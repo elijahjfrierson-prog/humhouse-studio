@@ -26,6 +26,7 @@ set(HHS_CORE_SOURCES
     Source/NoteTools.cpp
     Source/Instruments.cpp
     Source/Effects.cpp
+    Source/StudioEffects.cpp
     Source/Engine.cpp
     Source/ProjectIO.cpp
     Source/DrumSynth.cpp
@@ -38,7 +39,7 @@ set(HHS_DEFS
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_USE_MP3AUDIOFORMAT=1
-    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:HumHouseStudio,JUCE_PRODUCT_NAME>"
+    JUCE_APPLICATION_NAME_STRING="HumHouse Studio"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
 )
 if(APPLE)
@@ -54,6 +55,8 @@ set(HHS_LIBS
     juce::juce_gui_extra
 )
 
+option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
+if(NOT HHS_TESTS_ONLY)
 juce_add_gui_app(HumHouseStudio
     PRODUCT_NAME "HumHouse Studio"
     COMPANY_NAME "HumHouse"
@@ -80,6 +83,7 @@ target_sources(HumHouseStudio PRIVATE
 target_compile_definitions(HumHouseStudio PRIVATE ${HHS_DEFS})
 target_link_libraries(HumHouseStudio PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
+endif()
 
 # --- Tests: engine, effects, note tools and project I/O, headless -------------
 enable_testing()

@@ -779,9 +779,14 @@ private:
 };
 
 // ------------------------------------------------------------ registry
+std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
+
 const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
+        { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ 7", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
+        { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
+        { "satur", "Saturator", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
@@ -795,6 +800,7 @@ const std::vector<EffectInfo>& builtinEffects()
 
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
+    if (auto s = createStudioEffect (id)) return s;
     if (id == "eq") return std::make_unique<ParaEQ>();
     if (id == "comp") return std::make_unique<Compressor>();
     if (id == "limiter") return std::make_unique<Limiter>();
