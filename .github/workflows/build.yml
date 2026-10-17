@@ -77,7 +77,9 @@ jobs:
           test -s /tmp/pkg_expanded/Resources/license.txt || { echo "no EULA pane"; exit 1; }
           sudo installer -pkg artifacts/HumHouse-Studio-macOS.pkg -target /
           sudo installer -pkg artifacts/HumHouse-Studio-macOS.pkg -target /
-          test -x "/Applications/HumHouse Studio.app/Contents/MacOS/HumHouse Studio"
+          test -x "/Applications/HumHouse Studio.app/Contents/MacOS/HumHouse Studio" || {
+            echo "app not in /Applications"; pkgutil --pkg-info com.humhouse.studio.installer.app || true
+            pkgutil --files com.humhouse.studio.installer.app | head || true; exit 1; }
 
       - name: Package Setup.exe (Windows)
         if: runner.os == 'Windows'

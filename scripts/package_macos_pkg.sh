@@ -24,7 +24,11 @@ exit 0
 PRE
 chmod +x "$STAGE/scripts/preinstall"
 
+# Without this, macOS "relocates" the install onto any existing copy of the bundle id (e.g. the build dir).
+pkgbuild --analyze --root "$STAGE/root" "$STAGE/component.plist"
+plutil -replace BundleIsRelocatable -bool NO "$STAGE/component.plist"
 pkgbuild --identifier "${BUNDLE_ID}.app" --version "$VERSION" --root "$STAGE/root" \
+  --component-plist "$STAGE/component.plist" \
   --scripts "$STAGE/scripts" --install-location "/" "$STAGE/pkgs/app.pkg"
 
 cat > "$STAGE/distribution.xml" <<XML
