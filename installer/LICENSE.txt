@@ -1,0 +1,88 @@
+HumHouse Studio — End User License Agreement
+
+Last updated: 2026
+
+IMPORTANT: READ THIS AGREEMENT BEFORE INSTALLING OR USING THE SOFTWARE. BY
+CLICKING "I ACCEPT", INSTALLING, OR USING THE SOFTWARE, YOU AGREE TO BE BOUND BY
+THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT INSTALL OR USE THE SOFTWARE.
+
+1. PARTIES AND SUBJECT
+This End User License Agreement ("Agreement") is between you ("you") and
+HumHouse ("we", "us"), and covers the HumHouse Studio audio plug-in and
+standalone application, together with its presets, documentation and updates
+(the "Software").
+
+2. LICENSE GRANTED
+We grant you a personal, non-exclusive, worldwide, revocable license to install
+and use the Software on computers you own or control, for both personal and
+commercial music production. You may make backup copies for your own use.
+
+3. YOUR MUSIC IS YOURS
+We claim no rights in the audio, songs, stems, or recordings you create with the
+Software. No royalty, credit, or reporting is owed to us for anything you
+produce with it.
+
+4. RESTRICTIONS
+You may not:
+  (a) sell, rent, lease, sublicense, or redistribute the Software itself as a
+      product, whether alone or bundled with another product;
+  (b) remove or alter any copyright, trademark, or license notice;
+  (c) reverse engineer, decompile, or disassemble the Software, except to the
+      extent that applicable law expressly permits it despite this limitation;
+  (d) use the Software to develop a competing plug-in derived from it.
+
+5. OWNERSHIP
+The Software is licensed, not sold. We and our licensors retain all right, title
+and interest in the Software, including all intellectual property rights.
+
+6. THIRD-PARTY COMPONENTS
+The Software is built with the JUCE framework (https://juce.com), which is
+licensed separately by Raw Material Software Limited, and with the Steinberg VST3
+SDK. VST is a trademark of Steinberg Media Technologies GmbH. Their respective
+license terms apply to those components.
+
+7. NO AFFILIATION
+HumHouse is not affiliated with, endorsed by, or sponsored by Apple Inc.,
+Steinberg Media Technologies GmbH, or any DAW vendor. "Logic Pro", "Audio Unit",
+"VST", and other product names are trademarks of their respective owners and are
+used here only to describe compatibility and workflow. The Software is an
+independent, original implementation and contains no code or assets from any
+other vendor's product.
+
+8. UPDATES
+We may provide updates or new versions at our discretion. Unless an update ships
+with its own license terms, this Agreement governs it. We are under no
+obligation to provide support, updates, or maintenance.
+
+9. TERM AND TERMINATION
+This Agreement takes effect when you install the Software and continues until
+terminated. It terminates automatically if you breach it. On termination you must
+stop using the Software and remove all installed copies. Sections 3, 5, 10, 11
+and 12 survive termination.
+
+10. NO WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. WE DO
+NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED, ERROR-FREE, OR COMPATIBLE
+WITH ANY PARTICULAR HOST OR HARDWARE.
+
+11. LIMITATION OF LIABILITY
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, WE WILL NOT BE LIABLE FOR ANY INDIRECT,
+INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF
+PROFITS, REVENUE, DATA, RECORDINGS, PROJECTS, OR GOODWILL, ARISING OUT OF OR
+RELATED TO THE SOFTWARE. OUR TOTAL AGGREGATE LIABILITY UNDER THIS AGREEMENT WILL
+NOT EXCEED THE GREATER OF THE AMOUNT YOU PAID FOR THE SOFTWARE OR USD $25.
+
+AUDIO SAFETY NOTICE: pitch shifters can produce sudden loud output. Protect your
+ears and your speakers — keep monitoring levels low while adjusting settings. We
+are not liable for hearing damage or equipment damage caused by monitoring at
+unsafe levels.
+
+12. GENERAL
+If any provision of this Agreement is held unenforceable, the remainder stays in
+force. This Agreement is the entire agreement between us regarding the Software
+and supersedes any prior understanding. Our failure to enforce a provision is not
+a waiver of it.
+
+Questions: https://github.com/elijahjfrierson-prog/hum-house-pitch/issues
