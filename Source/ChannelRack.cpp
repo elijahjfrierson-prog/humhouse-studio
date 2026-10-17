@@ -51,7 +51,7 @@ constexpr int rowH = 34, headerH = 34, ctlW = 352;
 
 class ChannelRack;
 
-struct NameTag : public juce::Component
+struct NameTag : public juce::Component, public juce::SettableTooltipClient
 {
     std::function<void (const juce::MouseEvent&)> onMouse;
     juce::String text; juce::Colour colour; bool selected = false;

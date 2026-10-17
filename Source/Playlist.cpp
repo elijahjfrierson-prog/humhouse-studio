@@ -1,0 +1,661 @@
+#include "UI.h"
+
+namespace hhs
+{
+namespace
+{
+constexpr int toolbarH = 32, headerW = 220, rulerH = 24;
+
+juce::AudioFormatManager& formats()
+{
+    static juce::AudioFormatManager f;
+    if (f.getNumKnownFormats() == 0) f.registerBasicFormats();
+    return f;
+}
+
+double audioSeconds (const juce::File& f)
+{
+    std::unique_ptr<juce::AudioFormatReader> r (formats().createReaderFor (f));
+    return r && r->sampleRate > 0 ? (double) r->lengthInSamples / r->sampleRate : 0.0;
+}
+
+void autoCrossfade (Project& p)
+{
+    for (auto& a : p.clips)
+        for (auto& b : p.clips)
+        {
+            if (&a == &b || ! a.isAudio() || ! b.isAudio() || a.hidden || b.hidden || a.lane != b.lane) continue;
+            if (a.start < b.start && a.start + a.length > b.start && a.start + a.length < b.start + b.length)
+            {
+                const double ov = a.start + a.length - b.start;
+                a.fadeOut = juce::jmax (a.fadeOut, ov);
+                b.fadeIn = juce::jmax (b.fadeIn, ov);
+            }
+        }
+}
+
+struct LaneHeader : public juce::Component
+{
+    LaneHeader (Studio& st, int i) : s (st), index (i)
+    {
+        name.setEditable (false, true);
+        name.setTooltip ("Track name (double-click to rename). Right-click the header for routing / delete");
+        name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
+        setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
+        arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
+        arm.onClick = [this] { const bool on = arm.getToggleState(); s.edit ("Arm", [&] (Project& p) { p.lanes[(size_t) index].armed = on; }); };
+        setupButton (mute, "M", "Mute this track", true);
+        mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
+        mute.onClick = [this] { const bool on = mute.getToggleState(); s.edit ("Mute track", [&] (Project& p) { p.lanes[(size_t) index].muted = on; }); };
+        setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
+        mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
+        mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
+        input.setTooltip ("Audio input for this track (Mic 1, Mic 2, stereo pairs)");
+        input.onChange = [this] { const int v = input.getSelectedItemIndex(); s.edit ("Input", [&] (Project& p) { p.lanes[(size_t) index].inputPair = v; }); };
+        insert.setTooltip ("Mixer insert this track plays and records through - every take stays on it");
+        insert.onChange = [this] { const int v = insert.getSelectedItemIndex(); s.edit ("Route track", [&] (Project& p) { p.lanes[(size_t) index].mixerTrack = v; }); };
+        for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon,
+                                    (juce::Component*) &input, (juce::Component*) &insert })
+            addAndMakeVisible (c);
+        refresh();
+    }
+    void refresh()
+    {
+        auto& p = s.p();
+        if (index >= (int) p.lanes.size()) return;
+        auto& l = p.lanes[(size_t) index];
+        name.setText (l.name, juce::dontSendNotification);
+        arm.setToggleState (l.armed, juce::dontSendNotification);
+        mute.setToggleState (l.muted, juce::dontSendNotification);
+        mon.setToggleState (l.monitor, juce::dontSendNotification);
+        input.clear (juce::dontSendNotification);
+        int ins = 2;
+        if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
+        for (int i = 0; i < (ins + 1) / 2; ++i) input.addItem ("In " + juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2), i + 1);
+        input.setSelectedItemIndex (juce::jlimit (0, input.getNumItems() - 1, l.inputPair), juce::dontSendNotification);
+        insert.clear (juce::dontSendNotification);
+        for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name), (int) i + 1);
+        insert.setSelectedItemIndex (juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack), juce::dontSendNotification);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        g.setColour (col::gridBar); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
+        if (arm.getToggleState() && s.engine.isRecording()) { g.setColour (col::rec.withAlpha (0.25f)); g.fillRect (getLocalBounds().removeFromLeft (4)); }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (4, 3);
+        auto top = r.removeFromTop (r.getHeight() / 2);
+        arm.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
+        mute.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
+        name.setBounds (top);
+        r.removeFromTop (2);
+        mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
+        input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
+        insert.setBounds (r);
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu()) return;
+        juce::PopupMenu m;
+        m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
+        m.addSeparator(); m.addItem (4, "Delete track");
+        m.showMenuAsync ({}, [this] (int r) {
+            const int i = index;
+            if (r == 1) name.showEditor();
+            else if (r == 2) s.edit ("New insert", [i] (Project& p) { p.lanes[(size_t) i].mixerTrack = p.addMixerTrack (p.lanes[(size_t) i].name); });
+            else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
+            else if (r == 4) s.edit ("Delete track", [i] (Project& p) {
+                p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [i] (const Clip& c) { return c.lane == i; }), p.clips.end());
+                for (auto& c : p.clips) if (c.lane > i) --c.lane;
+                p.lanes.erase (p.lanes.begin() + i);
+            });
+        });
+    }
+    Studio& s; int index;
+    juce::Label name; juce::TextButton arm, mute, mon; juce::ComboBox input, insert;
+};
+
+class Playlist : public juce::Component, public juce::FileDragAndDropTarget, public juce::TooltipClient,
+                 private juce::ChangeListener, private juce::Timer
+{
+public:
+    explicit Playlist (Studio& st) : s (st)
+    {
+        s.addChangeListener (this);
+        setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
+        addTrack.onClick = [this] {
+            s.edit ("Add track", [] (Project& p) {
+                Lane l; l.name = "Vocal " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
+            });
+        };
+        setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
+        loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
+        setupButton (rts, "RETURN", "On stop, jump back to where playback started (FL style)", true);
+        rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
+        setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
+        preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };
+        setupButton (clearPunch, "CLEAR PUNCH", "Remove the punch-in / out range (or double-click the ruler)");
+        clearPunch.onClick = [this] { s.edit ("Clear punch", [] (Project& p) { p.punchIn = p.punchOut = -1.0; }); };
+        for (auto* b : { &addTrack, &loopRec, &rts, &preroll, &clearPunch }) addAndMakeVisible (b);
+        thumbCache = std::make_unique<juce::AudioThumbnailCache> (256);
+        setWantsKeyboardFocus (true);
+        refresh();
+        startTimerHz (30);
+    }
+    ~Playlist() override { s.removeChangeListener (this); }
+
+    juce::String getTooltip() override
+    {
+        if (lastMouse.y >= toolbarH && lastMouse.y < toolbarH + rulerH && lastMouse.x > headerW)
+            return "Ruler: click = move playhead, drag = set punch-in / out range, double-click = clear punch";
+        if (lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH)
+            return "Double-click = place pattern | drag clip = move | drag edges = trim | top corners = fades (Alt = curve) | right-click = takes, routing, split";
+        return {};
+    }
+
+    void resized() override
+    {
+        auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
+        addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
+        for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
+        layoutHeaders();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto& p = s.p();
+        g.fillAll (col::bg);
+        g.setColour (col::panel); g.fillRect (0, 0, getWidth(), toolbarH);
+        auto area = clipArea();
+        {
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (area);
+            for (size_t i = 0; i < p.lanes.size(); ++i)
+            {
+                const int y = laneY ((int) i);
+                g.setColour (i % 2 ? col::panel.darker (0.2f) : col::bg.brighter (0.03f));
+                g.fillRect (area.getX(), y, area.getWidth(), laneH);
+                g.setColour (col::grid); g.drawHorizontalLine (y + laneH - 1, (float) area.getX(), (float) area.getRight());
+            }
+            const double b1 = xToBeat ((float) area.getRight());
+            double step = 1.0;
+            while (step * pxPerBeat < 10) step *= 2;
+            for (double b = std::floor (scrollX / step) * step; b <= b1; b += step)
+            {
+                const bool bar = std::fmod (b + 1e-9, (double) p.beatsPerBar) < 1e-6;
+                g.setColour (bar ? col::gridBar : col::grid);
+                g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
+            }
+            if (p.hasPunch())
+            {
+                g.setColour (col::rec.withAlpha (0.07f));
+                g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
+            }
+            for (auto& c : p.clips) if (! c.hidden) drawClip (g, c);
+            const float px = beatToX (s.engine.positionBeats());
+            g.setColour (s.engine.isRecording() ? col::rec : col::accent2);
+            g.drawVerticalLine ((int) px, (float) area.getY(), (float) area.getBottom());
+        }
+        // ruler
+        juce::Rectangle<int> ruler (headerW, toolbarH, getWidth() - headerW, rulerH);
+        g.setColour (col::panel2); g.fillRect (ruler);
+        g.setFont (juce::FontOptions (11.0f));
+        for (int bar = (int) (scrollX / p.beatsPerBar); ; ++bar)
+        {
+            const float x = beatToX (bar * p.beatsPerBar);
+            if (x > getWidth()) break;
+            if (x < headerW) continue;
+            g.setColour (col::dim);
+            g.drawText (juce::String (bar + 1), (int) x + 3, toolbarH, 40, rulerH, juce::Justification::centredLeft);
+            g.drawVerticalLine ((int) x, (float) toolbarH + 12, (float) (toolbarH + rulerH));
+        }
+        if (p.hasPunch())
+        {
+            const float x0 = juce::jmax ((float) headerW, beatToX (p.punchIn)), x1 = beatToX (p.punchOut);
+            g.setColour (col::rec.withAlpha (0.45f));
+            g.fillRect (x0, (float) toolbarH + 2, x1 - x0, (float) rulerH - 4);
+            g.setColour (col::text); g.drawText ("PUNCH", (int) x0 + 4, toolbarH, 60, rulerH, juce::Justification::centredLeft);
+        }
+        const float px = beatToX (s.engine.positionBeats());
+        if (px >= headerW)
+        {
+            juce::Path tri; tri.addTriangle (px - 6, (float) toolbarH, px + 6, (float) toolbarH, px, (float) (toolbarH + 10));
+            g.setColour (col::accent2); g.fillPath (tri);
+        }
+        g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText ("PLAYLIST", 8, toolbarH, headerW - 16, rulerH, juce::Justification::centredLeft);
+    }
+
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        lastMouse = e.getPosition();
+        Part part; const int i = hitClip (e.position, part);
+        setMouseCursor (i < 0 ? juce::MouseCursor::NormalCursor
+                        : part == Part::FadeIn || part == Part::FadeOut ? juce::MouseCursor::PointingHandCursor
+                        : part == Part::Right || part == Part::Left ? juce::MouseCursor::LeftRightResizeCursor
+                        : juce::MouseCursor::DraggingHandCursor);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        grabKeyboardFocus();
+        auto& p = s.p();
+        changed = false;
+        dragStart = e.position;
+        if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW) { drag = Drag::Ruler; return; }
+        if (! clipArea().contains (e.getPosition())) return;
+        Part part; const int i = hitClip (e.position, part);
+        if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
+        if (i < 0)
+        {
+            s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
+            s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
+            repaint();
+            return;
+        }
+        s.live ([&] (Project&) {
+            if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) for (auto& c : p.clips) c.selected = false;
+            p.clips[(size_t) i].selected = true;
+        });
+        dragClip = i; dragOrig = p.clips;
+        drag = part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
+             : part == Part::Left ? Drag::Trim : Drag::Move;
+        repaint();
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        auto& p = s.p();
+        lastMouse = e.getPosition();
+        if (drag == Drag::Ruler)
+        {
+            if (std::abs (e.position.x - dragStart.x) < 4) return;
+            const double a = juce::jmax (0.0, snap (xToBeat (dragStart.x))), b = juce::jmax (0.0, snap (xToBeat (e.position.x)));
+            s.live ([&] (Project& pr) { pr.punchIn = juce::jmin (a, b); pr.punchOut = juce::jmax (a, b); });
+            changed = true; repaint(); return;
+        }
+        if (drag == Drag::None || dragClip < 0 || dragOrig.size() != p.clips.size()) return;
+        const bool noSnap = e.mods.isAltDown();
+        double d = xToBeat (e.position.x) - xToBeat (dragStart.x);
+        if (! noSnap && drag != Drag::FadeIn && drag != Drag::FadeOut) d = std::round (d / gridSnap()) * gridSnap();
+        const int dLane = drag == Drag::Move ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
+        s.live ([&] (Project&) {
+            for (size_t i = 0; i < p.clips.size(); ++i)
+            {
+                auto o = dragOrig[i];
+                if (drag == Drag::FadeIn || drag == Drag::FadeOut)
+                {
+                    if ((int) i != dragClip) continue;
+                    if (e.mods.isAltDown()) o.fadeCurve = juce::jlimit (-1.0f, 1.0f, o.fadeCurve - (e.position.y - dragStart.y) / 80.0f);
+                    else if (drag == Drag::FadeIn) o.fadeIn = juce::jlimit (0.0, o.length - o.fadeOut, o.fadeIn + d);
+                    else o.fadeOut = juce::jlimit (0.0, o.length - o.fadeIn, o.fadeOut - d);
+                }
+                else if (! o.selected) continue;
+                else if (drag == Drag::Move)
+                {
+                    o.start = juce::jmax (0.0, o.start + d);
+                    o.lane = juce::jlimit (0, juce::jmax (0, (int) p.lanes.size() - 1), o.lane + dLane);
+                }
+                else if (drag == Drag::Resize) o.length = juce::jmax (gridSnap() * 0.25, o.length + d);
+                else if (drag == Drag::Trim && o.isAudio())
+                {
+                    const double dd = juce::jlimit (-beatsFromSeconds (o.sourceOffset), o.length - 0.0625, d);
+                    o.start += dd; o.length -= dd; o.sourceOffset += beatsToSeconds (dd, p.bpm);
+                }
+                p.clips[i] = o;
+            }
+        });
+        changed = true;
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        auto& p = s.p();
+        if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
+        else if (changed)
+        {
+            s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut ? "Fade" : "Edit clips", [&] (Project&) {
+                // routing follows the recording: a moved audio clip keeps playing through the insert it came from
+                if (drag == Drag::Move && dragOrig.size() == p.clips.size())
+                    for (size_t i = 0; i < p.clips.size(); ++i)
+                    {
+                        auto& c = p.clips[i];
+                        if (c.isAudio() && c.lane != dragOrig[i].lane && c.mixerTrack < 0 && dragOrig[i].lane < (int) p.lanes.size())
+                            c.mixerTrack = p.lanes[(size_t) dragOrig[i].lane].mixerTrack;
+                    }
+                autoCrossfade (p);
+            });
+        }
+        drag = Drag::None; dragClip = -1;
+        repaint();
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        auto& p = s.p();
+        if (e.y >= toolbarH && e.y < toolbarH + rulerH) { s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
+        if (! clipArea().contains (e.getPosition())) return;
+        Part part; const int i = hitClip (e.position, part);
+        if (i >= 0)
+        {
+            if (! p.clips[(size_t) i].isAudio())
+            {
+                const int pat = p.clips[(size_t) i].patternIndex;
+                s.edit ("Open pattern", [pat] (Project& pr) { pr.currentPattern = pat; });
+                if (s.showView) s.showView (0);
+            }
+            return;
+        }
+        const int lane = laneAt (e.position.y);
+        if (lane < 0 || p.patterns.empty()) return;
+        const double at = juce::jmax (0.0, std::floor (xToBeat (e.position.x) / p.beatsPerBar) * p.beatsPerBar);
+        s.edit ("Place pattern", [&] (Project& pr) {
+            Clip c; c.uid = pr.newUid(); c.lane = lane; c.start = at; c.patternIndex = pr.currentPattern;
+            c.length = pr.patterns[(size_t) pr.currentPattern].lengthBeats();
+            pr.clips.push_back (c);
+        });
+    }
+
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (e.mods.isCommandDown())
+        {
+            const double at = xToBeat (e.position.x);
+            pxPerBeat = juce::jlimit (2.0f, 400.0f, pxPerBeat * (w.deltaY > 0 ? 1.15f : 1.0f / 1.15f));
+            scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
+        }
+        else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
+            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
+        else
+        {
+            scrollY = juce::jlimit (0, juce::jmax (0, (int) s.p().lanes.size() * laneH - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
+            layoutHeaders();
+        }
+        repaint();
+    }
+
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        const int cmd = juce::ModifierKeys::commandModifier;
+        if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
+        {
+            s.edit ("Delete clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
+            return true;
+        }
+        if (k == juce::KeyPress ('b', cmd, 0))
+        {
+            s.edit ("Duplicate clips", [] (Project& p) {
+                double lo = 1e9, hi = 0;
+                for (auto& c : p.clips) if (c.selected) { lo = std::min (lo, c.start); hi = std::max (hi, c.start + c.length); }
+                const auto n = p.clips.size();
+                for (size_t i = 0; i < n; ++i)
+                    if (p.clips[i].selected) { auto c = p.clips[i]; c.uid = p.newUid(); c.start += hi - lo; p.clips[i].selected = false; p.clips.push_back (c); }
+            });
+            return true;
+        }
+        if (k == juce::KeyPress ('a', cmd, 0)) { s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = true; }); repaint(); return true; }
+        return false;
+    }
+
+    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    void filesDropped (const juce::StringArray& files, int x, int y) override
+    {
+        const double at = juce::jmax (0.0, snap (xToBeat ((float) x)));
+        int lane = laneAt ((float) y);
+        s.edit ("Add audio", [&] (Project& p) {
+            for (auto& path : files)
+            {
+                juce::File f (path);
+                const double secs = audioSeconds (f);
+                if (secs <= 0) continue;
+                if (lane < 0 || lane >= (int) p.lanes.size())
+                {
+                    Lane l; l.name = f.getFileNameWithoutExtension(); l.mixerTrack = p.addMixerTrack (l.name);
+                    p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                }
+                Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.audioFile = f; c.patternIndex = -1;
+                c.length = secondsToBeats (secs, p.bpm);
+                p.clips.push_back (c);
+                ++lane;
+            }
+        });
+    }
+
+private:
+    enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut };
+    enum class Part { Body, Left, Right, FadeIn, FadeOut };
+    Studio& s;
+    std::vector<std::unique_ptr<LaneHeader>> headers;
+    juce::TextButton addTrack, loopRec, rts, preroll, clearPunch;
+    std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
+    std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
+    double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
+    static constexpr int laneH = 60;
+    Drag drag = Drag::None; int dragClip = -1; bool changed = false;
+    std::vector<Clip> dragOrig;
+    juce::Point<float> dragStart; juce::Point<int> lastMouse;
+
+    juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW); }
+    float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
+    double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
+    int laneY (int lane) const { return toolbarH + rulerH + lane * laneH - scrollY; }
+    int laneAt (float y) const
+    {
+        const int l = (int) std::floor ((y - toolbarH - rulerH + scrollY) / laneH);
+        return l >= 0 && l < (int) const_cast<Studio&> (s).p().lanes.size() ? l : -1;
+    }
+    double gridSnap() const
+    {
+        auto& p = const_cast<Studio&> (s).p();
+        double g = 1.0;
+        while (g * pxPerBeat < 12) g *= 2;
+        while (g * pxPerBeat > 80 && g > p.snap && g > 0.0625) g *= 0.5;
+        return g;
+    }
+    double snap (double b) const { const double g = gridSnap(); return std::round (b / g) * g; }
+    double beatsFromSeconds (double secs) const { return secondsToBeats (secs, const_cast<Studio&> (s).p().bpm); }
+    juce::Rectangle<float> clipRect (const Clip& c) const
+    {
+        return { beatToX (c.start), (float) laneY (c.lane) + 2.0f, juce::jmax (4.0f, (float) (c.length * pxPerBeat)), (float) laneH - 4.0f };
+    }
+    int hitClip (juce::Point<float> pt, Part& part) const
+    {
+        auto& p = const_cast<Studio&> (s).p();
+        part = Part::Body;
+        for (int i = (int) p.clips.size() - 1; i >= 0; --i)
+        {
+            auto& c = p.clips[(size_t) i];
+            if (c.hidden) continue;
+            auto r = clipRect (c);
+            if (! r.contains (pt)) continue;
+            if (c.isAudio() && pt.y < r.getY() + 12)
+            {
+                const float fi = r.getX() + (float) (c.fadeIn * pxPerBeat), fo = r.getRight() - (float) (c.fadeOut * pxPerBeat);
+                if (std::abs (pt.x - fi) < 8) { part = Part::FadeIn; return i; }
+                if (std::abs (pt.x - fo) < 8) { part = Part::FadeOut; return i; }
+            }
+            if (pt.x > r.getRight() - 6) part = Part::Right;
+            else if (c.isAudio() && pt.x < r.getX() + 6) part = Part::Left;
+            return i;
+        }
+        return -1;
+    }
+    juce::AudioThumbnail* thumb (const juce::File& f)
+    {
+        auto key = f.getFullPathName();
+        auto it = thumbs.find (key);
+        if (it != thumbs.end()) return it->second.get();
+        if (! f.existsAsFile()) return nullptr;
+        auto t = std::make_unique<juce::AudioThumbnail> (512, formats(), *thumbCache);
+        t->setSource (new juce::FileInputSource (f));
+        t->addChangeListener (this);
+        return (thumbs[key] = std::move (t)).get();
+    }
+    void drawClip (juce::Graphics& g, const Clip& c)
+    {
+        auto& p = s.p();
+        auto r = clipRect (c);
+        if (r.getRight() < headerW || r.getX() > getWidth()) return;
+        juce::Colour colour = c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        if (c.muted) colour = col::dim;
+        g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
+        g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);
+        auto body = r.withTrimmedTop (14).reduced (1, 2);
+        if (c.isAudio())
+        {
+            if (auto* t = thumb (c.audioFile))
+            {
+                const double secs = beatsToSeconds (c.length, p.bpm);
+                g.setColour (colour.brighter (0.4f));
+                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain);
+            }
+            // fades
+            const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);
+            g.setColour (juce::Colours::black.withAlpha (0.45f));
+            juce::Path pin, pout;
+            const float bend = c.fadeCurve * 0.5f;
+            pin.startNewSubPath (r.getX(), r.getBottom()); pin.quadraticTo (r.getX() + fi * (0.5f - bend), r.getY() + r.getHeight() * (0.5f + bend), r.getX() + fi, r.getY());
+            pin.lineTo (r.getX(), r.getY()); pin.closeSubPath();
+            pout.startNewSubPath (r.getRight(), r.getBottom()); pout.quadraticTo (r.getRight() - fo * (0.5f - bend), r.getY() + r.getHeight() * (0.5f + bend), r.getRight() - fo, r.getY());
+            pout.lineTo (r.getRight(), r.getY()); pout.closeSubPath();
+            if (fi > 1) g.fillPath (pin);
+            if (fo > 1) g.fillPath (pout);
+            g.setColour (col::text);
+            g.fillRect (r.getX() + fi - 3, r.getY(), 6.0f, 6.0f);
+            g.fillRect (r.getRight() - fo - 3, r.getY(), 6.0f, 6.0f);
+        }
+        else if (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size())
+        {
+            auto& pat = p.patterns[(size_t) c.patternIndex];
+            const double len = pat.lengthBeats();
+            int lo = 127, hi = 0;
+            for (auto& [id, list] : pat.notes) for (auto& n : list) { lo = std::min (lo, n.key); hi = std::max (hi, n.key); }
+            if (hi >= lo)
+            {
+                g.setColour (colour.brighter (0.5f));
+                for (double off = 0; off < c.length; off += len)
+                    for (auto& [id, list] : pat.notes)
+                        for (auto& n : list)
+                        {
+                            if (off + n.start >= c.length) continue;
+                            const float y = body.getBottom() - 3 - (body.getHeight() - 6) * (float) (n.key - lo) / (float) juce::jmax (1, hi - lo);
+                            g.fillRect (body.getX() + (float) ((off + n.start) * pxPerBeat), y, juce::jmax (1.5f, (float) (n.length * pxPerBeat)), 2.0f);
+                        }
+            }
+        }
+        juce::String label = c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
+                                         : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
+        if (c.isAudio())
+        {
+            const int ins = p.clipInsert (c);
+            if (ins >= 0 && ins < (int) p.mixer.size()) label << "  > " << p.mixer[(size_t) ins].name;
+            if (c.takeGroup > 0)
+            {
+                int n = 0, k = 0;
+                for (auto& o : p.clips) if (o.takeGroup == c.takeGroup) { ++n; if (o.uid == c.uid) k = n; }
+                if (n > 1) label << "  [take " << k << "/" << n << "]";
+            }
+        }
+        g.setColour (juce::Colours::black); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
+        if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
+    }
+    void clipMenu (int index)
+    {
+        auto& p = s.p();
+        const auto clip = p.clips[(size_t) index];
+        juce::PopupMenu m, route, takes, fades;
+        m.addItem (1, "Delete");
+        m.addItem (2, "Split at playhead", clip.isAudio());
+        m.addItem (3, clip.muted ? "Unmute" : "Mute");
+        fades.addItem (10, "Short fades (click-free)"); fades.addItem (11, "Fade in 1 beat"); fades.addItem (12, "Fade out 1 beat");
+        fades.addItem (13, "Fade in + out 1 bar"); fades.addItem (14, "Clear fades");
+        m.addSubMenu ("Fades (selected clips)", fades, clip.isAudio());
+        for (size_t i = 0; i < p.mixer.size(); ++i)
+            route.addItem (100 + (int) i, i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name, true, p.clipInsert (clip) == (int) i);
+        route.addSeparator(); route.addItem (99, "Follow track insert");
+        m.addSubMenu ("Route to insert", route, clip.isAudio());
+        std::vector<int> group;
+        if (clip.takeGroup > 0)
+            for (auto& o : p.clips) if (o.takeGroup == clip.takeGroup) group.push_back (o.uid);
+        for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
+        m.addSubMenu ("Takes", takes, group.size() > 1);
+        m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+        m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
+            if (r == 0) return;
+            s.edit ("Clip edit", [&] (Project& pr) {
+                auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+                if (it == pr.clips.end()) return;
+                auto& c = *it;
+                auto forSel = [&] (std::function<void (Clip&)> f) { for (auto& o : pr.clips) if ((o.selected || o.uid == uid) && o.isAudio()) f (o); };
+                const double shortFade = secondsToBeats (0.005, pr.bpm);
+                if (r == 1) pr.clips.erase (it);
+                else if (r == 2)
+                {
+                    const double at = s.engine.positionBeats();
+                    if (at > c.start && at < c.start + c.length)
+                    {
+                        Clip b = c; b.uid = pr.newUid();
+                        b.start = at; b.length = c.start + c.length - at; b.sourceOffset += beatsToSeconds (at - c.start, pr.bpm);
+                        b.fadeIn = shortFade; c.length = at - c.start; c.fadeOut = shortFade; b.selected = false;
+                        pr.clips.push_back (b);
+                    }
+                }
+                else if (r == 3) c.muted = ! c.muted;
+                else if (r == 4) c.reversed = ! c.reversed;
+                else if (r == 10) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = shortFade; });
+                else if (r == 11) forSel ([] (Clip& o) { o.fadeIn = juce::jmin (1.0, o.length * 0.5); });
+                else if (r == 12) forSel ([] (Clip& o) { o.fadeOut = juce::jmin (1.0, o.length * 0.5); });
+                else if (r == 13) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = juce::jmin ((double) pr.beatsPerBar, o.length * 0.5); });
+                else if (r == 14) forSel ([] (Clip& o) { o.fadeIn = o.fadeOut = 0; });
+                else if (r == 99) c.mixerTrack = -1;
+                else if (r >= 100 && r < 1000) forSel ([r] (Clip& o) { o.mixerTrack = r - 100; });
+                else if (r >= 1000) { const int keep = r - 1000; for (auto& o : pr.clips) if (o.takeGroup == c.takeGroup) o.hidden = o.uid != keep; }
+            });
+        });
+    }
+    void layoutHeaders()
+    {
+        for (size_t i = 0; i < headers.size(); ++i)
+        {
+            const int y = laneY ((int) i);
+            headers[i]->setBounds (0, y, headerW, laneH);
+            headers[i]->setVisible (y + laneH > toolbarH + rulerH);
+        }
+    }
+    void refresh()
+    {
+        auto& p = s.p();
+        if (headers.size() != p.lanes.size())
+        {
+            headers.clear();
+            for (size_t i = 0; i < p.lanes.size(); ++i) { headers.push_back (std::make_unique<LaneHeader> (s, (int) i)); addAndMakeVisible (*headers.back()); }
+            layoutHeaders();
+        }
+        for (auto& h : headers) h->refresh();
+        loopRec.setToggleState (p.loopRecord, juce::dontSendNotification);
+        rts.setToggleState (p.returnToStart, juce::dontSendNotification);
+        preroll.setToggleState (p.preRollBars > 0, juce::dontSendNotification);
+        repaint();
+    }
+    void changeListenerCallback (juce::ChangeBroadcaster* src) override
+    {
+        if (src == &s) refresh(); else repaint();
+    }
+    void timerCallback() override
+    {
+        if (! s.engine.isPlaying()) return;
+        const float px = beatToX (s.engine.positionBeats());
+        if (px > getWidth() - 40) { scrollX = s.engine.positionBeats() - 2.0; }
+        repaint();
+        for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();
+    }
+};
+}
+
+std::unique_ptr<juce::Component> createPlaylist (Studio& s) { return std::make_unique<Playlist> (s); }
+}
