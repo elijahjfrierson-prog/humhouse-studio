@@ -170,80 +170,174 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { rebuild(); }
 };
 
-class SampleBrowser : public juce::Component, private juce::FileBrowserListener
+static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
+
+struct SampleSearchFilter : public juce::FileFilter
+{
+    SampleSearchFilter() : juce::FileFilter ("Audio") {}
+    bool isFileSuitable (const juce::File& f) const override { return isAudioFile (f); }
+    bool isDirectorySuitable (const juce::File&) const override { return true; }
+};
+
+static juce::File downloadsFolder() { return juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"); }
+
+class SampleBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ListBoxModel
 {
 public:
     explicit SampleBrowser (Studio& st) : s (st)
     {
         thread.startThread (juce::Thread::Priority::low);
-        folders.setTooltip ("Your sample / kit folders (they are remembered)");
+        folders.setTooltip ("Your sample / kit folders (Downloads is always here; they are remembered)");
         folders.onChange = [this] { const int i = folders.getSelectedItemIndex(); if (i >= 0 && i < roots.size()) setRoot (juce::File (roots[i])); };
         addAndMakeVisible (folders);
-        setupButton (addFolder, "+ Folder", "Add a sample or drum-kit folder to the browser");
+        setupButton (addFolder, "+", "Find a folder: add a sample or drum-kit folder to the browser");
         addFolder.onClick = [this] {
-            chooser = std::make_unique<juce::FileChooser> ("Add a sample folder", juce::File::getSpecialLocation (juce::File::userMusicDirectory));
+            chooser = std::make_unique<juce::FileChooser> ("Add a sample folder", downloadsFolder());
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
                 auto f = fc.getResult();
                 if (! f.isDirectory()) return;
                 roots.addIfNotAlreadyThere (f.getFullPathName());
-                save(); loadFolders(); setRoot (f);
+                save(); refreshFolders(); setRoot (f);
             });
         };
-        addAndMakeVisible (addFolder);
+        setupButton (removeFolder, "-", "Remove this folder from the browser (files are not deleted)");
+        removeFolder.onClick = [this] {
+            const int i = folders.getSelectedItemIndex();
+            if (i <= 0 || i >= roots.size()) return;   // Downloads stays
+            roots.remove (i); save(); refreshFolders(); setRoot (juce::File (roots[0]));
+        };
+        addAndMakeVisible (addFolder); addAndMakeVisible (removeFolder);
+        search.setTextToShowWhenEmpty ("Search samples...", col::dim);
+        search.setTooltip ("Type to search every sample in this folder and its subfolders");
+        search.onTextChange = [this] { runSearch(); };
+        search.onEscapeKey = [this] { search.clear(); runSearch(); };
+        addAndMakeVisible (search);
         setupButton (kitBtn, "Import as kit", "Every sample in the selected folder becomes a Channel Rack row");
         kitBtn.onClick = [this] {
             auto f = tree.getSelectedFile();
             importKit (s, f.isDirectory() ? f : list.getDirectory());
         };
         setupButton (rackBtn, "Add to rack", "Add the selected sample as a channel (or double-click it)");
-        rackBtn.onClick = [this] { auto f = tree.getSelectedFile(); if (f.existsAsFile()) addSampleChannels (s, { f }, {}); };
+        rackBtn.onClick = [this] { auto f = selected(); if (f.existsAsFile()) addSampleChannels (s, { f }, {}); };
         addAndMakeVisible (kitBtn); addAndMakeVisible (rackBtn);
         tree.addListener (this);
         tree.setTooltip ("Click a sample to hear it, double-click to add it to the Channel Rack. You can also drag files from your desktop");
         tree.setDragAndDropDescription ("sample");
+        tree.setColour (juce::TreeView::backgroundColourId, col::panel);
+        tree.setColour (juce::TreeView::selectedItemBackgroundColourId, col::accent.withAlpha (0.35f));
+        tree.setColour (juce::TreeView::linesColourId, col::gridBar);
+        tree.setColour (juce::DirectoryContentsDisplayComponent::textColourId, col::text);
+        tree.setColour (juce::DirectoryContentsDisplayComponent::highlightColourId, col::accent.withAlpha (0.35f));
+        tree.setIndentSize (14);
+        tree.setItemHeight (22);
         addAndMakeVisible (tree);
+        results.setModel (this);
+        results.setRowHeight (22);
+        results.setColour (juce::ListBox::backgroundColourId, col::panel);
+        results.setTooltip ("Search results: click to hear, double-click to add to the Channel Rack");
+        addChildComponent (results);
         loadFolders();
-        if (roots.isEmpty()) roots.add (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getFullPathName());
         setRoot (juce::File (roots[0]));
     }
     ~SampleBrowser() override { tree.removeListener (this); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        auto h = header.toFloat();
+        g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.06f), 0, h.getY(), col::panel, 0, h.getBottom(), false));
+        g.fillRoundedRectangle (h, 6.0f);
+        drawLogo (g, h.reduced (6, 5).removeFromLeft (150), true);
+        g.setColour (col::dim);
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText ("SAMPLES", h.reduced (8, 0), juce::Justification::centredRight);
+    }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4);
+        header = r.removeFromTop (38);
+        r.removeFromTop (4);
         auto top = r.removeFromTop (26);
-        addFolder.setBounds (top.removeFromRight (70)); top.removeFromRight (4);
+        removeFolder.setBounds (top.removeFromRight (26)); top.removeFromRight (2);
+        addFolder.setBounds (top.removeFromRight (26)); top.removeFromRight (4);
         folders.setBounds (top);
+        r.removeFromTop (4);
+        search.setBounds (r.removeFromTop (26));
         r.removeFromTop (4);
         auto bottom = r.removeFromBottom (28);
         kitBtn.setBounds (bottom.removeFromLeft (bottom.getWidth() / 2).reduced (2, 0)); rackBtn.setBounds (bottom.reduced (2, 0));
         r.removeFromBottom (4);
-        tree.setBounds (r);
+        tree.setBounds (r); results.setBounds (r);
     }
 
 private:
     Studio& s;
     juce::TimeSliceThread thread { "HumHouse browser" };
-    juce::WildcardFileFilter filter { "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg", "*", "Audio" };
+    SampleSearchFilter filter;
     juce::DirectoryContentsList list { &filter, thread };
     juce::FileTreeComponent tree { list };
+    juce::ListBox results;
+    juce::Array<juce::File> hits;
     juce::ComboBox folders;
-    juce::TextButton addFolder, kitBtn, rackBtn;
+    juce::TextEditor search;
+    juce::TextButton addFolder, removeFolder, kitBtn, rackBtn;
     juce::StringArray roots;
+    juce::Rectangle<int> header;
     std::unique_ptr<juce::FileChooser> chooser;
 
+    juce::File selected() const
+    {
+        if (results.isVisible()) { const int r = results.getSelectedRow(); return r >= 0 && r < hits.size() ? hits[r] : juce::File(); }
+        return tree.getSelectedFile();
+    }
     void loadFolders()
     {
-        roots = juce::StringArray::fromLines (s.settings->getValue ("sampleFolders"));
+        roots = juce::StringArray::fromLines (s.settings ? s.settings->getValue ("sampleFolders") : juce::String());
         roots.removeEmptyStrings();
+        roots.removeString (downloadsFolder().getFullPathName());
+        roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
+        refreshFolders();
+    }
+    void refreshFolders()
+    {
         folders.clear (juce::dontSendNotification);
         for (int i = 0; i < roots.size(); ++i) folders.addItem (juce::File (roots[i]).getFileName(), i + 1);
     }
-    void save() { s.settings->setValue ("sampleFolders", roots.joinIntoString ("\n")); s.settings->saveIfNeeded(); }
+    void save() { if (s.settings) { s.settings->setValue ("sampleFolders", roots.joinIntoString ("\n")); s.settings->saveIfNeeded(); } }
     void setRoot (const juce::File& f)
     {
         list.setDirectory (f, true, true);
         folders.setSelectedItemIndex (roots.indexOf (f.getFullPathName()), juce::dontSendNotification);
+        runSearch();
     }
+    void runSearch()
+    {
+        const auto q = search.getText().trim();
+        hits.clearQuick();
+        if (q.isNotEmpty())
+        {
+            int scanned = 0;
+            for (const auto& e : juce::RangedDirectoryIterator (list.getDirectory(), true, "*", juce::File::findFiles))
+            {
+                if (++scanned > 50000 || hits.size() >= 1000) break;
+                const auto f = e.getFile();
+                if (isAudioFile (f) && f.getFileName().containsIgnoreCase (q)) hits.add (f);
+            }
+        }
+        results.updateContent(); results.deselectAllRows(); results.repaint();
+        results.setVisible (q.isNotEmpty()); tree.setVisible (q.isEmpty());
+    }
+    int getNumRows() override { return hits.size(); }
+    void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool sel) override
+    {
+        if (row < 0 || row >= hits.size()) return;
+        if (sel) { g.setColour (col::accent.withAlpha (0.35f)); g.fillRoundedRectangle (2, 1, (float) w - 4, (float) h - 2, 4.0f); }
+        g.setColour (col::accent); g.fillEllipse (8, h * 0.5f - 3, 6, 6);
+        g.setColour (col::text); g.setFont (juce::FontOptions (13.0f));
+        g.drawText (hits[row].getFileName(), 20, 0, w - 24, h, juce::Justification::centredLeft, true);
+    }
+    void selectedRowsChanged (int row) override { if (row >= 0 && row < hits.size()) s.engine.previewFile (hits[row]); }
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
+    juce::var getDragSourceDescription (const juce::SparseSet<int>&) override { return "sample"; }
     void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile()) s.engine.previewFile (f); }
     void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
