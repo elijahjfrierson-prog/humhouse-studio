@@ -275,6 +275,9 @@ public:
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
         setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
         themeBtn.onClick = [this] { showThemeDialog (studio); };
+        setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
+        scopeBtn.onClick = [this] { openScopeWindow (studio); };
+        addAndMakeVisible (scopeBtn);
         for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn, &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
@@ -355,6 +358,7 @@ public:
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
+        scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         browser->setVisible (showBrowser);
@@ -536,7 +540,7 @@ private:
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn, themeBtn;
+    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
     juce::Slider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;

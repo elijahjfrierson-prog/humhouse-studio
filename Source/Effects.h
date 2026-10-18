@@ -50,6 +50,41 @@ struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
 
+// lock-free audio tap for the Scope (written on the audio thread, read by the UI)
+struct ScopeTap
+{
+    static constexpr int size = 16384;
+    std::array<float, size> buf {};
+    std::atomic<int> pos { 0 };
+    std::atomic<double> rate { 44100.0 };
+    void push (const float* l, const float* r, int n)
+    {
+        int w = pos.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i) { buf[(size_t) w] = r != nullptr ? 0.5f * (l[i] + r[i]) : l[i]; w = (w + 1) & (size - 1); }
+        pos.store (w, std::memory_order_release);
+    }
+    void read (float* dst, int n, int end) const
+    {
+        n = std::min (n, size);
+        for (int i = 0; i < n; ++i) dst[i] = buf[(size_t) ((end - n + i + size) & (size - 1))];
+    }
+};
+ScopeTap& masterScope();
+
+// "Scope" insert: passes audio through untouched and feeds its own tap
+class ScopeFx : public BuiltinEffect
+{
+public:
+    ScopeFx() { initDefaults(); }
+    const char* typeId() const override { return "scope"; }
+    const std::vector<ParamDef>& params() const override
+    { static const std::vector<ParamDef> ps { { "zoom", "Display zoom", 0.5f, 4.0f, 1.0f } }; return ps; }
+    void prepare (double sr, int) override { tap->rate = sr; }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    { tap->push (b.getReadPointer (0), b.getNumChannels() > 1 ? b.getReadPointer (1) : nullptr, n); }
+    std::shared_ptr<ScopeTap> tap = std::make_shared<ScopeTap>();
+};
+
 // biquad used by EQ / de-esser / synth
 struct Biquad
 {

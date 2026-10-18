@@ -1198,6 +1198,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     masterPeakL = std::max (juce::FloatVectorOperations::findMaximum (l, n), -juce::FloatVectorOperations::findMinimum (l, n));
     masterPeakR = std::max (juce::FloatVectorOperations::findMaximum (r, n), -juce::FloatVectorOperations::findMinimum (r, n));
+    masterScope().rate = sampleRate;
+    masterScope().push (l, r, n);
     for (int c = 0; c < numOut; ++c)
     {
         if (! out[c]) continue;

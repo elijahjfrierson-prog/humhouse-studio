@@ -781,6 +781,8 @@ private:
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
 
+ScopeTap& masterScope() { static ScopeTap t; return t; }
+
 const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
@@ -794,13 +796,14 @@ const std::vector<EffectInfo>& builtinEffects()
         { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
-        { "glitch", "Glitch Gate", "Time FX" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
     return fx;
 }
 
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
     if (auto s = createStudioEffect (id)) return s;
+    if (id == "scope") return std::make_unique<ScopeFx>();
     if (id == "eq") return std::make_unique<ParaEQ>();
     if (id == "comp") return std::make_unique<Compressor>();
     if (id == "limiter") return std::make_unique<Limiter>();

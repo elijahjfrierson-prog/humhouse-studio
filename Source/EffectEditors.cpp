@@ -206,6 +206,16 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         return;
     }
 
+    if (slot->type == "scope")
+    {
+        auto* view = createScopeView ([&s, track, slotUid]() -> ScopeTap* {
+            auto* sc = dynamic_cast<ScopeFx*> (s.engine.builtinFx (track, slotUid));
+            return sc != nullptr ? sc->tap.get() : nullptr; }, trackName);
+        auto* w = new EditorWindow ("Scope - " + trackName, view, key, [&s, track, slotUid] { return findSlot (s, track, slotUid) != nullptr; });
+        w->setResizable (true, false); w->setResizeLimits (420, 240, 3000, 2000);
+        EditorWindow::windows().add (w);
+        return;
+    }
     auto fx = createBuiltinEffect (slot->type);
     if (fx == nullptr) return;
     juce::String title = slot->type;
@@ -342,6 +352,15 @@ void openChannelEditor (Studio& s, int channelId)
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }
+
+void openScopeWindow (Studio&)
+{
+    if (focusExisting ("scope:master")) return;
+    auto* w = new EditorWindow ("Scope - Master", createScopeView ([]() -> ScopeTap* { return &masterScope(); }, "Master"),
+                                "scope:master", [] { return true; });
+    w->setResizable (true, false); w->setResizeLimits (420, 240, 3000, 2000);
+    EditorWindow::windows().add (w);
+}
 
 void closeEditorsForPlugin (juce::AudioProcessor* p)
 {

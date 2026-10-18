@@ -81,6 +81,7 @@ target_sources(HumHouseStudio PRIVATE
     Source/ToolDialogs.cpp
     Source/EffectEditors.cpp
     Source/Theme.cpp
+    Source/ScopeView.cpp
 )
 target_compile_definitions(HumHouseStudio PRIVATE ${HHS_DEFS})
 target_link_libraries(HumHouseStudio PRIVATE ${HHS_LIBS}
