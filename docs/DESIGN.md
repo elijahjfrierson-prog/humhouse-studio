@@ -83,3 +83,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
   headers selected), click header = select/highlight, Shift = range, Ctrl/Cmd = toggle; selected headers highlighted;
   mute/arm/height/delete apply to all selected. Needs Lane::selected / MixerTrack::selected (UI-only, not saved).
 - DONE: createDefault() is now an empty rack; createDemo() keeps the starter beat (tests use it).
+- FL continuous punch: setRecording(true/false) while playing already starts/finishes writers without stopping transport (R key / rec button). Verify keyboard R toggles during playback; each toggle = new take on same lane/insert.
