@@ -59,3 +59,16 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - Hover tooltips on every knob/button/fader + FL-style hint bar showing name/value/shortcut.
 - "Plugin House" browser: built-ins (incl. AutoPitch) + scanned 3rd-party VST3/AU (HumHouse Autotune if installed).
 - Big sessions: parallel mixer worker pool, disk-streamed clips, freeze, auto-idle FX, CPU meter.
+
+## Next (requested 2026-10-18, add to PR #2 branch devin/1792315880-crash-fixes-logo-theme)
+- FL tool toolbar in Piano Roll + Playlist: Draw (P), Paint (B: drag paints repeated notes/clips at snap), Delete (D),
+  Mute (T), Slice (C: click/drag cuts notes/clips), Select (E), Zoom (Z), Group (Ctrl+G in playlist / group id on notes+clips: grouped items select+move together).
+- Mixer routing wires: draw cables from each strip to its targets (sends + master), FL routing view; channel->insert wires too.
+- Sampler/808 channel playback modes: One-shot (ignore note-off), Cut itself (new hit chokes previous voice), Cut group id
+  (e.g. hats choke each other), amp envelope A/H/D/R per channel, ~3 ms declick fade on choke. Expose in Channel settings + rack menu.
+- DONE (uncommitted->commit): sampler oneShot / cutItself / cutGroup / amp A-H-R (Model, Instruments, Engine renderChannels choke events, ProjectIO, channel editor, rack menu).
+- Kit browsing like FL (requested 2026-10-18): on a sampler channel, Up/Down arrows or mouse wheel over the channel name
+  shuffle to prev/next audio file in the same folder (live while playing); drag a browser sample onto a rack row replaces
+  its sample, onto empty rack space adds a channel; browser highlights samples used in the project; menu "Samples used"
+  lists every sample file in the project.
+- Alt+A arp/rolls already implemented (ToolDialogs Tool::Arp, rack right-click roll x2..x8) - user re-asked, told them.

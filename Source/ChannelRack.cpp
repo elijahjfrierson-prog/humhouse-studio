@@ -128,6 +128,8 @@ struct Row : public juce::Component
         m.addItem (4, "Route to selected mixer insert (" + juce::String (s.selectedTrack) + ")");
         m.addItem (5, "New mixer insert for this channel");
         m.addItem (6, "Clear notes in this pattern");
+        m.addItem (8, "Cut itself (808s never overlap)", c->type == ChannelType::Sampler, c->cutItself);
+        m.addItem (9, "One-shot (play whole sample)", c->type == ChannelType::Sampler, c->oneShot);
         m.addSeparator();
         m.addItem (7, "Delete channel");
         m.showMenuAsync ({}, [this] (int r) {
@@ -137,6 +139,8 @@ struct Row : public juce::Component
             else if (r == 3) { auto* c = s.channel (id); if (c) askText ("Rename channel", c->name, [this, id] (juce::String t) { s.edit ("Rename", [&] (Project&) { if (auto* ch = s.channel (id)) ch->name = t; }); }); }
             else if (r == 4) s.edit ("Route channel", [&] (Project&) { if (auto* ch = s.channel (id)) ch->mixerTrack = s.selectedTrack; });
             else if (r == 5) s.edit ("New insert", [&] (Project& p) { if (auto* ch = s.channel (id)) ch->mixerTrack = p.addMixerTrack (ch->name); });
+            else if (r == 8) s.edit ("Cut itself", [&] (Project&) { if (auto* ch = s.channel (id)) ch->cutItself = ! ch->cutItself; });
+            else if (r == 9) s.edit ("One-shot", [&] (Project&) { if (auto* ch = s.channel (id)) ch->oneShot = ! ch->oneShot; });
             else if (r == 6) s.edit ("Clear notes", [&] (Project&) { s.notes (id).clear(); });
             else if (r == 7) s.edit ("Delete channel", [&] (Project& p) {
                 p.channels.erase (std::remove_if (p.channels.begin(), p.channels.end(), [id] (const Channel& ch) { return ch.id == id; }), p.channels.end());

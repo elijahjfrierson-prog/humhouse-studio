@@ -55,6 +55,8 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("pitch", c.pitch, nullptr); t.setProperty ("glide", c.glide, nullptr); t.setProperty ("mono", c.mono, nullptr);
         t.setProperty ("mute", c.muted, nullptr); t.setProperty ("solo", c.solo, nullptr); t.setProperty ("root", c.rootKey, nullptr);
         t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
+        t.setProperty ("oneShot", c.oneShot, nullptr); t.setProperty ("cutSelf", c.cutItself, nullptr); t.setProperty ("cutGroup", c.cutGroup, nullptr);
+        t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
         auto& s = c.synth;
         t.setProperty ("wave", s.wave, nullptr); t.setProperty ("a", s.attack, nullptr); t.setProperty ("d", s.decay, nullptr);
         t.setProperty ("s", s.sustain, nullptr); t.setProperty ("r", s.release, nullptr); t.setProperty ("cut", s.cutoff, nullptr);
@@ -141,6 +143,8 @@ Project projectFromTree (const juce::ValueTree& root)
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xffff8a3d));
+        c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
+        c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         auto& s = c.synth;
         s.wave = t["wave"]; s.attack = t.getProperty ("a", 0.002f); s.decay = t.getProperty ("d", 0.3f); s.sustain = t.getProperty ("s", 0.7f);
         s.release = t.getProperty ("r", 0.25f); s.cutoff = t.getProperty ("cut", 12000.0f); s.resonance = t.getProperty ("res", 0.2f);

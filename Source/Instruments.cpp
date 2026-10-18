@@ -15,11 +15,13 @@ public:
     void update (const Channel& c) override
     {
         rootKey = c.rootKey; pitch = c.pitch; glide = c.glide; mono = c.mono;
+        oneShot = c.oneShot; cutItself = c.cutItself; attack = c.ampAttack; hold = c.ampHold; release = c.ampRelease;
     }
     void noteOn (int key, float vel, bool slide) override
     {
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = key - rootKey + pitch;
+        if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
         if (mono || slide)
         {
             for (auto& v : voices) if (v.active && ! v.releasing)
@@ -32,7 +34,7 @@ public:
         for (auto& c : voices) if (! c.active) { v = &c; break; }
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
-        v->active = true; v->key = key; v->gain = vel;
+        v->active = true; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideRate = glide > 0.0f ? 1.0 / (glide * sampleRate) : 1.0;
@@ -40,9 +42,10 @@ public:
     }
     void noteOff (int key) override
     {
-        for (auto& v : voices) if (v.active && v.key == key && mono) v.releasing = true;
+        for (auto& v : voices) if (v.active && v.key == key && (mono || ! oneShot)) v.releasing = true;
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
+    void choke() override { for (auto& v : voices) if (v.active) { v.releasing = true; v.fadeLen = 0.003f; } }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
     void render (juce::AudioBuffer<float>& out, int start, int num) override
@@ -68,7 +71,10 @@ public:
                 if (i0 + 1 >= len) { v.active = false; break; }
                 const float f = (float) (v.pos - i0);
                 float g = v.gain;
-                if (v.releasing) { v.rel -= 1.0f / (0.01f * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
+                if (attack > 0.0f && v.age < attack * sampleRate) g *= (float) (v.age / (attack * sampleRate));
+                if (hold > 0.0f && ! v.releasing && v.age > hold * sampleRate) v.releasing = true;
+                v.age += 1.0;
+                if (v.releasing) { v.rel -= 1.0f / (v.fadeLen * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
                 oL[i] += (l[i0] + f * (l[i0 + 1] - l[i0])) * g;
                 oR[i] += (r[i0] + f * (r[i0 + 1] - r[i0])) * g;
                 v.pos += std::pow (2.0, v.semis / 12.0);
@@ -76,12 +82,13 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1; float gain = 1, rel = 1; };
+    struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1, age = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 16> voices {};
     int next = 0, rootKey = 60;
     double sampleRate = 44100.0, lastSemis = -999.0;
     float pitch = 0, glide = 0; bool mono = false;
+    bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };
 
 // ------------------------------------------------------------ synth

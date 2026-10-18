@@ -184,6 +184,15 @@ void openChannelEditor (Studio& s, int channelId)
     ps.push_back ({ "glide", "Glide (s)", 0, 1, 0, ch->glide, {} });
     ps.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
     ps.push_back ({ "root", "Step note", 24, 96, 60, (float) ch->rootKey, {} });
+    if (ch->type == ChannelType::Sampler)
+    {
+        ps.push_back ({ "oneShot", "Mode", 0, 1, 1, ch->oneShot ? 1.0f : 0.0f, { "Gated (note length)", "One-shot" } });
+        ps.push_back ({ "cutSelf", "Cut itself", 0, 1, 0, ch->cutItself ? 1.0f : 0.0f, { "Off", "On (808s never overlap)" } });
+        ps.push_back ({ "cutGroup", "Cut group", 0, 8, 0, (float) ch->cutGroup, { "None", "1", "2", "3", "4", "5", "6", "7", "8" } });
+        ps.push_back ({ "ampA", "Attack (s)", 0, 0.5f, 0, ch->ampAttack, {} });
+        ps.push_back ({ "ampH", "Hold (s, 0=all)", 0, 4, 0, ch->ampHold, {} });
+        ps.push_back ({ "ampR", "Release (s)", 0.002f, 2, 0.01f, ch->ampRelease, {} });
+    }
     if (ch->type == ChannelType::Synth)
     {
         auto& sp = ch->synth;
@@ -210,6 +219,9 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "sustain") sp.sustain = v; else if (id == "release") sp.release = v; else if (id == "cutoff") sp.cutoff = v;
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
                 else if (id == "drive") sp.drive = v;
+                else if (id == "oneShot") c->oneShot = v > 0.5f; else if (id == "cutSelf") c->cutItself = v > 0.5f;
+                else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
+                else if (id == "ampH") c->ampHold = v; else if (id == "ampR") c->ampRelease = v;
             });
         },
         [&s] { s.commit ("Channel settings"); });

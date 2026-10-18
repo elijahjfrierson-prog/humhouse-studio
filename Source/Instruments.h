@@ -18,7 +18,8 @@ public:
     virtual void allNotesOff() = 0;
     virtual void render (juce::AudioBuffer<float>& out, int start, int num) = 0; // adds into out
     virtual bool isActive() const = 0;
-    virtual void update (const Channel&) = 0;   // pull params from model (message thread, under engine lock)
+    virtual void update (const Channel&) = 0;
+    virtual void choke() { allNotesOff(); }   // fast declicked stop (cut groups)   // pull params from model (message thread, under engine lock)
 };
 
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel&, SharedSample sample, double sampleRate);

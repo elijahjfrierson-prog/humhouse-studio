@@ -69,6 +69,7 @@ struct Engine::ChannelRuntime
     struct Active { int key; double remaining; };
     std::array<Active, 128> active {}; int numActive = 0;
     int silentBlocks = 0;
+    int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
 };
 
@@ -425,6 +426,7 @@ void Engine::sync()
         {
             auto* rt = channelRt[ch.id].get();
             if (rt->inst) rt->inst->update (ch);
+            rt->cutGroup = ch.cutGroup;
             channelOrder.push_back (rt);
         }
 
@@ -949,6 +951,7 @@ struct EngineJobs
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
+                if (ev.key < 0) continue;
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
@@ -972,7 +975,8 @@ struct EngineJobs
             {
                 auto& ev = rt->events[(size_t) k];
                 if (ev.offset > pos) { rt->inst->render (rt->buf, pos, ev.offset - pos); pos = ev.offset; }
-                if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
+                if (ev.key < 0) rt->inst->choke();
+                else if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
             }
             if (pos < n) rt->inst->render (rt->buf, pos, n - pos);
         }
@@ -1202,6 +1206,18 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
 void Engine::renderChannels (int n)
 {
+    // cut groups: a hit on one channel chokes every other channel in the same group at that sample offset
+    for (auto* a : channelOrder)
+    {
+        if (a->cutGroup <= 0) continue;
+        for (int k = 0, num = a->numEvents; k < num; ++k)
+        {
+            const auto ev = a->events[(size_t) k];
+            if (! ev.on || ev.key < 0) continue;
+            for (auto* b : channelOrder) if (b != a && b->cutGroup == a->cutGroup) b->addEvent ({ ev.offset, -1, 0.0f, false, false });
+        }
+    }
+
     juce::ignoreUnused (n);
     const int count = (int) channelOrder.size();
     if (count >= 4 && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
