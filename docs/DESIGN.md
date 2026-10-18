@@ -106,3 +106,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: Scope (SCOPE button, detachable/resizable): OSC / WAVE / SPECTRUM of master; 'Scope' insert in Plugin House for any track.
 - DONE: tattoo lettering (Pirata One / Rye, OFL, Options > Font), OBS/Discord capture (software renderer on Windows), v1.2.0 in title + What's new, installers replace the old app (pkill + remove, CloseApplications=force).
 - DONE: Instrument Pool (Prism, Drift, Lava, Glass, Haze, Nebula + piano/EP/Rhodes/guitar/bass/strings/brass/flute/choir), new synth engines (supersaw, FM, morph, air) + LFO/vibrato; live play from MIDI keyboards and the FL typing keyboard, recorded into the pattern while recording.
+- DONE: View > Detach Channel Rack / Piano Roll / Playlist / Mixer / Plugin House into own resizable windows; per-track height (drag header bottom edge), Alt+wheel all tracks, right-click > Make all tracks small/medium/large.

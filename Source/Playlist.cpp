@@ -125,8 +125,21 @@ struct LaneHeader : public juce::Component
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
     }
+    std::function<void (int lane, int height)> onHeight;
+    std::function<void (int size)> onAllHeights;
+    bool edgeDrag = false; int dragStartH = 0;
+    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5; }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (edgeDrag && onHeight) onHeight (index, dragStartH + e.getDistanceFromDragStartY());
+    }
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (! e.mods.isPopupMenu() && nearBottomEdge (e)) { edgeDrag = true; dragStartH = getHeight(); return; }
         auto& sel = s.selectedLanes;
         if (e.mods.isPopupMenu()) { if (! sel.contains (index)) { sel.clear(); sel.add (index); s.laneAnchor = index; } }
         else if (e.mods.isShiftDown() && s.laneAnchor >= 0)
@@ -141,18 +154,25 @@ struct LaneHeader : public juce::Component
     }
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (edgeDrag) { edgeDrag = false; return; }
         if (! e.mods.isPopupMenu()) return;
         juce::PopupMenu m;
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
         if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
+        {
+            juce::PopupMenu hm;
+            hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
+            m.addSubMenu ("Make all tracks", hm);
+        }
         m.addSeparator(); m.addItem (4, n > 1 ? "Delete " + juce::String (n) + " selected tracks" : juce::String ("Delete track"));
         m.showMenuAsync ({}, [this] (int r) {
             const int i = index;
             if (r == 1) name.showEditor();
             else if (r == 2) s.edit ("New insert", [i] (Project& p) { p.lanes[(size_t) i].mixerTrack = p.addMixerTrack (p.lanes[(size_t) i].name); });
             else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
+            else if (r >= 20 && r <= 22) { if (onAllHeights) onAllHeights (r - 20); }
             else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
@@ -244,8 +264,8 @@ public:
             {
                 const int y = laneY ((int) i);
                 g.setColour (i % 2 ? col::panel.darker (0.2f) : col::bg.brighter (0.03f));
-                g.fillRect (area.getX(), y, area.getWidth(), laneH);
-                g.setColour (col::grid); g.drawHorizontalLine (y + laneH - 1, (float) area.getX(), (float) area.getRight());
+                g.fillRect (area.getX(), y, area.getWidth(), laneHOf ((int) i));
+                g.setColour (col::grid); g.drawHorizontalLine (y + laneHOf ((int) i) - 1, (float) area.getX(), (float) area.getRight());
             }
             const double b1 = xToBeat ((float) area.getRight());
             double step = 1.0;
@@ -478,6 +498,12 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
+        if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
+        {
+            zoomH = juce::jlimit (0.4f, 4.0f, zoomH * (w.deltaY > 0 ? 1.1f : 1.0f / 1.1f));
+            layoutHeaders(); repaint();
+            return;
+        }
         if (e.mods.isCommandDown())
         {
             const double at = xToBeat (e.position.x);
@@ -488,7 +514,7 @@ public:
             scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
         else
         {
-            scrollY = juce::jlimit (0, juce::jmax (0, (int) s.p().lanes.size() * laneH - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
+            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
             layoutHeaders();
         }
         repaint();
@@ -590,11 +616,26 @@ private:
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW); }
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
-    int laneY (int lane) const { return toolbarH + rulerH + lane * laneH - scrollY; }
+    std::map<int, float> laneMul;   // per-track height (drag a header's bottom edge)
+    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks)
+    int numLanes() const { return (int) const_cast<Studio&> (s).p().lanes.size(); }
+    int laneHOf (int lane) const
+    {
+        auto it = laneMul.find (lane);
+        return juce::jlimit (22, 800, (int) ((float) laneH * zoomH * (it != laneMul.end() ? it->second : 1.0f)));
+    }
+    int totalLaneH() const { int t = 0; for (int i = 0; i < numLanes(); ++i) t += laneHOf (i); return t; }
+    int laneY (int lane) const
+    {
+        int y = toolbarH + rulerH - scrollY;
+        for (int i = 0; i < lane; ++i) y += laneHOf (i);
+        return y;
+    }
     int laneAt (float y) const
     {
-        const int l = (int) std::floor ((y - toolbarH - rulerH + scrollY) / laneH);
-        return l >= 0 && l < (int) const_cast<Studio&> (s).p().lanes.size() ? l : -1;
+        int top = toolbarH + rulerH - scrollY;
+        for (int i = 0; i < numLanes(); ++i) { const int h = laneHOf (i); if (y >= (float) top && y < (float) (top + h)) return i; top += h; }
+        return -1;
     }
     double gridSnap() const
     {
@@ -608,7 +649,7 @@ private:
     double beatsFromSeconds (double secs) const { return secondsToBeats (secs, const_cast<Studio&> (s).p().bpm); }
     juce::Rectangle<float> clipRect (const Clip& c) const
     {
-        return { beatToX (c.start), (float) laneY (c.lane) + 2.0f, juce::jmax (4.0f, (float) (c.length * pxPerBeat)), (float) laneH - 4.0f };
+        return { beatToX (c.start), (float) laneY (c.lane) + 2.0f, juce::jmax (4.0f, (float) (c.length * pxPerBeat)), (float) laneHOf (c.lane) - 4.0f };
     }
     int hitClip (juce::Point<float> pt, Part& part) const
     {
@@ -809,8 +850,8 @@ private:
         for (size_t i = 0; i < headers.size(); ++i)
         {
             const int y = laneY ((int) i);
-            headers[i]->setBounds (0, y, headerW, laneH);
-            headers[i]->setVisible (y + laneH > toolbarH + rulerH);
+            headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
+            headers[i]->setVisible (y + laneHOf ((int) i) > toolbarH + rulerH);
         }
     }
     void refresh()
@@ -819,7 +860,22 @@ private:
         if (headers.size() != p.lanes.size())
         {
             headers.clear();
-            for (size_t i = 0; i < p.lanes.size(); ++i) { headers.push_back (std::make_unique<LaneHeader> (s, (int) i)); addAndMakeVisible (*headers.back()); }
+            for (size_t i = 0; i < p.lanes.size(); ++i) 
+            {
+                headers.push_back (std::make_unique<LaneHeader> (s, (int) i));
+                headers.back()->onHeight = [this] (int lane, int h)
+                {
+                    laneMul[lane] = juce::jlimit (0.3f, 8.0f, (float) h / (float) juce::jmax (1.0f, (float) laneH * zoomH));
+                    layoutHeaders(); repaint();
+                };
+                headers.back()->onAllHeights = [this] (int size)
+                {
+                    laneMul.clear();
+                    zoomH = size == 0 ? 0.6f : size == 1 ? 1.0f : 1.8f;
+                    layoutHeaders(); repaint();
+                };
+                addAndMakeVisible (*headers.back());
+            }
             layoutHeaders();
         }
         for (auto& h : headers) h->refresh();

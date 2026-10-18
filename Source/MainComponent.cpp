@@ -207,7 +207,7 @@ enum MenuIds
 {
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
-    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed,
+    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
     mHistory = 1000
@@ -366,6 +366,7 @@ public:
     {
         stopTimer();
         engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
+        popouts.clear();
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
@@ -408,13 +409,21 @@ public:
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
-        browser->setVisible (showBrowser);
-        if (showBrowser) browser->setBounds (r.removeFromLeft (260));
-        rack->setVisible (view == 0); piano->setVisible (view == 0);
-        playlist->setVisible (view == 1); mixer->setVisible (view == 2);
-        if (view == 0) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
-        else if (view == 1) playlist->setBounds (r);
-        else mixer->setBounds (r);
+        auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
+        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (260)); }
+        const bool rackHere = here (rack), pianoHere = here (piano);
+        if (rackHere) rack->setVisible (view == 0);
+        if (pianoHere) piano->setVisible (view == 0);
+        if (here (playlist)) playlist->setVisible (view == 1);
+        if (here (mixer)) mixer->setVisible (view == 2);
+        if (view == 0)
+        {
+            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
+            else if (rackHere) rack->setBounds (r);
+            else if (pianoHere) piano->setBounds (r);
+        }
+        else if (view == 1) { if (here (playlist)) playlist->setBounds (r); }
+        else if (here (mixer)) mixer->setBounds (r);
     }
 
     bool keyPressed (const juce::KeyPress& k) override
@@ -556,6 +565,12 @@ public:
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
+            m.addSeparator();
+            add (mDetachRack, "Detach Channel Rack (own window)", {}, true, popouts.count (rack.get()) > 0);
+            add (mDetachPiano, "Detach Piano Roll (own window)", {}, true, popouts.count (piano.get()) > 0);
+            add (mDetachPlaylist, "Detach Playlist (own window)", {}, true, popouts.count (playlist.get()) > 0);
+            add (mDetachMixer, "Detach Mixer (own window)", {}, true, popouts.count (mixer.get()) > 0);
+            add (mDetachBrowser, "Detach Plugin House / Browser (own window)", {}, true, popouts.count (browser.get()) > 0);
         }
         else if (index == 3)
         {
@@ -624,6 +639,11 @@ public:
             case mUndo: studio.undoStep (-1); break;
             case mRedo: studio.undoStep (1); break;
             case mBackupFolder: backupDir().createDirectory(); backupDir().startAsProcess(); break;
+            case mDetachRack: toggleDetach (rack.get(), "Channel Rack"); break;
+            case mDetachPiano: toggleDetach (piano.get(), "Piano Roll"); break;
+            case mDetachPlaylist: toggleDetach (playlist.get(), "Playlist"); break;
+            case mDetachMixer: toggleDetach (mixer.get(), "Mixer"); break;
+            case mDetachBrowser: toggleDetach (browser.get(), "Plugin House"); break;
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;
@@ -682,6 +702,44 @@ private:
     bool autoBackup() const { return studio.settings->getBoolValue ("autoBackup", true); }
 
     void flash (const juce::String& t) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + 2500; }
+
+    // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
+    struct PopOut : public juce::DocumentWindow
+    {
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) {}
+        std::function<void()> onClose;
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+    std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
+
+    void toggleDetach (juce::Component* c, const juce::String& title)
+    {
+        if (popouts.count (c) > 0) { reattach (c); return; }
+        auto w = std::make_unique<PopOut> (title);
+        w->setUsingNativeTitleBar (true);
+        w->setContentNonOwned (c, false);
+        c->setVisible (true);
+        w->setResizable (true, true);
+        w->setResizeLimits (360, 220, 10000, 8000);
+        w->centreWithSize (juce::jmax (900, c->getWidth()), juce::jmax (520, c->getHeight()));
+        w->setVisible (true);
+        makeCaptureFriendly (*w);
+        w->onClose = [safe = juce::Component::SafePointer<MainComponent> (this), c]
+        {
+            juce::MessageManager::callAsync ([safe, c] { if (safe != nullptr) safe->reattach (c); });
+        };
+        popouts[c] = std::move (w);
+        resized();
+    }
+    void reattach (juce::Component* c)
+    {
+        auto it = popouts.find (c);
+        if (it == popouts.end()) return;
+        it->second->clearContentComponent();
+        popouts.erase (it);
+        addAndMakeVisible (c);
+        resized();
+    }
 
     void setView (int v)
     {
