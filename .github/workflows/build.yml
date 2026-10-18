@@ -80,6 +80,10 @@ jobs:
           test -x "/Applications/HumHouse Studio.app/Contents/MacOS/HumHouse Studio" || {
             echo "app not in /Applications"; pkgutil --pkg-info com.humhouse.studio.installer.app || true
             pkgutil --files com.humhouse.studio.installer.app | head || true; exit 1; }
+          v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/HumHouse Studio.app/Contents/Info.plist")
+          echo "installed version: $v"; test "$v" = "1.2.0" || { echo "old version still installed"; exit 1; }
+          n=$(find /Applications -maxdepth 2 -name "HumHouse Studio*.app" | wc -l | tr -d ' ')
+          test "$n" = "1" || { echo "expected exactly one HumHouse Studio.app, found $n"; exit 1; }
 
       - name: Package Setup.exe (Windows)
         if: runner.os == 'Windows'
@@ -102,6 +106,9 @@ jobs:
           foreach ($p in @("$env:ProgramFiles\HumHouse\HumHouse Studio\HumHouse Studio.exe", "$env:ProgramFiles\HumHouse\HumHouse Studio\LICENSE.txt")) {
             if (-not (Test-Path -LiteralPath $p)) { throw "missing $p" }
           }
+          $keys = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'HumHouse Studio*' }
+          if (@($keys).Count -ne 1) { throw "expected one HumHouse Studio install, found $(@($keys).Count)" }
+          if ($keys.DisplayName -notlike '*1.2.0*') { throw "old version still registered: $($keys.DisplayName)" }
 
       - name: Stage artifacts (Linux)
         if: runner.os == 'Linux'
