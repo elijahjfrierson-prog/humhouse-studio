@@ -586,6 +586,20 @@ void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
     }
 }
 
+void Engine::forEachLiveTake (const std::function<void (int, double, const float*, int, double)>& fn)
+{
+    if (! recording.load()) return;
+    struct Info { int lane; double start; const float* pk; int num; };
+    std::vector<Info> live;
+    {
+        const juce::SpinLock::ScopedTryLockType tl (takeLock);   // brief: copy, then draw outside the lock
+        if (! tl.isLocked()) return;
+        for (auto& tk : takes) if (tk->started) live.push_back ({ tk->lane, tk->startBeat, tk->peaks.data(), tk->numPeaks.load() });
+    }
+    const double beatsPerPeak = 256.0 / sampleRate * proj.bpm / 60.0;
+    for (auto& i : live) fn (i.lane, i.start, i.pk, i.num, beatsPerPeak);
+}
+
 float Engine::fxLoad (int track, int uid) const
 {
     if (track < 0 || track >= (int) trackRt.size() || ! trackRt[(size_t) track]) return 0.0f;
@@ -1313,6 +1327,16 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                         const float* chans[2] { il, ir };
                         tk->writer->write (chans, n);
                         tk->samplesWritten += n;
+                        for (int i = 0; i < n; ++i)
+                        {
+                            tk->peakAcc = std::max (tk->peakAcc, std::max (std::abs (il[i]), std::abs (ir[i])));
+                            if (++tk->peakN >= 256)
+                            {
+                                const int k = tk->numPeaks.load();
+                                if (k < (int) tk->peaks.size()) { tk->peaks[(size_t) k] = tk->peakAcc; tk->numPeaks = k + 1; }
+                                tk->peakAcc = 0; tk->peakN = 0;
+                            }
+                        }
                     }
         }
     }

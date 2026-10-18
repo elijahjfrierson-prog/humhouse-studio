@@ -292,6 +292,26 @@ public:
                 g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
             }
             for (auto& c : p.clips) if (! c.hidden) drawClip (g, c);
+            // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
+            s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
+                if (lane < 0 || lane >= (int) p.lanes.size() || num <= 0) return;
+                const float y0 = (float) laneY (lane), h = (float) laneHOf (lane);
+                const float x0 = beatToX (startBeat), x1 = beatToX (startBeat + num * bpp);
+                juce::Rectangle<float> r (x0, y0 + 2.0f, juce::jmax (2.0f, x1 - x0), h - 4.0f);
+                g.setColour (col::rec.withAlpha (0.25f)); g.fillRoundedRectangle (r, 4);
+                g.setColour (col::rec); g.fillRoundedRectangle (r.withHeight (14), 4);
+                float mx = 0.02f;
+                for (int i = 0; i < num; ++i) mx = std::max (mx, pk[i]);
+                const float scale = juce::jlimit (1.0f, 10.0f, 0.8f / mx);
+                auto body = r.withTrimmedTop (14).reduced (1, 2);
+                const float mid = body.getCentreY(), half = body.getHeight() * 0.5f;
+                g.setColour (col::rec.brighter (0.5f));
+                for (int i = 0; i < num; ++i)
+                {
+                    const float a = std::min (1.0f, pk[i] * scale) * half;
+                    g.drawVerticalLine ((int) beatToX (startBeat + i * bpp), mid - a, mid + a);
+                }
+            });
             const float px = beatToX (s.engine.positionBeats());
             const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
             g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
@@ -711,7 +731,7 @@ private:
             {
                 const double secs = beatsToSeconds (c.length, p.bpm);
                 g.setColour (colour.brighter (0.4f));
-                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain);
+                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, t->getApproximatePeak())));   // quiet takes stay visible
             }
             // fades
             const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);

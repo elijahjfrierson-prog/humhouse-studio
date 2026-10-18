@@ -53,6 +53,7 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- See the take being recorded: live red clip + waveform; quiet takes drawn scaled up\n"
         "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
         "- NORM button on every track: zero-latency auto-normalize for your voice\n"
         "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
