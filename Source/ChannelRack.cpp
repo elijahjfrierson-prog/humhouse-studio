@@ -67,7 +67,30 @@ struct NameTag : public juce::Component, public juce::SettableTooltipClient
         g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
     }
     void mouseUp (const juce::MouseEvent& e) override { if (onMouse && contains (e.getPosition())) onMouse (e); }
+    std::function<void (int)> onShuffle;
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (onShuffle && w.deltaY != 0) onShuffle (w.deltaY > 0 ? -1 : 1); else Component::mouseWheelMove (e, w);
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (onShuffle && k == juce::KeyPress::upKey) { onShuffle (-1); return true; }
+        if (onShuffle && k == juce::KeyPress::downKey) { onShuffle (1); return true; }
+        return false;
+    }
 };
+
+// FL-style sample shuffling: step to the previous / next audio file in the same folder
+static juce::File siblingSample (const juce::File& f, int dir)
+{
+    juce::Array<juce::File> files;
+    for (const auto& e : juce::RangedDirectoryIterator (f.getParentDirectory(), false, "*", juce::File::findFiles))
+        if (isAudioFile (e.getFile())) files.add (e.getFile());
+    files.sort();
+    const int i = files.indexOf (f);
+    if (files.isEmpty()) return f;
+    return files[(i < 0 ? 0 : i + dir + files.size()) % files.size()];
+}
 
 struct Row : public juce::Component
 {
@@ -87,7 +110,16 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.setTooltip ("Click: open in Piano Roll. Right-click: rename, delete, editor, routing");
+        name.setTooltip ("Click: open in Piano Roll. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.setWantsKeyboardFocus (true);
+        name.onShuffle = [this] (int dir) {
+            auto* c = s.channel (channelId);
+            if (c == nullptr || c->type != ChannelType::Sampler || ! c->sampleFile.existsAsFile()) return;
+            const auto next = siblingSample (c->sampleFile, dir);
+            if (next == c->sampleFile) return;
+            s.edit ("Shuffle sample", [&] (Project&) { if (auto* ch = s.channel (channelId)) { ch->sampleFile = next; ch->name = next.getFileNameWithoutExtension(); } });
+            if (! s.engine.isPlaying()) s.engine.previewFile (next);
+        };
         refresh();
     }
     void bind (Knob& k, std::function<void (Channel&, float)> set)
