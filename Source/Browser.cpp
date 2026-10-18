@@ -221,7 +221,7 @@ public:
         rackBtn.onClick = [this] { auto f = selected(); if (f.existsAsFile()) addSampleChannels (s, { f }, {}); };
         addAndMakeVisible (kitBtn); addAndMakeVisible (rackBtn);
         tree.addListener (this);
-        tree.setTooltip ("Click a sample to hear it, double-click to add it to the Channel Rack. You can also drag files from your desktop");
+        tree.setTooltip ("Click a sample to hear it. Double-click or drag it into the Channel Rack, or drag it onto the Playlist. Desktop files can be dragged in too");
         tree.setDragAndDropDescription ("sample");
         tree.setColour (juce::TreeView::backgroundColourId, col::panel);
         tree.setColour (juce::TreeView::selectedItemBackgroundColourId, col::accent.withAlpha (0.35f));

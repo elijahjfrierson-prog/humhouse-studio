@@ -302,7 +302,7 @@ struct Row : public juce::Component
     juce::Slider insert;
 };
 
-class ChannelRack : public juce::Component, public juce::FileDragAndDropTarget, public juce::TooltipClient,
+class ChannelRack : public juce::Component, public juce::FileDragAndDropTarget, public juce::DragAndDropTarget, public juce::TooltipClient,
                     private juce::ChangeListener, private juce::Timer
 {
 public:
@@ -435,6 +435,16 @@ public:
         layoutRows(); repaint();
     }
 
+    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString() == "sample"; }
+    void itemDropped (const SourceDetails& d) override   // drag from the Samples browser
+    {
+        if (auto* t = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get()))
+        {
+            juce::StringArray files;
+            for (int i = 0; i < t->getNumSelectedFiles(); ++i) files.add (t->getSelectedFile (i).getFullPathName());
+            if (! files.isEmpty()) filesDropped (files, d.localPosition.x, d.localPosition.y);
+        }
+    }
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void filesDropped (const juce::StringArray& files, int, int) override
     {

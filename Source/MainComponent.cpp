@@ -59,6 +59,7 @@ void showWhatsNewIfUpdated()
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
         "- FL Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
         "- Ctrl/Cmd+C / X / V copy, cut, paste at the playhead; Ctrl/Cmd+B duplicate; Shift+drag clones; Ctrl/Cmd+D deselect\n"
+        "- Drag samples from the browser into the Channel Rack or onto the Playlist\n"
         "- Piano Roll MUTE (M): silence note previews while you edit\n"
         "- Play / Stop / Rec buttons, draggable playhead handle in the ruler, 4 ms declick when starting mid-sound\n"
         "- Fixed: first note cut when a held note (808 tail) ran over the loop; crash on New project; auto-backup every 8 edits\n"
@@ -314,7 +315,7 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 };
 }
 
-class MainComponent : public juce::Component, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
+class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
     MainComponent()
