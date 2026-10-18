@@ -1,7 +1,7 @@
 ; Produces HumHouse-Studio-Windows-Setup.exe: shows the EULA (must be accepted), then installs
 ; HumHouse Studio into Program Files with Start-menu and optional desktop shortcuts.
 #define MyAppName "HumHouse Studio"
-#define MyAppVersion "1.2.3"
+#define MyAppVersion "1.2.4"
 #define MyAppPublisher "HumHouse"
 #define MyAppURL "https://github.com/elijahjfrierson-prog/humhouse-studio"
 #define MyAppExeName "HumHouse Studio.exe"
