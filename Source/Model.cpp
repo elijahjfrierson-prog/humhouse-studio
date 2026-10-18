@@ -98,7 +98,7 @@ Project Project::createDefault()
     p.mixer.push_back (master);
     Pattern pat; pat.name = "Pattern 1";
     p.patterns.push_back (pat);
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 10; ++i)
     {
         Lane l; l.name = i == 0 ? "Beat" : (i == 1 ? "Vocal" : "Track " + juce::String (i + 1));
         p.lanes.push_back (l);
