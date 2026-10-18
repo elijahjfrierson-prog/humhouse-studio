@@ -117,7 +117,8 @@ juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Pr
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);
-void openScopeWindow (Studio&);   // master scope, pops out + resizable
+void openScopeWindow (Studio&);
+void openTrackScopeWindow (Studio&, int track);   // master scope, pops out + resizable
 void closeEditorsForPlugin (juce::AudioProcessor*);
 
 void applyTheme (juce::Colour accent, float tint);   // tint 0..1 = how much the accent colors the background

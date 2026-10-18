@@ -1041,6 +1041,7 @@ void Engine::processTrack (int t)
     tr.out.applyGain (1, 0, n, gr);
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
     tr.peak.store (std::max (pk, tr.peak.load() * 0.85f));
+    if (auto* sc = trackScope (t)) { sc->rate = sampleRate; sc->push (tr.out.getReadPointer (0), tr.out.getReadPointer (1), n); }
 }
 
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)

@@ -58,6 +58,9 @@ public:
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     float trackPeak (int track) const;
+    ScopeTap* trackScope (int t) { return t >= 0 && t < maxScopeTracks ? &(*trackScopes)[(size_t) t] : nullptr; }
+    static constexpr int maxScopeTracks = 64;
+    std::unique_ptr<std::array<ScopeTap, maxScopeTracks>> trackScopes = std::make_unique<std::array<ScopeTap, maxScopeTracks>>();
     double cpuLoad() const;
     bool isCountingIn() const { return countingIn.load(); }
 

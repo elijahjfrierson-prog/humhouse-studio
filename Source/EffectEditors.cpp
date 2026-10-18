@@ -239,6 +239,69 @@ void openEffectEditor (Studio& s, int track, int slotUid)
 
 
 // FL-style channel settings: SMP / INS / FUNC pages (the "wrench" panel)
+// sampler WAVE page: the sample after SMP edits (normalize, reverse, trim, fades, stretch), Ableton-style
+struct SampleWaveView : juce::Component, private juce::Timer
+{
+    SampleWaveView (Studio& st, int id) : s (st), channelId (id) { setSize (560, 300); startTimer (250); timerCallback(); }
+    void timerCallback() override
+    {
+        auto* c = s.channel (channelId);
+        if (c == nullptr) return;
+        const juce::String k = c->sampleFile.getFullPathName() + juce::String ((int) c->smpNormalize) + juce::String ((int) c->smpReverse)
+            + juce::String ((int) c->smpInvert) + juce::String ((int) c->smpDeclick) + juce::String ((int) c->smpTrim) + juce::String (c->smpBoostDb)
+            + "|" + juce::String (c->smpFadeIn) + "|" + juce::String (c->smpFadeOut) + "|" + juce::String (c->stretchMode) + "|" + juce::String (c->stretchTime);
+        if (k == key) return;
+        key = k;
+        const Channel copy = *c;
+        auto raw = loadSampleFile (copy.sampleFile, 44100.0);
+        auto done = raw != nullptr ? processSample (raw, copy, 44100.0) : nullptr;
+        peaks.clear();
+        if (done != nullptr && done->getNumSamples() > 0)
+        {
+            const int cols = 1024, n = done->getNumSamples();
+            for (int x = 0; x < cols; ++x)
+            {
+                const int a = (int) ((int64_t) n * x / cols), b = juce::jmax (a + 1, (int) ((int64_t) n * (x + 1) / cols));
+                float lo = 0, hi = 0;
+                for (int ch = 0; ch < done->getNumChannels(); ++ch)
+                {
+                    auto r = done->findMinMax (ch, a, juce::jmin (b, n) - a);
+                    lo = juce::jmin (lo, r.getStart()); hi = juce::jmax (hi, r.getEnd());
+                }
+                peaks.push_back ({ lo, hi });
+            }
+            seconds = (double) n / 44100.0;
+        }
+        fadeIn = copy.smpFadeIn; fadeOut = copy.smpFadeOut;
+        repaint();
+    }
+    void paint (juce::Graphics& g) override
+    {
+        auto a = getLocalBounds().toFloat().reduced (8);
+        g.fillAll (col::panel);
+        g.setColour (col::bg); g.fillRoundedRectangle (a, 6);
+        g.setColour (col::grid);
+        for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8.0f), a.getY(), a.getBottom());
+        g.drawHorizontalLine ((int) a.getCentreY(), a.getX(), a.getRight());
+        if (peaks.empty()) { g.setColour (col::dim); g.drawText ("No sample loaded", a, juce::Justification::centred); return; }
+        juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.46f;
+        for (size_t i = 0; i < peaks.size(); ++i)
+            p.lineTo (a.getX() + a.getWidth() * (float) i / (float) (peaks.size() - 1), mid - peaks[i].second * hh);
+        for (size_t i = peaks.size(); i-- > 0;)
+            p.lineTo (a.getX() + a.getWidth() * (float) i / (float) (peaks.size() - 1), mid - peaks[i].first * hh);
+        p.closeSubPath();
+        g.setColour (col::accent.withAlpha (0.25f)); g.fillPath (p);
+        g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
+        g.setColour (col::accent2);
+        if (fadeIn > 0 && seconds > 0) g.drawLine (a.getX(), a.getBottom(), a.getX() + a.getWidth() * (float) juce::jmin (1.0, fadeIn / seconds), a.getY(), 1.5f);
+        if (fadeOut > 0 && seconds > 0) g.drawLine (a.getRight() - a.getWidth() * (float) juce::jmin (1.0, fadeOut / seconds), a.getY(), a.getRight(), a.getBottom(), 1.5f);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
+        g.drawText (juce::String (seconds, 2) + " s", a.reduced (6), juce::Justification::topRight);
+    }
+    Studio& s; int channelId; juce::String key;
+    std::vector<std::pair<float, float>> peaks; double seconds = 0; float fadeIn = 0, fadeOut = 0;
+};
+
 struct ChannelTabs : juce::Component
 {
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
@@ -356,6 +419,11 @@ void openChannelEditor (Studio& s, int channelId)
     if (sampler) tabs->add ("SMP", new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP"));
     tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
     tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
+    if (sampler) tabs->add ("WAVE", new SampleWaveView (s, channelId));
+    tabs->add ("SCOPE", createScopeView ([&s, channelId]() -> ScopeTap* {
+        auto* c = s.channel (channelId);
+        const int t = c != nullptr ? c->mixerTrack : 0;
+        return t > 0 ? s.engine.trackScope (t) : &masterScope(); }, ch->name));
     tabs->finish();
     EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
 }
@@ -368,6 +436,17 @@ void openScopeWindow (Studio&)
     auto* w = new EditorWindow ("Scope - Master", createScopeView ([]() -> ScopeTap* { return &masterScope(); }, "Master"),
                                 "scope:master", [] { return true; });
     w->setResizable (true, false); w->setResizeLimits (420, 240, 3000, 2000);
+    EditorWindow::windows().add (w);
+}
+
+void openTrackScopeWindow (Studio& s, int track)
+{
+    const juce::String key = "scope:track:" + juce::String (track);
+    if (focusExisting (key)) return;
+    const auto title = track == 0 ? juce::String ("Master") : s.p().mixer.size() > (size_t) track ? s.p().mixer[(size_t) track].name : "Track " + juce::String (track);
+    auto* w = new EditorWindow ("Scope - " + title, createScopeView ([&s, track] { return s.engine.trackScope (track); }, title), key, [] { return true; });
+    w->setResizable (true, false);
+    w->setResizeLimits (420, 240, 3000, 2000);
     EditorWindow::windows().add (w);
 }
 

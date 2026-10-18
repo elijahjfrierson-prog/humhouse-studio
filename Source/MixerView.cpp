@@ -80,6 +80,7 @@ struct Strip : public juce::Component
         {
             g.setColour (col::accent2); g.drawText ("FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
         }
+        paintScope (g);
         // meter
         auto m = meterArea();
         g.setColour (col::bg); g.fillRect (m);
@@ -93,12 +94,35 @@ struct Strip : public juce::Component
             g.drawText (juce::String ((int) p.mixer[(size_t) index].fx.size()) + " FX", 0, getHeight() - 58, getWidth(), 12, juce::Justification::centred);
         }
     }
-    juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 64, 8, getHeight() - 64 - 96 }; }
+    juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 96, 8, getHeight() - 96 - 96 }; }
+    juce::Rectangle<int> scopeArea;
+    void paintScope (juce::Graphics& g)
+    {
+        auto a = scopeArea.toFloat();
+        g.setColour (col::bg); g.fillRoundedRectangle (a, 3);
+        auto* tap = s.engine.trackScope (index);
+        if (tap == nullptr || a.getWidth() < 8) return;
+        float buf[512];
+        tap->read (buf, 512, tap->pos.load (std::memory_order_acquire));
+        juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
+        for (int i = 0; i < 512; ++i)
+        {
+            const float x = a.getX() + a.getWidth() * (float) i / 511.0f, y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
+            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+        }
+        g.setColour (col::accent.withAlpha (0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
+        g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (scopeArea.contains (e.getPosition())) openTrackScopeWindow (s, index);
+    }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4);
         r.removeFromTop (28);
         pan.setBounds (r.removeFromTop (32).withSizeKeepingCentre (32, 32));
+        scopeArea = r.removeFromTop (28).reduced (0, 2);
         auto bottom = r.removeFromBottom (90);
         fader.setBounds (r.withTrimmedRight (14));
         auto ms = bottom.removeFromTop (22);
@@ -137,7 +161,7 @@ struct Strip : public juce::Component
     {
         const float pk = s.engine.trackPeak (index);
         level = juce::jmax (pk, level * 0.85f);
-        repaint (meterArea());
+        repaint (meterArea()); repaint (scopeArea);
     }
     Studio& s; int index; float level = 0;
     juce::Slider fader;
