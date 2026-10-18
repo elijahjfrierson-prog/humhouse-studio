@@ -1,4 +1,5 @@
 #include "UI.h"
+#include <thread>
 #include "BinaryData.h"
 
 namespace hhs
@@ -6,9 +7,25 @@ namespace hhs
 // ------------------------------------------------------------------ look and feel
 HHLookAndFeel::HHLookAndFeel() { refreshColours(); }
 
+struct PerfSettings { int threads = 0; bool mt = true, smart = true; };
+static PerfSettings& perf();
 static juce::File appDataFile (const char* name)
 {
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio").getChildFile (name);
+}
+static PerfSettings& perf()
+{
+    static PerfSettings p = [] {
+        PerfSettings r;
+        auto t = juce::StringArray::fromTokens (appDataFile ("performance.txt").loadFileAsString(), " ", "");
+        if (t.size() >= 3) { r.threads = t[0].getIntValue(); r.mt = t[1].getIntValue() != 0; r.smart = t[2].getIntValue() != 0; }
+        return r; }();
+    return p;
+}
+static void savePerf()
+{
+    appDataFile ("performance.txt").getParentDirectory().createDirectory();
+    appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
 void setFontStyle (int st)
@@ -36,6 +53,7 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- AutoPitch: Pitch (+/-12 st), Detune (+/-100 cents), Tuning A4 400-500 Hz; no more cracks (note hold, octave-error filter, smooth bypass)\n"
         "- Recording input Mono (centred in both ears) or Stereo per track\n- Mix knob on every FX slot now blends dry / wet (e.g. 10% EQ)\n- Double-click a channel to change its sound (keeps notes, steps, routing)\n"
         "- Chord stamp in the Piano Roll (STAMP / Alt+T): 24 chords, inversions, lock to scale\n"
         "- Playhead line across Channel Rack, Piano Roll and Playlist; notes under the playhead always sound\n"
@@ -257,6 +275,7 @@ public:
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
+        engine.setPerformance (perf().threads, perf().mt, perf().smart);
         if (auto pl = studio.settings->getXmlValue ("plugins")) engine.knownPlugins.recreateFromXml (*pl);
         engine.knownPlugins.addChangeListener (this);
         engine.onPluginDiscard = [] (juce::AudioProcessor* p) { closeEditorsForPlugin (p); };
@@ -598,6 +617,18 @@ public:
                 for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
                 m.addSubMenu ("Font", fm);
             }
+            {
+                juce::PopupMenu pm;
+                const int hw = juce::jmax (1, (int) std::thread::hardware_concurrency());
+                pm.addSectionHeader ("Processing threads (" + juce::String (engine.processingThreads()) + " in use, " + juce::String (hw) + " cores)");
+                const int opts[] { 0, 1, 2, 4, 6, 8, 12, 16 };
+                for (int i = 0; i < 8; ++i)
+                    pm.addItem (460 + i, opts[i] == 0 ? juce::String ("Auto (all cores)") : juce::String (opts[i]) + (opts[i] == 1 ? " (no multithreading)" : ""), opts[i] <= 1 || opts[i] <= hw * 2, perf().threads == opts[i]);
+                pm.addSeparator();
+                pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
+                pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
+                m.addSubMenu ("Performance", pm);
+            }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
         else
@@ -617,6 +648,16 @@ public:
             return;
         }
         if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id >= 460 && id <= 471)
+        {
+            const int opts[] { 0, 1, 2, 4, 6, 8, 12, 16 };
+            if (id < 468) perf().threads = opts[id - 460];
+            else if (id == 470) perf().mt = ! perf().mt;
+            else if (id == 471) perf().smart = ! perf().smart;
+            savePerf();
+            engine.setPerformance (perf().threads, perf().mt, perf().smart);
+            return;
+        }
         if (id >= 200 && id < 208)
         {
             const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };

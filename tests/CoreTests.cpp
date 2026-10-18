@@ -3,6 +3,7 @@
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
 #include <cstdio>
+#include <iostream>
 
 using namespace hhs;
 static int failures = 0;
@@ -175,6 +176,96 @@ int main()
         e.setPositionBeats (2.0);
         e.play();
         CHECK (renderPeak (e, 20) > 0.01f);
+        e.stop();
+    }
+    // AutoPitch Pitch +12 doubles the frequency; Detune moves it by cents
+    {
+        auto crossings = [] (float pitchSt, float cents) {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("pitch", pitchSt); ap->setParam ("detune", cents);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0; int zc = 0; float prev = 0;
+            for (int k = 0; k < 200; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                ap->process (b, 512, ctx);
+                if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
+            }
+            return zc;
+        };
+        const int base = crossings (0, 0), up = crossings (12, 0), cents = crossings (0, 100);
+        CHECK (up > base * 1.8 && up < base * 2.2);
+        CHECK (cents > base * 1.03 && cents < base * 1.09);
+        // A4 = 415 Hz: a 440-tuned C is re-tuned onto the 415 grid (about a semitone away)
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("tuning", 415.0f); ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0; int zc = 0; float prev = 0;
+        for (int k = 0; k < 200; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
+        }
+        CHECK (std::abs ((float) zc / (float) base - 1.0f) > 0.03f);
+    }
+    // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0; float prev = 0, maxJump = 0; long t = 0;
+        for (int k = 0; k < 400; ++k)
+        {
+            for (int i = 0; i < 512; ++i, ++t)
+            {
+                const double sec = (double) t / 48000.0, cyc = std::fmod (sec, 0.6);
+                const float gate = (float) juce::jlimit (0.0, 1.0, std::min (cyc / 0.01, (0.35 - cyc) / 0.01));   // 350 ms notes, 10 ms fades
+                const double hz = 255.0 + 20.0 * std::sin (sec * 3.0);                                             // drifting voice
+                const float v = 0.3f * gate * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * hz / 48000.0;
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            ap->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (k > 10) maxJump = std::max (maxJump, std::abs (y - prev)); prev = y; }
+        }
+        CHECK (maxJump < 0.06f);
+    }
+    // big session stress: 128 inserts x (EQ, Dyn, Verb) + 64 synth channels, 256-sample buffer
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        auto& p = e.project();
+        p.songMode = false;
+        for (int t = 0; t < 128; ++t)
+        {
+            const int mt = p.addMixerTrack ("T" + juce::String (t));
+            for (auto* id : { "steq7", "stdyn", "verb" }) p.addFx (mt, id);
+        }
+        for (int c = 0; c < 64; ++c)
+        {
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "S" + juce::String (c); ch.mixerTrack = 1 + c * 2; ch.synth.unison = 3;
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 16; ++k) { Note nt; nt.key = 48 + (c + k) % 24; nt.start = k * 0.25; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
+        }
+        e.sync();
+        e.play();
+        juce::AudioBuffer<float> out (2, 256);
+        auto runFor = [&] (int blocks) {
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int b = 0; b < blocks; ++b) { float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (nullptr, 0, o, 2, 256); }
+            return juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / (blocks * 256.0 / 48000.0);
+        };
+        runFor (50);
+        const double mtLoad = runFor (400);
+        e.setPerformance (1, false, true);
+        const double stLoad = runFor (200);
+        e.setPerformance (0, true, true);
+        std::cout << "big session: " << e.processingThreads() << " threads, real-time load " << juce::String (mtLoad * 100.0, 1)
+                  << "% (single thread " << juce::String (stLoad * 100.0, 1) << "%)" << std::endl;
+        CHECK (std::isfinite (out.getSample (0, 0)));
         e.stop();
     }
     // every built-in effect stays finite and silent-in gives finite out

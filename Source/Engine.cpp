@@ -13,19 +13,27 @@ WorkerPool::~WorkerPool()
 {
     quit = true;
     generation.fetch_add (1);
+    cv.notify_all();
     for (auto& t : threads) t.join();
 }
 void WorkerPool::workerLoop()
 {
+    juce::FloatVectorOperations::disableDenormalisedNumberSupport();   // denormals in reverb tails cause CPU spikes
     int seen = generation.load();
+    auto lastWork = std::chrono::steady_clock::now();
     while (! quit.load())
     {
-        int spins = 0;
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
-            if (++spins > 2000) std::this_thread::sleep_for (std::chrono::microseconds (50));
-            else std::this_thread::yield();
+            // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
+            if (std::chrono::steady_clock::now() - lastWork < std::chrono::milliseconds (40)) std::this_thread::yield();
+            else
+            {
+                std::unique_lock<std::mutex> lk (m);
+                cv.wait_for (lk, std::chrono::milliseconds (2), [&] { return generation.load() != seen || quit.load(); });
+            }
         }
+        lastWork = std::chrono::steady_clock::now();
         seen = generation.load();
         if (quit.load()) return;
         for (;;)
@@ -43,6 +51,7 @@ void WorkerPool::run (int count, Job j, void* c)
     if (threads.empty() || count == 1) { for (int i = 0; i < count; ++i) j (c, i); return; }
     job = j; ctx = c; done = 0; total = count; next = 0;
     generation.fetch_add (1, std::memory_order_release);
+    cv.notify_all();
     for (;;)
     {
         const int i = next.fetch_add (1);
@@ -82,6 +91,7 @@ struct FxRuntime
     juce::AudioBuffer<float> buf;   // sized to the plugin's own channel count
     juce::MidiBuffer midi;
     double tail = 0.0;
+    std::atomic<float> load { 0.0f };
 };
 
 static int pluginChannels (const juce::AudioPluginInstance& p)
@@ -234,7 +244,7 @@ Engine::Engine()
     knownPlugins.setCustomScanner (std::make_unique<ChildProcessScanner>());
     proj = Project::createDefault();
     const int hw = (int) std::thread::hardware_concurrency();
-    pool = std::make_unique<WorkerPool> (juce::jlimit (0, 7, hw - 1));
+    pool = std::make_unique<WorkerPool> (juce::jlimit (0, 31, hw - 1));
     diskThread.startThread (juce::Thread::Priority::high);
     recordingFolder = proj.recordingsFolder();
     prepare (44100.0, 512);
@@ -435,6 +445,10 @@ void Engine::sync()
             rt->cutGroup = ch.cutGroup;
             channelOrder.push_back (rt);
         }
+        chanJobOrder.resize (channelOrder.size());
+        for (size_t i = 0; i < chanJobOrder.size(); ++i) chanJobOrder[i] = (int) i;
+        chanCost.assign (channelOrder.size(), 0.0f);
+        trackCost.assign (proj.mixer.size() + 1, 0.0f);
 
         // tracks
         std::vector<std::unique_ptr<TrackRuntime>> tracks;
@@ -556,6 +570,26 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 void Engine::audioDeviceStopped() {}
 
 double Engine::cpuLoad() const { return deviceManager.getCpuUsage(); }
+
+void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
+{
+    const int hw = juce::jmax (1, (int) std::thread::hardware_concurrency());
+    const int workers = threads <= 0 ? juce::jlimit (0, 31, hw - 1) : juce::jlimit (0, 63, threads - 1);
+    std::unique_ptr<WorkerPool> fresh;
+    if (! pool || pool->size() != workers) fresh = std::make_unique<WorkerPool> (workers);
+    {
+        const juce::ScopedLock sl (lock);
+        if (fresh) std::swap (pool, fresh);
+        mtOn = multithreaded; smartOn = smartDisable;
+    }
+}
+
+float Engine::fxLoad (int track, int uid) const
+{
+    if (track < 0 || track >= (int) trackRt.size() || ! trackRt[(size_t) track]) return 0.0f;
+    for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->load.load();
+    return 0.0f;
+}
 
 float Engine::trackPeak (int t) const
 {
@@ -964,6 +998,13 @@ struct EngineJobs
     static void channel (void* c, int i)
     {
         auto* e = static_cast<Engine*> (c);
+        const int ci = i < (int) e->chanJobOrder.size() ? e->chanJobOrder[(size_t) i] : i;
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        channelJob (e, ci);
+        if (ci < (int) e->chanCost.size()) e->chanCost[(size_t) ci] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->chanCost[(size_t) ci] * 0.9f);
+    }
+    static void channelJob (Engine* e, int i)
+    {
         auto* rt = e->channelOrder[(size_t) i];
         const int n = e->currentBlock;
         rt->buf.clear (0, n);
@@ -977,7 +1018,7 @@ struct EngineJobs
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
-            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4) { rt->numEvents = 0; return; }
+            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
             auto& pl = *rt->plugin;
             const juce::ScopedTryLock cl (pl.getCallbackLock());
@@ -1009,7 +1050,9 @@ struct EngineJobs
     {
         auto* e = static_cast<Engine*> (c);
         const int t = e->levels[(size_t) e->currentLevel][(size_t) i];
+        const auto t0 = juce::Time::getHighResolutionTicks();
         e->processTrack (t);
+        if (t < (int) e->trackCost.size()) e->trackCost[(size_t) t] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->trackCost[(size_t) t] * 0.9f);
     }
 };
 
@@ -1025,7 +1068,7 @@ void Engine::processTrack (int t)
 
     const float mag = tr.out.getMagnitude (0, n);
     if (mag > 1.0e-6f) tr.silentSamples = 0; else tr.silentSamples += n;
-    const bool idle = tr.silentSamples > (int) (tr.tailSeconds * sampleRate);
+    const bool idle = smartOn.load() && tr.silentSamples > (int) (tr.tailSeconds * sampleRate);
     if (! idle && ! tr.frozen)
     {
         juce::AudioBuffer<float> view (tr.out.getArrayOfWritePointers(), 2, n);
@@ -1034,7 +1077,10 @@ void Engine::processTrack (int t)
             auto& slot = mt.fx[k];
             auto& f = *tr.fx[k];
             const float mix = juce::jlimit (0.0f, 1.0f, slot.mix);
-            if (slot.bypass || mix <= 0.0f) continue;
+            if (slot.bypass || mix <= 0.0f) { f.load = 0.0f; continue; }
+            struct LoadMeter { std::atomic<float>& out; juce::int64 t0; double block;
+                ~LoadMeter() { const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / block); out = std::max (v, out.load() * 0.95f); } }
+                meterLoad { f.load, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
             const bool blend = mix < 0.999f && n <= tr.dry.getNumSamples();
             if (blend) for (int c = 0; c < 2; ++c) tr.dry.copyFrom (c, 0, view, c, 0, n);
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
@@ -1096,6 +1142,7 @@ void Engine::processTrack (int t)
 
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
+    juce::ScopedNoDenormals noDenormals;
     const juce::ScopedTryLock sl (lock);
     if (! sl.isLocked() || trackRt.empty())
     {
@@ -1277,7 +1324,9 @@ void Engine::renderChannels (int n)
 
     juce::ignoreUnused (n);
     const int count = (int) channelOrder.size();
-    if (count >= 4 && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
+    if ((int) chanJobOrder.size() == count && (int) chanCost.size() == count)   // heaviest first = best spread across cores
+        std::sort (chanJobOrder.begin(), chanJobOrder.end(), [this] (int a, int b) { return chanCost[(size_t) a] > chanCost[(size_t) b]; });
+    if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
     else for (int i = 0; i < count; ++i) EngineJobs::channel (this, i);
 }
 
@@ -1287,7 +1336,11 @@ void Engine::mixTracks (const float* const*, int, int)
     {
         currentLevel = (int) lv;
         const int count = (int) levels[lv].size();
-        if (count >= 3 && pool && pool->size() > 0) pool->run (count, &EngineJobs::track, this);
+        auto& L = levels[lv];
+        if (count > 2) std::sort (L.begin(), L.end(), [this] (int a, int b) {
+            const float ca = a < (int) trackCost.size() ? trackCost[(size_t) a] : 0.0f, cb = b < (int) trackCost.size() ? trackCost[(size_t) b] : 0.0f;
+            return ca > cb; });
+        if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::track, this);
         else for (int i = 0; i < count; ++i) EngineJobs::track (this, i);
     }
 }
