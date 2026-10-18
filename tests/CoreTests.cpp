@@ -174,6 +174,22 @@ int main()
         }
         if (amp < 0.1f) CHECK (pk > 0.15f); else CHECK (pk < 1.0f && pk > 0.3f);
     }
+    // Flanger / Flangus: 0 latency, finite, audibly changes the sound
+    for (const char* id : { "flanger", "flangus" })
+    {
+        auto fx = createBuiltinEffect (id); CHECK (fx != nullptr);
+        if (! fx) continue;
+        fx->prepare (48000, 512); CHECK (fx->latencySamples() == 0);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; juce::Random r (1); float diff = 0;
+        for (int k = 0; k < 40; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = r.nextFloat() * 0.5f - 0.25f; b.setSample (0, i, v); b.setSample (1, i, v); }
+            juce::AudioBuffer<float> dry (b);
+            fx->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { CHECK (std::isfinite (b.getSample (0, i))); diff += std::abs (b.getSample (0, i) - dry.getSample (0, i)); }
+        }
+        CHECK (diff > 1.0f);
+    }
     // Studio EQ 7: natural boost, linear-phase FIR of the same curve, dynamic band pulls a loud band down
     {
         auto run = [] (BuiltinEffect& fx, float hz, float amp, int blocks, bool wait) {
@@ -205,7 +221,7 @@ int main()
         CHECK (run (*dq, 1000, 0.5f, 100, false) < 0.5f);
         CHECK (dq->meter (3) < -6.0f);
         auto e12 = createBuiltinEffect ("steq7");
-        CHECK (e12->params().size() == 122);
+        CHECK (e12->params().size() == 123);
         e12->setParam ("e12On", 1.0f); e12->setParam ("e12F", 1000.0f); e12->setParam ("e12G", -12.0f); e12->prepare (48000, 512);
         CHECK (std::abs (e12->responseDb (1000.0) + 12.0f) < 0.6f);
         CHECK (run (*dq, 1000, 0.001f, 400, false) > 0.9f);

@@ -77,6 +77,7 @@ public:
                 v.push_back ({ str (e + "DAt"), str (n + " Dyn Attack"), 0.1f, 100, 5 });
                 v.push_back ({ str (e + "DRl"), str (n + " Dyn Release"), 5, 1000, 120 });
             }
+            v.push_back ({ "solo", "Listen band", 0, 12, 0 });
             return v; }();
         return ps;
     }
@@ -109,10 +110,24 @@ public:
         }
         else processIir (b, n);
         processDynamic (b, n);
+        const int so = (int) std::round (p (soloIdx));
+        if (so > 0 && so <= numBands)   // Pro-Q style listen: hear only the region the band works on
+        {
+            soloF.set (Biquad::BandPass, sr, juce::jlimit (20.0f, 20000.0f, bp (so - 1, 2)), juce::jmax (0.3f, bp (so - 1, 4)), 0);
+            for (int c = 0; c < juce::jmin (2, b.getNumChannels()); ++c)
+            {
+                auto* x = b.getWritePointer (c);
+                for (int i = 0; i < n; ++i) x[i] = soloF.tick (x[i], c);
+            }
+        }
+        else if (lastSolo > 0) soloF.clear();
+        lastSolo = so;
     }
 private:
     double sr = 44100; int maxN = 512;
-    Biquad f_[numBands], dynF[numBands], det[numBands];
+    static constexpr int soloIdx = bandBase + numBands * perBand;
+    Biquad f_[numBands], dynF[numBands], det[numBands], soloF;
+    int lastSolo = 0;
     bool active[numBands] {};
     float hash = -1, env[numBands] {}, cur[numBands] {};
     std::array<std::atomic<float>, numBands> dynDb {};

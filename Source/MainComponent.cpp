@@ -27,6 +27,7 @@ static void savePerf()
     appDataFile ("performance.txt").getParentDirectory().createDirectory();
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
+bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
 int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
 void setFontStyle (int st)
 {
@@ -53,6 +54,12 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Studio EQ: Pro-Q style band bar (type / freq / gain / Q, type values in), selected band shape, listen (Alt+drag a dot), Shift = fine, display range 6 / 12 / 18 / 30 dB\n"
+        "- Trackpad pinch zoom + Ctrl/Cmd+scroll zoom at the mouse in Playlist and Piano Roll\n"
+        "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
+        "- New Flanger and Flangus (multi-voice) effects with factory presets\n"
+        "- Fade bends: drag the round handle on any fade up / down for curved fades\n"
+        "- Smoother UI: Playlist / Piano Roll only redraw what moves while playing; Options > capture-friendly drawing toggle (Windows)\n"
         "- See the take being recorded: live red clip + waveform; quiet takes drawn scaled up\n"
         "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
         "- NORM button on every track: zero-latency auto-normalize for your voice\n"
@@ -641,6 +648,9 @@ public:
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 m.addSubMenu ("Performance", pm);
+               #if JUCE_WINDOWS
+                m.addItem (480, "OBS / Discord capture-friendly drawing (untick = faster GPU drawing)", true, captureFriendlyDrawing());
+               #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
@@ -661,6 +671,21 @@ public:
             return;
         }
         if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id == 480)
+        {
+            captureFriendlyDrawing() = ! captureFriendlyDrawing();
+            appDataFile ("capture.txt").getParentDirectory().createDirectory();
+            appDataFile ("capture.txt").replaceWithText (captureFriendlyDrawing() ? "1" : "0");
+            auto& d = juce::Desktop::getInstance();
+            for (int i = 0; i < d.getNumComponents(); ++i)
+                if (auto* c = d.getComponent (i); c != nullptr && c->getPeer() != nullptr)
+                {
+                    auto* peer = c->getPeer();
+                    const int k = peer->getAvailableRenderingEngines().indexOf (captureFriendlyDrawing() ? "Software Renderer" : "Direct2D");
+                    if (k >= 0) peer->setCurrentRenderingEngine (k);
+                }
+            return;
+        }
         if (id >= 460 && id <= 471)
         {
             const int opts[] { 0, 1, 2, 4, 6, 8, 12, 16 };

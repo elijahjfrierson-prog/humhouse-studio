@@ -68,6 +68,8 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "clip", { { "Warm", { { "gain", 3.0f }, { "ceiling", -1.0f } } }, { "Loud", { { "gain", 9.0f }, { "ceiling", -0.5f } } } } },
         { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } } } },
         { "delay", { { "1/4 Echo", { { "time", 4.0f }, { "feedback", 0.3f }, { "mix", 0.2f } } }, { "1/8 Ping Pong", { { "time", 2.0f }, { "pingpong", 1.0f }, { "feedback", 0.4f } } }, { "Dotted 1/8", { { "time", 3.0f }, { "feedback", 0.45f } } }, { "Dub Throw", { { "time", 5.0f }, { "feedback", 0.7f }, { "tone", 3000.0f }, { "mix", 0.35f } } } } },
+        { "flanger", { { "Jet Plane", { { "rate", 0.1f }, { "depth", 0.9f }, { "delay", 3.0f }, { "feedback", 0.8f } } }, { "Classic Flange", { { "rate", 0.3f }, { "depth", 0.7f }, { "delay", 1.5f }, { "feedback", 0.5f } } }, { "Zero Flange", { { "rate", 0.2f }, { "depth", 1.0f }, { "delay", 0.6f }, { "feedback", -0.7f }, { "invert", 1.0f } } }, { "Subtle Vocal", { { "rate", 0.2f }, { "depth", 0.4f }, { "delay", 2.0f }, { "feedback", 0.2f }, { "mix", 0.25f } } }, { "Metal Comb", { { "rate", 0.05f }, { "depth", 0.2f }, { "delay", 5.0f }, { "feedback", 0.9f } } }, { "Wobble 808", { { "rate", 2.0f }, { "depth", 0.5f }, { "delay", 1.0f }, { "feedback", 0.3f }, { "mix", 0.35f } } } } },
+        { "flangus", { { "Dreamy Choir", { { "voices", 4.0f }, { "spread", 1.0f }, { "depth", 0.6f }, { "speed", 0.2f }, { "delay", 12.0f }, { "feedback", 0.1f } } }, { "Psychedelic Swirl", { { "voices", 3.0f }, { "speed", 0.8f }, { "feedback", 0.6f }, { "cross", 0.6f }, { "delay", 3.0f } } }, { "Wide Guitar", { { "voices", 2.0f }, { "delay", 8.0f }, { "spread", 1.0f }, { "mix", 0.4f } } }, { "Liquid Hats", { { "voices", 2.0f }, { "speed", 1.5f }, { "delay", 1.5f }, { "feedback", 0.7f } } }, { "Subtle Thick", { { "voices", 2.0f }, { "depth", 0.25f }, { "mix", 0.25f } } }, { "Space Flange", { { "voices", 6.0f }, { "depth", 0.9f }, { "delay", 5.0f }, { "feedback", 0.5f }, { "cross", 0.8f } } } } },
         { "chorus", { { "Wide Vocal", { { "rate", 0.6f }, { "depth", 0.3f }, { "mix", 0.3f } } }, { "Lush", { { "rate", 1.2f }, { "depth", 0.6f }, { "mix", 0.5f } } }, { "Flanger", { { "delay", 2.0f }, { "feedback", 0.6f }, { "rate", 0.3f } } } } },
         { "phaser", { { "Slow Swirl", { { "rate", 0.3f }, { "depth", 0.7f } } }, { "Fast Phase", { { "rate", 4.0f }, { "depth", 0.5f } } } } },
         { "wide", { { "Wide", { { "width", 1.6f } } }, { "Subtle", { { "width", 1.2f } } }, { "Mono", { { "width", 0.0f } } } } },
@@ -279,6 +281,29 @@ public:
         model = createBuiltinEffect ("steq7");
         if (model) model->prepare (48000, 512);
         snap.assign (fftN, 0.0f); fftBuf.assign (fftN * 2, 0.0f); spec.assign (fftN / 2, -100.0f);
+        static const char* tn[] { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass" };
+        for (int t = 0; t < 7; ++t) typeBox.addItem (tn[t], t + 1);
+        typeBox.onChange = [this] { if (sel >= 0) { grid.setExternal (pid (sel, "T"), (float) typeBox.getSelectedItemIndex()); grid.commitNow(); repaint(); } };
+        for (auto* l : { &fL, &gL, &qL })
+        {
+            l->setEditable (false, true);
+            l->setJustificationType (juce::Justification::centred);
+            l->setColour (juce::Label::backgroundColourId, col::panel2);
+            l->setColour (juce::Label::outlineColourId, col::grid);
+            l->setTooltip ("Double-click to type a value");
+            addAndMakeVisible (l);
+        }
+        fL.onTextChange = [this] { if (sel < 0) return; auto t = fL.getText().toLowerCase(); float v = t.getFloatValue(); if (t.containsChar ('k')) v *= 1000.0f;
+                                   grid.setExternal (pid (sel, "F"), juce::jlimit (20.0f, 20000.0f, v)); grid.commitNow(); repaint(); };
+        gL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "G"), juce::jlimit (-18.0f, 18.0f, gL.getText().getFloatValue())); grid.commitNow(); repaint(); };
+        qL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "Q"), juce::jlimit (0.1f, 18.0f, qL.getText().getFloatValue())); grid.commitNow(); repaint(); };
+        dynB.setClickingTogglesState (true); listenB.setClickingTogglesState (true);
+        dynB.setTooltip ("Dynamic EQ for this band"); listenB.setTooltip ("Listen: hear only this band (or Alt+drag a dot)"); delB.setTooltip ("Delete band");
+        dynB.onClick = [this] { if (sel >= 0) { grid.setExternal (pid (sel, "Dyn"), dynB.getToggleState() ? 1.0f : 0.0f); grid.commitNow(); repaint(); } };
+        listenB.onClick = [this] { if (sel >= 0) { grid.setExternal ("solo", listenB.getToggleState() ? (float) (sel + 1) : 0.0f); grid.commitNow(); } };
+        delB.onClick = [this] { if (sel >= 0) { grid.setExternal (pid (sel, "On"), 0.0f); grid.setExternal ("solo", 0.0f); grid.commitNow(); sel = -1; syncBar(); repaint(); } };
+        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) addAndMakeVisible (c);
+        syncBar();
         setTooltip ("Double-click empty space = add a band (up to 12). Drag a dot = frequency + gain. Wheel = width (Q). Double-click a dot = reset gain. Right-click a dot = type, Dynamic EQ, delete. Click NATURAL / LINEAR to switch phase.");
         startTimerHz (30);
     }
@@ -293,7 +318,10 @@ public:
             g.setColour (col::grid.withAlpha (0.5f)); g.drawVerticalLine ((int) x, a.getY(), a.getBottom());
             g.setColour (col::dim); g.drawText (f >= 1000 ? juce::String (f / 1000, 0) + "k" : juce::String (f, 0), (int) x + 2, (int) a.getBottom() - 12, 30, 12, juce::Justification::left);
         }
-        for (int d : { -18, -12, -6, 0, 6, 12, 18 })
+        std::vector<int> ticks;
+        const int stepDb = range <= 6 ? 3 : range <= 12 ? 6 : range <= 20 ? 6 : 10;
+        for (int d = -(int) range / stepDb * stepDb; d <= (int) range; d += stepDb) ticks.push_back (d);
+        for (int d : ticks)
         {
             g.setColour (col::grid.withAlpha (d == 0 ? 0.9f : 0.35f)); g.drawHorizontalLine ((int) yOf ((float) d), a.getX(), a.getRight());
             if (d != 0) { g.setColour (col::dim); g.drawText (juce::String (d), (int) a.getX() + 2, (int) yOf ((float) d) - 6, 24, 12, juce::Justification::left); }
@@ -322,6 +350,16 @@ public:
             }
             juce::Path fill (c); fill.lineTo (a.getRight(), yOf (0)); fill.lineTo (a.getX(), yOf (0)); fill.closeSubPath();
             g.setColour (col::accent.withAlpha (0.16f)); g.fillPath (fill);
+            if (sel >= 0 && isOn (sel))   // selected band's own shape, Pro-Q style
+            {
+                for (int k = 0; k < bands; ++k) if (k != sel) model->setParam (pid (k, "On"), 0.0f);
+                model->setParam ("out", 0.0f);
+                juce::Path bs; bs.startNewSubPath (a.getX(), yOf (0));
+                for (float x = a.getX(); x <= a.getRight(); x += 2.0f) bs.lineTo (x, yOf (model->responseDb (freqAt (x))));
+                bs.lineTo (a.getRight(), yOf (0)); bs.closeSubPath();
+                g.setColour (colourOf (sel).withAlpha (0.28f)); g.fillPath (bs);
+                for (auto& d : model->params()) model->setParam (d.id, grid.valueOf (d.id));
+            }
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
             g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
         }
@@ -351,28 +389,68 @@ public:
                 g.drawText (t, (int) pt.x - 110, (int) pt.y - 30, 220, 14, juce::Justification::centred);
             }
         }
+        if (hover.x >= a.getX() && hot < 0 && drag < 0 && a.contains (hover))
+        {
+            const double hz = freqAt (hover.x);
+            static const char* nn[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+            const int midi = juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0));
+            g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
+            g.drawText (hzText ((float) hz) + "  " + nn[((midi % 12) + 12) % 12] + juce::String (midi / 12 - 1) + "  " + juce::String (dbAt (hover.y), 1) + " dB",
+                        (int) a.getX() + 30, (int) a.getY() + 2, 220, 14, juce::Justification::left);
+        }
+        g.setColour (col::panel2.withAlpha (0.9f)); g.fillRect (getLocalBounds().removeFromBottom (barH + 4).reduced (6, 2).toFloat());
+        g.setColour (sel >= 0 ? colourOf (sel) : col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText (sel >= 0 ? "BAND " + juce::String (sel + 1) : "Click a dot to edit it here", getLocalBounds().removeFromBottom (barH + 4).reduced (12, 2), juce::Justification::centredLeft);
+        auto rc = rangeChip();
+        g.setColour (col::panel2); g.fillRoundedRectangle (rc, 4.0f);
+        g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (juce::String::charToString (0xb1) + juce::String ((int) range) + " dB", rc, juce::Justification::centred);
         const bool lin = grid.valueOf ("phase") > 0.5f;
         auto chip = modeChip();
         g.setColour (lin ? col::accent2.withAlpha (0.3f) : col::good.withAlpha (0.25f)); g.fillRoundedRectangle (chip, 4.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         g.drawText (lin ? "LINEAR  ~23 ms" : "NATURAL  0 ms", chip, juce::Justification::centred);
     }
-    void mouseMove (const juce::MouseEvent& e) override { const int h = hit (e.position); if (h != hot) { hot = h; repaint(); } }
-    void mouseExit (const juce::MouseEvent&) override { hot = -1; repaint(); }
+    void resized() override
+    {
+        auto b = getLocalBounds().removeFromBottom (barH + 4).reduced (6, 4).withTrimmedLeft (110);
+        typeBox.setBounds (b.removeFromLeft (110)); b.removeFromLeft (6);
+        for (auto* l : { &fL, &gL, &qL }) { l->setBounds (b.removeFromLeft (84)); b.removeFromLeft (6); }
+        dynB.setBounds (b.removeFromLeft (50)); b.removeFromLeft (4);
+        listenB.setBounds (b.removeFromLeft (64)); b.removeFromLeft (4);
+        delB.setBounds (b.removeFromLeft (28));
+    }
+    void mouseMove (const juce::MouseEvent& e) override { hover = e.position; const int h = hit (e.position); hot = h; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { hot = -1; hover = { -1, -1 }; repaint(); }
     void mouseDown (const juce::MouseEvent& e) override
     {
         if (modeChip().contains (e.position)) { grid.setExternal ("phase", grid.valueOf ("phase") > 0.5f ? 0.0f : 1.0f); grid.commitNow(); repaint(); return; }
+        if (rangeChip().contains (e.position)) { range = range <= 6 ? 12.0f : range <= 12 ? 20.0f : range <= 20 ? 30.0f : 6.0f; repaint(); return; }
         drag = hit (e.position); hot = drag;
-        if (drag >= 0 && e.mods.isPopupMenu()) { bandMenu (drag); drag = -1; }
+        sel = drag; syncBar();
+        if (drag >= 0 && e.mods.isPopupMenu()) { bandMenu (drag); drag = -1; return; }
+        if (drag >= 0)
+        {
+            drag0 = e.position; f0 = grid.valueOf (pid (drag, "F")); g0 = grid.valueOf (pid (drag, "G"));
+            if (e.mods.isAltDown()) { altSolo = true; grid.setExternal ("solo", (float) (drag + 1)); grid.commitNow(); }
+        }
+        repaint();
     }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (drag < 0) return;
-        grid.setExternal (pid (drag, "F"), (float) freqAt (e.position.x));
-        if (hasGain (drag)) grid.setExternal (pid (drag, "G"), juce::jlimit (-18.0f, 18.0f, dbAt (e.position.y)));
-        repaint();
+        const float fine = e.mods.isShiftDown() ? 0.1f : 1.0f;   // Shift = fine moves
+        const float x = drag0.x + (e.position.x - drag0.x) * fine, y = drag0.y + (e.position.y - drag0.y) * fine;
+        grid.setExternal (pid (drag, "F"), (float) juce::jlimit (20.0, 20000.0, f0 * std::pow (1000.0, (double) ((x - drag0.x) / area().getWidth()))));
+        if (hasGain (drag)) grid.setExternal (pid (drag, "G"), juce::jlimit (-18.0f, 18.0f, g0 + (dbAt (y) - dbAt (drag0.y))));
+        syncBar(); repaint();
     }
-    void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) grid.commitNow(); drag = -1; }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (altSolo) { grid.setExternal ("solo", 0.0f); altSolo = false; }
+        if (drag >= 0) grid.commitNow();
+        drag = -1;
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         const int k = hit (e.position);
@@ -384,7 +462,7 @@ public:
                 grid.setExternal (pid (b, "T"), 0.0f); grid.setExternal (pid (b, "F"), (float) freqAt (e.position.x));
                 grid.setExternal (pid (b, "G"), juce::jlimit (-18.0f, 18.0f, dbAt (e.position.y))); grid.setExternal (pid (b, "Q"), 1.0f);
                 grid.setExternal (pid (b, "Dyn"), 0.0f); grid.setExternal (pid (b, "On"), 1.0f);
-                grid.commitNow(); hot = b; repaint();
+                grid.commitNow(); hot = sel = b; syncBar(); repaint();
                 return;
             }
     }
@@ -392,8 +470,8 @@ public:
     {
         const int k = hit (e.position);
         if (k < 0) return;
-        grid.setExternal (pid (k, "Q"), grid.valueOf (pid (k, "Q")) * (w.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
-        grid.commitNow(); repaint();
+        grid.setExternal (pid (k, "Q"), juce::jlimit (0.1f, 18.0f, grid.valueOf (pid (k, "Q")) * std::pow (1.12f, juce::jlimit (-3.0f, 3.0f, w.deltaY * 6.0f))));
+        grid.commitNow(); syncBar(); repaint();
     }
 private:
     static constexpr int bands = 12;
@@ -408,12 +486,27 @@ private:
     bool isOn (int k) const { return grid.valueOf (pid (k, "On")) > 0.5f; }
     int  typeOf (int k) const { return juce::jlimit (0, 6, (int) std::round (grid.valueOf (pid (k, "T")))); }
     bool hasGain (int k) const { return typeOf (k) <= 2; }
-    juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (6.0f, 8.0f); }
+    juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (6.0f, 8.0f).withTrimmedBottom ((float) barH); }
     juce::Rectangle<float> modeChip() const { return { (float) getWidth() - 128.0f, 8.0f, 118.0f, 20.0f }; }
+    juce::Rectangle<float> rangeChip() const { return { (float) getWidth() - 196.0f, 8.0f, 62.0f, 20.0f }; }
+    void syncBar()
+    {
+        const bool on = sel >= 0 && isOn (sel);
+        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &fL, (juce::Component*) &gL, (juce::Component*) &qL,
+                                    (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) c->setVisible (on);
+        if (! on) return;
+        typeBox.setSelectedItemIndex (typeOf (sel), juce::dontSendNotification);
+        if (! fL.isBeingEdited()) fL.setText (hzText (grid.valueOf (pid (sel, "F"))), juce::dontSendNotification);
+        if (! gL.isBeingEdited()) gL.setText (hasGain (sel) ? juce::String (grid.valueOf (pid (sel, "G")), 1) + " dB" : "--", juce::dontSendNotification);
+        if (! qL.isBeingEdited()) qL.setText ("Q " + juce::String (grid.valueOf (pid (sel, "Q")), 2), juce::dontSendNotification);
+        gL.setEnabled (hasGain (sel)); dynB.setEnabled (hasGain (sel));
+        dynB.setToggleState (grid.valueOf (pid (sel, "Dyn")) > 0.5f, juce::dontSendNotification);
+        listenB.setToggleState ((int) std::round (grid.valueOf ("solo")) == sel + 1, juce::dontSendNotification);
+    }
     float xOf (double f) const { auto a = area(); return a.getX() + a.getWidth() * (float) (std::log (juce::jlimit (20.0, 20000.0, f) / 20.0) / std::log (1000.0)); }
     double freqAt (float x) const { auto a = area(); return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) ((x - a.getX()) / a.getWidth()))); }
-    float yOf (float db) const { auto a = area(); return a.getCentreY() - juce::jlimit (-20.0f, 20.0f, db) / 20.0f * a.getHeight() * 0.5f; }
-    float dbAt (float y) const { auto a = area(); return (a.getCentreY() - y) / (a.getHeight() * 0.5f) * 20.0f; }
+    float yOf (float db) const { auto a = area(); return a.getCentreY() - juce::jlimit (-range, range, db) / range * a.getHeight() * 0.5f; }
+    float dbAt (float y) const { auto a = area(); return (a.getCentreY() - y) / (a.getHeight() * 0.5f) * range; }
     juce::Point<float> dotOf (int k) const { return { xOf (grid.valueOf (pid (k, "F"))), yOf (hasGain (k) ? grid.valueOf (pid (k, "G")) : 0.0f) }; }
     int hit (juce::Point<float> p) const
     {
@@ -445,13 +538,15 @@ private:
             m.addSubMenu ("Dynamic release", rl);
             m.addSeparator();
         }
+        m.addItem (8, "Listen (solo this band)", true, (int) std::round (grid.valueOf ("solo")) == k + 1);
         m.addItem (9, "Delete band");
         juce::Component::SafePointer<EqGraph> safe (this);
         m.showMenuAsync ({}, [safe, k] (int r) {
             if (safe == nullptr || r <= 0) return;
             auto& gr = safe->grid;
             const bool on = gr.valueOf (pid (k, "Dyn")) > 0.5f;
-            if (r == 9) gr.setExternal (pid (k, "On"), 0.0f);
+            if (r == 8) gr.setExternal ("solo", (int) std::round (gr.valueOf ("solo")) == k + 1 ? 0.0f : (float) (k + 1));
+            else if (r == 9) { gr.setExternal (pid (k, "On"), 0.0f); gr.setExternal ("solo", 0.0f); }
             else if (r >= 20 && r < 27) gr.setExternal (pid (k, "T"), (float) (r - 20));
             else if (r == 1) gr.setExternal (pid (k, "Dyn"), on ? 0.0f : 1.0f);
             else if (r == 2) for (int i = 0; i < bands; ++i) gr.setExternal (pid (i, "Dyn"), i == k ? 1.0f : 0.0f);
@@ -460,7 +555,7 @@ private:
             else if (r < 400) { gr.setExternal (pid (k, "DRg"), (float) (r - 250)); gr.setExternal (pid (k, "Dyn"), 1.0f); }
             else if (r < 1000) gr.setExternal (pid (k, "DAt"), (float) (r - 400));
             else gr.setExternal (pid (k, "DRl"), (float) (r - 1000));
-            gr.commitNow(); safe->repaint();
+            gr.commitNow(); safe->syncBar(); safe->repaint();
         });
     }
     void timerCallback() override
@@ -479,6 +574,7 @@ private:
                 spec[(size_t) i] = db > spec[(size_t) i] ? db : spec[(size_t) i] * 0.85f + db * 0.15f;
             }
         }
+        if (drag < 0) syncBar();
         repaint();
     }
     static constexpr int fftOrder = 11, fftN = 1 << fftOrder;
@@ -489,7 +585,14 @@ private:
     juce::dsp::FFT fft { fftOrder };
     std::vector<float> snap, fftBuf, spec;
     double rate = 0;
-    int hot = -1, drag = -1;
+    int hot = -1, drag = -1, sel = -1;
+    static constexpr int barH = 30;
+    float range = 20.0f, f0 = 1000.0f, g0 = 0.0f;
+    bool altSolo = false;
+    juce::Point<float> hover { -1, -1 }, drag0;
+    juce::ComboBox typeBox;
+    juce::Label fL, gL, qL;
+    juce::TextButton dynB { "DYN" }, listenB { "LISTEN" }, delB { "X" };
 };
 
 // compressor: transfer curve (in -> out), threshold line and live gain-reduction meter
@@ -684,7 +787,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     int vh = 170;
     if (ty == "steq7")
     {
-        grid->hideWhere ([] (const juce::String& id) { return id.startsWithChar ('e'); });   // graph-first: only Output + Phase knobs
+        grid->hideWhere ([] (const juce::String& id) { return id.startsWithChar ('e') || id == "solo"; });   // graph-first: only Output + Phase knobs
         visual = new EqGraph (*grid, liveFx, tapFn); vh = 360;
     }
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
