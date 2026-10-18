@@ -175,6 +175,9 @@ private:
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;
+    struct NormState { float rms = 0.0f, gain = 1.0f; };
+    std::array<NormState, 256> normState {};
+    juce::AudioBuffer<float> normScratch { 2, 8192 };
     int idleThresholdBlocks = 0;
     int currentBlock = 0, currentLevel = 0;
     PlayContext ctx;

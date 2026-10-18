@@ -72,6 +72,9 @@ struct LaneHeader : public juce::Component
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
+        setupButton (norm, "NORM", "Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
+        norm.setColour (juce::TextButton::buttonOnColourId, col::good);
+        norm.onClick = [this] { const bool on = norm.getToggleState(); s.edit ("Auto normalize", [&] (Project& p) { p.lanes[(size_t) index].autoNorm = on; }); };
         setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
         mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
         mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
@@ -81,7 +84,7 @@ struct LaneHeader : public juce::Component
                 if (id >= 1000) { l.stereoIn = true; l.inputPair = id - 1000; } else { l.stereoIn = false; l.inputCh = id - 1; } }); };
         insert.setTooltip ("Mixer insert this track plays and records through - every take stays on it");
         insert.onChange = [this] { const int v = insert.getSelectedItemIndex(); s.edit ("Route track", [&] (Project& p) { p.lanes[(size_t) index].mixerTrack = v; }); };
-        for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon,
+        for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon, (juce::Component*) &norm,
                                     (juce::Component*) &input, (juce::Component*) &insert })
             addAndMakeVisible (c);
         refresh();
@@ -95,6 +98,7 @@ struct LaneHeader : public juce::Component
         arm.setToggleState (l.armed, juce::dontSendNotification);
         mute.setToggleState (l.muted, juce::dontSendNotification);
         mon.setToggleState (l.monitor, juce::dontSendNotification);
+        norm.setToggleState (l.autoNorm, juce::dontSendNotification);
         input.clear (juce::dontSendNotification);
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
@@ -127,6 +131,7 @@ struct LaneHeader : public juce::Component
         name.setBounds (top);
         r.removeFromTop (2);
         mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
+        norm.setBounds (r.removeFromLeft (44)); r.removeFromLeft (3);
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
     }
@@ -184,7 +189,7 @@ struct LaneHeader : public juce::Component
         });
     }
     Studio& s; int index;
-    juce::Label name; juce::TextButton arm, mute, mon; juce::ComboBox input, insert;
+    juce::Label name; juce::TextButton arm, mute, mon, norm; juce::ComboBox input, insert;
 };
 
 class Playlist : public juce::Component, public juce::FileDragAndDropTarget, public juce::TooltipClient,

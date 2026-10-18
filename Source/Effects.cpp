@@ -651,6 +651,7 @@ void PitchShifter::prepare (double sr)
 float PitchShifter::process (float x)
 {
     buf[(size_t) write] = x;
+    if (targetGrain > 0.0f) grain += (targetGrain - grain) * 0.0005f;
     phase += (1.0 - ratio) / grain;
     phase -= std::floor (phase);
     auto tap = [&] (double ph)
@@ -761,6 +762,13 @@ public:
                     if (midi > 0)
                     {
                         unvoiced = 0; lastMidi = midi;
+                        {
+                            // grain = 2 x whole periods, so the two overlapping taps stay in phase (full, not thin / plastic)
+                            const float period = (float) (sr / hz);
+                            const float k = std::max (1.0f, std::round (0.015f * (float) sr / period));
+                            const float gs = juce::jlimit ((float) (0.01 * sr), (float) (0.05 * sr), 2.0f * k * period);
+                            for (auto& sh : shifters) sh.setGrain (gs);
+                        }
                         const int cand = snapToScale ((int) std::round (midi), root, scale);
                         int target = lastTarget < 0 ? cand : lastTarget;
                         if (cand == lastTarget) pendingCount = 0;

@@ -53,6 +53,8 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- NORM button on every track: zero-latency auto-normalize for your voice\n"
+        "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
         "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
         "- Studio EQ: 12-band graph EQ like Parametric EQ 2 (7 on by default, double-click to add, drag, wheel = Q, right-click = type / dynamic)\n"
         "- Factory presets on every effect (PRESETS menu)\n"

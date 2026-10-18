@@ -16,7 +16,7 @@ struct Strip : public juce::Component
         fader.setDoubleClickReturnValue (true, 0.8);
         fader.setTooltip ("Volume (double-click = default)");
         fader.setPopupDisplayEnabled (true, true, nullptr, 1500);
-        fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels (v), 1) + " dB"; };
+        fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels ((v / 0.8) * (v / 0.8)), 1) + " dB"; };
         fader.setName ("Volume");
         fader.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.volume = (float) fader.getValue(); }); if (! fader.isMouseButtonDown()) s.commit ("Volume"); };
         fader.onDragEnd = [this] { s.commit ("Volume"); };

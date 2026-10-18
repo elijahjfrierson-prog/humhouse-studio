@@ -111,12 +111,13 @@ class PitchShifter
 public:
     void prepare (double sr);
     void setRatio (float r) { ratio = r; }
+    void setGrain (float samples) { targetGrain = samples; }   // pitch-synchronous grains: taps add up instead of cancelling
     float process (float x);
 private:
     std::vector<float> buf;
     int write = 0, size = 0;
     double phase = 0.0;
-    float ratio = 1.0f, grain = 1.0f;
+    float ratio = 1.0f, grain = 1.0f, targetGrain = 0.0f;
 };
 
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f); // Hz or 0

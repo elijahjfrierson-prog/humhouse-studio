@@ -129,6 +129,28 @@ int main()
         }
         CHECK (pl > 0.01f);
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
+        if (! stereo) CHECK (std::abs (pl - 0.3f) < 0.03f);   // default insert + master faders = unity gain (0 dB)
+    }
+    // NORM: a quiet mic comes up strong, a loud one never clips
+    for (float amp : { 0.02f, 0.9f })
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[0].armed = true; p.lanes[0].monitor = true; p.lanes[0].autoNorm = true;
+        juce::AudioBuffer<float> mic (2, 512), out (2, 512);
+        float pk = 0; double ph = 0;
+        for (int b = 0; b < 400; ++b)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = amp * (float) std::sin (ph); ph += 0.05; mic.setSample (0, i, v); mic.setSample (1, i, 0.0f); }
+            const float* ins[2] { mic.getReadPointer (0), mic.getReadPointer (1) };
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (ins, 2, o, 2, 512);
+            if (b > 300) pk = std::max (pk, out.getMagnitude (0, 0, 512));
+        }
+        if (amp < 0.1f) CHECK (pk > 0.15f); else CHECK (pk < 1.0f && pk > 0.3f);
     }
     // Studio EQ 7: natural boost, linear-phase FIR of the same curve, dynamic band pulls a loud band down
     {

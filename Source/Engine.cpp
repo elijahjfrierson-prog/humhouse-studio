@@ -1133,7 +1133,7 @@ void Engine::processTrack (int t)
     else tr.duckGain = 1.0f;
 
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
-    const float vol = muted ? 0.0f : mt.volume * mt.volume * 1.5f;
+    const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
     const float gl = vol * std::min (1.0f, 1.0f - mt.pan), gr = vol * std::min (1.0f, 1.0f + mt.pan);
     tr.out.applyGain (0, 0, n, gl);
     tr.out.applyGain (1, 0, n, gr);
@@ -1240,7 +1240,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         auto& ch = proj.channels[ci];
         auto* rt = channelOrder[ci];
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
-        const float v = ch.volume, gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
+        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
         auto& dest = trackRt[(size_t) t]->in;
         dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
         dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
@@ -1259,6 +1259,26 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             const float* ir = c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;
+            if (lane.autoNorm && l < normState.size() && n <= normScratch.getNumSamples())
+            {
+                // zero-latency auto-normalize: slow RMS leveler (target about -12 dBFS, up to +24 dB) + soft ceiling
+                auto& ns = normState[l];
+                auto* nl = normScratch.getWritePointer (0); auto* nr = normScratch.getWritePointer (1);
+                auto ceil = [] (float y) { const float a = std::abs (y); return a <= 0.89f ? y : std::copysign (0.89f + 0.1f * std::tanh ((a - 0.89f) / 0.1f), y); };
+                for (int i = 0; i < n; ++i)
+                {
+                    const float x = 0.5f * (il[i] + ir[i]);
+                    ns.rms = ns.rms * 0.9995f + 0.0005f * x * x;
+                    const float level = std::sqrt (ns.rms);
+                    if (level > 0.001f)
+                    {
+                        const float tg = juce::jlimit (0.5f, 16.0f, 0.25f / level);
+                        ns.gain += (tg - ns.gain) * (tg < ns.gain ? 0.002f : 0.0002f);
+                    }
+                    nl[i] = ceil (il[i] * ns.gain); nr[i] = ceil (ir[i] * ns.gain);
+                }
+                il = nl; ir = nr;
+            }
             if (lane.monitor && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;

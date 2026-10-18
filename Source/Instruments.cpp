@@ -164,7 +164,7 @@ public:
                 // TPT state-variable lowpass
                 const float v3 = s - v.ic2, v1 = a1 * v.ic1 + a2 * v3, v2 = v.ic2 + a2 * v.ic1 + a3 * v3;
                 v.ic1 = 2.0f * v1 - v.ic1; v.ic2 = 2.0f * v2 - v.ic2;
-                const float y = v2 * v.env * v.velocity * 0.5f;
+                const float y = v2 * v.env * v.velocity * 0.9f;
                 oL[i] += y; oR[i] += y;
                 ++v.age;
             }
