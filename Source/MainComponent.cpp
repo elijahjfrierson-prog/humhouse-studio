@@ -1,4 +1,5 @@
 #include "UI.h"
+#include <thread>
 #include "BinaryData.h"
 
 namespace hhs
@@ -6,9 +7,25 @@ namespace hhs
 // ------------------------------------------------------------------ look and feel
 HHLookAndFeel::HHLookAndFeel() { refreshColours(); }
 
+struct PerfSettings { int threads = 0; bool mt = true, smart = true; };
+static PerfSettings& perf();
 static juce::File appDataFile (const char* name)
 {
     return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio").getChildFile (name);
+}
+static PerfSettings& perf()
+{
+    static PerfSettings p = [] {
+        PerfSettings r;
+        auto t = juce::StringArray::fromTokens (appDataFile ("performance.txt").loadFileAsString(), " ", "");
+        if (t.size() >= 3) { r.threads = t[0].getIntValue(); r.mt = t[1].getIntValue() != 0; r.smart = t[2].getIntValue() != 0; }
+        return r; }();
+    return p;
+}
+static void savePerf()
+{
+    appDataFile ("performance.txt").getParentDirectory().createDirectory();
+    appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
 void setFontStyle (int st)
@@ -36,6 +53,14 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
+        "- NORM button on every track: zero-latency auto-normalize for your voice\n"
+        "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
+        "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
+        "- Studio EQ: 12-band graph EQ like Parametric EQ 2 (7 on by default, double-click to add, drag, wheel = Q, right-click = type / dynamic)\n"
+        "- Factory presets on every effect (PRESETS menu)\n"
+        "- Options > Performance: processing threads, multithreading, smart disable; CPU % per FX slot\n"
+        "- AutoPitch: Pitch (+/-12 st), Detune (+/-100 cents), Tuning A4 400-500 Hz; no more cracks (note hold, octave-error filter, smooth bypass)\n"
         "- Recording input Mono (centred in both ears) or Stereo per track\n- Mix knob on every FX slot now blends dry / wet (e.g. 10% EQ)\n- Double-click a channel to change its sound (keeps notes, steps, routing)\n"
         "- Chord stamp in the Piano Roll (STAMP / Alt+T): 24 chords, inversions, lock to scale\n"
         "- Playhead line across Channel Rack, Piano Roll and Playlist; notes under the playhead always sound\n"
@@ -140,7 +165,12 @@ Knob::Knob (const juce::String& name, const juce::String& help, double mn, doubl
 {
     setName (name);
     setTooltip (name + " - " + help + "  (double-click resets)");
-    setRange (mn, mx, 0.0);
+    // clean steps (0.01 / 0.1 / 1 / 10 by range) instead of 0.000001 values
+    const double span = mx - mn;
+    const double step = span <= 2.0 ? 0.01 : span <= 60.0 ? 0.1 : span <= 3000.0 ? 1.0 : 10.0;
+    setRange (mn, mx, step);
+    setNumDecimalPlacesToDisplay (step < 0.1 ? 2 : step < 1.0 ? 1 : 0);
+    setVelocityModeParameters (0.4, 1, 0.0, true, juce::ModifierKeys::shiftModifier);   // Shift = fine
     setValue (def, juce::dontSendNotification);
     setDoubleClickReturnValue (true, def);
     setTextValueSuffix (suffix);
@@ -257,6 +287,7 @@ public:
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
+        engine.setPerformance (perf().threads, perf().mt, perf().smart);
         if (auto pl = studio.settings->getXmlValue ("plugins")) engine.knownPlugins.recreateFromXml (*pl);
         engine.knownPlugins.addChangeListener (this);
         engine.onPluginDiscard = [] (juce::AudioProcessor* p) { closeEditorsForPlugin (p); };
@@ -598,6 +629,18 @@ public:
                 for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
                 m.addSubMenu ("Font", fm);
             }
+            {
+                juce::PopupMenu pm;
+                const int hw = juce::jmax (1, (int) std::thread::hardware_concurrency());
+                pm.addSectionHeader ("Processing threads (" + juce::String (engine.processingThreads()) + " in use, " + juce::String (hw) + " cores)");
+                const int opts[] { 0, 1, 2, 4, 6, 8, 12, 16 };
+                for (int i = 0; i < 8; ++i)
+                    pm.addItem (460 + i, opts[i] == 0 ? juce::String ("Auto (all cores)") : juce::String (opts[i]) + (opts[i] == 1 ? " (no multithreading)" : ""), opts[i] <= 1 || opts[i] <= hw * 2, perf().threads == opts[i]);
+                pm.addSeparator();
+                pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
+                pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
+                m.addSubMenu ("Performance", pm);
+            }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
         else
@@ -617,6 +660,16 @@ public:
             return;
         }
         if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id >= 460 && id <= 471)
+        {
+            const int opts[] { 0, 1, 2, 4, 6, 8, 12, 16 };
+            if (id < 468) perf().threads = opts[id - 460];
+            else if (id == 470) perf().mt = ! perf().mt;
+            else if (id == 471) perf().smart = ! perf().smart;
+            savePerf();
+            engine.setPerformance (perf().threads, perf().mt, perf().smart);
+            return;
+        }
         if (id >= 200 && id < 208)
         {
             const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };

@@ -651,6 +651,7 @@ void PitchShifter::prepare (double sr)
 float PitchShifter::process (float x)
 {
     buf[(size_t) write] = x;
+    if (targetGrain > 0.0f) grain += (targetGrain - grain) * 0.0005f;
     phase += (1.0 - ratio) / grain;
     phase -= std::floor (phase);
     auto tap = [&] (double ph)
@@ -711,7 +712,9 @@ public:
             { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
             { "scale", "Scale", -1, 15, -1 }, { "voice", "Voice", 0, 2, 1, { "Low", "Mid", "High" } },
-            { "mix", "Mix", 0, 1, 1 } };
+            { "mix", "Mix", 0, 1, 1 },
+            { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
+            { "tuning", "Tuning A4 (Hz)", 400, 500, 440 } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -722,6 +725,7 @@ public:
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         currentRatio = 1.0f; targetRatio = 1.0f; detectedMidi.store (0); correctedMidi.store (0);
+        lastTarget = -1; pendingCount = 0; unvoiced = 0; lastMidi = 0; dryMix = 1;
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -734,9 +738,12 @@ public:
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = juce::jmap (speed, 400.0f, 1.0f);   // retune glide time
+        const float timeMs = style == 3 ? 6.0f : juce::jmap (speed, 400.0f, 4.0f);   // retune glide time (hard tune: short glide, no clicks)
+        const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
+        const float xfade = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = style == 3 ? 0.0f : p (2);
+        const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -750,24 +757,44 @@ public:
                     std::array<float, 1024> win {};
                     for (int k = 0; k < 1024; ++k) win[(size_t) k] = analysis[(size_t) ((aw - 1024 + k + (int) analysis.size()) % (int) analysis.size())];
                     const float hz = detectPitchYin (win.data(), 1024, dsr, style == 0 ? 0.12f : 0.18f);
-                    if (hz > 0)
+                    float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    if (midi > 0 && lastMidi > 0 && std::abs (std::abs (midi - lastMidi) - 12.0f) < 1.0f) midi = 0.0f;   // octave misread: ignore
+                    if (midi > 0)
                     {
-                        const float midi = 69.0f + 12.0f * std::log2 (hz / 440.0f);
-                        const int target = snapToScale ((int) std::round (midi), root, scale);
+                        unvoiced = 0; lastMidi = midi;
+                        {
+                            // grain = 2 x whole periods, so the two overlapping taps stay in phase (full, not thin / plastic)
+                            const float period = (float) (sr / hz);
+                            const float k = std::max (1.0f, std::round (0.015f * (float) sr / period));
+                            const float gs = juce::jlimit ((float) (0.01 * sr), (float) (0.05 * sr), 2.0f * k * period);
+                            for (auto& sh : shifters) sh.setGrain (gs);
+                        }
+                        const int cand = snapToScale ((int) std::round (midi), root, scale);
+                        int target = lastTarget < 0 ? cand : lastTarget;
+                        if (cand == lastTarget) pendingCount = 0;
+                        else if (lastTarget >= 0)
+                        {
+                            // hysteresis: sitting between two notes stays on the current one; small moves must persist
+                            const float dist = std::abs (midi - (float) lastTarget);
+                            if (dist >= 1.6f || (dist >= 0.7f && ++pendingCount >= 2)) { target = cand; pendingCount = 0; }
+                        }
+                        lastTarget = target;
                         float semis = (float) target - midi;
                         if (std::abs (semis) < humanize * 0.6f) semis *= (1.0f - humanize);   // let small natural drift through
                         if (style == 0) semis *= 0.8f;
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
-                    else targetRatio = 1.0f;
+                    else if (++unvoiced > 6) { targetRatio = 1.0f; lastTarget = -1; lastMidi = 0; }   // hold through short gaps
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
-            for (auto& sh : shifters) sh.setRatio (currentRatio);
+            const float ratio = currentRatio * offset;
+            for (auto& sh : shifters) sh.setRatio (ratio);
             const float tl = shifters[0].process (l[i]), tr = shifters[1].process (r[i]);
-            const bool bypassShift = std::abs (currentRatio - 1.0f) < 1.0e-4f && targetRatio == 1.0f;
-            const float wl = bypassShift ? l[i] : tl, wr = bypassShift ? r[i] : tr;
+            const bool wantDry = std::abs (ratio - 1.0f) < 1.0e-4f && targetRatio == 1.0f && offset == 1.0f;
+            dryMix += ((wantDry ? 1.0f : 0.0f) - dryMix) * xfade;      // crossfade, never hard-switch (that was the crack)
+            const float wl = tl + (l[i] - tl) * dryMix, wr = tr + (r[i] - tr) * dryMix;
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -776,6 +803,8 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; PitchShifter shifters[2];
     float currentRatio = 1, targetRatio = 1;
+    int lastTarget = -1, pendingCount = 0, unvoiced = 0;
+    float lastMidi = 0, dryMix = 1;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 
@@ -787,7 +816,7 @@ ScopeTap& masterScope() { static ScopeTap t; return t; }
 const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
-        { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ 7", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
+        { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
         { "satur", "Saturator", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },

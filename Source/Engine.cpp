@@ -13,19 +13,27 @@ WorkerPool::~WorkerPool()
 {
     quit = true;
     generation.fetch_add (1);
+    cv.notify_all();
     for (auto& t : threads) t.join();
 }
 void WorkerPool::workerLoop()
 {
+    juce::FloatVectorOperations::disableDenormalisedNumberSupport();   // denormals in reverb tails cause CPU spikes
     int seen = generation.load();
+    auto lastWork = std::chrono::steady_clock::now();
     while (! quit.load())
     {
-        int spins = 0;
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
-            if (++spins > 2000) std::this_thread::sleep_for (std::chrono::microseconds (50));
-            else std::this_thread::yield();
+            // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
+            if (std::chrono::steady_clock::now() - lastWork < std::chrono::milliseconds (40)) std::this_thread::yield();
+            else
+            {
+                std::unique_lock<std::mutex> lk (m);
+                cv.wait_for (lk, std::chrono::milliseconds (2), [&] { return generation.load() != seen || quit.load(); });
+            }
         }
+        lastWork = std::chrono::steady_clock::now();
         seen = generation.load();
         if (quit.load()) return;
         for (;;)
@@ -33,6 +41,7 @@ void WorkerPool::workerLoop()
             const int i = next.fetch_add (1);
             if (i >= total.load()) break;
             job.load() (ctx.load(), i);
+            workerJobs.fetch_add (1, std::memory_order_relaxed);
             done.fetch_add (1);
         }
     }
@@ -41,8 +50,10 @@ void WorkerPool::run (int count, Job j, void* c)
 {
     if (count <= 0) return;
     if (threads.empty() || count == 1) { for (int i = 0; i < count; ++i) j (c, i); return; }
+    runs.fetch_add (1, std::memory_order_relaxed);
     job = j; ctx = c; done = 0; total = count; next = 0;
     generation.fetch_add (1, std::memory_order_release);
+    cv.notify_all();
     for (;;)
     {
         const int i = next.fetch_add (1);
@@ -82,6 +93,7 @@ struct FxRuntime
     juce::AudioBuffer<float> buf;   // sized to the plugin's own channel count
     juce::MidiBuffer midi;
     double tail = 0.0;
+    std::atomic<float> load { 0.0f };
 };
 
 static int pluginChannels (const juce::AudioPluginInstance& p)
@@ -234,7 +246,7 @@ Engine::Engine()
     knownPlugins.setCustomScanner (std::make_unique<ChildProcessScanner>());
     proj = Project::createDefault();
     const int hw = (int) std::thread::hardware_concurrency();
-    pool = std::make_unique<WorkerPool> (juce::jlimit (0, 7, hw - 1));
+    pool = std::make_unique<WorkerPool> (juce::jlimit (0, 31, hw - 1));
     diskThread.startThread (juce::Thread::Priority::high);
     recordingFolder = proj.recordingsFolder();
     prepare (44100.0, 512);
@@ -435,6 +447,10 @@ void Engine::sync()
             rt->cutGroup = ch.cutGroup;
             channelOrder.push_back (rt);
         }
+        chanJobOrder.resize (channelOrder.size());
+        for (size_t i = 0; i < chanJobOrder.size(); ++i) chanJobOrder[i] = (int) i;
+        chanCost.assign (channelOrder.size(), 0.0f);
+        trackCost.assign (proj.mixer.size() + 1, 0.0f);
 
         // tracks
         std::vector<std::unique_ptr<TrackRuntime>> tracks;
@@ -556,6 +572,26 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 void Engine::audioDeviceStopped() {}
 
 double Engine::cpuLoad() const { return deviceManager.getCpuUsage(); }
+
+void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
+{
+    const int hw = juce::jmax (1, (int) std::thread::hardware_concurrency());
+    const int workers = threads <= 0 ? juce::jlimit (0, 31, hw - 1) : juce::jlimit (0, 63, threads - 1);
+    std::unique_ptr<WorkerPool> fresh;
+    if (! pool || pool->size() != workers) fresh = std::make_unique<WorkerPool> (workers);
+    {
+        const juce::ScopedLock sl (lock);
+        if (fresh) std::swap (pool, fresh);
+        mtOn = multithreaded; smartOn = smartDisable;
+    }
+}
+
+float Engine::fxLoad (int track, int uid) const
+{
+    if (track < 0 || track >= (int) trackRt.size() || ! trackRt[(size_t) track]) return 0.0f;
+    for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->load.load();
+    return 0.0f;
+}
 
 float Engine::trackPeak (int t) const
 {
@@ -718,6 +754,27 @@ void Engine::finishRecordingWriters()
             newClips.push_back (c);
         }
         if (newClips.empty()) continue;
+        if (! proj.hasPunch())
+        {
+            // FL-style: a new take never covers an earlier one - it drops to the next free lane (same vocal insert)
+            const double a0 = newClips.front().start, a1 = a0 + newClips.front().length;
+            auto overlaps = [&] (int ln) {
+                for (auto& c : proj.clips) if (c.lane == ln && c.isAudio() && ! c.hidden && c.start < a1 && c.start + c.length > a0) return true;
+                return false; };
+            int ln = t->lane;
+            while (overlaps (ln)) ++ln;
+            if (ln != t->lane)
+            {
+                while (ln >= (int) proj.lanes.size()) { Lane nl; nl.name = "Track " + juce::String ((int) proj.lanes.size() + 1); nl.mixerTrack = insert; proj.lanes.push_back (nl); }
+                for (size_t i = 0; i < newClips.size(); ++i)
+                {
+                    newClips[i].lane = ln;
+                    newClips[i].hidden = i + 1 < newClips.size();
+                    proj.clips.push_back (newClips[i]);
+                }
+                continue;
+            }
+        }
         // punch: cut existing clips on this lane at the new take's range (5 ms crossfade via fades)
         const double r0 = newClips.front().start, r1 = newClips.front().start + newClips.front().length;
         std::vector<Clip> keep;
@@ -964,6 +1021,13 @@ struct EngineJobs
     static void channel (void* c, int i)
     {
         auto* e = static_cast<Engine*> (c);
+        const int ci = i < (int) e->chanJobOrder.size() ? e->chanJobOrder[(size_t) i] : i;
+        const auto t0 = juce::Time::getHighResolutionTicks();
+        channelJob (e, ci);
+        if (ci < (int) e->chanCost.size()) e->chanCost[(size_t) ci] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->chanCost[(size_t) ci] * 0.9f);
+    }
+    static void channelJob (Engine* e, int i)
+    {
         auto* rt = e->channelOrder[(size_t) i];
         const int n = e->currentBlock;
         rt->buf.clear (0, n);
@@ -977,7 +1041,7 @@ struct EngineJobs
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
-            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4) { rt->numEvents = 0; return; }
+            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
             auto& pl = *rt->plugin;
             const juce::ScopedTryLock cl (pl.getCallbackLock());
@@ -1009,7 +1073,9 @@ struct EngineJobs
     {
         auto* e = static_cast<Engine*> (c);
         const int t = e->levels[(size_t) e->currentLevel][(size_t) i];
+        const auto t0 = juce::Time::getHighResolutionTicks();
         e->processTrack (t);
+        if (t < (int) e->trackCost.size()) e->trackCost[(size_t) t] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->trackCost[(size_t) t] * 0.9f);
     }
 };
 
@@ -1025,7 +1091,7 @@ void Engine::processTrack (int t)
 
     const float mag = tr.out.getMagnitude (0, n);
     if (mag > 1.0e-6f) tr.silentSamples = 0; else tr.silentSamples += n;
-    const bool idle = tr.silentSamples > (int) (tr.tailSeconds * sampleRate);
+    const bool idle = smartOn.load() && tr.silentSamples > (int) (tr.tailSeconds * sampleRate);
     if (! idle && ! tr.frozen)
     {
         juce::AudioBuffer<float> view (tr.out.getArrayOfWritePointers(), 2, n);
@@ -1034,7 +1100,10 @@ void Engine::processTrack (int t)
             auto& slot = mt.fx[k];
             auto& f = *tr.fx[k];
             const float mix = juce::jlimit (0.0f, 1.0f, slot.mix);
-            if (slot.bypass || mix <= 0.0f) continue;
+            if (slot.bypass || mix <= 0.0f) { f.load = 0.0f; continue; }
+            struct LoadMeter { std::atomic<float>& out; juce::int64 t0; double block;
+                ~LoadMeter() { const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / block); out = std::max (v, out.load() * 0.95f); } }
+                meterLoad { f.load, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
             const bool blend = mix < 0.999f && n <= tr.dry.getNumSamples();
             if (blend) for (int c = 0; c < 2; ++c) tr.dry.copyFrom (c, 0, view, c, 0, n);
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
@@ -1085,7 +1154,7 @@ void Engine::processTrack (int t)
     else tr.duckGain = 1.0f;
 
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
-    const float vol = muted ? 0.0f : mt.volume * mt.volume * 1.5f;
+    const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
     const float gl = vol * std::min (1.0f, 1.0f - mt.pan), gr = vol * std::min (1.0f, 1.0f + mt.pan);
     tr.out.applyGain (0, 0, n, gl);
     tr.out.applyGain (1, 0, n, gr);
@@ -1096,6 +1165,7 @@ void Engine::processTrack (int t)
 
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
+    juce::ScopedNoDenormals noDenormals;
     const juce::ScopedTryLock sl (lock);
     if (! sl.isLocked() || trackRt.empty())
     {
@@ -1191,7 +1261,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         auto& ch = proj.channels[ci];
         auto* rt = channelOrder[ci];
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
-        const float v = ch.volume, gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
+        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
         auto& dest = trackRt[(size_t) t]->in;
         dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
         dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
@@ -1210,6 +1280,26 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             const float* ir = c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;
+            if (lane.autoNorm && l < normState.size() && n <= normScratch.getNumSamples())
+            {
+                // zero-latency auto-normalize: slow RMS leveler (target about -12 dBFS, up to +24 dB) + soft ceiling
+                auto& ns = normState[l];
+                auto* nl = normScratch.getWritePointer (0); auto* nr = normScratch.getWritePointer (1);
+                auto ceil = [] (float y) { const float a = std::abs (y); return a <= 0.89f ? y : std::copysign (0.89f + 0.1f * std::tanh ((a - 0.89f) / 0.1f), y); };
+                for (int i = 0; i < n; ++i)
+                {
+                    const float x = 0.5f * (il[i] + ir[i]);
+                    ns.rms = ns.rms * 0.9995f + 0.0005f * x * x;
+                    const float level = std::sqrt (ns.rms);
+                    if (level > 0.001f)
+                    {
+                        const float tg = juce::jlimit (0.5f, 16.0f, 0.25f / level);
+                        ns.gain += (tg - ns.gain) * (tg < ns.gain ? 0.002f : 0.0002f);
+                    }
+                    nl[i] = ceil (il[i] * ns.gain); nr[i] = ceil (ir[i] * ns.gain);
+                }
+                il = nl; ir = nr;
+            }
             if (lane.monitor && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;
@@ -1277,7 +1367,9 @@ void Engine::renderChannels (int n)
 
     juce::ignoreUnused (n);
     const int count = (int) channelOrder.size();
-    if (count >= 4 && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
+    if ((int) chanJobOrder.size() == count && (int) chanCost.size() == count)   // heaviest first = best spread across cores
+        std::sort (chanJobOrder.begin(), chanJobOrder.end(), [this] (int a, int b) { return chanCost[(size_t) a] > chanCost[(size_t) b]; });
+    if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
     else for (int i = 0; i < count; ++i) EngineJobs::channel (this, i);
 }
 
@@ -1287,7 +1379,11 @@ void Engine::mixTracks (const float* const*, int, int)
     {
         currentLevel = (int) lv;
         const int count = (int) levels[lv].size();
-        if (count >= 3 && pool && pool->size() > 0) pool->run (count, &EngineJobs::track, this);
+        auto& L = levels[lv];
+        if (count > 2) std::sort (L.begin(), L.end(), [this] (int a, int b) {
+            const float ca = a < (int) trackCost.size() ? trackCost[(size_t) a] : 0.0f, cb = b < (int) trackCost.size() ? trackCost[(size_t) b] : 0.0f;
+            return ca > cb; });
+        if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::track, this);
         else for (int i = 0; i < count; ++i) EngineJobs::track (this, i);
     }
 }

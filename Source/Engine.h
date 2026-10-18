@@ -1,4 +1,6 @@
 #pragma once
+#include <condition_variable>
+#include <mutex>
 #include "Model.h"
 #include "Instruments.h"
 #include "Effects.h"
@@ -17,6 +19,7 @@ public:
     ~WorkerPool();
     void run (int count, Job job, void* ctx);   // blocks until all indices are done
     int size() const { return (int) threads.size(); }
+    std::atomic<long> workerJobs { 0 }, runs { 0 };
 private:
     void workerLoop();
     std::vector<std::thread> threads;
@@ -24,6 +27,8 @@ private:
     std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 };
     std::atomic<Job> job { nullptr };
     std::atomic<void*> ctx { nullptr };
+    std::mutex m;
+    std::condition_variable cv;
 };
 
 class Engine : public juce::AudioIODeviceCallback,
@@ -62,6 +67,11 @@ public:
     static constexpr int maxScopeTracks = 64;
     std::unique_ptr<std::array<ScopeTap, maxScopeTracks>> trackScopes = std::make_unique<std::array<ScopeTap, maxScopeTracks>>();
     double cpuLoad() const;
+    // performance (Options > Performance): threads = total processing threads (0 = auto, all cores)
+    void setPerformance (int threads, bool multithreaded, bool smartDisable);
+    int  processingThreads() const { return (pool ? pool->size() : 0) + 1; }
+    long poolStat (bool workers) const { return pool ? (workers ? pool->workerJobs.load() : pool->runs.load()) : 0; }
+    float fxLoad (int track, int slotUid) const;      // share of the audio block this slot used (0..1)
     bool isCountingIn() const { return countingIn.load(); }
 
     // preview (computer keyboard / clicking keys / browser)
@@ -136,6 +146,9 @@ private:
     std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;
+    std::atomic<bool> mtOn { true }, smartOn { true };
+    std::vector<float> trackCost, chanCost;
+    std::vector<int> chanJobOrder;
     juce::TimeSliceThread diskThread { "HHS disk" };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
@@ -162,6 +175,9 @@ private:
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;
+    struct NormState { float rms = 0.0f, gain = 1.0f; };
+    std::array<NormState, 256> normState {};
+    juce::AudioBuffer<float> normScratch { 2, 8192 };
     int idleThresholdBlocks = 0;
     int currentBlock = 0, currentLevel = 0;
     PlayContext ctx;

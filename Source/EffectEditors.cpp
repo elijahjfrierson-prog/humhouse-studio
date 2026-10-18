@@ -1,5 +1,6 @@
 #include "UI.h"
 #include <complex>
+#include <map>
 
 namespace hhs
 {
@@ -43,6 +44,40 @@ FxSlot* findSlot (Studio& s, int track, int uid)
     if (track < 0 || track >= (int) p.mixer.size()) return nullptr;
     for (auto& f : p.mixer[(size_t) track].fx) if (f.uid == uid) return &f;
     return nullptr;
+}
+
+struct FactoryPreset { const char* name; std::vector<std::pair<const char*, float>> values; };
+const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
+{
+    static const std::map<juce::String, std::vector<FactoryPreset>> all {
+        { "steq7", { { "Flat (reset)", {  } }, { "Vocal Clarity", { { "e1F", 90.0f }, { "e3F", 300.0f }, { "e3G", -3.0f }, { "e5F", 4000.0f }, { "e5G", 2.5f }, { "e7F", 10000.0f }, { "e7G", 3.0f } } }, { "Tight 808", { { "e1F", 25.0f }, { "e2F", 60.0f }, { "e2G", 2.0f }, { "e3F", 220.0f }, { "e3G", -4.0f }, { "e3Q", 1.4f } } }, { "Air", { { "e6F", 9000.0f }, { "e6G", 1.5f }, { "e7F", 12000.0f }, { "e7G", 4.0f } } }, { "Mud Cut", { { "e1F", 40.0f }, { "e3F", 300.0f }, { "e3G", -5.0f }, { "e3Q", 1.2f } } }, { "De-Harsh (dynamic)", { { "e5F", 3500.0f }, { "e5Dyn", 1.0f }, { "e5DTh", -30.0f }, { "e5DRg", -6.0f } } }, { "Master Polish", { { "e1F", 25.0f }, { "e2F", 80.0f }, { "e2G", 1.0f }, { "e3F", 300.0f }, { "e3G", -1.5f }, { "e7F", 14000.0f }, { "e7G", 1.5f } } } } },
+        { "stdyn", { { "Vocal Leveler", { { "threshold", -24.0f }, { "ratio", 3.0f }, { "attack", 10.0f }, { "release", 120.0f }, { "gain", 4.0f }, { "knee", 8.0f } } }, { "Drum Bus", { { "threshold", -18.0f }, { "ratio", 4.0f }, { "attack", 30.0f }, { "release", 100.0f }, { "gain", 3.0f } } }, { "Mix Glue", { { "threshold", -16.0f }, { "ratio", 2.0f }, { "attack", 30.0f }, { "release", 300.0f }, { "gain", 2.0f }, { "knee", 12.0f } } }, { "Brickwall", { { "threshold", -6.0f }, { "ratio", 20.0f }, { "attack", 0.5f }, { "release", 50.0f } } } } },
+        { "comp", { { "Vocal", { { "threshold", -22.0f }, { "ratio", 3.0f }, { "attack", 8.0f }, { "release", 120.0f } } }, { "Drums", { { "threshold", -18.0f }, { "ratio", 4.0f }, { "attack", 25.0f }, { "release", 90.0f } } }, { "Glue", { { "threshold", -14.0f }, { "ratio", 2.0f }, { "attack", 30.0f }, { "release", 300.0f } } }, { "Parallel Smash", { { "threshold", -30.0f }, { "ratio", 8.0f }, { "mix", 0.5f } } } } },
+        { "fet76", { { "Vocal Grab", { { "input", 28.0f }, { "ratio", 0.0f }, { "attack", 4.0f }, { "release", 5.0f } } }, { "All Buttons Smash", { { "input", 36.0f }, { "ratio", 4.0f }, { "mix", 0.5f } } }, { "Drum Crunch", { { "input", 32.0f }, { "ratio", 2.0f } } } } },
+        { "stgate", { { "Vocal Gate", { { "threshold", -45.0f }, { "range", -30.0f }, { "release", 150.0f } } }, { "Tight Drums", { { "threshold", -35.0f }, { "range", -60.0f }, { "hold", 10.0f }, { "release", 60.0f } } }, { "Soft Expander", { { "mode", 1.0f }, { "threshold", -40.0f }, { "ratio", 2.0f } } } } },
+        { "stlimit", { { "Master Loud", { { "gain", 6.0f }, { "ceiling", -0.3f } } }, { "Safe", { { "gain", 0.0f }, { "ceiling", -1.0f } } }, { "Transparent", { { "gain", 3.0f }, { "ceiling", -1.0f }, { "release", 100.0f } } } } },
+        { "limiter", { { "Master Loud", { { "gain", 6.0f }, { "ceiling", -0.3f } } }, { "Safe", { { "gain", 0.0f }, { "ceiling", -1.0f } } }, { "Transparent", { { "gain", 3.0f }, { "ceiling", -1.0f }, { "release", 100.0f } } } } },
+        { "satur", { { "Tape Warmth", { { "drive", 6.0f }, { "char", 0.0f } } }, { "Tube Push", { { "drive", 10.0f }, { "char", 1.0f } } }, { "Transformer Grit", { { "drive", 14.0f }, { "char", 2.0f }, { "mix", 0.7f } } } } },
+        { "strip", { { "Rap Vocal", { { "gateTh", -55.0f }, { "compTh", -20.0f }, { "compRatio", 4.0f }, { "makeup", 5.0f }, { "hpf", 100.0f }, { "mid", -2.0f }, { "midF", 400.0f }, { "high", 3.0f } } }, { "Singer", { { "compTh", -18.0f }, { "compRatio", 3.0f }, { "hpf", 80.0f }, { "high", 2.0f } } }, { "Podcast", { { "gateTh", -50.0f }, { "compTh", -22.0f }, { "compRatio", 3.0f }, { "hpf", 90.0f }, { "low", -2.0f }, { "high", 2.0f } } } } },
+        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "speed", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "speed", 0.8f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "speed", 1.0f } } }, { "Robot", { { "style", 3.0f }, { "speed", 1.0f }, { "humanize", 0.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
+        { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
+        { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
+        { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
+        { "gate", { { "Tight", { { "threshold", -40.0f }, { "release", 50.0f } } }, { "Soft", { { "threshold", -55.0f }, { "release", 200.0f }, { "range", -20.0f } } } } },
+        { "pump", { { "Classic 1/4", { { "depth", 0.8f }, { "rate", 1.0f } } }, { "Subtle", { { "depth", 0.4f } } }, { "1/8 Pulse", { { "rate", 2.0f }, { "depth", 0.7f } } } } },
+        { "clip", { { "Warm", { { "gain", 3.0f }, { "ceiling", -1.0f } } }, { "Loud", { { "gain", 9.0f }, { "ceiling", -0.5f } } } } },
+        { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } } } },
+        { "delay", { { "1/4 Echo", { { "time", 4.0f }, { "feedback", 0.3f }, { "mix", 0.2f } } }, { "1/8 Ping Pong", { { "time", 2.0f }, { "pingpong", 1.0f }, { "feedback", 0.4f } } }, { "Dotted 1/8", { { "time", 3.0f }, { "feedback", 0.45f } } }, { "Dub Throw", { { "time", 5.0f }, { "feedback", 0.7f }, { "tone", 3000.0f }, { "mix", 0.35f } } } } },
+        { "chorus", { { "Wide Vocal", { { "rate", 0.6f }, { "depth", 0.3f }, { "mix", 0.3f } } }, { "Lush", { { "rate", 1.2f }, { "depth", 0.6f }, { "mix", 0.5f } } }, { "Flanger", { { "delay", 2.0f }, { "feedback", 0.6f }, { "rate", 0.3f } } } } },
+        { "phaser", { { "Slow Swirl", { { "rate", 0.3f }, { "depth", 0.7f } } }, { "Fast Phase", { { "rate", 4.0f }, { "depth", 0.5f } } } } },
+        { "wide", { { "Wide", { { "width", 1.6f } } }, { "Subtle", { { "width", 1.2f } } }, { "Mono", { { "width", 0.0f } } } } },
+        { "gain", { { "+6 dB", { { "gain", 6.0f } } }, { "-6 dB", { { "gain", -6.0f } } }, { "Mono", { { "mono", 1.0f } } }, { "Flip Phase", { { "phase", 1.0f } } } } },
+        { "grit", { { "Tape", { { "mode", 0.0f }, { "drive", 0.3f } } }, { "Tube", { { "mode", 1.0f }, { "drive", 0.5f } } }, { "Fuzz", { { "mode", 2.0f }, { "drive", 0.8f }, { "mix", 0.6f } } }, { "Fold", { { "mode", 3.0f }, { "drive", 0.6f } } } } },
+        { "crush", { { "8-bit", { { "bits", 8.0f }, { "down", 4.0f } } }, { "Lo-fi", { { "bits", 12.0f }, { "down", 2.0f }, { "mix", 0.6f } } }, { "Destroy", { { "bits", 4.0f }, { "down", 16.0f } } } } },
+        { "glitch", { { "Stutter All", { { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
+    static const std::vector<FactoryPreset> none;
+    auto it = all.find (type);
+    return it != all.end() ? it->second : none;
 }
 
 class ParamGrid : public juce::Component
@@ -164,12 +199,16 @@ private:
     {
         juce::PopupMenu menu;
         menu.addItem (1, "Save preset...");
+        const auto& fac = factoryPresets (kind);
+        if (! fac.empty()) menu.addSectionHeader ("Factory presets");
+        for (size_t i = 0; i < fac.size(); ++i) menu.addItem (5000 + (int) i, fac[i].name);
         auto files = presetDir().findChildFiles (juce::File::findFiles, false, "*.hhpreset");
         files.sort();
-        if (! files.isEmpty()) menu.addSeparator();
+        if (! files.isEmpty()) menu.addSectionHeader ("Your presets");
         for (int i = 0; i < files.size() && i < 200; ++i) menu.addItem (100 + i, files[i].getFileNameWithoutExtension());
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
+            else if (r >= 5000 && r - 5000 < (int) factoryPresets (kind).size()) loadFactory (factoryPresets (kind)[(size_t) (r - 5000)]);
             else if (r >= 100 && r - 100 < files.size()) loadPreset (files[r - 100]);
         });
     }
@@ -189,6 +228,14 @@ private:
             safe->presetDir().createDirectory();
             x.writeTo (safe->presetDir().getChildFile (name + ".hhpreset"));
         }), true);
+    }
+    void loadFactory (const FactoryPreset& fp)
+    {
+        std::vector<std::pair<juce::String, float>> defs;
+        for (auto& p : params) defs.push_back ({ p.id, p.def });
+        for (auto& [id, v] : defs) setExternal (id, v);
+        for (auto& [id, v] : fp.values) setExternal (id, v);
+        onCommit();
     }
     void loadPreset (const juce::File& f)
     {
@@ -232,7 +279,7 @@ public:
         model = createBuiltinEffect ("steq7");
         if (model) model->prepare (48000, 512);
         snap.assign (fftN, 0.0f); fftBuf.assign (fftN * 2, 0.0f); spec.assign (fftN / 2, -100.0f);
-        setTooltip ("Drag a dot: left/right = frequency, up/down = gain. Wheel = Q. Double-click = reset. Right-click = Dynamic EQ. Click NATURAL/LINEAR to switch phase.");
+        setTooltip ("Double-click empty space = add a band (up to 12). Drag a dot = frequency + gain. Wheel = width (Q). Double-click a dot = reset gain. Right-click a dot = type, Dynamic EQ, delete. Click NATURAL / LINEAR to switch phase.");
         startTimerHz (30);
     }
     void paint (juce::Graphics& g) override
@@ -251,7 +298,6 @@ public:
             g.setColour (col::grid.withAlpha (d == 0 ? 0.9f : 0.35f)); g.drawHorizontalLine ((int) yOf ((float) d), a.getX(), a.getRight());
             if (d != 0) { g.setColour (col::dim); g.drawText (juce::String (d), (int) a.getX() + 2, (int) yOf ((float) d) - 6, 24, 12, juce::Justification::left); }
         }
-        // live spectrum
         if (rate > 0)
         {
             juce::Path sp; bool started = false;
@@ -263,13 +309,8 @@ public:
                 if (! started) { sp.startNewSubPath (xOf (f), a.getBottom()); started = true; }
                 sp.lineTo (xOf (f), y);
             }
-            if (started)
-            {
-                sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath();
-                g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp);
-            }
+            if (started) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp); }
         }
-        // EQ curve
         if (model)
         {
             for (auto& d : model->params()) model->setParam (d.id, grid.valueOf (d.id));
@@ -284,33 +325,32 @@ public:
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
             g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
         }
-        // band dots (+ live dynamic ring)
         auto* fx = live ? live() : nullptr;
-        for (int b = 0; b < (int) bands().size(); ++b)
+        for (int k = 0; k < bands; ++k)
         {
-            auto pt = dotOf (b);
-            const auto c = juce::Colour (bands()[(size_t) b].colour);
-            const int k = bands()[(size_t) b].dyn;
-            if (k >= 0 && grid.valueOf (dynId (k, "Dyn")) > 0.5f)
+            if (! isOn (k)) continue;
+            auto pt = dotOf (k);
+            const auto c = colourOf (k);
+            if (hasGain (k) && grid.valueOf (pid (k, "Dyn")) > 0.5f)
             {
-                const float off = fx ? fx->meter (k) : 0.0f;
-                const float yr = yOf (gainOf (b) + off);
+                const float yr = yOf (grid.valueOf (pid (k, "G")) + (fx ? fx->meter (k) : 0.0f));
                 g.setColour (c.withAlpha (0.5f)); g.drawLine (pt.x, pt.y, pt.x, yr, 1.5f);
                 g.setColour (c); g.drawEllipse (pt.x - 10, yr - 10, 20, 20, 2.0f);
             }
-            g.setColour (c.withAlpha (b == hot ? 0.45f : 0.2f)); g.fillEllipse (pt.x - 11, pt.y - 11, 22, 22);
-            g.setColour (c); g.fillEllipse (pt.x - 6, pt.y - 6, 12, 12);
-            if (b == hot)
+            g.setColour (c.withAlpha (k == hot ? 0.45f : 0.2f)); g.fillEllipse (pt.x - 11, pt.y - 11, 22, 22);
+            g.setColour (c); g.fillEllipse (pt.x - 7, pt.y - 7, 14, 14);
+            g.setColour (juce::Colours::black.withAlpha (0.8f)); g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+            g.drawText (juce::String (k + 1), juce::Rectangle<float> (pt.x - 7, pt.y - 7, 14, 14), juce::Justification::centred);
+            if (k == hot)
             {
+                static const char* tn[] { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass" };
+                juce::String t = juce::String (tn[typeOf (k)]) + "  " + hzText (grid.valueOf (pid (k, "F")));
+                if (hasGain (k)) t << "  " << juce::String (grid.valueOf (pid (k, "G")), 1) << " dB";
+                t << "  Q " << juce::String (grid.valueOf (pid (k, "Q")), 2);
                 g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-                const auto& bd = bands()[(size_t) b];
-                juce::String t = juce::String (bd.name) + "  " + hzText (grid.valueOf (bd.f));
-                if (bd.g) t << "  " << juce::String (grid.valueOf (bd.g), 1) << " dB";
-                if (bd.q) t << "  Q " << juce::String (grid.valueOf (bd.q), 2);
-                g.drawText (t, (int) pt.x - 90, (int) pt.y - 30, 180, 14, juce::Justification::centred);
+                g.drawText (t, (int) pt.x - 110, (int) pt.y - 30, 220, 14, juce::Justification::centred);
             }
         }
-        // phase mode chip
         const bool lin = grid.valueOf ("phase") > 0.5f;
         auto chip = modeChip();
         g.setColour (lin ? col::accent2.withAlpha (0.3f) : col::good.withAlpha (0.25f)); g.fillRoundedRectangle (chip, 4.0f);
@@ -328,91 +368,98 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (drag < 0) return;
-        const auto& bd = bands()[(size_t) drag];
-        grid.setExternal (bd.f, (float) freqAt (e.position.x));
-        if (bd.g) grid.setExternal (bd.g, juce::jlimit (-18.0f, 18.0f, dbAt (e.position.y)));
+        grid.setExternal (pid (drag, "F"), (float) freqAt (e.position.x));
+        if (hasGain (drag)) grid.setExternal (pid (drag, "G"), juce::jlimit (-18.0f, 18.0f, dbAt (e.position.y)));
         repaint();
     }
     void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) grid.commitNow(); drag = -1; }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        const int b = hit (e.position);
-        if (b < 0) return;
-        const auto& bd = bands()[(size_t) b];
-        if (bd.g) grid.setExternal (bd.g, 0.0f); else grid.setExternal (bd.f, b == 0 ? 20.0f : 22000.0f);
-        grid.commitNow(); repaint();
+        const int k = hit (e.position);
+        if (k >= 0) { if (hasGain (k)) grid.setExternal (pid (k, "G"), 0.0f); grid.commitNow(); repaint(); return; }
+        if (modeChip().contains (e.position)) return;
+        for (int b = 0; b < bands; ++b)
+            if (! isOn (b))
+            {
+                grid.setExternal (pid (b, "T"), 0.0f); grid.setExternal (pid (b, "F"), (float) freqAt (e.position.x));
+                grid.setExternal (pid (b, "G"), juce::jlimit (-18.0f, 18.0f, dbAt (e.position.y))); grid.setExternal (pid (b, "Q"), 1.0f);
+                grid.setExternal (pid (b, "Dyn"), 0.0f); grid.setExternal (pid (b, "On"), 1.0f);
+                grid.commitNow(); hot = b; repaint();
+                return;
+            }
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
-        const int b = hit (e.position);
-        if (b < 0 || bands()[(size_t) b].q == nullptr) return;
-        const auto* q = bands()[(size_t) b].q;
-        grid.setExternal (q, grid.valueOf (q) * (w.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
+        const int k = hit (e.position);
+        if (k < 0) return;
+        grid.setExternal (pid (k, "Q"), grid.valueOf (pid (k, "Q")) * (w.deltaY > 0 ? 1.12f : 1.0f / 1.12f));
         grid.commitNow(); repaint();
     }
 private:
-    struct Band { const char* g; const char* f; const char* q; juce::uint32 colour; int dyn; const char* name; };
-    static const std::vector<Band>& bands()
-    {
-        static const std::vector<Band> b {
-            { nullptr, "hpf", nullptr, 0xff9aa0aa, -1, "HPF" }, { "lsG", "lsF", nullptr, 0xffff5d5d, 0, "Low Shelf" },
-            { "b1G", "b1F", "b1Q", 0xffffa53d, 1, "LMF" }, { "b2G", "b2F", "b2Q", 0xfff5e04a, 2, "MF" },
-            { "b3G", "b3F", "b3Q", 0xff4ade80, 3, "HMF" }, { "b4G", "b4F", "b4Q", 0xff38bdf8, 4, "Presence" },
-            { "hsG", "hsF", nullptr, 0xffa78bfa, 5, "High Shelf" }, { nullptr, "lpf", nullptr, 0xff9aa0aa, -1, "LPF" } };
-        return b;
-    }
-    static juce::String dynId (int k, const char* suffix)
-    {
-        static const char* pre[] { "ls", "b1", "b2", "b3", "b4", "hs" };
-        return juce::String (pre[k]) + suffix;
-    }
+    static constexpr int bands = 12;
+    static juce::String pid (int k, const char* f) { return "e" + juce::String (k + 1) + f; }
     static juce::String hzText (float f) { return f >= 1000 ? juce::String (f / 1000.0f, 2) + " kHz" : juce::String ((int) f) + " Hz"; }
+    juce::Colour colourOf (int k) const
+    {
+        static const juce::uint32 c[] { 0xff9aa0aa, 0xffff5d5d, 0xffffa53d, 0xfff5e04a, 0xff4ade80, 0xff38bdf8, 0xffa78bfa,
+                                        0xfff472b6, 0xff2dd4bf, 0xfffb923c, 0xffa3e635, 0xff818cf8 };
+        return juce::Colour (c[k % 12]);
+    }
+    bool isOn (int k) const { return grid.valueOf (pid (k, "On")) > 0.5f; }
+    int  typeOf (int k) const { return juce::jlimit (0, 6, (int) std::round (grid.valueOf (pid (k, "T")))); }
+    bool hasGain (int k) const { return typeOf (k) <= 2; }
     juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (6.0f, 8.0f); }
     juce::Rectangle<float> modeChip() const { return { (float) getWidth() - 128.0f, 8.0f, 118.0f, 20.0f }; }
     float xOf (double f) const { auto a = area(); return a.getX() + a.getWidth() * (float) (std::log (juce::jlimit (20.0, 20000.0, f) / 20.0) / std::log (1000.0)); }
     double freqAt (float x) const { auto a = area(); return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) ((x - a.getX()) / a.getWidth()))); }
     float yOf (float db) const { auto a = area(); return a.getCentreY() - juce::jlimit (-20.0f, 20.0f, db) / 20.0f * a.getHeight() * 0.5f; }
     float dbAt (float y) const { auto a = area(); return (a.getCentreY() - y) / (a.getHeight() * 0.5f) * 20.0f; }
-    float gainOf (int b) const { const auto* gid = bands()[(size_t) b].g; return gid ? grid.valueOf (gid) : 0.0f; }
-    juce::Point<float> dotOf (int b) const { return { xOf (grid.valueOf (bands()[(size_t) b].f)), yOf (gainOf (b)) }; }
+    juce::Point<float> dotOf (int k) const { return { xOf (grid.valueOf (pid (k, "F"))), yOf (hasGain (k) ? grid.valueOf (pid (k, "G")) : 0.0f) }; }
     int hit (juce::Point<float> p) const
     {
         int best = -1; float bd = 14.0f;
-        for (int b = 0; b < (int) bands().size(); ++b) { const float d = dotOf (b).getDistanceFrom (p); if (d < bd) { bd = d; best = b; } }
+        for (int k = 0; k < bands; ++k) if (isOn (k)) { const float d = dotOf (k).getDistanceFrom (p); if (d < bd) { bd = d; best = k; } }
         return best;
     }
-    void bandMenu (int b)
+    void bandMenu (int k)
     {
-        const int k = bands()[(size_t) b].dyn;
-        if (k < 0) return;
-        const bool on = grid.valueOf (dynId (k, "Dyn")) > 0.5f;
         juce::PopupMenu m, th, rg, at, rl;
-        m.addSectionHeader (juce::String (bands()[(size_t) b].name) + " - Dynamic EQ");
-        m.addItem (1, "Dynamic", true, on);
-        m.addItem (2, "Only this band dynamic");
-        m.addItem (3, "Make all bands dynamic");
-        m.addItem (4, "Make all bands static");
+        m.addSectionHeader ("Band " + juce::String (k + 1));
+        static const char* tn[] { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass" };
+        for (int t = 0; t < 7; ++t) m.addItem (20 + t, tn[t], true, typeOf (k) == t);
         m.addSeparator();
-        const float curTh = grid.valueOf (dynId (k, "DTh")), curRg = grid.valueOf (dynId (k, "DRg"));
-        for (int v : { 12, 24, 36, 48 }) th.addItem (100 + v, "-" + juce::String (v) + " dB", true, (int) std::round (-curTh) == v);
-        m.addSubMenu ("Threshold", th);
-        for (int v : { -12, -6, -3, 3, 6, 12 }) rg.addItem (200 + v + 50, (v > 0 ? "+" : "") + juce::String (v) + " dB" + (v < 0 ? " (cut when loud)" : " (boost when loud)"), true, (int) std::round (curRg) == v);
-        m.addSubMenu ("Range", rg);
-        for (int v : { 1, 5, 20, 50 }) at.addItem (400 + v, juce::String (v) + " ms", true, (int) std::round (grid.valueOf (dynId (k, "DAt"))) == v);
-        m.addSubMenu ("Attack", at);
-        for (int v : { 50, 120, 300, 800 }) rl.addItem (1000 + v, juce::String (v) + " ms", true, (int) std::round (grid.valueOf (dynId (k, "DRl"))) == v);
-        m.addSubMenu ("Release", rl);
+        if (hasGain (k))
+        {
+            const bool on = grid.valueOf (pid (k, "Dyn")) > 0.5f;
+            m.addItem (1, "Dynamic", true, on);
+            m.addItem (2, "Only this band dynamic");
+            m.addItem (3, "Make all bands dynamic");
+            m.addItem (4, "Make all bands static");
+            for (int v : { 12, 24, 36, 48 }) th.addItem (100 + v, "-" + juce::String (v) + " dB", true, (int) std::round (-grid.valueOf (pid (k, "DTh"))) == v);
+            m.addSubMenu ("Dynamic threshold", th);
+            for (int v : { -12, -6, -3, 3, 6, 12 }) rg.addItem (250 + v, (v > 0 ? "+" : "") + juce::String (v) + " dB" + (v < 0 ? " (cut when loud)" : " (boost when loud)"), true, (int) std::round (grid.valueOf (pid (k, "DRg"))) == v);
+            m.addSubMenu ("Dynamic range", rg);
+            for (int v : { 1, 5, 20, 50 }) at.addItem (400 + v, juce::String (v) + " ms", true, (int) std::round (grid.valueOf (pid (k, "DAt"))) == v);
+            m.addSubMenu ("Dynamic attack", at);
+            for (int v : { 50, 120, 300, 800 }) rl.addItem (1000 + v, juce::String (v) + " ms", true, (int) std::round (grid.valueOf (pid (k, "DRl"))) == v);
+            m.addSubMenu ("Dynamic release", rl);
+            m.addSeparator();
+        }
+        m.addItem (9, "Delete band");
         juce::Component::SafePointer<EqGraph> safe (this);
-        m.showMenuAsync ({}, [safe, k, on] (int r) {
+        m.showMenuAsync ({}, [safe, k] (int r) {
             if (safe == nullptr || r <= 0) return;
             auto& gr = safe->grid;
-            if (r == 1) gr.setExternal (dynId (k, "Dyn"), on ? 0.0f : 1.0f);
-            else if (r == 2) for (int i = 0; i < 6; ++i) gr.setExternal (dynId (i, "Dyn"), i == k ? 1.0f : 0.0f);
-            else if (r == 3 || r == 4) for (int i = 0; i < 6; ++i) gr.setExternal (dynId (i, "Dyn"), r == 3 ? 1.0f : 0.0f);
-            else if (r < 200) { gr.setExternal (dynId (k, "DTh"), (float) -(r - 100)); gr.setExternal (dynId (k, "Dyn"), 1.0f); }
-            else if (r < 400) { gr.setExternal (dynId (k, "DRg"), (float) (r - 250)); gr.setExternal (dynId (k, "Dyn"), 1.0f); }
-            else if (r < 1000) gr.setExternal (dynId (k, "DAt"), (float) (r - 400));
-            else gr.setExternal (dynId (k, "DRl"), (float) (r - 1000));
+            const bool on = gr.valueOf (pid (k, "Dyn")) > 0.5f;
+            if (r == 9) gr.setExternal (pid (k, "On"), 0.0f);
+            else if (r >= 20 && r < 27) gr.setExternal (pid (k, "T"), (float) (r - 20));
+            else if (r == 1) gr.setExternal (pid (k, "Dyn"), on ? 0.0f : 1.0f);
+            else if (r == 2) for (int i = 0; i < bands; ++i) gr.setExternal (pid (i, "Dyn"), i == k ? 1.0f : 0.0f);
+            else if (r == 3 || r == 4) for (int i = 0; i < bands; ++i) gr.setExternal (pid (i, "Dyn"), r == 3 ? 1.0f : 0.0f);
+            else if (r < 200) { gr.setExternal (pid (k, "DTh"), (float) -(r - 100)); gr.setExternal (pid (k, "Dyn"), 1.0f); }
+            else if (r < 400) { gr.setExternal (pid (k, "DRg"), (float) (r - 250)); gr.setExternal (pid (k, "Dyn"), 1.0f); }
+            else if (r < 1000) gr.setExternal (pid (k, "DAt"), (float) (r - 400));
+            else gr.setExternal (pid (k, "DRl"), (float) (r - 1000));
             gr.commitNow(); safe->repaint();
         });
     }
@@ -637,8 +684,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     int vh = 170;
     if (ty == "steq7")
     {
-        grid->hideWhere ([] (const juce::String& id) { return id.length() > 3 && juce::StringArray { "Dyn", "DTh", "DRg", "DAt", "DRl" }.contains (id.getLastCharacters (3)); });
-        visual = new EqGraph (*grid, liveFx, tapFn); vh = 300;
+        grid->hideWhere ([] (const juce::String& id) { return id.startsWithChar ('e'); });   // graph-first: only Output + Phase knobs
+        visual = new EqGraph (*grid, liveFx, tapFn); vh = 360;
     }
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});

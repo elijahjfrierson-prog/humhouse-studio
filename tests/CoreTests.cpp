@@ -3,6 +3,7 @@
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
 #include <cstdio>
+#include <iostream>
 
 using namespace hhs;
 static int failures = 0;
@@ -128,6 +129,50 @@ int main()
         }
         CHECK (pl > 0.01f);
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
+        if (! stereo) CHECK (std::abs (pl - 0.3f) < 0.03f);   // default insert + master faders = unity gain (0 dB)
+    }
+    // a second take over the same spot drops to the next lane instead of covering the first
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        p.songMode = true;
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[1].armed = true;
+        e.countInOn = false;
+        juce::AudioBuffer<float> mic (1, 512), out (2, 512);
+        for (int i = 0; i < 512; ++i) mic.setSample (0, i, 0.3f * std::sin (i * 0.07f));
+        auto take = [&] {
+            e.setPositionBeats (0.0); e.setRecording (true); e.play();
+            for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
+            e.stop(); e.setRecording (false);
+        };
+        take(); take();
+        int onLane1 = 0, onLane2 = 0;
+        for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { onLane1 += c.lane == 1; onLane2 += c.lane == 2; }
+        CHECK (onLane1 == 1 && onLane2 == 1);
+    }
+    // NORM: a quiet mic comes up strong, a loud one never clips
+    for (float amp : { 0.02f, 0.9f })
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[0].armed = true; p.lanes[0].monitor = true; p.lanes[0].autoNorm = true;
+        juce::AudioBuffer<float> mic (2, 512), out (2, 512);
+        float pk = 0; double ph = 0;
+        for (int b = 0; b < 400; ++b)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = amp * (float) std::sin (ph); ph += 0.05; mic.setSample (0, i, v); mic.setSample (1, i, 0.0f); }
+            const float* ins[2] { mic.getReadPointer (0), mic.getReadPointer (1) };
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (ins, 2, o, 2, 512);
+            if (b > 300) pk = std::max (pk, out.getMagnitude (0, 0, 512));
+        }
+        if (amp < 0.1f) CHECK (pk > 0.15f); else CHECK (pk < 1.0f && pk > 0.3f);
     }
     // Studio EQ 7: natural boost, linear-phase FIR of the same curve, dynamic band pulls a loud band down
     {
@@ -142,7 +187,7 @@ int main()
             return out / std::max (in, 1.0e-9f);
         };
         auto eq = createBuiltinEffect ("steq7");
-        eq->setParam ("b2G", 12.0f); eq->setParam ("b2F", 1000.0f);
+        eq->setParam ("e4G", 12.0f); eq->setParam ("e4F", 1000.0f);
         eq->prepare (48000, 512);
         const float nat = run (*eq, 1000, 0.1f, 40, false);
         CHECK (nat > 3.0f && nat < 5.0f);
@@ -155,10 +200,14 @@ int main()
         const float linFlat = run (*eq, 8000, 0.1f, 80, true);
         CHECK (linFlat > 0.8f && linFlat < 1.25f);
         auto dq = createBuiltinEffect ("steq7");
-        dq->setParam ("b2F", 1000.0f); dq->setParam ("b2Dyn", 1.0f); dq->setParam ("b2DTh", -40.0f); dq->setParam ("b2DRg", -12.0f);
+        dq->setParam ("e4F", 1000.0f); dq->setParam ("e4Dyn", 1.0f); dq->setParam ("e4DTh", -40.0f); dq->setParam ("e4DRg", -12.0f);
         dq->prepare (48000, 512);
         CHECK (run (*dq, 1000, 0.5f, 100, false) < 0.5f);
-        CHECK (dq->meter (2) < -6.0f);
+        CHECK (dq->meter (3) < -6.0f);
+        auto e12 = createBuiltinEffect ("steq7");
+        CHECK (e12->params().size() == 122);
+        e12->setParam ("e12On", 1.0f); e12->setParam ("e12F", 1000.0f); e12->setParam ("e12G", -12.0f); e12->prepare (48000, 512);
+        CHECK (std::abs (e12->responseDb (1000.0) + 12.0f) < 0.6f);
         CHECK (run (*dq, 1000, 0.001f, 400, false) > 0.9f);
     }
     // starting playback in the middle of a long synth note still sounds it (FL-style chase)
@@ -175,6 +224,97 @@ int main()
         e.setPositionBeats (2.0);
         e.play();
         CHECK (renderPeak (e, 20) > 0.01f);
+        e.stop();
+    }
+    // AutoPitch Pitch +12 doubles the frequency; Detune moves it by cents
+    {
+        auto crossings = [] (float pitchSt, float cents) {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("pitch", pitchSt); ap->setParam ("detune", cents);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0; int zc = 0; float prev = 0;
+            for (int k = 0; k < 200; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                ap->process (b, 512, ctx);
+                if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
+            }
+            return zc;
+        };
+        const int base = crossings (0, 0), up = crossings (12, 0), cents = crossings (0, 100);
+        CHECK (up > base * 1.8 && up < base * 2.2);
+        CHECK (cents > base * 1.03 && cents < base * 1.09);
+        // A4 = 415 Hz: a 440-tuned C is re-tuned onto the 415 grid (about a semitone away)
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("tuning", 415.0f); ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0; int zc = 0; float prev = 0;
+        for (int k = 0; k < 200; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
+        }
+        CHECK (std::abs ((float) zc / (float) base - 1.0f) > 0.03f);
+    }
+    // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0; float prev = 0, maxJump = 0; long t = 0;
+        for (int k = 0; k < 400; ++k)
+        {
+            for (int i = 0; i < 512; ++i, ++t)
+            {
+                const double sec = (double) t / 48000.0, cyc = std::fmod (sec, 0.6);
+                const float gate = (float) juce::jlimit (0.0, 1.0, std::min (cyc / 0.01, (0.35 - cyc) / 0.01));   // 350 ms notes, 10 ms fades
+                const double hz = 255.0 + 20.0 * std::sin (sec * 3.0);                                             // drifting voice
+                const float v = 0.3f * gate * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * hz / 48000.0;
+                b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            ap->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (k > 10) maxJump = std::max (maxJump, std::abs (y - prev)); prev = y; }
+        }
+        CHECK (maxJump < 0.06f);
+    }
+    // big session stress: 128 inserts x (EQ, Dyn, Verb) + 64 synth channels, 256-sample buffer
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        auto& p = e.project();
+        p.songMode = false;
+        for (int t = 0; t < 128; ++t)
+        {
+            const int mt = p.addMixerTrack ("T" + juce::String (t));
+            for (auto* id : { "steq7", "stdyn", "verb" }) p.addFx (mt, id);
+        }
+        for (int c = 0; c < 64; ++c)
+        {
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "S" + juce::String (c); ch.mixerTrack = 1 + c * 2; ch.synth.unison = 3;
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 16; ++k) { Note nt; nt.key = 48 + (c + k) % 24; nt.start = k * 0.25; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
+        }
+        e.sync();
+        e.play();
+        juce::AudioBuffer<float> out (2, 256);
+        auto runFor = [&] (int blocks) {
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            for (int b = 0; b < blocks; ++b) { float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (nullptr, 0, o, 2, 256); }
+            return juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / (blocks * 256.0 / 48000.0);
+        };
+        runFor (50);
+        const double mtLoad = runFor (400);
+        std::cout << "pool runs " << e.poolStat (false) << " worker jobs " << e.poolStat (true) << std::endl;
+        e.setPerformance (1, false, true);
+        const double stLoad = runFor (200);
+        e.setPerformance (0, true, true);
+        std::cout << "big session: " << e.processingThreads() << " threads, real-time load " << juce::String (mtLoad * 100.0, 1)
+                  << "% (single thread " << juce::String (stLoad * 100.0, 1) << "%)" << std::endl;
+        CHECK (std::isfinite (out.getSample (0, 0)));
         e.stop();
     }
     // every built-in effect stays finite and silent-in gives finite out

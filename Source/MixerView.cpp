@@ -16,7 +16,7 @@ struct Strip : public juce::Component
         fader.setDoubleClickReturnValue (true, 0.8);
         fader.setTooltip ("Volume (double-click = default)");
         fader.setPopupDisplayEnabled (true, true, nullptr, 1500);
-        fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels (v), 1) + " dB"; };
+        fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels ((v / 0.8) * (v / 0.8)), 1) + " dB"; };
         fader.setName ("Volume");
         fader.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.volume = (float) fader.getValue(); }); if (! fader.isMouseButtonDown()) s.commit ("Volume"); };
         fader.onDragEnd = [this] { s.commit ("Volume"); };
@@ -214,12 +214,33 @@ struct Strip : public juce::Component
 struct SlotButton : public juce::TextButton
 {
     std::function<void (bool popup)> onPress;
+    float load = 0.0f;   // share of the audio block (CPU) this slot uses
     void clicked (const juce::ModifierKeys& m) override { if (onPress) onPress (m.isPopupMenu()); }
+    void paint (juce::Graphics& g) override
+    {
+        juce::TextButton::paint (g);
+        if (load < 0.005f) return;
+        g.setColour ((load > 0.25f ? col::rec : load > 0.1f ? col::accent : col::good).withAlpha (0.95f));
+        g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawText (juce::String (juce::roundToInt (load * 100.0f)) + "%", getLocalBounds().reduced (5, 0), juce::Justification::centredRight);
+    }
 };
 
 class FxPanel : public juce::Component
 {
 public:
+    void updateLoads()
+    {
+        auto& p = s.p();
+        const int t = track();
+        if (t < 0 || t >= (int) p.mixer.size()) return;
+        auto& fx = p.mixer[(size_t) t].fx;
+        for (int i = 0; i < slots.size(); ++i)
+        {
+            const float l = i < (int) fx.size() ? s.engine.fxLoad (t, fx[(size_t) i].uid) : 0.0f;
+            if (std::abs (l - slots[i]->load) > 0.005f) { slots[i]->load = l; slots[i]->repaint(); }
+        }
+    }
     explicit FxPanel (Studio& st) : s (st)
     {
         title.setFont (juce::FontOptions (14.0f, juce::Font::bold));
@@ -486,6 +507,7 @@ private:
         if (! isShowing()) return;
         const auto vis = viewport.getViewArea();
         for (auto& st : strips) if (st->getBounds().intersects (vis)) st->tick();
+        fx.updateLoads();
     }
 };
 }

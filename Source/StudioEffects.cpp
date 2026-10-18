@@ -2,6 +2,7 @@
 #include "Effects.h"
 #include <cmath>
 #include <complex>
+#include <string>
 
 namespace hhs
 {
@@ -44,39 +45,39 @@ struct CompCore
     }
 };
 
-// EQ III style 7-band. Natural = zero-latency IIR; Linear = linear-phase FIR of the same curve (adds firN/2 latency).
-// Every band can be dynamic: it moves by Range when its own band gets louder than Threshold (zero latency).
+// Parametric EQ (FL Parametric EQ 2 style): 12 bands, 7 on by default. Natural = zero-latency IIR,
+// Linear = linear-phase FIR of the same curve (adds firN/2 latency). Bell / shelf bands can be dynamic (zero latency).
 class StudioEQ7 : public BuiltinEffect
 {
 public:
-    static constexpr int firOrder = 11, firN = 1 << firOrder, numBands = 6, phaseIdx = 21, dynBase = 22;
+    static constexpr int firOrder = 11, firN = 1 << firOrder, numBands = 12, perBand = 10, bandBase = 2, phaseIdx = 1;
+    enum BandType { Bell, LowShelf, HighShelf, LowCut, HighCut, Notch, BandPassT };
     StudioEQ7() { initDefaults(); }
     const char* typeId() const override { return "steq7"; }
     const std::vector<ParamDef>& params() const override
     {
-        static const std::vector<ParamDef> ps {
-            { "hpf", "HPF", 20, 1000, 20 }, { "hpfSlope", "HPF Slope", 0, 3, 1, { "6 dB", "12 dB", "18 dB", "24 dB" } },
-            { "lsG", "Low Shelf", -18, 18, 0 }, { "lsF", "LS Freq", 20, 1000, 100 },
-            { "b1G", "LMF Gain", -18, 18, 0 }, { "b1F", "LMF Freq", 40, 2000, 250 }, { "b1Q", "LMF Q", 0.1f, 10, 1 },
-            { "b2G", "MF Gain", -18, 18, 0 }, { "b2F", "MF Freq", 200, 8000, 1000 }, { "b2Q", "MF Q", 0.1f, 10, 1 },
-            { "b3G", "HMF Gain", -18, 18, 0 }, { "b3F", "HMF Freq", 1000, 16000, 3500 }, { "b3Q", "HMF Q", 0.1f, 10, 1 },
-            { "b4G", "Presence", -18, 18, 0 }, { "b4F", "Pres Freq", 2000, 18000, 6000 }, { "b4Q", "Pres Q", 0.1f, 10, 1 },
-            { "hsG", "High Shelf", -18, 18, 0 }, { "hsF", "HS Freq", 1500, 20000, 10000 },
-            { "lpf", "LPF", 1000, 22000, 22000 }, { "lpfSlope", "LPF Slope", 0, 3, 1, { "6 dB", "12 dB", "18 dB", "24 dB" } },
-            { "out", "Output", -18, 18, 0 },
-            { "phase", "Phase", 0, 1, 0, { "Natural (0 latency)", "Linear (~23 ms)" } },
-            { "lsDyn", "LS Dynamic", 0, 1, 0, { "Off", "On" } }, { "lsDTh", "LS Dyn Thresh", -60, 0, -24 }, { "lsDRg", "LS Dyn Range", -18, 18, -6 },
-            { "lsDAt", "LS Dyn Attack", 0.1f, 100, 5 }, { "lsDRl", "LS Dyn Release", 5, 1000, 120 },
-            { "b1Dyn", "LMF Dynamic", 0, 1, 0, { "Off", "On" } }, { "b1DTh", "LMF Dyn Thresh", -60, 0, -24 }, { "b1DRg", "LMF Dyn Range", -18, 18, -6 },
-            { "b1DAt", "LMF Dyn Attack", 0.1f, 100, 5 }, { "b1DRl", "LMF Dyn Release", 5, 1000, 120 },
-            { "b2Dyn", "MF Dynamic", 0, 1, 0, { "Off", "On" } }, { "b2DTh", "MF Dyn Thresh", -60, 0, -24 }, { "b2DRg", "MF Dyn Range", -18, 18, -6 },
-            { "b2DAt", "MF Dyn Attack", 0.1f, 100, 5 }, { "b2DRl", "MF Dyn Release", 5, 1000, 120 },
-            { "b3Dyn", "HMF Dynamic", 0, 1, 0, { "Off", "On" } }, { "b3DTh", "HMF Dyn Thresh", -60, 0, -24 }, { "b3DRg", "HMF Dyn Range", -18, 18, -6 },
-            { "b3DAt", "HMF Dyn Attack", 0.1f, 100, 5 }, { "b3DRl", "HMF Dyn Release", 5, 1000, 120 },
-            { "b4Dyn", "Pres Dynamic", 0, 1, 0, { "Off", "On" } }, { "b4DTh", "Pres Dyn Thresh", -60, 0, -24 }, { "b4DRg", "Pres Dyn Range", -18, 18, -6 },
-            { "b4DAt", "Pres Dyn Attack", 0.1f, 100, 5 }, { "b4DRl", "Pres Dyn Release", 5, 1000, 120 },
-            { "hsDyn", "HS Dynamic", 0, 1, 0, { "Off", "On" } }, { "hsDTh", "HS Dyn Thresh", -60, 0, -24 }, { "hsDRg", "HS Dyn Range", -18, 18, -6 },
-            { "hsDAt", "HS Dyn Attack", 0.1f, 100, 5 }, { "hsDRl", "HS Dyn Release", 5, 1000, 120 } };
+        static std::vector<std::unique_ptr<std::string>> store;
+        static const std::vector<ParamDef> ps = [] {
+            auto str = [] (const std::string& t) { store.push_back (std::make_unique<std::string> (t)); return store.back()->c_str(); };
+            std::vector<ParamDef> v { { "out", "Output", -18, 18, 0 }, { "phase", "Phase", 0, 1, 0, { "Natural (0 latency)", "Linear (~23 ms)" } } };
+            const int   types[] { LowCut, LowShelf, Bell, Bell, Bell, Bell, HighShelf, Bell, Bell, Bell, Bell, Bell };
+            const float freqs[] { 30, 100, 250, 1000, 3500, 8000, 12000, 500, 2000, 5000, 700, 1500 };
+            for (int k = 0; k < numBands; ++k)
+            {
+                const std::string e = "e" + std::to_string (k + 1), n = "Band " + std::to_string (k + 1);
+                const float q = types[k] == Bell ? 1.0f : 0.707f;
+                v.push_back ({ str (e + "On"), str (n + " On"), 0, 1, k < 7 ? 1.0f : 0.0f, { "Off", "On" } });
+                v.push_back ({ str (e + "T"), str (n + " Type"), 0, 6, (float) types[k], { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass" } });
+                v.push_back ({ str (e + "F"), str (n + " Freq"), 20, 20000, freqs[k] });
+                v.push_back ({ str (e + "G"), str (n + " Gain"), -18, 18, 0 });
+                v.push_back ({ str (e + "Q"), str (n + " Q"), 0.1f, 18, q });
+                v.push_back ({ str (e + "Dyn"), str (n + " Dynamic"), 0, 1, 0, { "Off", "On" } });
+                v.push_back ({ str (e + "DTh"), str (n + " Dyn Thresh"), -60, 0, -24 });
+                v.push_back ({ str (e + "DRg"), str (n + " Dyn Range"), -18, 18, -6 });
+                v.push_back ({ str (e + "DAt"), str (n + " Dyn Attack"), 0.1f, 100, 5 });
+                v.push_back ({ str (e + "DRl"), str (n + " Dyn Release"), 5, 1000, 120 });
+            }
+            return v; }();
         return ps;
     }
     int latencySamples() const override { return p (phaseIdx) > 0.5f ? firN / 2 : 0; }
@@ -111,35 +112,46 @@ public:
     }
 private:
     double sr = 44100; int maxN = 512;
-    Biquad f_[10], dynF[numBands], det[numBands];
-    float hash = -1, hpC = 0, lpC = 1, hpS[2] {}, lpS[2] {};
-    float env[numBands] {}, cur[numBands] {};
+    Biquad f_[numBands], dynF[numBands], det[numBands];
+    bool active[numBands] {};
+    float hash = -1, env[numBands] {}, cur[numBands] {};
     std::array<std::atomic<float>, numBands> dynDb {};
     std::unique_ptr<juce::dsp::Convolution> conv;
     std::unique_ptr<juce::dsp::FFT> fft;
     std::vector<float> fftData;
     bool firDirty = true; int firHold = 0;
 
-    static int gIdx (int k) { static const int g[] { 2, 4, 7, 10, 13, 16 }; return g[k]; }
-    float bandF (int k) const { return p (gIdx (k) + 1); }
-    float bandQ (int k) const { return k == 0 || k == numBands - 1 ? 0.707f : p (gIdx (k) + 2); }
-    Biquad::Type bandType (int k) const { return k == 0 ? Biquad::LowShelf : k == numBands - 1 ? Biquad::HighShelf : Biquad::Peak; }
-
+    float bp (int k, int field) const { return p (bandBase + k * perBand + field); }
+    int  typeOf (int k) const { return juce::jlimit (0, 6, (int) std::round (bp (k, 1))); }
+    static bool gainType (int t) { return t == Bell || t == LowShelf || t == HighShelf; }
+    void setBand (Biquad& q, int t, float f, float qq, float g) const
+    {
+        switch (t)
+        {
+            case LowShelf:  q.set (Biquad::LowShelf, sr, f, qq, g); break;
+            case HighShelf: q.set (Biquad::HighShelf, sr, f, qq, g); break;
+            case LowCut:    q.set (Biquad::HighPass, sr, f, qq, 0); break;
+            case HighCut:   q.set (Biquad::LowPass, sr, f, qq, 0); break;
+            case Notch:     q.set (Biquad::Peak, sr, f, qq, -40); break;
+            case BandPassT: q.set (Biquad::BandPass, sr, f, qq, 0); break;
+            default:        q.set (Biquad::Peak, sr, f, qq, g); break;
+        }
+    }
     void update()
     {
-        float h = 0; for (int i = 0; i < 21; ++i) h += p (i) * (float) (i + 3) * 0.917f;
+        float h = p (0) * 1.37f;
+        for (int k = 0; k < numBands; ++k) for (int fld = 0; fld < 5; ++fld) h += bp (k, fld) * (float) (k * 7 + fld + 3) * 0.917f;
         if (h == hash) return;
         hash = h;
-        f_[0].set (Biquad::HighPass, sr, p (0), 0.707, 0); f_[1].set (Biquad::HighPass, sr, p (0), 0.707, 0);
         for (int k = 0; k < numBands; ++k)
         {
-            f_[2 + k].set (bandType (k), sr, bandF (k), bandQ (k), p (gIdx (k)));
-            det[k].set (k == 0 ? Biquad::LowPass : k == numBands - 1 ? Biquad::HighPass : Biquad::BandPass, sr, bandF (k), bandQ (k), 0);
-            dynF[k].set (bandType (k), sr, bandF (k), bandQ (k), cur[k]);
+            const int t = typeOf (k);
+            const float f = bp (k, 2), q = bp (k, 4), g = bp (k, 3);
+            active[k] = bp (k, 0) > 0.5f && ! (gainType (t) && g == 0.0f);
+            setBand (f_[k], t, f, q, g);
+            det[k].set (t == LowShelf ? Biquad::LowPass : t == HighShelf ? Biquad::HighPass : Biquad::BandPass, sr, f, juce::jmax (0.5f, q), 0);
+            if (gainType (t)) setBand (dynF[k], t, f, q, cur[k]);
         }
-        f_[8].set (Biquad::LowPass, sr, p (18), 0.707, 0); f_[9].set (Biquad::LowPass, sr, p (18), 0.707, 0);
-        hpC = 1.0f - std::exp (-2.0f * juce::MathConstants<float>::pi * p (0) / (float) sr);
-        lpC = 1.0f - std::exp (-2.0f * juce::MathConstants<float>::pi * p (18) / (float) sr);
         firDirty = true;
     }
     double mag (double hz) const
@@ -147,14 +159,14 @@ private:
         using C = std::complex<double>;
         const double w = juce::MathConstants<double>::twoPi * juce::jlimit (1.0, sr * 0.5, hz) / sr;
         const C z1 = std::polar (1.0, -w), z2 = z1 * z1;
-        auto bq = [&] (const Biquad& q) { return (C (q.b0) + C (q.b1) * z1 + C (q.b2) * z2) / (C (1.0) + C (q.a1) * z1 + C (q.a2) * z2); };
-        auto lp1 = [&] (float c) { return C (c) / (C (1.0) - C (1.0 - c) * z1); };
         C H (1.0);
-        const int hs = (int) p (1), ls = (int) p (19);
-        if (p (0) > 21) { if (hs == 0 || hs == 2) H *= C (1.0) - lp1 (hpC); if (hs >= 1) H *= bq (f_[0]); if (hs == 3) H *= bq (f_[1]); }
-        for (int k = 0; k < numBands; ++k) if (p (gIdx (k)) != 0) H *= bq (f_[2 + k]);
-        if (p (18) < 21000) { if (ls == 0 || ls == 2) H *= lp1 (lpC); if (ls >= 1) H *= bq (f_[8]); if (ls == 3) H *= bq (f_[9]); }
-        return std::abs (H) * dB (p (20));
+        for (int k = 0; k < numBands; ++k)
+            if (active[k])
+            {
+                const auto& q = f_[k];
+                H *= (C (q.b0) + C (q.b1) * z1 + C (q.b2) * z2) / (C (1.0) + C (q.a1) * z1 + C (q.a2) * z2);
+            }
+        return std::abs (H) * dB (p (0));
     }
     void makeConv()
     {
@@ -180,28 +192,14 @@ private:
     }
     void processIir (juce::AudioBuffer<float>& b, int n)
     {
-        const int hs = (int) p (1), ls = (int) p (19);
-        const bool hp = p (0) > 21, lp = p (18) < 21000;
-        const float g = dB (p (20));
+        const float g = dB (p (0));
         for (int ch = 0; ch < 2; ++ch)
         {
             auto* d = b.getWritePointer (ch);
             for (int i = 0; i < n; ++i)
             {
                 float x = d[i];
-                if (hp)
-                {
-                    if (hs == 0 || hs == 2) { hpS[ch] += hpC * (x - hpS[ch]); x -= hpS[ch]; }
-                    if (hs >= 1) x = f_[0].tick (x, ch);
-                    if (hs == 3) x = f_[1].tick (x, ch);
-                }
-                for (int k = 0; k < numBands; ++k) if (p (gIdx (k)) != 0) x = f_[2 + k].tick (x, ch);
-                if (lp)
-                {
-                    if (ls == 0 || ls == 2) { lpS[ch] += lpC * (x - lpS[ch]); x = lpS[ch]; }
-                    if (ls >= 1) x = f_[8].tick (x, ch);
-                    if (ls == 3) x = f_[9].tick (x, ch);
-                }
+                for (int k = 0; k < numBands; ++k) if (active[k]) x = f_[k].tick (x, ch);
                 d[i] = x * g;
             }
         }
@@ -211,9 +209,9 @@ private:
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int k = 0; k < numBands; ++k)
         {
-            const int d = dynBase + k * 5;
-            if (p (d) < 0.5f) { cur[k] = 0; env[k] = -120.0f; dynDb[(size_t) k] = 0.0f; continue; }
-            const float th = p (d + 1), range = p (d + 2), attMs = p (d + 3), relMs = p (d + 4);
+            const int t = typeOf (k);
+            if (bp (k, 0) < 0.5f || bp (k, 5) < 0.5f || ! gainType (t)) { cur[k] = 0; env[k] = -120.0f; dynDb[(size_t) k] = 0.0f; continue; }
+            const float th = bp (k, 6), range = bp (k, 7), attMs = bp (k, 8), relMs = bp (k, 9);
             for (int i0 = 0; i0 < n; i0 += 32)
             {
                 const int len = juce::jmin (32, n - i0);
@@ -222,9 +220,8 @@ private:
                 const float lvl = toDb (pk);
                 const float ca = std::exp (-(float) len / (0.001f * attMs * (float) sr)), cr = std::exp (-(float) len / (0.001f * relMs * (float) sr));
                 env[k] = lvl > env[k] ? ca * env[k] + (1 - ca) * lvl : cr * env[k] + (1 - cr) * lvl;
-                const float over = env[k] - th;
-                const float off = range * juce::jlimit (0.0f, 1.0f, over / 12.0f);
-                if (std::abs (off - cur[k]) > 0.05f) { cur[k] = off; dynF[k].set (bandType (k), sr, bandF (k), bandQ (k), off); }
+                const float off = range * juce::jlimit (0.0f, 1.0f, (env[k] - th) / 12.0f);
+                if (std::abs (off - cur[k]) > 0.05f) { cur[k] = off; setBand (dynF[k], t, bp (k, 2), bp (k, 4), off); }
                 if (cur[k] != 0.0f)
                     for (int i = i0; i < i0 + len; ++i) { l[i] = dynF[k].tick (l[i], 0); r[i] = dynF[k].tick (r[i], 1); }
             }
