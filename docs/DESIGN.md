@@ -85,3 +85,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: createDefault() is now an empty rack; createDemo() keeps the starter beat (tests use it).
 - FL continuous punch: setRecording(true/false) while playing already starts/finishes writers without stopping transport (R key / rec button). Verify keyboard R toggles during playback; each toggle = new take on same lane/insert.
 - DONE: default 10 tracks. TODO: Playlist lane height = max(60, visible height / lanes) so 10 tracks fill view evenly (replace const laneH).
+- DONE: default lanes/inserts named Track 1..10 (+Master). TODO: '+ Track' in Playlist/Mixer should name 'Track N' not 'Vocal N'/'Insert N'.
