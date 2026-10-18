@@ -50,6 +50,9 @@ public:
             toolBtns[0]->setToggleState (true, juce::dontSendNotification);
         }
         ghostBtn.onClick = [this] { repaint(); };
+        setupButton (muteBtn, "MUTE", "Mute note previews (M): clicking / drawing notes stays silent, playback still sounds", true);
+        muteBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prMutePreview", false), juce::dontSendNotification);
+        muteBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prMutePreview", muteBtn.getToggleState()); };
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
             if (! glide.isMouseButtonDown()) s.commit ("Glide");
@@ -57,7 +60,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -88,7 +91,8 @@ public:
         toolsBtn.setBounds (t.removeFromLeft (70)); t.removeFromLeft (4);
         slideBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
         stampBtn.setBounds (t.removeFromLeft (stampChord >= 0 ? 110 : 64)); t.removeFromLeft (4);
-        ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (10);
+        ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
+        muteBtn.setBounds (t.removeFromLeft (56)); t.removeFromLeft (10);
         glide.setBounds (t.removeFromLeft (28)); t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (46)); t.removeFromLeft (2); }
     }
@@ -416,6 +420,7 @@ public:
         const double snap = s.p().snap > 0 ? s.p().snap : 0.25;
         if (is ('m', alt)) return op ("Mute notes", [] (NoteList& n) { tools::muteSelected (n, true); });
         if (is ('m', alt | shift)) return op ("Unmute notes", [] (NoteList& n) { tools::muteSelected (n, false); });
+        if (is ('m', 0)) { muteBtn.setToggleState (! muteBtn.getToggleState(), juce::dontSendNotification); muteBtn.onClick(); return true; }
         if (is ('v', alt)) { ghostBtn.setToggleState (! ghostBtn.getToggleState(), juce::dontSendNotification); repaint(); return true; }
         if (is ('b', cmd)) return op ("Duplicate", [] (NoteList& n) { tools::duplicateRight (n); });
         if (is ('g', cmd)) return op ("Glue", [] (NoteList& n) { tools::glue (n); });
@@ -473,7 +478,7 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn;
+    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn;
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
     juce::Label chLabel;
 
@@ -503,6 +508,8 @@ private:
     void preview (int key)
     {
         if (previewKey >= 0) s.engine.previewNote (channelId, previewKey, 0, false);
+        previewKey = -1;
+        if (muteBtn.getToggleState()) return;
         previewKey = juce::jlimit (0, 127, key);
         s.engine.previewNote (channelId, previewKey, 0.8f, true);
         repaint (0, gridArea().getY(), keyW, gridArea().getHeight());
