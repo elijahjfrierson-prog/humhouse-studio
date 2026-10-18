@@ -75,8 +75,10 @@ struct LaneHeader : public juce::Component
         setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
         mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
         mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
-        input.setTooltip ("Audio input for this track (Mic 1, Mic 2, stereo pairs)");
-        input.onChange = [this] { const int v = input.getSelectedItemIndex(); s.edit ("Input", [&] (Project& p) { p.lanes[(size_t) index].inputPair = v; }); };
+        input.setTooltip ("Recording input: MONO puts one mic in the centre (both ears), STEREO records an input pair");
+        input.onChange = [this] { const int id = input.getSelectedId(); if (id <= 0) return;
+            s.edit ("Input", [&] (Project& p) { auto& l = p.lanes[(size_t) index];
+                if (id >= 1000) { l.stereoIn = true; l.inputPair = id - 1000; } else { l.stereoIn = false; l.inputCh = id - 1; } }); };
         insert.setTooltip ("Mixer insert this track plays and records through - every take stays on it");
         insert.onChange = [this] { const int v = insert.getSelectedItemIndex(); s.edit ("Route track", [&] (Project& p) { p.lanes[(size_t) index].mixerTrack = v; }); };
         for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon,
@@ -96,8 +98,11 @@ struct LaneHeader : public juce::Component
         input.clear (juce::dontSendNotification);
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
-        for (int i = 0; i < (ins + 1) / 2; ++i) input.addItem ("In " + juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2), i + 1);
-        input.setSelectedItemIndex (juce::jlimit (0, input.getNumItems() - 1, l.inputPair), juce::dontSendNotification);
+        input.addSectionHeading ("Mono (both ears)");
+        for (int i = 0; i < juce::jmax (1, ins); ++i) input.addItem ("In " + juce::String (i + 1) + " Mono", i + 1);
+        input.addSectionHeading ("Stereo");
+        for (int i = 0; i < juce::jmax (1, ins / 2); ++i) input.addItem ("In " + juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2) + " Stereo", 1000 + i);
+        input.setSelectedId (l.stereoIn ? 1000 + l.inputPair : 1 + l.inputCh, juce::dontSendNotification);
         insert.clear (juce::dontSendNotification);
         for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name), (int) i + 1);
         insert.setSelectedItemIndex (juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack), juce::dontSendNotification);
@@ -283,8 +288,9 @@ public:
             }
             for (auto& c : p.clips) if (! c.hidden) drawClip (g, c);
             const float px = beatToX (s.engine.positionBeats());
-            g.setColour (s.engine.isRecording() ? col::rec : col::accent2);
-            g.drawVerticalLine ((int) px, (float) area.getY(), (float) area.getBottom());
+            const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
+            g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
+            g.setColour (phc); g.fillRect (px - 0.75f, (float) area.getY(), 1.5f, (float) area.getHeight());
         }
         // ruler
         juce::Rectangle<int> ruler (headerW, toolbarH, getWidth() - headerW, rulerH);

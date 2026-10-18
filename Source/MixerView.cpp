@@ -22,6 +22,11 @@ struct Strip : public juce::Component
         fader.onDragEnd = [this] { s.commit ("Volume"); };
         pan.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.pan = (float) pan.getValue(); }); if (! pan.isMouseButtonDown()) s.commit ("Pan"); };
         pan.onDragEnd = [this] { s.commit ("Pan"); };
+        duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! duck.isMouseButtonDown()) s.commit ("Duck"); };
+        duck.onDragEnd = [this] { s.commit ("Duck"); };
+        setupButton (scBtn, "SC", "Sidechain: pick the source (default = armed vocal) + ratio / threshold / attack / release");
+        scBtn.onClick = [this] { scMenu(); };
+        addAndMakeVisible (duck); addAndMakeVisible (scBtn);
         setupButton (mute, "M", "Mute insert", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); s.edit ("Mute", [&] (Project& p) { p.mixer[(size_t) index].muted = on; }); };
@@ -54,6 +59,8 @@ struct Strip : public juce::Component
         auto& t = p.mixer[(size_t) index];
         fader.setValue (t.volume, juce::dontSendNotification);
         pan.setValue (t.pan, juce::dontSendNotification);
+        duck.setValue (t.duck, juce::dontSendNotification);
+        duck.setVisible (index > 0); scBtn.setVisible (index > 0);
         mute.setToggleState (t.muted, juce::dontSendNotification);
         solo.setToggleState (t.solo, juce::dontSendNotification);
         name.setText (index == 0 ? juce::String ("Master") : t.name, juce::dontSendNotification);
@@ -113,6 +120,37 @@ struct Strip : public juce::Component
         g.setColour (col::accent.withAlpha (0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
         g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
     }
+    void scMenu()
+    {
+        auto& p = s.p();
+        if (index <= 0 || index >= (int) p.mixer.size()) return;
+        const auto& t = p.mixer[(size_t) index];
+        juce::PopupMenu m, src, ratio, thr, att, rel;
+        src.addItem (1, "Auto (armed vocal track)", true, t.duckSource < 0);
+        for (int i = 1; i < (int) p.mixer.size(); ++i) if (i != index) src.addItem (100 + i, p.mixer[(size_t) i].name, true, t.duckSource == i);
+        m.addSubMenu ("SC from", src);
+        for (int r : { 2, 4, 8, 20 }) ratio.addItem (200 + r, juce::String (r) + ":1", true, (int) std::round (t.duckRatio) == r);
+        m.addSubMenu ("Ratio", ratio);
+        for (int d : { 50, 40, 30, 20 }) thr.addItem (2000 + d, "-" + juce::String (d) + " dB", true, (int) std::round (-t.duckThreshold) == d);
+        m.addSubMenu ("Threshold", thr);
+        for (int a : { 1, 5, 10, 30 }) att.addItem (300 + a, juce::String (a) + " ms", true, (int) std::round (t.duckAttack) == a);
+        m.addSubMenu ("Attack", att);
+        for (int r : { 50, 150, 300, 600 }) rel.addItem (1000 + r, juce::String (r) + " ms", true, (int) std::round (t.duckRelease) == r);
+        m.addSubMenu ("Release", rel);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&scBtn), [this] (int r) {
+            if (r <= 0) return;
+            s.edit ("Sidechain", [&] (Project& pr) {
+                if (index >= (int) pr.mixer.size()) return;
+                auto& tr = pr.mixer[(size_t) index];
+                if (r == 1) tr.duckSource = -1;
+                else if (r < 200) tr.duckSource = r - 100;
+                else if (r < 300) tr.duckRatio = (float) (r - 200);
+                else if (r < 1000) tr.duckAttack = (float) (r - 300);
+                else if (r < 2000) tr.duckRelease = (float) (r - 1000);
+                else tr.duckThreshold = (float) -(r - 2000);
+            });
+        });
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (scopeArea.contains (e.getPosition())) openTrackScopeWindow (s, index);
@@ -122,6 +160,7 @@ struct Strip : public juce::Component
         auto r = getLocalBounds().reduced (4);
         r.removeFromTop (28);
         pan.setBounds (r.removeFromTop (32).withSizeKeepingCentre (32, 32));
+        { auto row = r.removeFromTop (30); duck.setBounds (row.removeFromLeft (row.getWidth() / 2).withSizeKeepingCentre (28, 28)); scBtn.setBounds (row.reduced (2, 5)); }
         scopeArea = r.removeFromTop (28).reduced (0, 2);
         auto bottom = r.removeFromBottom (90);
         fader.setBounds (r.withTrimmedRight (14));
@@ -166,6 +205,8 @@ struct Strip : public juce::Component
     Studio& s; int index; float level = 0;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
+    Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
+    juce::TextButton scBtn;
     juce::TextButton mute, solo, route;
     juce::Label name;
 };
@@ -340,39 +381,38 @@ private:
     }
 };
 
-// FL-style routing cables drawn over the strips: every insert -> each target it feeds
+// FL-style routing cables in a lane under the strips (selected insert only unless WIRES is on; master is implicit)
 class WireOverlay : public juce::Component
 {
 public:
     WireOverlay (Studio& st, int w) : s (st), stripW (w) { setInterceptsMouseClicks (false, false); }
+    bool showAll = false;
     void paint (juce::Graphics& g) override
     {
+        g.setColour (col::bg.darker (0.25f)); g.fillRect (getLocalBounds());
         auto& p = s.p();
-        const float y0 = (float) getHeight() - 10.0f;
+        const float y0 = 5.0f, maxSag = (float) getHeight() - 9.0f;
         auto x = [this] (int i) { return (float) i * (float) stripW + (float) stripW * 0.5f; };
         for (size_t i = 1; i < p.mixer.size(); ++i)
         {
             auto& t = p.mixer[i];
-            std::vector<std::pair<int, float>> targets;
-            for (auto& sd : t.sends) targets.push_back ({ sd.target, sd.level });
-            if (t.routesToMaster && t.sends.empty()) targets.push_back ({ 0, 1.0f });
-            else if (t.routesToMaster) targets.push_back ({ 0, 1.0f });
-            const bool hot = (int) i == s.selectedTrack;
-            for (auto [tg, lvl] : targets)
+            for (auto& sd : t.sends)
             {
-                if (tg < 0 || tg >= (int) p.mixer.size() || tg == (int) i) continue;
+                const int tg = sd.target;
+                if (tg <= 0 || tg >= (int) p.mixer.size() || tg == (int) i) continue;
+                const bool hot = (int) i == s.selectedTrack || tg == s.selectedTrack;
+                if (! showAll && ! hot) continue;
                 const float xa = x ((int) i), xb = x (tg);
-                const float sag = 18.0f + std::abs (xb - xa) * 0.12f;
+                const float sag = juce::jmin (maxSag, 10.0f + std::abs (xb - xa) * 0.08f);
                 juce::Path cable;
                 cable.startNewSubPath (xa, y0);
-                cable.cubicTo (xa, y0 - sag, xb, y0 - sag, xb, y0);
-                auto c = tg == 0 ? col::dim : col::accent;
-                g.setColour (c.withAlpha (hot ? 0.95f : 0.35f + 0.3f * juce::jlimit (0.0f, 1.0f, lvl)));
-                g.strokePath (cable, juce::PathStrokeType (hot ? 2.4f : 1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-                g.fillEllipse (xb - 3.0f, y0 - 3.0f, 6.0f, 6.0f);
+                cable.cubicTo (xa, y0 + sag, xb, y0 + sag, xb, y0);
+                g.setColour (col::accent.withAlpha (hot ? 0.9f : 0.3f + 0.25f * juce::jlimit (0.0f, 1.0f, sd.level)));
+                g.strokePath (cable, juce::PathStrokeType (hot ? 1.8f : 1.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.fillEllipse (xb - 2.5f, y0 - 2.5f, 5.0f, 5.0f);
+                g.setColour (col::text.withAlpha (0.6f));
+                g.fillEllipse (xa - 2.0f, y0 - 2.0f, 4.0f, 4.0f);
             }
-            g.setColour (col::text.withAlpha (0.6f));
-            g.fillEllipse (x ((int) i) - 2.5f, y0 - 2.5f, 5.0f, 5.0f);
         }
     }
 private:
@@ -393,6 +433,9 @@ public:
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
         addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Track " + juce::String (p.mixer.size())); }); };
         addAndMakeVisible (addBtn);
+        setupButton (wiresBtn, "WIRES", "Show every routing wire (off = only the selected insert's wires)", true);
+        wiresBtn.onClick = [this] { wires.showAll = wiresBtn.getToggleState(); wires.repaint(); };
+        addAndMakeVisible (wiresBtn);
         refresh();
         startTimerHz (25);
     }
@@ -402,11 +445,14 @@ public:
     {
         auto r = getLocalBounds();
         fx.setBounds (r.removeFromRight (fxPanelW));
-        addBtn.setBounds (r.removeFromTop (30).removeFromLeft (100).reduced (4));
+        auto top = r.removeFromTop (30);
+        addBtn.setBounds (top.removeFromLeft (100).reduced (4));
+        wiresBtn.setBounds (top.removeFromLeft (80).reduced (4));
         viewport.setBounds (r);
         holder.setSize ((int) strips.size() * stripW, juce::jmax (300, r.getHeight() - viewport.getScrollBarThickness()));
-        for (size_t i = 0; i < strips.size(); ++i) strips[i]->setBounds ((int) i * stripW, 0, stripW, holder.getHeight());
-        wires.setBounds (holder.getLocalBounds());
+        constexpr int wireLaneH = 40;
+        for (size_t i = 0; i < strips.size(); ++i) strips[i]->setBounds ((int) i * stripW, 0, stripW, holder.getHeight() - wireLaneH);
+        wires.setBounds (0, holder.getHeight() - wireLaneH, holder.getWidth(), wireLaneH);
         wires.toFront (false);
     }
 
@@ -416,7 +462,7 @@ private:
     juce::Component holder;
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
-    juce::TextButton addBtn;
+    juce::TextButton addBtn, wiresBtn;
     WireOverlay wires { s, stripW };
 
     void refresh()

@@ -36,6 +36,12 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Recording input Mono (centred in both ears) or Stereo per track\n- Mix knob on every FX slot now blends dry / wet (e.g. 10% EQ)\n- Double-click a channel to change its sound (keeps notes, steps, routing)\n"
+        "- Chord stamp in the Piano Roll (STAMP / Alt+T): 24 chords, inversions, lock to scale\n"
+        "- Playhead line across Channel Rack, Piano Roll and Playlist; notes under the playhead always sound\n"
+        "- Studio EQ 7: draggable EQ graph + live spectrum, Natural / Linear phase, right-click any band for Dynamic EQ\n"
+        "- Compressor transfer curve + GR meter; reverb / delay / filter pictures\n"
+        "- Duck knob + SC on every mixer insert (beat dips under your vocal); cleaner wires under the strips (WIRES = show all)\n"
         "- Crash-safe plugin scanning / loading and recording\n- HumHouse logo, color wheel, classic tattoo lettering (Options > Font)\n"
         "- Playlist tools: select, paint, delete, mute, slice, group (Ctrl/Cmd+G), split pattern by channel\n"
         "- Piano roll tool bar, notes and steps light up as they play\n- Channel settings SMP / INS / FUNC: normalize, reverse, trim, fades, Resample / Stretch / Stretch X\n"

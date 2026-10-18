@@ -121,6 +121,7 @@ public:
     }
     void prepare (double s, int) override { sr = s; env = 0; }
     float gainReductionDb() const { return grDb.load(); }
+    float meter (int) const override { return grDb.load(); }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float th = p (0), ratio = p (1), knee = p (4);

@@ -30,6 +30,8 @@ public:
         setupButton (toolsBtn, "TOOLS", "Piano roll tools: arp/rolls, strum, chop, flam, quantize, randomize, limit...");
         toolsBtn.onClick = [this] { toolsMenu(); };
         setupButton (slideBtn, "SLIDE", "Draw slide (glide) notes - the pitch glides from the previous note, great for 808s", true);
+        setupButton (stampBtn, "STAMP", "Chord stamp (Alt/Opt+T): every note you draw lays down the chosen chord", true);
+        stampBtn.onClick = [this] { stampBtn.setToggleState (stampChord >= 0, juce::dontSendNotification); stampMenu(); };
         setupButton (ghostBtn, "GHOST", "Show other channels' notes faintly (Alt+V)", true);
         {
             const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM" };
@@ -55,7 +57,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &ghostBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -85,6 +87,7 @@ public:
         snapBox.setBounds (t.removeFromLeft (100)); t.removeFromLeft (10);
         toolsBtn.setBounds (t.removeFromLeft (70)); t.removeFromLeft (4);
         slideBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
+        stampBtn.setBounds (t.removeFromLeft (stampChord >= 0 ? 110 : 64)); t.removeFromLeft (4);
         ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (10);
         glide.setBounds (t.removeFromLeft (28)); t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (46)); t.removeFromLeft (2); }
@@ -281,8 +284,9 @@ public:
                 tools::selectAll (notes, false);
                 Note n; n.key = juce::jlimit (0, 127, yToKey (e.position.y)); n.start = juce::jmax (0.0, floorSnap (xToBeat (e.position.x)));
                 n.length = lastLength; n.velocity = lastVelocity; n.slide = slideBtn.getToggleState(); n.selected = true;
-                notes.push_back (n);
-                hit = (int) notes.size() - 1; edge = false; changed = true;
+                const size_t first = notes.size();
+                stamp (notes, n);
+                hit = (int) first; edge = false; changed = true;
             }
         });
         if (editTool == EditTool::Paint && changed)
@@ -316,7 +320,7 @@ public:
                 auto& ns = s.notes (channelId);
                 for (auto& n : ns) if (n.key == key && b < n.start + n.length - 1e-9 && b + lastLength > n.start + 1e-9) return;
                 Note n; n.key = key; n.start = b; n.length = lastLength; n.velocity = lastVelocity; n.slide = slideBtn.getToggleState();
-                ns.push_back (n);
+                stamp (ns, n);
             });
             paintLast = b; changed = true;
             repaint();
@@ -396,6 +400,7 @@ public:
                                                  { 'q', Tool::Quantize }, { 'r', Tool::Randomize }, { 'k', Tool::Limit }, { 'l', Tool::Articulate },
                                                  { 'x', Tool::ScaleLevels }, { 'y', Tool::Flip }, { 'w', Tool::Claw }, { 'o', Tool::Lfo } };
         for (auto& [key, tool] : altTools) if (is (key, alt)) { showToolDialog (s, tool, channelId); return true; }
+        if (is ('t', alt)) { stampMenu(); return true; }
         {
             const std::pair<int, EditTool> keys[] { { 'p', EditTool::Draw }, { 'b', EditTool::Paint }, { 'd', EditTool::Delete }, { 't', EditTool::Mute },
                                                     { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom } };
@@ -461,7 +466,7 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, slideBtn, ghostBtn;
+    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn;
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
     juce::Label chLabel;
 
@@ -525,16 +530,75 @@ private:
     }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {
-        if (! s.engine.isPlaying()) return;
         auto& p = s.p();
         const double len = p.patterns[(size_t) p.currentPattern].lengthBeats();
         const double pos = p.songMode ? s.engine.positionBeats() : std::fmod (s.engine.positionBeats(), len);
-        double local = pos;
+        double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
                 if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
-        g.setColour (col::accent2);
-        g.drawVerticalLine ((int) beatToX (local), (float) ga.getY(), (float) ga.getBottom());
+        if (local < 0) return;
+        const float x = (float) beatToX (local);
+        g.setColour (col::accent2.withAlpha (0.22f)); g.fillRect (x - 2.5f, (float) ga.getY(), 5.0f, (float) ga.getHeight());
+        g.setColour (col::accent2); g.fillRect (x - 0.75f, (float) ga.getY(), 1.5f, (float) ga.getHeight());
+    }
+    // FL-style chord stamp
+    struct ChordDef { const char* name; std::vector<int> iv; };
+    static const std::vector<ChordDef>& chords()
+    {
+        static const std::vector<ChordDef> c {
+            { "Major", { 0, 4, 7 } }, { "Minor", { 0, 3, 7 } }, { "Dim", { 0, 3, 6 } }, { "Aug", { 0, 4, 8 } },
+            { "Sus2", { 0, 2, 7 } }, { "Sus4", { 0, 5, 7 } }, { "6", { 0, 4, 7, 9 } }, { "m6", { 0, 3, 7, 9 } },
+            { "7", { 0, 4, 7, 10 } }, { "Maj7", { 0, 4, 7, 11 } }, { "m7", { 0, 3, 7, 10 } }, { "m7b5", { 0, 3, 6, 10 } },
+            { "Dim7", { 0, 3, 6, 9 } }, { "mMaj7", { 0, 3, 7, 11 } }, { "add9", { 0, 4, 7, 14 } }, { "m(add9)", { 0, 3, 7, 14 } },
+            { "9", { 0, 4, 7, 10, 14 } }, { "Maj9", { 0, 4, 7, 11, 14 } }, { "m9", { 0, 3, 7, 10, 14 } }, { "11", { 0, 4, 7, 10, 14, 17 } },
+            { "m11", { 0, 3, 7, 10, 14, 17 } }, { "13", { 0, 4, 7, 10, 14, 21 } }, { "Power (5)", { 0, 7, 12 } }, { "Octave", { 0, 12 } } };
+        return c;
+    }
+    int stampChord = -1, stampInv = 0;
+    bool stampLock = false;
+    void stamp (NoteList& ns, const Note& n)
+    {
+        if (stampChord < 0 || stampChord >= (int) chords().size()) { ns.push_back (n); return; }
+        auto iv = chords()[(size_t) stampChord].iv;
+        for (int i = 0; i < stampInv && i < (int) iv.size() - 1; ++i) iv[(size_t) i] += 12;
+        std::sort (iv.begin(), iv.end());
+        std::vector<int> used;
+        for (int d : iv)
+        {
+            int k = n.key + d;
+            if (stampLock) k = snapToScale (k, s.p().keyRoot, s.p().scaleIndex);
+            k = juce::jlimit (0, 127, k);
+            if (std::find (used.begin(), used.end(), k) != used.end()) continue;
+            used.push_back (k);
+            Note c = n; c.key = k; c.slide = c.slide && d == iv.front();
+            ns.push_back (c);
+        }
+    }
+    void stampMenu()
+    {
+        auto& p = s.p();
+        juce::PopupMenu m, inv;
+        m.addItem (1, "Off (single notes)", true, stampChord < 0);
+        m.addSectionHeader ("Chord stamp");
+        for (int i = 0; i < (int) chords().size(); ++i) m.addItem (100 + i, chords()[(size_t) i].name, true, stampChord == i);
+        m.addSeparator();
+        for (int i = 0; i < 4; ++i) inv.addItem (10 + i, i == 0 ? juce::String ("Root position") : juce::String (i) + (i == 1 ? "st" : i == 2 ? "nd" : "rd") + " inversion", true, stampInv == i);
+        m.addSubMenu ("Inversion", inv);
+        const auto sc = p.scaleIndex >= 0 && p.scaleIndex < (int) allScales().size() ? juce::String (allScales()[(size_t) p.scaleIndex].name) : juce::String();
+        m.addItem (2, "Lock to scale (" + juce::String (rootNames[juce::jlimit (0, 11, p.keyRoot)]) + " " + sc + ")", true, stampLock);
+        juce::Component::SafePointer<PianoRoll> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&stampBtn), [safe] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r == 1) safe->stampChord = -1;
+            else if (r == 2) safe->stampLock = ! safe->stampLock;
+            else if (r >= 10 && r < 14) safe->stampInv = r - 10;
+            else if (r >= 100) safe->stampChord = r - 100;
+            const bool on = safe->stampChord >= 0;
+            safe->stampBtn.setButtonText (on ? "STAMP: " + juce::String (chords()[(size_t) safe->stampChord].name) : juce::String ("STAMP"));
+            safe->stampBtn.setToggleState (on, juce::dontSendNotification);
+            safe->resized();
+        });
     }
     void toolsMenu()
     {
