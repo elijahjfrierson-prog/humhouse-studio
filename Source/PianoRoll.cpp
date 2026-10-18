@@ -388,6 +388,7 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (isTypingNoteKey (k)) return false;
         if (s.channel (channelId) == nullptr) return false;
         const int alt = juce::ModifierKeys::altModifier, cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };

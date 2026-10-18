@@ -105,3 +105,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: 3-page channel settings (SMP/INS/FUNC): normalize, boost, reverse, polarity, declick, trim, fades, Resample/Stretch/Stretch X (OLA) baked non-destructively.
 - DONE: Scope (SCOPE button, detachable/resizable): OSC / WAVE / SPECTRUM of master; 'Scope' insert in Plugin House for any track.
 - DONE: tattoo lettering (Pirata One / Rye, OFL, Options > Font), OBS/Discord capture (software renderer on Windows), v1.2.0 in title + What's new, installers replace the old app (pkill + remove, CloseApplications=force).
+- DONE: Instrument Pool (Prism, Drift, Lava, Glass, Haze, Nebula + piano/EP/Rhodes/guitar/bass/strings/brass/flute/choir), new synth engines (supersaw, FM, morph, air) + LFO/vibrato; live play from MIDI keyboards and the FL typing keyboard, recorded into the pattern while recording.

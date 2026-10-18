@@ -15,6 +15,23 @@ namespace col
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
 }
 
+// FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
+inline bool& typingKeyboard() { static bool on = false; return on; }
+inline int typingKeyOffset (int keyCode)
+{
+    static const juce::String lo ("zsxdcvgbhnjm,"), hi ("q2w3er5t6y7ui");
+    const auto c = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) keyCode);
+    int i = lo.indexOfChar (c);
+    if (i >= 0) return i;
+    i = hi.indexOfChar (c);
+    return i >= 0 ? 12 + i : -1;
+}
+inline bool isTypingNoteKey (const juce::KeyPress& k)
+{
+    return typingKeyboard() && ! k.getModifiers().isCommandDown() && ! k.getModifiers().isAltDown()
+           && ! k.getModifiers().isCtrlDown() && typingKeyOffset (k.getKeyCode()) >= 0;
+}
+
 // 0 = Tattoo (Pirata One), 1 = Flash (Rye), 2 = Clean; remembered between launches
 int& fontStyle();
 void setFontStyle (int);

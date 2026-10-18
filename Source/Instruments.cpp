@@ -152,9 +152,12 @@ public:
                 if (! v.active) break;
                 double hz = keyToHz (v.current);
                 if (p.wave == 4) hz *= 1.0 + 1.5 * std::exp (-v.age * 40.0 / sampleRate); // 808 pitch drop
+                if (p.vibrato > 0.0f && p.lfoRate > 0.0f)
+                    hz *= std::pow (2.0, p.vibrato * std::sin (juce::MathConstants<double>::twoPi * p.lfoRate * v.age / sampleRate) / 12.0);
                 const float dt = (float) (hz / sampleRate);
-                float s = osc (v.ph1, dt);
-                if (p.detune != 0.0f || p.unison > 1) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
+                float s = p.wave >= 5 ? voiceOsc (v, dt) : osc (v.ph1, dt);
+                if (p.wave < 5 && (p.detune != 0.0f || p.unison > 1)) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
+                if (p.noise > 0.0f) s += p.noise * nextNoise (v);
                 v.ph1 += dt; if (v.ph1 >= 1.0f) v.ph1 -= 1.0f;
                 v.ph2 += dt * detRatio; if (v.ph2 >= 1.0f) v.ph2 -= 1.0f;
                 if (p.drive > 0.0f) s = std::tanh (s * (1.0f + p.drive * 8.0f)) / std::tanh (1.0f + p.drive * 8.0f) ;
@@ -169,7 +172,53 @@ public:
     }
 private:
     struct Voice { bool active = false; int key = 0, stage = 0; double current = 60, target = 60, glideRate = 1, age = 0;
-                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0; };
+                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
+                   std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
+                   uint32_t rng = 0x9e3779b9u; };
+    static float nextNoise (Voice& v)
+    {
+        v.rng = v.rng * 1664525u + 1013904223u;
+        return (float) (v.rng >> 8) * (1.0f / 8388608.0f) - 1.0f;
+    }
+    float voiceOsc (Voice& v, float dt)
+    {
+        constexpr float tp = juce::MathConstants<float>::twoPi;
+        const double t = v.age / sampleRate;
+        switch (p.wave)
+        {
+            case 5: // supersaw: 7 detuned saws
+            {
+                static constexpr float spread[6] { -1.0f, -0.62f, -0.3f, 0.3f, 0.62f, 1.0f };
+                const float amt = 0.004f + p.detune * 0.03f;
+                float s = 2.0f * v.ph1 - 1.0f - blep (v.ph1, dt);
+                for (size_t k = 0; k < 6; ++k)
+                {
+                    const float d = dt * (1.0f + spread[k] * amt);
+                    float& ph = v.sx[k];
+                    s += 0.7f * (2.0f * ph - 1.0f - blep (ph, d));
+                    ph += d; if (ph >= 1.0f) ph -= 1.0f;
+                }
+                return s * 0.3f;
+            }
+            case 6: // 2-op FM, index decays like a struck tine / bell
+            {
+                const float idx = p.fmIndex * (0.25f + 0.75f * (float) std::exp (-t * 2.5));
+                const float m = std::sin (tp * v.fmPh);
+                v.fmPh += dt * p.fmRatio; v.fmPh -= std::floor (v.fmPh);
+                return std::sin (tp * v.ph1 + idx * m);
+            }
+            case 7: // morphing wavetable swept by the LFO
+            {
+                const float m = juce::jlimit (0.0f, 1.0f, p.morph + 0.35f * std::sin (tp * (float) (p.lfoRate * t))) * 3.0f;
+                const float w[4] { std::sin (tp * v.ph1), 4.0f * std::abs (v.ph1 - 0.5f) - 1.0f,
+                                   2.0f * v.ph1 - 1.0f - blep (v.ph1, dt), v.ph1 < 0.5f ? 1.0f : -1.0f };
+                const int i0 = juce::jmin (2, (int) m);
+                return w[i0] + (w[i0 + 1] - w[i0]) * (m - (float) i0);
+            }
+            default: // air: noise over a sine body
+                return 0.5f * std::sin (tp * v.ph1) + 0.5f * nextNoise (v);
+        }
+    }
     static inline float blep (float t, float dt)
     {
         if (t < dt) { t /= dt; return t + t - t * t - 1.0f; }

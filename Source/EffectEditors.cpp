@@ -305,7 +305,7 @@ void openChannelEditor (Studio& s, int channelId)
     else
     {
         auto& sp = ch->synth;
-        ins.push_back ({ "wave", "Wave", 0, 4, 0, (float) sp.wave, { "Saw", "Square", "Sine", "Triangle", "808" } });
+        ins.push_back ({ "wave", "Wave", 0, 8, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air" } });
         ins.push_back ({ "attack", "Attack", 0.001f, 2, 0.002f, sp.attack, {} });
         ins.push_back ({ "decay", "Decay", 0.01f, 4, 0.3f, sp.decay, {} });
         ins.push_back ({ "sustain", "Sustain", 0, 1, 0.7f, sp.sustain, {} });
@@ -315,6 +315,12 @@ void openChannelEditor (Studio& s, int channelId)
         ins.push_back ({ "detune", "Detune", 0, 1, 0, sp.detune, {} });
         ins.push_back ({ "unison", "Unison", 1, 7, 1, (float) sp.unison, {} });
         ins.push_back ({ "drive", "Drive", 0, 1, 0, sp.drive, {} });
+        ins.push_back ({ "fmRatio", "FM ratio", 0.5f, 8, 1, sp.fmRatio, {} });
+        ins.push_back ({ "fmIndex", "FM amount", 0, 8, 0, sp.fmIndex, {} });
+        ins.push_back ({ "morph", "Morph", 0, 1, 0, sp.morph, {} });
+        ins.push_back ({ "noise", "Air / noise", 0, 1, 0, sp.noise, {} });
+        func.push_back ({ "lfoRate", "LFO rate (Hz)", 0, 12, 0, sp.lfoRate, {} });
+        func.push_back ({ "vibrato", "Vibrato (st)", 0, 1, 0, sp.vibrato, {} });
         func.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
         func.push_back ({ "root", "Step note", 24, 96, 60, (float) ch->rootKey, {} });
     }
@@ -332,6 +338,8 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "sustain") sp.sustain = v; else if (id == "release") sp.release = v; else if (id == "cutoff") sp.cutoff = v;
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
                 else if (id == "drive") sp.drive = v;
+                else if (id == "fmRatio") sp.fmRatio = v; else if (id == "fmIndex") sp.fmIndex = v; else if (id == "morph") sp.morph = v;
+                else if (id == "noise") sp.noise = v; else if (id == "lfoRate") sp.lfoRate = v; else if (id == "vibrato") sp.vibrato = v;
                 else if (id == "oneShot") c->oneShot = v > 0.5f; else if (id == "cutSelf") c->cutItself = v > 0.5f;
                 else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
                 else if (id == "ampH") c->ampHold = v; else if (id == "ampR") c->ampRelease = v;

@@ -66,6 +66,8 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("s", s.sustain, nullptr); t.setProperty ("r", s.release, nullptr); t.setProperty ("cut", s.cutoff, nullptr);
         t.setProperty ("res", s.resonance, nullptr); t.setProperty ("det", s.detune, nullptr); t.setProperty ("uni", s.unison, nullptr);
         t.setProperty ("drv", s.drive, nullptr);
+        t.setProperty ("fmr", s.fmRatio, nullptr); t.setProperty ("fmi", s.fmIndex, nullptr); t.setProperty ("mor", s.morph, nullptr);
+        t.setProperty ("noi", s.noise, nullptr); t.setProperty ("lfr", s.lfoRate, nullptr); t.setProperty ("vib", s.vibrato, nullptr);
         chs.appendChild (t, nullptr);
     }
     root.appendChild (chs, nullptr);
@@ -156,6 +158,8 @@ Project projectFromTree (const juce::ValueTree& root)
         s.wave = t["wave"]; s.attack = t.getProperty ("a", 0.002f); s.decay = t.getProperty ("d", 0.3f); s.sustain = t.getProperty ("s", 0.7f);
         s.release = t.getProperty ("r", 0.25f); s.cutoff = t.getProperty ("cut", 12000.0f); s.resonance = t.getProperty ("res", 0.2f);
         s.detune = t["det"]; s.unison = t.getProperty ("uni", 1); s.drive = t["drv"];
+        s.fmRatio = t.getProperty ("fmr", 1.0f); s.fmIndex = t["fmi"]; s.morph = t["mor"];
+        s.noise = t["noi"]; s.lfoRate = t["lfr"]; s.vibrato = t["vib"];
         p.channels.push_back (c);
     }
     for (auto t : root.getChildWithName ("PATTERNS"))

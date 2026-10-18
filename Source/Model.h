@@ -35,12 +35,16 @@ enum class ChannelType { Sampler, Synth, Plugin };
 
 struct SynthParams
 {
-    int   wave = 0;        // 0 saw 1 square 2 triangle 3 sine 4 808
+    int   wave = 0;        // 0 saw 1 square 2 triangle 3 sine 4 808 5 supersaw 6 FM 7 morph 8 air/noise
     float attack = 0.002f, decay = 0.3f, sustain = 0.7f, release = 0.25f;
     float cutoff = 12000.0f, resonance = 0.2f;
     float detune = 0.0f;   // cents for 2nd osc
     int   unison = 1;
     float drive = 0.0f;
+    float fmRatio = 1.0f, fmIndex = 0.0f;   // FM keys / bells
+    float morph = 0.0f;                     // morph wave: sine > triangle > saw > square
+    float noise = 0.0f;                     // breath / air mixed into any wave
+    float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
 };
 
 struct Channel

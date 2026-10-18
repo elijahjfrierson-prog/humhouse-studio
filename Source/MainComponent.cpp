@@ -208,7 +208,7 @@ enum MenuIds
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
     mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed,
-    mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist,
+    mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
     mHistory = 1000
 };
@@ -352,12 +352,20 @@ public:
         setSize (1440, 900);
         setView (0);
         syncControls();
+        typingKeyboard() = studio.settings->getBoolValue ("typingKeys", false);
+        liveMidi.fn = [safe = juce::Component::SafePointer<MainComponent> (this)] (int key, float vel, bool on)
+        {
+            if (safe != nullptr) safe->liveNote (key, vel, on);
+        };
+        enableMidiInputs();
+        engine.deviceManager.addMidiInputDeviceCallback ({}, &liveMidi);
         startTimerHz (30);
     }
 
     ~MainComponent() override
     {
         stopTimer();
+        engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
@@ -414,6 +422,12 @@ public:
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
+        if (isTypingNoteKey (k))
+        {
+            const int key = 48 + typingKeyOffset (k.getKeyCode());
+            if (heldTyping.count (k.getKeyCode()) == 0) { heldTyping[k.getKeyCode()] = key; liveNote (key, 0.8f, true); }
+            return true;
+        }
         if (is ('r', 0)) { engine.setRecording (! engine.isRecording()); return true; }
         if (is ('l', 0)) { songBtn.setToggleState (! songBtn.getToggleState(), juce::sendNotificationSync); return true; }
         if (is (juce::KeyPress::F5Key, 0)) { setView (1); return true; }
@@ -429,6 +443,67 @@ public:
         if (is ('m', cmd)) { metroBtn.setToggleState (! metroBtn.getToggleState(), juce::sendNotificationSync); return true; }
         if (is ('r', cmd)) { exportWav (-1); return true; }
         return false;
+    }
+
+    bool keyStateChanged (bool) override
+    {
+        for (auto it = heldTyping.begin(); it != heldTyping.end();)
+        {
+            if (! juce::KeyPress::isKeyCurrentlyDown (it->first)) { liveNote (it->second, 0.0f, false); it = heldTyping.erase (it); }
+            else ++it;
+        }
+        return false;
+    }
+
+    // ---- live playing: MIDI keyboards + typing keyboard play the selected channel; recorded into the pattern while recording
+    struct LiveMidi : juce::MidiInputCallback
+    {
+        std::function<void (int, float, bool)> fn;
+        void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+        {
+            if (! (m.isNoteOn() || m.isNoteOff())) return;
+            const int key = m.getNoteNumber(); const float vel = m.getFloatVelocity(); const bool on = m.isNoteOn();
+            juce::MessageManager::callAsync ([f = fn, key, vel, on] { if (f) f (key, vel, on); });
+        }
+    };
+    LiveMidi liveMidi;
+    std::map<int, int> heldTyping;
+    std::map<int, std::pair<double, float>> heldNotes;
+
+    void enableMidiInputs()
+    {
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            if (! engine.deviceManager.isMidiInputDeviceEnabled (d.identifier))
+                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, true);
+    }
+
+    void liveNote (int key, float vel, bool on)
+    {
+        int ch = studio.selectedChannel;
+        if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
+        if (studio.channel (ch) == nullptr) return;
+        engine.previewNote (ch, key, vel, on);
+        if (on)
+        {
+            heldNotes[key] = { engine.isPlaying() && engine.isRecording() ? engine.positionBeats() : -1.0, vel };
+            return;
+        }
+        auto it = heldNotes.find (key);
+        if (it == heldNotes.end()) return;
+        const double start = it->second.first; const float velocity = it->second.second;
+        heldNotes.erase (it);
+        if (start < 0.0 || ! engine.isPlaying()) return;
+        const double end = engine.positionBeats();
+        studio.edit ("Record notes", [=] (Project& p) {
+            if (p.patterns.empty()) return;
+            auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
+            const double len = juce::jmax (1.0, pat.lengthBeats());
+            double s0 = std::fmod (start, len), e0 = s0 + juce::jmax (0.0, end - start);
+            Note n; n.key = key; n.velocity = velocity;
+            n.start = std::round (s0 * 16.0) / 16.0;
+            n.length = juce::jmax (1.0 / 16.0, e0 - n.start);
+            pat.notes[ch].push_back (n);
+        });
     }
 
     // ---- menus
@@ -487,6 +562,8 @@ public:
             add (mAudio, "Audio settings (device, buffer size, sample rate)...");
             add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup every 5 minutes", {}, true, autoBackup());
+            add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
+            add (mMidiInputs, "Connect MIDI keyboards");
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
             {
@@ -566,6 +643,8 @@ public:
             case mPlugins: showPluginScanner (studio); break;
             case mTheme: showThemeDialog (studio); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
+            case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
+            case mMidiInputs: enableMidiInputs(); break;
             case mAutoBackup: studio.settings->setValue ("autoBackup", ! autoBackup()); break;
             case mShortcuts: showShortcuts(); break;
             case mAbout:

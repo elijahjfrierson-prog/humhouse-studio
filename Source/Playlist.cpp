@@ -496,6 +496,7 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (isTypingNoteKey (k)) return false;
         const int cmd = juce::ModifierKeys::commandModifier;
         if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
         {
