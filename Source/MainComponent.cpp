@@ -206,6 +206,8 @@ public:
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
 
+        if (studio.settings->containsKey ("uiScale"))
+            juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
         auto audioXml = studio.settings->getXmlValue ("audio");
@@ -434,6 +436,13 @@ public:
             add (mAutoBackup, "Auto-backup every 5 minutes", {}, true, autoBackup());
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
+            {
+                juce::PopupMenu sc;
+                const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
+                const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
+                for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
+                m.addSubMenu ("UI scale", sc);
+            }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
         else
@@ -446,6 +455,14 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= 200 && id < 208)
+        {
+            const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
+            const float f = (float) pcts[id - 200] / 100.0f;
+            juce::Desktop::getInstance().setGlobalScaleFactor (f);
+            if (studio.settings) { studio.settings->setValue ("uiScale", (double) f); studio.settings->saveIfNeeded(); }
+            return;
+        }
         switch (id)
         {
             case mNew: newProject(); break;

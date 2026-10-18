@@ -94,3 +94,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE (Browser.cpp SampleBrowser rewrite). Sample browser (requested 2026-10-18): default root = ~/Downloads (userHomeDirectory/Downloads) when no saved folders; FL-like look: folder tree with icons, HumHouse logo (drawLogo) in browser header, folder chooser buttons, search bar filtering files (WildcardFileFilter on '*query*'), click = preview.
 - SHIP POLICY (user 2026-10-18 'no ship as all'): do NOT send partial installers; build every item above, then one CI-green .pkg + Setup.exe.
 - DONE: Playlist laneH even-fill (min 60), + Track / Add insert name 'Track N', mixer title shows track name.
+- DONE: Options > UI scale 75-200% (saved uiScale).
