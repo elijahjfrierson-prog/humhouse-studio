@@ -315,6 +315,46 @@ private:
     }
 };
 
+// FL-style routing cables drawn over the strips: every insert -> each target it feeds
+class WireOverlay : public juce::Component
+{
+public:
+    WireOverlay (Studio& st, int w) : s (st), stripW (w) { setInterceptsMouseClicks (false, false); }
+    void paint (juce::Graphics& g) override
+    {
+        auto& p = s.p();
+        const float y0 = (float) getHeight() - 10.0f;
+        auto x = [this] (int i) { return (float) i * (float) stripW + (float) stripW * 0.5f; };
+        for (size_t i = 1; i < p.mixer.size(); ++i)
+        {
+            auto& t = p.mixer[i];
+            std::vector<std::pair<int, float>> targets;
+            for (auto& sd : t.sends) targets.push_back ({ sd.target, sd.level });
+            if (t.routesToMaster && t.sends.empty()) targets.push_back ({ 0, 1.0f });
+            else if (t.routesToMaster) targets.push_back ({ 0, 1.0f });
+            const bool hot = (int) i == s.selectedTrack;
+            for (auto [tg, lvl] : targets)
+            {
+                if (tg < 0 || tg >= (int) p.mixer.size() || tg == (int) i) continue;
+                const float xa = x ((int) i), xb = x (tg);
+                const float sag = 18.0f + std::abs (xb - xa) * 0.12f;
+                juce::Path cable;
+                cable.startNewSubPath (xa, y0);
+                cable.cubicTo (xa, y0 - sag, xb, y0 - sag, xb, y0);
+                auto c = tg == 0 ? col::dim : col::accent;
+                g.setColour (c.withAlpha (hot ? 0.95f : 0.35f + 0.3f * juce::jlimit (0.0f, 1.0f, lvl)));
+                g.strokePath (cable, juce::PathStrokeType (hot ? 2.4f : 1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.fillEllipse (xb - 3.0f, y0 - 3.0f, 6.0f, 6.0f);
+            }
+            g.setColour (col::text.withAlpha (0.6f));
+            g.fillEllipse (x ((int) i) - 2.5f, y0 - 2.5f, 5.0f, 5.0f);
+        }
+    }
+private:
+    Studio& s;
+    int stripW;
+};
+
 class MixerView : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
@@ -341,6 +381,8 @@ public:
         viewport.setBounds (r);
         holder.setSize ((int) strips.size() * stripW, juce::jmax (300, r.getHeight() - viewport.getScrollBarThickness()));
         for (size_t i = 0; i < strips.size(); ++i) strips[i]->setBounds ((int) i * stripW, 0, stripW, holder.getHeight());
+        wires.setBounds (holder.getLocalBounds());
+        wires.toFront (false);
     }
 
 private:
@@ -350,6 +392,7 @@ private:
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
     juce::TextButton addBtn;
+    WireOverlay wires { s, stripW };
 
     void refresh()
     {
@@ -361,6 +404,9 @@ private:
             resized();
         }
         for (auto& st : strips) st->refresh();
+        if (wires.getParentComponent() == nullptr) holder.addAndMakeVisible (wires);
+        wires.toFront (false);
+        wires.repaint();
         fx.refresh();
     }
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
