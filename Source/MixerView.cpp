@@ -203,7 +203,7 @@ public:
         auto& p = s.p();
         if (p.mixer.empty()) return;
         auto& t = p.mixer[(size_t) track()];
-        title.setText ((track() == 0 ? juce::String ("Master") : "Insert " + juce::String (track()) + " - " + t.name), juce::dontSendNotification);
+        title.setText ((track() == 0 ? juce::String ("Master") : t.name), juce::dontSendNotification);
         const auto& infos = builtinEffects();
         for (int i = 0; i < maxSlots; ++i)
         {
@@ -326,7 +326,7 @@ public:
         addAndMakeVisible (viewport);
         addAndMakeVisible (fx);
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
-        addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Insert " + juce::String (p.mixer.size())); }); };
+        addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Track " + juce::String (p.mixer.size())); }); };
         addAndMakeVisible (addBtn);
         refresh();
         startTimerHz (25);

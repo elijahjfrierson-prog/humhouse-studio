@@ -93,3 +93,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - Stretch modes (requested 2026-10-18): SMP tab + audio clips: Resample (pitch+speed), Stretch (tempo-synced time, pitch kept), Stretch X (time multiplier + pitch shift w/o length change), Fit to tempo (beats length). Use granular/PSOLA stretcher (reuse PitchShifter in Effects).
 - DONE (Browser.cpp SampleBrowser rewrite). Sample browser (requested 2026-10-18): default root = ~/Downloads (userHomeDirectory/Downloads) when no saved folders; FL-like look: folder tree with icons, HumHouse logo (drawLogo) in browser header, folder chooser buttons, search bar filtering files (WildcardFileFilter on '*query*'), click = preview.
 - SHIP POLICY (user 2026-10-18 'no ship as all'): do NOT send partial installers; build every item above, then one CI-green .pkg + Setup.exe.
+- DONE: Playlist laneH even-fill (min 60), + Track / Add insert name 'Track N', mixer title shows track name.

@@ -127,7 +127,7 @@ public:
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
-                Lane l; l.name = "Vocal " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
+                Lane l; l.name = "Track " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
             });
         };
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
@@ -157,6 +157,7 @@ public:
 
     void resized() override
     {
+        laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
@@ -434,7 +435,7 @@ private:
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
-    static constexpr int laneH = 60;
+    int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
