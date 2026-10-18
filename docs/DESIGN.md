@@ -79,3 +79,7 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
   empty pattern) - rack only shows samples the user chose; keep lanes + mixer. Update tests that rely on default channels
   (engine renders default beat test -> add a sampler/drum channel in the test instead).
 - Sleek pass: flatter thinner controls, softer rounded panels w/ subtle gradients, quieter grid lines, cleaner spacing/type (HHLookAndFeel + view paints).
+- Tracks (requested 2026-10-18): Playlist + Mixer: "+ Track", right-click Insert above/below, Delete track (key Del when
+  headers selected), click header = select/highlight, Shift = range, Ctrl/Cmd = toggle; selected headers highlighted;
+  mute/arm/height/delete apply to all selected. Needs Lane::selected / MixerTrack::selected (UI-only, not saved).
+- DONE: createDefault() is now an empty rack; createDemo() keeps the starter beat (tests use it).

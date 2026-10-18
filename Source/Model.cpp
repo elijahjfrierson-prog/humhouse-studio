@@ -96,6 +96,24 @@ Project Project::createDefault()
     Project p;
     MixerTrack master; master.name = "Master"; master.routesToMaster = false;
     p.mixer.push_back (master);
+    Pattern pat; pat.name = "Pattern 1";
+    p.patterns.push_back (pat);
+    for (int i = 0; i < 8; ++i)
+    {
+        Lane l; l.name = i == 0 ? "Beat" : (i == 1 ? "Vocal" : "Track " + juce::String (i + 1));
+        p.lanes.push_back (l);
+    }
+    p.lanes[1].mixerTrack = p.addMixerTrack ("Vocal");
+    Clip c; c.uid = p.newUid(); c.lane = 0; c.start = 0; c.length = 4; c.patternIndex = 0;
+    p.clips.push_back (c);
+    return p;
+}
+
+Project Project::createDemo()
+{
+    Project p;
+    MixerTrack master; master.name = "Master"; master.routesToMaster = false;
+    p.mixer.push_back (master);
 
     static const char* drumNames[] { "Kick", "Clap", "Snare", "Hat", "Open Hat", "808" };
     for (int i = 0; i < 6; ++i)

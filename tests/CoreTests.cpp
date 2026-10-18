@@ -46,7 +46,7 @@ int main()
 
     // routing
     {
-        auto p = Project::createDefault();
+        auto p = Project::createDemo();
         const int a = p.addMixerTrack ("A"), b = p.addMixerTrack ("B");
         CHECK (p.toggleRoute (a, b));
         CHECK (! p.toggleRoute (b, a));        // cycle refused
@@ -59,6 +59,7 @@ int main()
     {
         Engine e;
         e.prepare (44100, 512);
+        e.newProject (Project::createDemo());
         e.sync();
         e.play();
         const float pk = renderPeak (e, 200);
@@ -132,7 +133,7 @@ int main()
 
     // save / load / undo
     {
-        auto p = Project::createDefault();
+        auto p = Project::createDemo();
         p.bpm = 151; p.addFx (1, "comp").params["ratio"] = 6;
         auto f = juce::File::createTempFile (".hhs");
         CHECK (saveProject (p, f));

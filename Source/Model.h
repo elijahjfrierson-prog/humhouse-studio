@@ -166,7 +166,8 @@ struct Project
     int newUid() { return nextUid++; }
     FxSlot& addFx (int track, const juce::String& type);
 
-    static Project createDefault();
+    static Project createDefault();   // clean rack: no channels until the user picks samples
+    static Project createDemo();      // starter beat (drums, 808, keys)
     Channel* findChannel (int id);
     const Channel* findChannel (int id) const;
     int  addChannel (Channel c);       // returns id, creates mixer track if mixerTrack<0
