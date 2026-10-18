@@ -7,8 +7,9 @@ namespace
 class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
-    EditorWindow (const juce::String& title, juce::Component* content, juce::String k, std::function<bool()> stillValid)
-        : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), valid (std::move (stillValid))
+    EditorWindow (const juce::String& title, juce::Component* content, juce::String k, std::function<bool()> stillValid,
+                  juce::AudioProcessor* p = nullptr)
+        : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), proc (p), valid (std::move (stillValid))
     {
         setUsingNativeTitleBar (true);
         setContentOwned (content, true);
@@ -21,6 +22,7 @@ public:
     static void close (EditorWindow* w) { juce::MessageManager::callAsync ([w] { windows().removeObject (w); }); }
     static juce::OwnedArray<EditorWindow>& windows() { static juce::OwnedArray<EditorWindow> w; return w; }
     juce::String key;
+    juce::AudioProcessor* proc = nullptr;
 
 private:
     std::function<bool()> valid;
@@ -125,10 +127,12 @@ void openEffectEditor (Studio& s, int track, int slotUid)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Plugin House", "This plugin could not be loaded on this computer.");
             return;
         }
+        s.engine.beginRiskyPluginCall (plugin->getPluginDescription());
         juce::Component* ed = plugin->hasEditor() ? plugin->createEditorIfNeeded() : nullptr;
+        s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         EditorWindow::windows().add (new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
-                                                       [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }));
+                                                       [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin));
         return;
     }
 
@@ -166,9 +170,11 @@ void openChannelEditor (Studio& s, int channelId)
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Plugin House", "This instrument could not be loaded on this computer.");
             return;
         }
+        s.engine.beginRiskyPluginCall (plugin->getPluginDescription());
         juce::Component* ed = plugin->hasEditor() ? plugin->createEditorIfNeeded() : nullptr;
+        s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
-        EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }));
+        EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
         return;
     }
     std::vector<ParamGrid::P> ps;
@@ -211,4 +217,11 @@ void openChannelEditor (Studio& s, int channelId)
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }
+
+void closeEditorsForPlugin (juce::AudioProcessor* p)
+{
+    auto& w = EditorWindow::windows();
+    for (int i = w.size(); --i >= 0;)
+        if (w[i]->proc == p) w.remove (i);
+}
 }

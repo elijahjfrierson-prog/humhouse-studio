@@ -7,8 +7,14 @@ public:
     const juce::String getApplicationVersion() override { return "1.0.0"; }
     bool moreThanOneInstanceAllowed() override { return true; }
 
-    void initialise (const juce::String&) override
+    void initialise (const juce::String& commandLine) override
     {
+        if (hhs::isPluginScanChild (commandLine))
+        {
+            setApplicationReturnValue (hhs::runPluginScanChild (commandLine));
+            quit();
+            return;
+        }
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
         window = std::make_unique<MainWindow>();
     }

@@ -66,6 +66,44 @@ int main()
         e.stop();
     }
 
+
+    // recording from a MONO mic, plus deleting the lane mid-take, must not crash
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        p.songMode = true;
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[1].armed = true;
+        e.countInOn = false;
+        juce::AudioBuffer<float> mic (1, 512), out (2, 512);
+        for (int i = 0; i < 512; ++i) mic.setSample (0, i, 0.3f * std::sin (i * 0.07f));
+        auto run = [&] (int blocks) {
+            for (int b = 0; b < blocks; ++b)
+            {
+                const float* ins[1] { mic.getReadPointer (0) };
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (ins, 1, o, 2, 512);
+            }
+        };
+        const auto before = p.clips.size();
+        e.setRecording (true);
+        e.play();
+        run (120);
+        e.stop();
+        CHECK (p.clips.size() > before);
+        e.setRecording (false);
+
+        e.setRecording (true);
+        e.play();
+        run (40);
+        { const juce::ScopedLock sl (e.getLock()); p.lanes.pop_back(); }
+        e.stop();                         // lane gone: must skip, not crash
+        e.setRecording (false);
+        run (10);
+        CHECK (true);
+    }
     // every built-in effect stays finite and silent-in gives finite out
     for (auto& info : builtinEffects())
     {

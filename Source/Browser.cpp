@@ -11,6 +11,7 @@ static bool isHumHouse (const juce::PluginDescription& d)
 void addEffect (Studio& s, int track, const juce::String& type, const juce::String& pluginId, int replaceSlotUid)
 {
     if (track < 0 || track >= (int) s.p().mixer.size()) return;
+    if (type == "plugin" && s.dirty) writeBackup (s.p());   // safety net before loading third-party code
     int uid = -1;
     s.edit ("Add effect", [&] (Project& p) {
         auto& fx = p.mixer[(size_t) track].fx;
@@ -26,6 +27,7 @@ void showPluginScanner (Studio& s)
 {
     auto pedal = s.settings->getFile().getSiblingFile ("PluginScanCrash.txt");
     auto* c = new juce::PluginListComponent (s.engine.formats, s.engine.knownPlugins, pedal, s.settings, true);
+    c->setNumberOfThreadsForScanning (2);   // each plugin is probed in its own child process, so this is crash-safe
     c->setSize (780, 540);
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned (c);

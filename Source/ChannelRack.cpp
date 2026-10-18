@@ -37,6 +37,7 @@ void importKit (Studio& s, const juce::File& folder)
 
 void addPluginChannel (Studio& s, const juce::PluginDescription& d)
 {
+    if (s.dirty) writeBackup (s.p());
     s.edit ("Add " + d.name, [&] (Project& p) {
         Channel c; c.name = d.name; c.type = ChannelType::Plugin; c.pluginId = d.createIdentifierString(); c.mixerTrack = -1;
         c.colour = col::accent2;

@@ -3,7 +3,9 @@
 namespace hhs
 {
 // ------------------------------------------------------------------ look and feel
-HHLookAndFeel::HHLookAndFeel()
+HHLookAndFeel::HHLookAndFeel() { refreshColours(); }
+
+void HHLookAndFeel::refreshColours()
 {
     setColourScheme ({ col::bg, col::panel2, col::panel, col::gridBar, col::text, col::accent,
                        juce::Colours::black, col::accent, col::text });
@@ -167,7 +169,7 @@ enum MenuIds
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit,
     mUndo = 20, mRedo, mBackupFolder,
     mBeat = 40, mRecord, mMix, mBrowser,
-    mAudio = 60, mPlugins, mAutoBackup,
+    mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist,
     mShortcuts = 80, mAbout,
     mHistory = 1000
 };
@@ -204,10 +206,20 @@ public:
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
 
+        if (studio.settings->containsKey ("themeColour"))
+            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         if (auto pl = studio.settings->getXmlValue ("plugins")) engine.knownPlugins.recreateFromXml (*pl);
         engine.knownPlugins.addChangeListener (this);
+        engine.onPluginDiscard = [] (juce::AudioProcessor* p) { closeEditorsForPlugin (p); };
+        const auto crashed = engine.recoverFromPluginCrash();
+        if (crashed.isNotEmpty())
+            juce::MessageManager::callAsync ([crashed] {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Plugin disabled",
+                    crashed + " crashed HumHouse Studio last time, so it was switched off to keep your session safe.\n\n"
+                    "Your work is in File > Open backup. To try it again: Options > Re-enable crashed plugins.");
+            });
         engine.recordingFolder = docsDir().getChildFile ("Recordings");
         engine.recordingFolder.createDirectory();
         juce::Component::SafePointer<MainComponent> sp (this);
@@ -229,7 +241,6 @@ public:
         titleLabel.setText ("HUMHOUSE", juce::dontSendNotification);
         titleLabel.setFont (juce::FontOptions (19.0f, juce::Font::bold));
         titleLabel.setColour (juce::Label::textColourId, col::accent);
-        addAndMakeVisible (titleLabel);
 
         int i = 0;
         for (auto* t : { &beatTab, &recordTab, &mixTab })
@@ -260,7 +271,9 @@ public:
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
-        for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn }) addAndMakeVisible (b);
+        setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
+        themeBtn.onClick = [this] { showThemeDialog (studio); };
+        for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn, &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -305,6 +318,7 @@ public:
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
         closeAllEditorWindows();
+        engine.onPluginDiscard = nullptr;
         engine.knownPlugins.removeChangeListener (this);
         if (auto x = engine.deviceManager.createStateXml()) studio.settings->setValue ("audio", x.get());
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
@@ -316,6 +330,7 @@ public:
         g.fillAll (col::bg);
         g.setColour (col::panel);
         g.fillRect (topBar);
+        drawLogo (g, logoArea.toFloat(), true);
     }
 
     void resized() override
@@ -326,7 +341,7 @@ public:
 #endif
         topBar = r.removeFromTop (48);
         auto t = topBar.reduced (8, 8);
-        titleLabel.setBounds (t.removeFromLeft (120));
+        logoArea = t.removeFromLeft (150);
         for (auto* b : { &beatTab, &recordTab, &mixTab }) { b->setBounds (t.removeFromLeft (84)); t.removeFromLeft (4); }
         t.removeFromLeft (16);
         songBtn.setBounds (t.removeFromLeft (48)); t.removeFromLeft (4);
@@ -337,6 +352,7 @@ public:
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
+        themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         browser->setVisible (showBrowser);
@@ -414,6 +430,9 @@ public:
             add (mAudio, "Audio settings (device, buffer size, sample rate)...");
             add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup every 5 minutes", {}, true, autoBackup());
+            m.addSeparator();
+            add (mTheme, "Theme color wheel...");
+            add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
         else
         {
@@ -444,6 +463,8 @@ public:
             case mBrowser: browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); break;
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
+            case mTheme: showThemeDialog (studio); break;
+            case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mAutoBackup: studio.settings->setValue ("autoBackup", ! autoBackup()); break;
             case mShortcuts: showShortcuts(); break;
             case mAbout:
@@ -462,10 +483,10 @@ private:
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn;
+    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn, themeBtn;
     juce::Slider bpm;
     juce::MenuBarComponent menuBar { this };
-    juce::Rectangle<int> topBar;
+    juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser;
     int view = 0, ticks = 0;
     bool showBrowser = true;

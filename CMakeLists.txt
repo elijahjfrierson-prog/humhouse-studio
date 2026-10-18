@@ -59,6 +59,7 @@ option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
 if(NOT HHS_TESTS_ONLY)
 juce_add_gui_app(HumHouseStudio
     PRODUCT_NAME "HumHouse Studio"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon.png"
     COMPANY_NAME "HumHouse"
     BUNDLE_ID "com.humhouse.studio"
     VERSION ${PROJECT_VERSION}
@@ -79,6 +80,7 @@ target_sources(HumHouseStudio PRIVATE
     Source/Browser.cpp
     Source/ToolDialogs.cpp
     Source/EffectEditors.cpp
+    Source/Theme.cpp
 )
 target_compile_definitions(HumHouseStudio PRIVATE ${HHS_DEFS})
 target_link_libraries(HumHouseStudio PRIVATE ${HHS_LIBS}
