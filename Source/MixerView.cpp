@@ -120,6 +120,7 @@ struct Strip : public juce::Component
             m.addItem (3, "Export this insert as a stem...");
             m.addSeparator();
             m.addItem (4, "Clear all FX");
+            m.addSubMenu ("Presets", trackPresetMenu (s, index));
             m.showMenuAsync ({}, [this] (int r) {
                 if (r == 1)
                 {

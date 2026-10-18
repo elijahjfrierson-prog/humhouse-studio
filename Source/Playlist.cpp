@@ -145,6 +145,7 @@ struct LaneHeader : public juce::Component
         juce::PopupMenu m;
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
+        if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
         m.addSeparator(); m.addItem (4, n > 1 ? "Delete " + juce::String (n) + " selected tracks" : juce::String ("Delete track"));
         m.showMenuAsync ({}, [this] (int r) {

@@ -307,3 +307,99 @@ void closeEditorsForPlugin (juce::AudioProcessor* p)
         if (w[i]->proc == p) w.remove (i);
 }
 }
+
+namespace hhs
+{
+static juce::File presetsRoot() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Presets"); }
+
+static void saveChainPreset (Studio& s, int track)
+{
+    auto* aw = new juce::AlertWindow ("Save FX chain preset", "Name this chain (every effect on the insert, in order)", juce::MessageBoxIconType::NoIcon);
+    aw->addTextEditor ("name", "My vocal chain");
+    aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+    aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    aw->enterModalState (true, juce::ModalCallbackFunction::create ([&s, track, aw] (int r) {
+        const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+        if (r != 1 || name.isEmpty() || track < 0 || track >= (int) s.p().mixer.size()) return;
+        s.engine.storePluginStates();
+        juce::XmlElement x ("HUMHOUSE_CHAIN");
+        for (auto& f : s.p().mixer[(size_t) track].fx)
+        {
+            auto* fe = x.createNewChildElement ("FX");
+            fe->setAttribute ("type", f.type); fe->setAttribute ("plugin", f.pluginId);
+            fe->setAttribute ("bypass", f.bypass); fe->setAttribute ("mix", (double) f.mix);
+            if (f.pluginState.getSize() > 0) fe->setAttribute ("state", f.pluginState.toBase64Encoding());
+            for (auto& [id, v] : f.params) { auto* pe = fe->createNewChildElement ("P"); pe->setAttribute ("id", id); pe->setAttribute ("v", (double) v); }
+        }
+        auto dir = presetsRoot().getChildFile ("Chains");
+        dir.createDirectory();
+        x.writeTo (dir.getChildFile (name + ".hhchain"));
+    }), true);
+}
+
+static void loadChainPreset (Studio& s, int track, const juce::File& file, bool replace)
+{
+    auto x = juce::XmlDocument::parse (file);
+    if (x == nullptr) return;
+    s.edit ("Load FX chain", [&] (Project& p) {
+        if (track < 0 || track >= (int) p.mixer.size()) return;
+        if (replace) p.mixer[(size_t) track].fx.clear();
+        for (auto* fe : x->getChildWithTagNameIterator ("FX"))
+        {
+            auto& f = p.addFx (track, fe->getStringAttribute ("type"));
+            f.pluginId = fe->getStringAttribute ("plugin");
+            f.bypass = fe->getBoolAttribute ("bypass");
+            f.mix = (float) fe->getDoubleAttribute ("mix", 1.0);
+            if (fe->hasAttribute ("state")) f.pluginState.fromBase64Encoding (fe->getStringAttribute ("state"));
+            for (auto* pe : fe->getChildWithTagNameIterator ("P")) f.params[pe->getStringAttribute ("id")] = (float) pe->getDoubleAttribute ("v");
+        }
+    });
+}
+
+juce::PopupMenu trackPresetMenu (Studio& s, int track)
+{
+    juce::PopupMenu m;
+    if (track < 0) { m.addItem ("(no mixer insert)", false, false, [] {}); return m; }
+    juce::PopupMenu chains;
+    auto chainFiles = presetsRoot().getChildFile ("Chains").findChildFiles (juce::File::findFiles, false, "*.hhchain");
+    chainFiles.sort();
+    for (auto& f : chainFiles)
+    {
+        juce::PopupMenu one;
+        one.addItem ("Replace this track's FX", [&s, track, f] { loadChainPreset (s, track, f, true); });
+        one.addItem ("Add after current FX", [&s, track, f] { loadChainPreset (s, track, f, false); });
+        chains.addSubMenu (f.getFileNameWithoutExtension(), one);
+    }
+    if (chainFiles.isEmpty()) chains.addItem ("(none saved yet)", false, false, [] {});
+    m.addSubMenu ("FX chain presets", chains);
+    m.addItem ("Save this track's FX chain as preset...", [&s, track] { saveChainPreset (s, track); });
+    m.addSeparator();
+    m.addSectionHeader ("Add effect from saved preset");
+    bool any = false;
+    for (auto& inf : builtinEffects())
+    {
+        auto files = presetsRoot().getChildFile (juce::File::createLegalFileName (inf.id)).findChildFiles (juce::File::findFiles, false, "*.hhpreset");
+        if (files.isEmpty()) continue;
+        files.sort();
+        any = true;
+        juce::PopupMenu sub;
+        const juce::String type = inf.id;
+        for (auto& f : files)
+            sub.addItem (f.getFileNameWithoutExtension(), [&s, track, type, f] {
+                auto x = juce::XmlDocument::parse (f);
+                if (x == nullptr) return;
+                int uid = 0;
+                s.edit ("Add preset", [&] (Project& p) {
+                    if (track >= (int) p.mixer.size()) return;
+                    auto& slot = p.addFx (track, type);
+                    uid = slot.uid;
+                    for (auto* e : x->getChildWithTagNameIterator ("P")) slot.params[e->getStringAttribute ("id")] = (float) e->getDoubleAttribute ("v");
+                });
+                if (uid != 0) openEffectEditor (s, track, uid);
+            });
+        m.addSubMenu (inf.name, sub);
+    }
+    if (! any) m.addItem ("(save presets from any effect's PRESETS button)", false, false, [] {});
+    return m;
+}
+}

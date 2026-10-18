@@ -99,3 +99,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: PRESETS button on every built-in effect and synth/sampler editor (~/Music/HumHouse Studio/Presets/<kind>/*.hhpreset). Third-party plugin state presets still TODO.
 - DONE: Track select (click/Shift/Ctrl-Cmd, highlighted), insert above/below, delete selected (menu or Delete key), arm/mute apply to selection.
 - DONE: Mixer routing wires (WireOverlay cables from each insert to send targets/master; selected insert highlighted).
+- DONE: Right-click track header / mixer insert > Presets (add effect from saved preset, FX chain presets save/load incl. plugin state).

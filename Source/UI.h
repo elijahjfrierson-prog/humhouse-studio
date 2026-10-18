@@ -76,6 +76,7 @@ void addEffect (Studio&, int track, const juce::String& type, const juce::String
 void showPluginScanner (Studio&);
 
 void openEffectEditor (Studio&, int track, int slotUid);
+juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Presets on tracks / inserts
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
 void closeEditorsForPlugin (juce::AudioProcessor*);
