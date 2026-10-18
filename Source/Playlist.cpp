@@ -34,8 +34,33 @@ void autoCrossfade (Project& p)
         }
 }
 
+static void deleteLanes (Project& p, juce::SortedSet<int> which)
+{
+    for (int k = which.size(); --k >= 0;)
+    {
+        const int i = which[k];
+        if (i < 0 || i >= (int) p.lanes.size()) continue;
+        p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [i] (const Clip& c) { return c.lane == i; }), p.clips.end());
+        for (auto& c : p.clips) if (c.lane > i) --c.lane;
+        p.lanes.erase (p.lanes.begin() + i);
+    }
+}
+
+static void insertLane (Project& p, int at)
+{
+    at = juce::jlimit (0, (int) p.lanes.size(), at);
+    for (auto& c : p.clips) if (c.lane >= at) ++c.lane;
+    Lane l; l.name = "Track " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name);
+    p.lanes.insert (p.lanes.begin() + at, l);
+}
+
 struct LaneHeader : public juce::Component
 {
+    juce::SortedSet<int> targets() const
+    {
+        if (s.selectedLanes.contains (index)) return s.selectedLanes;
+        juce::SortedSet<int> one; one.add (index); return one;
+    }
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
         name.setEditable (false, true);
@@ -43,10 +68,10 @@ struct LaneHeader : public juce::Component
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
         arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
-        arm.onClick = [this] { const bool on = arm.getToggleState(); s.edit ("Arm", [&] (Project& p) { p.lanes[(size_t) index].armed = on; }); };
+        arm.onClick = [this] { const bool on = arm.getToggleState(); const auto t = targets(); s.edit ("Arm", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].armed = on; }); };
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
-        mute.onClick = [this] { const bool on = mute.getToggleState(); s.edit ("Mute track", [&] (Project& p) { p.lanes[(size_t) index].muted = on; }); };
+        mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
         setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
         mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
         mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
@@ -80,6 +105,11 @@ struct LaneHeader : public juce::Component
     void paint (juce::Graphics& g) override
     {
         g.fillAll (col::panel);
+        if (s.selectedLanes.contains (index))
+        {
+            g.setColour (col::accent.withAlpha (0.16f)); g.fillRect (getLocalBounds());
+            g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (3));
+        }
         g.setColour (col::gridBar); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         if (arm.getToggleState() && s.engine.isRecording()) { g.setColour (col::rec.withAlpha (0.25f)); g.fillRect (getLocalBounds().removeFromLeft (4)); }
     }
@@ -95,22 +125,57 @@ struct LaneHeader : public juce::Component
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
     }
+    std::function<void (int lane, int height)> onHeight;
+    std::function<void (int size)> onAllHeights;
+    bool edgeDrag = false; int dragStartH = 0;
+    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5; }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (edgeDrag && onHeight) onHeight (index, dragStartH + e.getDistanceFromDragStartY());
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! e.mods.isPopupMenu() && nearBottomEdge (e)) { edgeDrag = true; dragStartH = getHeight(); return; }
+        auto& sel = s.selectedLanes;
+        if (e.mods.isPopupMenu()) { if (! sel.contains (index)) { sel.clear(); sel.add (index); s.laneAnchor = index; } }
+        else if (e.mods.isShiftDown() && s.laneAnchor >= 0)
+        {
+            sel.clear();
+            for (int i = juce::jmin (s.laneAnchor, index); i <= juce::jmax (s.laneAnchor, index); ++i) sel.add (i);
+        }
+        else if (e.mods.isCommandDown()) { if (sel.contains (index)) sel.removeValue (index); else sel.add (index); s.laneAnchor = index; }
+        else { sel.clear(); sel.add (index); s.laneAnchor = index; }
+        if (getParentComponent() != nullptr) getParentComponent()->repaint();
+        for (auto* c : getParentComponent()->getChildren()) c->repaint();
+    }
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (edgeDrag) { edgeDrag = false; return; }
         if (! e.mods.isPopupMenu()) return;
         juce::PopupMenu m;
+        const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
-        m.addSeparator(); m.addItem (4, "Delete track");
+        if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
+        m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
+        {
+            juce::PopupMenu hm;
+            hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
+            m.addSubMenu ("Make all tracks", hm);
+        }
+        m.addSeparator(); m.addItem (4, n > 1 ? "Delete " + juce::String (n) + " selected tracks" : juce::String ("Delete track"));
         m.showMenuAsync ({}, [this] (int r) {
             const int i = index;
             if (r == 1) name.showEditor();
             else if (r == 2) s.edit ("New insert", [i] (Project& p) { p.lanes[(size_t) i].mixerTrack = p.addMixerTrack (p.lanes[(size_t) i].name); });
             else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
-            else if (r == 4) s.edit ("Delete track", [i] (Project& p) {
-                p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [i] (const Clip& c) { return c.lane == i; }), p.clips.end());
-                for (auto& c : p.clips) if (c.lane > i) --c.lane;
-                p.lanes.erase (p.lanes.begin() + i);
-            });
+            else if (r >= 20 && r <= 22) { if (onAllHeights) onAllHeights (r - 20); }
+            else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
+            else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
+            else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
         });
     }
     Studio& s; int index;
@@ -127,9 +192,27 @@ public:
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
-                Lane l; l.name = "Vocal " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
+                Lane l; l.name = "Track " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
             });
         };
+        {
+            const char* labels[] { "SEL", "PAINT", "DEL", "MUTE", "SLICE" };
+            const char* tips[] { "Select / move (E) - click a clip to select, drag to move", "Paint (B) - click empty space to paint copies of the last clip",
+                                 "Delete (D) - click clips to delete them", "Mute (T) - click a clip to mute / unmute it",
+                                 "Slice (C) - click an audio clip to cut it at the snap line" };
+            for (int i = 0; i < 5; ++i)
+            {
+                auto* b = toolBtns.add (new juce::TextButton());
+                setupButton (*b, labels[i], tips[i], true);
+                b->setRadioGroupId (4301);
+                b->onClick = [this, i] { tool = (PTool) i; };
+                addAndMakeVisible (b);
+            }
+            toolBtns[0]->setToggleState (true, juce::dontSendNotification);
+            setupButton (groupBtn, "GROUP", "Group the selected clips so they select and move together (Ctrl/Cmd+G, ungroup Ctrl/Cmd+Shift+G)");
+            groupBtn.onClick = [this] { groupSelected (true); };
+            addAndMakeVisible (groupBtn);
+        }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
         setupButton (rts, "RETURN", "On stop, jump back to where playback started (FL style)", true);
@@ -157,9 +240,14 @@ public:
 
     void resized() override
     {
+        laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
+        t.removeFromLeft (10);
+        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
+        t.removeFromLeft (6);
+        groupBtn.setBounds (t.removeFromLeft (60));
         layoutHeaders();
     }
 
@@ -176,8 +264,8 @@ public:
             {
                 const int y = laneY ((int) i);
                 g.setColour (i % 2 ? col::panel.darker (0.2f) : col::bg.brighter (0.03f));
-                g.fillRect (area.getX(), y, area.getWidth(), laneH);
-                g.setColour (col::grid); g.drawHorizontalLine (y + laneH - 1, (float) area.getX(), (float) area.getRight());
+                g.fillRect (area.getX(), y, area.getWidth(), laneHOf ((int) i));
+                g.setColour (col::grid); g.drawHorizontalLine (y + laneHOf ((int) i) - 1, (float) area.getX(), (float) area.getRight());
             }
             const double b1 = xToBeat ((float) area.getRight());
             double step = 1.0;
@@ -249,6 +337,52 @@ public:
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
+        if (i < 0 && tool == PTool::Paint)
+        {
+            const int lane = laneAt (e.position.y);
+            if (lane < 0 || lane >= (int) p.lanes.size()) return;
+            const double at = juce::jmax (0.0, std::floor (xToBeat (e.position.x) / gridSnap()) * gridSnap());
+            s.edit ("Paint clip", [&] (Project& pr) {
+                Clip c;
+                auto src = std::find_if (pr.clips.begin(), pr.clips.end(), [this] (const Clip& o) { return o.uid == lastClipUid; });
+                if (src != pr.clips.end()) c = *src;
+                else if (! pr.patterns.empty()) { c.patternIndex = juce::jlimit (0, (int) pr.patterns.size() - 1, pr.currentPattern); c.length = pr.patterns[(size_t) c.patternIndex].lengthBeats(); }
+                else return;
+                c.uid = pr.newUid(); c.lane = lane; c.start = at; c.selected = false; c.group = 0; c.takeGroup = 0; c.hidden = false;
+                pr.clips.push_back (c);
+            });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Delete)
+        {
+            const int g = p.clips[(size_t) i].group, uid = p.clips[(size_t) i].uid;
+            s.edit ("Delete clip", [&] (Project& pr) {
+                pr.clips.erase (std::remove_if (pr.clips.begin(), pr.clips.end(), [&] (const Clip& c) { return c.uid == uid || (g > 0 && c.group == g); }), pr.clips.end());
+            });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Mute)
+        {
+            const int uid = p.clips[(size_t) i].uid;
+            s.edit ("Mute clip", [&] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.muted = ! c.muted; });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Slice)
+        {
+            const int uid = p.clips[(size_t) i].uid;
+            const double at = snap (xToBeat (e.position.x));
+            s.edit ("Slice clip", [&] (Project& pr) {
+                auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+                if (it == pr.clips.end() || ! it->isAudio() || at <= it->start || at >= it->start + it->length) return;
+                Clip b = *it; b.uid = pr.newUid();
+                const double shortFade = secondsToBeats (0.005, pr.bpm);
+                b.start = at; b.length = it->start + it->length - at; b.sourceOffset += beatsToSeconds (at - it->start, pr.bpm);
+                b.fadeIn = shortFade; b.selected = false;
+                it->length = at - it->start; it->fadeOut = shortFade;
+                pr.clips.push_back (b);
+            });
+            return;
+        }
         if (i < 0)
         {
             s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
@@ -259,7 +393,9 @@ public:
         s.live ([&] (Project&) {
             if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) for (auto& c : p.clips) c.selected = false;
             p.clips[(size_t) i].selected = true;
+            if (const int g = p.clips[(size_t) i].group; g > 0) for (auto& c : p.clips) if (c.group == g) c.selected = true;
         });
+        lastClipUid = p.clips[(size_t) i].uid;
         dragClip = i; dragOrig = p.clips;
         drag = part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
              : part == Part::Left ? Drag::Trim : Drag::Move;
@@ -362,6 +498,12 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
+        if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
+        {
+            zoomH = juce::jlimit (0.4f, 4.0f, zoomH * (w.deltaY > 0 ? 1.1f : 1.0f / 1.1f));
+            layoutHeaders(); repaint();
+            return;
+        }
         if (e.mods.isCommandDown())
         {
             const double at = xToBeat (e.position.x);
@@ -372,7 +514,7 @@ public:
             scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
         else
         {
-            scrollY = juce::jlimit (0, juce::jmax (0, (int) s.p().lanes.size() * laneH - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
+            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
             layoutHeaders();
         }
         repaint();
@@ -380,11 +522,28 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (isTypingNoteKey (k)) return false;
         const int cmd = juce::ModifierKeys::commandModifier;
         if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
         {
+            const bool anyClip = std::any_of (s.p().clips.begin(), s.p().clips.end(), [] (const Clip& c) { return c.selected; });
+            if (! anyClip && ! s.selectedLanes.isEmpty())
+            {
+                const auto t = s.selectedLanes; s.selectedLanes.clear();
+                s.edit ("Delete tracks", [t] (Project& p) { deleteLanes (p, t); });
+                return true;
+            }
             s.edit ("Delete clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
+        }
+        if (k == juce::KeyPress ('g', cmd, 0)) { groupSelected (true); return true; }
+        if (k == juce::KeyPress ('g', cmd | juce::ModifierKeys::shiftModifier, 0)) { groupSelected (false); return true; }
+        if (k.getModifiers().isAnyModifierKeyDown() == false)
+        {
+            const std::pair<int, PTool> keys[] { { 'e', PTool::Select }, { 'b', PTool::Paint }, { 'd', PTool::Delete }, { 't', PTool::Mute }, { 'c', PTool::Slice } };
+            for (auto& [key, tl] : keys)
+                if (k.getKeyCode() == key || k.getKeyCode() == juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key))
+                { tool = tl; toolBtns[(int) tl]->setToggleState (true, juce::dontSendNotification); return true; }
         }
         if (k == juce::KeyPress ('b', cmd, 0))
         {
@@ -427,6 +586,21 @@ public:
 
 private:
     enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut };
+    enum class PTool { Select, Paint, Delete, Mute, Slice };
+    PTool tool = PTool::Select;
+    juce::OwnedArray<juce::TextButton> toolBtns;
+    juce::TextButton groupBtn;
+    int lastClipUid = 0;
+    void groupSelected (bool on)
+    {
+        s.edit (on ? "Group clips" : "Ungroup clips", [on] (Project& pr) {
+            int g = 0;
+            if (on) { for (auto& c : pr.clips) g = juce::jmax (g, c.group); ++g; }
+            int n = 0;
+            for (auto& c : pr.clips) if (c.selected) { c.group = on ? g : 0; ++n; }
+            if (on && n < 2) for (auto& c : pr.clips) if (c.group == g) c.group = 0;
+        });
+    }
     enum class Part { Body, Left, Right, FadeIn, FadeOut };
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
@@ -434,7 +608,7 @@ private:
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
-    static constexpr int laneH = 60;
+    int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
@@ -442,11 +616,26 @@ private:
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW); }
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
-    int laneY (int lane) const { return toolbarH + rulerH + lane * laneH - scrollY; }
+    std::map<int, float> laneMul;   // per-track height (drag a header's bottom edge)
+    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks)
+    int numLanes() const { return (int) const_cast<Studio&> (s).p().lanes.size(); }
+    int laneHOf (int lane) const
+    {
+        auto it = laneMul.find (lane);
+        return juce::jlimit (22, 800, (int) ((float) laneH * zoomH * (it != laneMul.end() ? it->second : 1.0f)));
+    }
+    int totalLaneH() const { int t = 0; for (int i = 0; i < numLanes(); ++i) t += laneHOf (i); return t; }
+    int laneY (int lane) const
+    {
+        int y = toolbarH + rulerH - scrollY;
+        for (int i = 0; i < lane; ++i) y += laneHOf (i);
+        return y;
+    }
     int laneAt (float y) const
     {
-        const int l = (int) std::floor ((y - toolbarH - rulerH + scrollY) / laneH);
-        return l >= 0 && l < (int) const_cast<Studio&> (s).p().lanes.size() ? l : -1;
+        int top = toolbarH + rulerH - scrollY;
+        for (int i = 0; i < numLanes(); ++i) { const int h = laneHOf (i); if (y >= (float) top && y < (float) (top + h)) return i; top += h; }
+        return -1;
     }
     double gridSnap() const
     {
@@ -460,7 +649,7 @@ private:
     double beatsFromSeconds (double secs) const { return secondsToBeats (secs, const_cast<Studio&> (s).p().bpm); }
     juce::Rectangle<float> clipRect (const Clip& c) const
     {
-        return { beatToX (c.start), (float) laneY (c.lane) + 2.0f, juce::jmax (4.0f, (float) (c.length * pxPerBeat)), (float) laneH - 4.0f };
+        return { beatToX (c.start), (float) laneY (c.lane) + 2.0f, juce::jmax (4.0f, (float) (c.length * pxPerBeat)), (float) laneHOf (c.lane) - 4.0f };
     }
     int hitClip (juce::Point<float> pt, Part& part) const
     {
@@ -585,6 +774,8 @@ private:
         for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
         m.addSubMenu ("Takes", takes, group.size() > 1);
         m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+        m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
+        m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
             s.edit ("Clip edit", [&] (Project& pr) {
@@ -607,6 +798,42 @@ private:
                 }
                 else if (r == 3) c.muted = ! c.muted;
                 else if (r == 4) c.reversed = ! c.reversed;
+                else if (r == 6 || r == 7)
+                {
+                    int g = 0;
+                    if (r == 6) { for (auto& o : pr.clips) g = juce::jmax (g, o.group); ++g; }
+                    const int old = c.group;
+                    for (auto& o : pr.clips) if (o.selected || o.uid == uid || (r == 7 && old > 0 && o.group == old)) o.group = g;
+                }
+                else if (r == 5 && c.patternIndex >= 0 && c.patternIndex < (int) pr.patterns.size())
+                {
+                    const Clip orig = c;
+                    const Pattern src = pr.patterns[(size_t) orig.patternIndex];
+                    std::vector<Clip> made;
+                    int lane = orig.lane;
+                    for (auto& ch : pr.channels)
+                    {
+                        auto nit = src.notes.find (ch.id);
+                        if (nit == src.notes.end() || nit->second.empty()) continue;
+                        Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour;
+                        one.notes[ch.id] = nit->second;
+                        pr.patterns.push_back (one);
+                        while (lane >= (int) pr.lanes.size())
+                        {
+                            Lane l; l.name = "Track " + juce::String (pr.lanes.size() + 1); l.mixerTrack = pr.addMixerTrack (l.name); pr.lanes.push_back (l);
+                        }
+                        Clip nc = orig; nc.uid = pr.newUid(); nc.lane = lane++; nc.patternIndex = (int) pr.patterns.size() - 1; nc.group = 0; nc.selected = true;
+                        made.push_back (nc);
+                    }
+                    if (made.size() > 1)
+                    {
+                        pr.clips.erase (std::remove_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& o) { return o.uid == uid; }), pr.clips.end());
+                        for (auto& o : pr.clips) o.selected = false;
+                        for (auto& nc : made) pr.clips.push_back (nc);
+                    }
+                    else if (! made.empty()) pr.patterns.pop_back();
+                    return;
+                }
                 else if (r == 10) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = shortFade; });
                 else if (r == 11) forSel ([] (Clip& o) { o.fadeIn = juce::jmin (1.0, o.length * 0.5); });
                 else if (r == 12) forSel ([] (Clip& o) { o.fadeOut = juce::jmin (1.0, o.length * 0.5); });
@@ -623,8 +850,8 @@ private:
         for (size_t i = 0; i < headers.size(); ++i)
         {
             const int y = laneY ((int) i);
-            headers[i]->setBounds (0, y, headerW, laneH);
-            headers[i]->setVisible (y + laneH > toolbarH + rulerH);
+            headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
+            headers[i]->setVisible (y + laneHOf ((int) i) > toolbarH + rulerH);
         }
     }
     void refresh()
@@ -633,7 +860,22 @@ private:
         if (headers.size() != p.lanes.size())
         {
             headers.clear();
-            for (size_t i = 0; i < p.lanes.size(); ++i) { headers.push_back (std::make_unique<LaneHeader> (s, (int) i)); addAndMakeVisible (*headers.back()); }
+            for (size_t i = 0; i < p.lanes.size(); ++i) 
+            {
+                headers.push_back (std::make_unique<LaneHeader> (s, (int) i));
+                headers.back()->onHeight = [this] (int lane, int h)
+                {
+                    laneMul[lane] = juce::jlimit (0.3f, 8.0f, (float) h / (float) juce::jmax (1.0f, (float) laneH * zoomH));
+                    layoutHeaders(); repaint();
+                };
+                headers.back()->onAllHeights = [this] (int size)
+                {
+                    laneMul.clear();
+                    zoomH = size == 0 ? 0.6f : size == 1 ? 1.0f : 1.8f;
+                    layoutHeaders(); repaint();
+                };
+                addAndMakeVisible (*headers.back());
+            }
             layoutHeaders();
         }
         for (auto& h : headers) h->refresh();

@@ -55,11 +55,19 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("pitch", c.pitch, nullptr); t.setProperty ("glide", c.glide, nullptr); t.setProperty ("mono", c.mono, nullptr);
         t.setProperty ("mute", c.muted, nullptr); t.setProperty ("solo", c.solo, nullptr); t.setProperty ("root", c.rootKey, nullptr);
         t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
+        t.setProperty ("oneShot", c.oneShot, nullptr); t.setProperty ("cutSelf", c.cutItself, nullptr); t.setProperty ("cutGroup", c.cutGroup, nullptr);
+        t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
+        t.setProperty ("smpNorm", c.smpNormalize, nullptr); t.setProperty ("smpRev", c.smpReverse, nullptr); t.setProperty ("smpInv", c.smpInvert, nullptr);
+        t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
+        t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
+        t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
         auto& s = c.synth;
         t.setProperty ("wave", s.wave, nullptr); t.setProperty ("a", s.attack, nullptr); t.setProperty ("d", s.decay, nullptr);
         t.setProperty ("s", s.sustain, nullptr); t.setProperty ("r", s.release, nullptr); t.setProperty ("cut", s.cutoff, nullptr);
         t.setProperty ("res", s.resonance, nullptr); t.setProperty ("det", s.detune, nullptr); t.setProperty ("uni", s.unison, nullptr);
         t.setProperty ("drv", s.drive, nullptr);
+        t.setProperty ("fmr", s.fmRatio, nullptr); t.setProperty ("fmi", s.fmIndex, nullptr); t.setProperty ("mor", s.morph, nullptr);
+        t.setProperty ("noi", s.noise, nullptr); t.setProperty ("lfr", s.lfoRate, nullptr); t.setProperty ("vib", s.vibrato, nullptr);
         chs.appendChild (t, nullptr);
     }
     root.appendChild (chs, nullptr);
@@ -93,7 +101,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); t.setProperty ("file", fileStr (c.audioFile), nullptr);
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
-        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr);
+        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         t.setProperty ("hidden", c.hidden, nullptr);
         clips.appendChild (t, nullptr);
     }
@@ -141,10 +149,17 @@ Project projectFromTree (const juce::ValueTree& root)
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xffff8a3d));
+        c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
+        c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
+        c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true);
+        c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
+        c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
         auto& s = c.synth;
         s.wave = t["wave"]; s.attack = t.getProperty ("a", 0.002f); s.decay = t.getProperty ("d", 0.3f); s.sustain = t.getProperty ("s", 0.7f);
         s.release = t.getProperty ("r", 0.25f); s.cutoff = t.getProperty ("cut", 12000.0f); s.resonance = t.getProperty ("res", 0.2f);
         s.detune = t["det"]; s.unison = t.getProperty ("uni", 1); s.drive = t["drv"];
+        s.fmRatio = t.getProperty ("fmr", 1.0f); s.fmIndex = t["fmi"]; s.morph = t["mor"];
+        s.noise = t["noi"]; s.lfoRate = t["lfr"]; s.vibrato = t["vib"];
         p.channels.push_back (c);
     }
     for (auto t : root.getChildWithName ("PATTERNS"))
@@ -165,7 +180,7 @@ Project projectFromTree (const juce::ValueTree& root)
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"];
         c.audioFile = strFile (t["file"].toString()); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
-        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.hidden = t["hidden"];
+        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
         p.clips.push_back (c);
     }
     for (auto t : root.getChildWithName ("MIXER"))

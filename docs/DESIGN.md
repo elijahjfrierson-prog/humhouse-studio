@@ -59,3 +59,52 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - Hover tooltips on every knob/button/fader + FL-style hint bar showing name/value/shortcut.
 - "Plugin House" browser: built-ins (incl. AutoPitch) + scanned 3rd-party VST3/AU (HumHouse Autotune if installed).
 - Big sessions: parallel mixer worker pool, disk-streamed clips, freeze, auto-idle FX, CPU meter.
+
+## Next (requested 2026-10-18, add to PR #2 branch devin/1792315880-crash-fixes-logo-theme)
+- FL tool toolbar in Piano Roll + Playlist: Draw (P), Paint (B: drag paints repeated notes/clips at snap), Delete (D),
+  Mute (T), Slice (C: click/drag cuts notes/clips), Select (E), Zoom (Z), Group (Ctrl+G in playlist / group id on notes+clips: grouped items select+move together).
+- Mixer routing wires: draw cables from each strip to its targets (sends + master), FL routing view; channel->insert wires too.
+- Sampler/808 channel playback modes: One-shot (ignore note-off), Cut itself (new hit chokes previous voice), Cut group id
+  (e.g. hats choke each other), amp envelope A/H/D/R per channel, ~3 ms declick fade on choke. Expose in Channel settings + rack menu.
+- DONE (uncommitted->commit): sampler oneShot / cutItself / cutGroup / amp A-H-R (Model, Instruments, Engine renderChannels choke events, ProjectIO, channel editor, rack menu).
+- PARTLY DONE (shuffle committed; drag-replace, used-samples list DONE (View menu); drag-replace + browser highlight, FL tool toolbar, mixer wires still TODO). Kit browsing like FL (requested 2026-10-18): on a sampler channel, Up/Down arrows or mouse wheel over the channel name
+  shuffle to prev/next audio file in the same folder (live while playing); drag a browser sample onto a rack row replaces
+  its sample, onto empty rack space adds a channel; browser highlights samples used in the project; menu "Samples used"
+  lists every sample file in the project.
+- Alt+A arp/rolls already implemented (ToolDialogs Tool::Arp, rack right-click roll x2..x8) - user re-asked, told them.
+- UI sizing (requested 2026-10-18): Options > UI scale 75-200% (Desktop::setGlobalScaleFactor, saved "uiScale");
+  playlist lane height per track: drag lane bottom edge / Alt+wheel on header (Lane::height already in model+IO, Playlist uses const laneH=60 -> make per-lane);
+  "All tracks: small/medium/large"; detach Mixer / Piano Roll / Channel Rack / Browser into own resizable DocumentWindow (FL detached).
+- Clean rack (requested 2026-10-18): Project::createDefault() should start with an EMPTY channel rack (no starter drums/808/keys,
+  empty pattern) - rack only shows samples the user chose; keep lanes + mixer. Update tests that rely on default channels
+  (engine renders default beat test -> add a sampler/drum channel in the test instead).
+- Sleek pass: flatter thinner controls, softer rounded panels w/ subtle gradients, quieter grid lines, cleaner spacing/type (HHLookAndFeel + view paints).
+- Tracks (requested 2026-10-18): Playlist + Mixer: "+ Track", right-click Insert above/below, Delete track (key Del when
+  headers selected), click header = select/highlight, Shift = range, Ctrl/Cmd = toggle; selected headers highlighted;
+  mute/arm/height/delete apply to all selected. Needs Lane::selected / MixerTrack::selected (UI-only, not saved).
+- DONE: createDefault() is now an empty rack; createDemo() keeps the starter beat (tests use it).
+- FL continuous punch: setRecording(true/false) while playing already starts/finishes writers without stopping transport (R key / rec button). Verify keyboard R toggles during playback; each toggle = new take on same lane/insert.
+- DONE: default 10 tracks. TODO: Playlist lane height = max(60, visible height / lanes) so 10 tracks fill view evenly (replace const laneH).
+- DONE: default lanes/inserts named Track 1..10 (+Master). TODO: '+ Track' in Playlist/Mixer should name 'Track N' not 'Vocal N'/'Insert N'.
+- Templates + presets (requested 2026-10-18): File > Save as template (.hhs in ~/Music/HumHouse Studio/Templates), New from template, set default template; preset menu in EffectEditors ParamGrid + plugin windows (Save/Load preset: builtin params XML, plugin getStateInformation), stored in ~/Music/HumHouse Studio/Presets/<type>/.
+- Instrument Pool (requested 2026-10-18): built-in synth instruments listed in Plugin House > Instruments, addable as channels: Prism (wavetable psychedelic pad, morph + phaser shimmer), Drift (detuned supersaw lead, wobble LFO), Lava (analog mono bass, squelch filter) + 808, Glass (FM bell/pluck keys), Haze (lo-fi tape keys wow/flutter/noise), Nebula (evolving drone). Each with presets. Implement as SynthParams presets + new wave/engine options in SynthInstrument.
+- Live instruments (requested 2026-10-18): pool adds piano/EP/Rhodes, guitar pluck, bass gtr, strings, brass, flute, choir (synth-modelled, no copied sample libs); MIDI keyboard input (deviceManager MIDI callback -> previewNote on selected channel) + computer-keyboard piano (FL typing layout) + record into piano roll; live guitar/bass via armed track + amp FX.
+- FL channel settings (requested 2026-10-18): wrench icon on each rack row + click name opens 3-tab panel: SMP (normalize, reverse, declick, fade in/out, trim silence, boost, pitch/fine, root, loop, stretch, invert), INS (one-shot, cut, AHDSR, filter cutoff/res, pan, glide, mono, vel->vol), FUNC (portamento, arp, time offset/swing, note length, crossfade). Non-destructive (Channel fields + sampler render), undo, saved in ProjectIO.
+- Stretch modes (requested 2026-10-18): SMP tab + audio clips: Resample (pitch+speed), Stretch (tempo-synced time, pitch kept), Stretch X (time multiplier + pitch shift w/o length change), Fit to tempo (beats length). Use granular/PSOLA stretcher (reuse PitchShifter in Effects).
+- DONE (Browser.cpp SampleBrowser rewrite). Sample browser (requested 2026-10-18): default root = ~/Downloads (userHomeDirectory/Downloads) when no saved folders; FL-like look: folder tree with icons, HumHouse logo (drawLogo) in browser header, folder chooser buttons, search bar filtering files (WildcardFileFilter on '*query*'), click = preview.
+- SHIP POLICY (user 2026-10-18 'no ship as all'): do NOT send partial installers; build every item above, then one CI-green .pkg + Setup.exe.
+- DONE: Playlist laneH even-fill (min 60), + Track / Add insert name 'Track N', mixer title shows track name.
+- DONE: Options > UI scale 75-200% (saved uiScale).
+- DONE: Templates (File > Save as template / New from template / default template in ~/Music/HumHouse Studio/Templates).
+- DONE: PRESETS button on every built-in effect and synth/sampler editor (~/Music/HumHouse Studio/Presets/<kind>/*.hhpreset). Third-party plugin state presets still TODO.
+- DONE: Track select (click/Shift/Ctrl-Cmd, highlighted), insert above/below, delete selected (menu or Delete key), arm/mute apply to selection.
+- DONE: Mixer routing wires (WireOverlay cables from each insert to send targets/master; selected insert highlighted).
+- DONE: Right-click track header / mixer insert > Presets (add effect from saved preset, FX chain presets save/load incl. plugin state).
+- DONE: Piano roll FL toolbar DRAW/PAINT/DEL/MUTE/SLICE/SEL/ZOOM + keys P B D T C E Z.
+- DONE: Playlist tools SEL/PAINT/DEL/MUTE/SLICE (+E B D T C), clip GROUP (Ctrl/Cmd+G, Shift ungroup, Clip.group saved), Split by channel, notes/steps light up as they play.
+- DONE: 3-page channel settings (SMP/INS/FUNC): normalize, boost, reverse, polarity, declick, trim, fades, Resample/Stretch/Stretch X (OLA) baked non-destructively.
+- DONE: Scope (SCOPE button, detachable/resizable): OSC / WAVE / SPECTRUM of master; 'Scope' insert in Plugin House for any track.
+- DONE: tattoo lettering (Pirata One / Rye, OFL, Options > Font), OBS/Discord capture (software renderer on Windows), v1.2.0 in title + What's new, installers replace the old app (pkill + remove, CloseApplications=force).
+- DONE: Instrument Pool (Prism, Drift, Lava, Glass, Haze, Nebula + piano/EP/Rhodes/guitar/bass/strings/brass/flute/choir), new synth engines (supersaw, FM, morph, air) + LFO/vibrato; live play from MIDI keyboards and the FL typing keyboard, recorded into the pattern while recording.
+- DONE: View > Detach Channel Rack / Piano Roll / Playlist / Mixer / Plugin House into own resizable windows; per-track height (drag header bottom edge), Alt+wheel all tracks, right-click > Make all tracks small/medium/large.
+- DONE: mini scope on every mixer insert (double-click = full Scope for that track), channel editor WAVE page (sample after SMP edits) + SCOPE page.

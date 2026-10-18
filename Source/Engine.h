@@ -58,6 +58,9 @@ public:
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     float trackPeak (int track) const;
+    ScopeTap* trackScope (int t) { return t >= 0 && t < maxScopeTracks ? &(*trackScopes)[(size_t) t] : nullptr; }
+    static constexpr int maxScopeTracks = 64;
+    std::unique_ptr<std::array<ScopeTap, maxScopeTracks>> trackScopes = std::make_unique<std::array<ScopeTap, maxScopeTracks>>();
     double cpuLoad() const;
     bool isCountingIn() const { return countingIn.load(); }
 
@@ -92,6 +95,12 @@ public:
 
     juce::File recordingFolder;
     std::function<void()> onRecordingAdded;
+    std::function<void (juce::AudioProcessor*)> onPluginDiscard;   // message thread, before a plugin instance is deleted
+
+    // crash guard: a marker file names the plugin being loaded; if the app dies, it is blacklisted next launch
+    void beginRiskyPluginCall (const juce::PluginDescription&);
+    void endRiskyPluginCall();
+    juce::String recoverFromPluginCrash();   // returns the name of a plugin that crashed last run (now blacklisted)
 
     struct ChannelRuntime;
     struct TrackRuntime;
@@ -127,6 +136,7 @@ private:
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;
     juce::TimeSliceThread diskThread { "HHS disk" };
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
     // preview FIFO
     struct PreviewEvent { int channelId, key; float vel; bool on; };
@@ -158,4 +168,7 @@ private:
     int renderTrackOnly = -1;
     friend struct EngineJobs;
 };
+// Plugin scanning runs in a child copy of the app so a crashing plugin can't take the DAW down.
+bool isPluginScanChild (const juce::String& commandLine);
+int runPluginScanChild (const juce::String& commandLine);
 }

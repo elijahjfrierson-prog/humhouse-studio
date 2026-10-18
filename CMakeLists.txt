@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.0.0 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,6 +59,7 @@ option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
 if(NOT HHS_TESTS_ONLY)
 juce_add_gui_app(HumHouseStudio
     PRODUCT_NAME "HumHouse Studio"
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon.png"
     COMPANY_NAME "HumHouse"
     BUNDLE_ID "com.humhouse.studio"
     VERSION ${PROJECT_VERSION}
@@ -79,6 +80,8 @@ target_sources(HumHouseStudio PRIVATE
     Source/Browser.cpp
     Source/ToolDialogs.cpp
     Source/EffectEditors.cpp
+    Source/Theme.cpp
+    Source/ScopeView.cpp
 )
 target_compile_definitions(HumHouseStudio PRIVATE ${HHS_DEFS})
 target_link_libraries(HumHouseStudio PRIVATE ${HHS_LIBS}
@@ -93,3 +96,9 @@ target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS})
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
+
+# classic tattoo lettering (SIL Open Font License, see Resources/Fonts/OFL-*.txt)
+if(TARGET HumHouseStudio)
+    juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf)
+    target_link_libraries(HumHouseStudio PRIVATE HHSFonts)
+endif()

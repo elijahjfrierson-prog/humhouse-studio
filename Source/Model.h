@@ -35,12 +35,16 @@ enum class ChannelType { Sampler, Synth, Plugin };
 
 struct SynthParams
 {
-    int   wave = 0;        // 0 saw 1 square 2 triangle 3 sine 4 808
+    int   wave = 0;        // 0 saw 1 square 2 triangle 3 sine 4 808 5 supersaw 6 FM 7 morph 8 air/noise
     float attack = 0.002f, decay = 0.3f, sustain = 0.7f, release = 0.25f;
     float cutoff = 12000.0f, resonance = 0.2f;
     float detune = 0.0f;   // cents for 2nd osc
     int   unison = 1;
     float drive = 0.0f;
+    float fmRatio = 1.0f, fmIndex = 0.0f;   // FM keys / bells
+    float morph = 0.0f;                     // morph wave: sine > triangle > saw > square
+    float noise = 0.0f;                     // breath / air mixed into any wave
+    float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
 };
 
 struct Channel
@@ -59,6 +63,16 @@ struct Channel
     bool  mono = false;                    // legato/mono mode
     bool  muted = false, solo = false;
     int   rootKey = 60;                    // step-sequencer note
+    // sampler playback (FL style): one-shot ignores note length; cut itself chokes the previous hit (808s never overlap);
+    // channels sharing a cut group choke each other (closed hat cuts open hat)
+    bool  oneShot = true, cutItself = false;
+    int   cutGroup = 0;
+    float ampAttack = 0.0f, ampHold = 0.0f, ampRelease = 0.01f;   // seconds; hold 0 = play to the end
+    // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
+    bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = true, smpTrim = false;
+    float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
+    int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
+    float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
     juce::Colour colour { 0xffff8a3d };
 };
 
@@ -89,6 +103,7 @@ struct Clip
     float  fadeCurve = 0.0f;        // -1..1 (0 = linear)
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
+    int    group = 0;               // FL-style clip group: grouped clips select / move together
     bool isAudio() const { return patternIndex < 0; }
 };
 
@@ -161,7 +176,8 @@ struct Project
     int newUid() { return nextUid++; }
     FxSlot& addFx (int track, const juce::String& type);
 
-    static Project createDefault();
+    static Project createDefault();   // clean rack: no channels until the user picks samples
+    static Project createDemo();      // starter beat (drums, 808, keys)
     Channel* findChannel (int id);
     const Channel* findChannel (int id) const;
     int  addChannel (Channel c);       // returns id, creates mixer track if mixerTrack<0

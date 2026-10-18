@@ -2,6 +2,45 @@
 
 namespace hhs
 {
+
+struct PoolInstrument
+{
+    const char* name; juce::uint32 colour; int wave; float a, d, s, r, cut, res, det; int uni; float drv, fmr, fmi, mor, noi, lfo, vib, glide; bool mono; int root;
+};
+static const std::vector<PoolInstrument>& instrumentPool()
+{
+    static const std::vector<PoolInstrument> pool {
+        //  name                 colour      wv  a      d     s     r     cut    res   det  uni drv   fmr  fmi  mor  noi   lfo   vib   glide mono   root
+        { "Prism (morph pad)",   0xffb06bff, 7, 0.8f,  1.0f, 0.8f, 1.6f, 6500,  0.3f, 0,   1, 0,    1,   0,   0.3f,0,    0.15f,0.04f,0,    false, 60 },
+        { "Drift (supersaw)",    0xff5ad1ff, 5, 0.01f, 0.4f, 0.8f, 0.35f,9000,  0.25f,0.5f,1, 0.1f, 1,   0,   0,   0,    5.5f, 0.12f,0.05f,false, 60 },
+        { "Lava (squelch bass)", 0xffff6a3d, 0, 0.002f,0.35f,0.5f, 0.12f,900,   0.75f,0.2f,1, 0.45f,1,   0,   0,   0,    0,    0,    0.07f,true,  36 },
+        { "Glass (FM bells)",    0xff8affe0, 6, 0.001f,1.6f, 0,    1.2f, 14000, 0.1f, 0,   1, 0,    3.5f,4,   0,   0,    0,    0,    0,    false, 72 },
+        { "Haze (lo-fi keys)",   0xffe8c27a, 6, 0.005f,1.2f, 0.35f,0.6f, 4200,  0.15f,0,   1, 0.15f,1,   1.2f,0,   0.04f,0.7f, 0.09f,0,    false, 60 },
+        { "Nebula (drone)",      0xff6a7dff, 8, 2.0f,  2.0f, 1.0f, 3.0f, 2800,  0.5f, 0,   1, 0,    1,   0,   0.2f,0.5f, 0.08f,0.03f,0,    false, 48 },
+        { "Acoustic Piano",      0xfff2f2f2, 6, 0.001f,2.6f, 0,    0.45f,9000,  0.05f,0,   1, 0,    1,   2.8f,0,   0,    0,    0,    0,    false, 60 },
+        { "Electric Piano",      0xffffb35a, 6, 0.001f,2.2f, 0.25f,0.5f, 7000,  0.1f, 0,   1, 0.05f,1,   1.8f,0,   0,    0,    0,    0,    false, 60 },
+        { "Rhodes",              0xffff8a5a, 6, 0.002f,2.5f, 0.3f, 0.6f, 5500,  0.1f, 0,   1, 0.1f, 1,   1.3f,0,   0,    5,    0.03f,0,    false, 60 },
+        { "Guitar Pluck",        0xffd9a066, 0, 0.001f,0.7f, 0,    0.25f,3200,  0.35f,0.15f,1,0.1f, 1,   0,   0,   0,    0,    0,    0,    false, 60 },
+        { "Bass Guitar",         0xff9a6a3d, 2, 0.002f,0.9f, 0.35f,0.15f,1600,  0.3f, 0,   1, 0.25f,1,   0,   0,   0,    0,    0,    0.03f,true,  36 },
+        { "Strings",             0xffc9a0ff, 5, 0.45f, 1.0f, 0.9f, 0.9f, 5000,  0.15f,0.35f,1,0,    1,   0,   0,   0,    5,    0.08f,0,    false, 60 },
+        { "Brass Stab",          0xffffd04a, 0, 0.03f, 0.35f,0.55f,0.25f,3800,  0.35f,0.3f,2, 0.2f, 1,   0,   0,   0,    0,    0,    0,    false, 60 },
+        { "Flute",               0xffa0e8ff, 3, 0.08f, 0.3f, 0.85f,0.25f,6000,  0.05f,0,   1, 0,    1,   0,   0,   0.08f,5,    0.12f,0,    false, 72 },
+        { "Choir Pad",           0xffe0d0ff, 7, 0.6f,  1.2f, 0.85f,1.4f, 4200,  0.25f,0,   1, 0,    1,   0,   0.12f,0.03f,0.3f, 0.04f,0,    false, 60 },
+    };
+    return pool;
+}
+static Channel poolChannel (const PoolInstrument& e)
+{
+    Channel c; c.type = ChannelType::Synth; c.mixerTrack = -1;
+    c.name = juce::String (e.name).upToFirstOccurrenceOf (" (", false, false);
+    c.colour = juce::Colour (e.colour);
+    auto& sp = c.synth;
+    sp.wave = e.wave; sp.attack = e.a; sp.decay = e.d; sp.sustain = e.s; sp.release = e.r; sp.cutoff = e.cut; sp.resonance = e.res;
+    sp.detune = e.det; sp.unison = e.uni; sp.drive = e.drv; sp.fmRatio = e.fmr; sp.fmIndex = e.fmi; sp.morph = e.mor; sp.noise = e.noi;
+    sp.lfoRate = e.lfo; sp.vibrato = e.vib;
+    c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
+    return c;
+}
 static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
 
 void addSampleChannels (Studio& s, const juce::Array<juce::File>& files, const juce::String& insertName)
@@ -37,6 +76,7 @@ void importKit (Studio& s, const juce::File& folder)
 
 void addPluginChannel (Studio& s, const juce::PluginDescription& d)
 {
+    if (s.dirty) writeBackup (s.p());
     s.edit ("Add " + d.name, [&] (Project& p) {
         Channel c; c.name = d.name; c.type = ChannelType::Plugin; c.pluginId = d.createIdentifierString(); c.mixerTrack = -1;
         c.colour = col::accent2;
@@ -66,7 +106,31 @@ struct NameTag : public juce::Component, public juce::SettableTooltipClient
         g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
     }
     void mouseUp (const juce::MouseEvent& e) override { if (onMouse && contains (e.getPosition())) onMouse (e); }
+    std::function<void (int)> onShuffle;
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (onShuffle && w.deltaY != 0) onShuffle (w.deltaY > 0 ? -1 : 1); else Component::mouseWheelMove (e, w);
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (isTypingNoteKey (k)) return false;
+        if (onShuffle && k == juce::KeyPress::upKey) { onShuffle (-1); return true; }
+        if (onShuffle && k == juce::KeyPress::downKey) { onShuffle (1); return true; }
+        return false;
+    }
 };
+
+// FL-style sample shuffling: step to the previous / next audio file in the same folder
+static juce::File siblingSample (const juce::File& f, int dir)
+{
+    juce::Array<juce::File> files;
+    for (const auto& e : juce::RangedDirectoryIterator (f.getParentDirectory(), false, "*", juce::File::findFiles))
+        if (isAudioFile (e.getFile())) files.add (e.getFile());
+    files.sort();
+    const int i = files.indexOf (f);
+    if (files.isEmpty()) return f;
+    return files[(i < 0 ? 0 : i + dir + files.size()) % files.size()];
+}
 
 struct Row : public juce::Component
 {
@@ -86,7 +150,16 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.setTooltip ("Click: open in Piano Roll. Right-click: rename, delete, editor, routing");
+        name.setTooltip ("Click: open in Piano Roll. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.setWantsKeyboardFocus (true);
+        name.onShuffle = [this] (int dir) {
+            auto* c = s.channel (channelId);
+            if (c == nullptr || c->type != ChannelType::Sampler || ! c->sampleFile.existsAsFile()) return;
+            const auto next = siblingSample (c->sampleFile, dir);
+            if (next == c->sampleFile) return;
+            s.edit ("Shuffle sample", [&] (Project&) { if (auto* ch = s.channel (channelId)) { ch->sampleFile = next; ch->name = next.getFileNameWithoutExtension(); } });
+            if (! s.engine.isPlaying()) s.engine.previewFile (next);
+        };
         refresh();
     }
     void bind (Knob& k, std::function<void (Channel&, float)> set)
@@ -127,6 +200,8 @@ struct Row : public juce::Component
         m.addItem (4, "Route to selected mixer insert (" + juce::String (s.selectedTrack) + ")");
         m.addItem (5, "New mixer insert for this channel");
         m.addItem (6, "Clear notes in this pattern");
+        m.addItem (8, "Cut itself (808s never overlap)", c->type == ChannelType::Sampler, c->cutItself);
+        m.addItem (9, "One-shot (play whole sample)", c->type == ChannelType::Sampler, c->oneShot);
         m.addSeparator();
         m.addItem (7, "Delete channel");
         m.showMenuAsync ({}, [this] (int r) {
@@ -136,6 +211,8 @@ struct Row : public juce::Component
             else if (r == 3) { auto* c = s.channel (id); if (c) askText ("Rename channel", c->name, [this, id] (juce::String t) { s.edit ("Rename", [&] (Project&) { if (auto* ch = s.channel (id)) ch->name = t; }); }); }
             else if (r == 4) s.edit ("Route channel", [&] (Project&) { if (auto* ch = s.channel (id)) ch->mixerTrack = s.selectedTrack; });
             else if (r == 5) s.edit ("New insert", [&] (Project& p) { if (auto* ch = s.channel (id)) ch->mixerTrack = p.addMixerTrack (ch->name); });
+            else if (r == 8) s.edit ("Cut itself", [&] (Project&) { if (auto* ch = s.channel (id)) ch->cutItself = ! ch->cutItself; });
+            else if (r == 9) s.edit ("One-shot", [&] (Project&) { if (auto* ch = s.channel (id)) ch->oneShot = ! ch->oneShot; });
             else if (r == 6) s.edit ("Clear notes", [&] (Project&) { s.notes (id).clear(); });
             else if (r == 7) s.edit ("Delete channel", [&] (Project& p) {
                 p.channels.erase (std::remove_if (p.channels.begin(), p.channels.end(), [id] (const Channel& ch) { return ch.id == id; }), p.channels.end());
@@ -233,7 +310,15 @@ public:
                     g.setColour (juce::Colours::black.withAlpha (0.6f));
                     for (int k = 1; k < count; ++k) g.fillRect (r.getX() + r.getWidth() * k / count, r.getY() + 3, 1.5f, r.getHeight() - 6);
                 }
-                if (st == playStep) { g.setColour (col::text); g.drawRoundedRectangle (r, 3, 1.5f); }
+                if (st == playStep)
+                {
+                    if (count > 0)   // FL-style: the step lights up as it plays
+                    {
+                        g.setColour (ch->colour.brighter (0.9f).withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (2.0f), 4);
+                        g.setColour (ch->colour.brighter (0.7f)); g.fillRoundedRectangle (r, 3);
+                    }
+                    g.setColour (col::text); g.drawRoundedRectangle (r, 3, 1.5f);
+                }
             }
         }
     }
@@ -345,6 +430,14 @@ private:
         m.addItem (1, "Sampler (pick a sample)...");
         m.addItem (2, "Synth (keys / lead)");
         m.addItem (3, "808 (glide bass)");
+        juce::PopupMenu pool;
+        pool.addSectionHeader ("Psychedelic synths");
+        for (int i = 0; i < (int) instrumentPool().size(); ++i)
+        {
+            if (i == 6) pool.addSectionHeader ("Live instruments");
+            pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
+        }
+        m.addSubMenu ("Instrument Pool", pool);
         auto types = s.engine.knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");
         m.addSubMenu ("Plugin instrument", inst, inst.getNumItems() > 0);
@@ -367,6 +460,8 @@ private:
                     c.colour = r == 3 ? juce::Colour (0xffff5d8a) : juce::Colour (0xff8a7dff);
                     s.selectedChannel = p.addChannel (c);
                 });
+            else if (r >= 2000 && r < 2000 + (int) instrumentPool().size())
+                s.edit ("Add instrument", [&] (Project& p) { s.selectedChannel = p.addChannel (poolChannel (instrumentPool()[(size_t) (r - 2000)])); });
             else if (r >= 1000) addPluginChannel (s, types.getReference (r - 1000));
         });
     }

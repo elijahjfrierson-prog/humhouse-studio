@@ -31,6 +31,22 @@ public:
         toolsBtn.onClick = [this] { toolsMenu(); };
         setupButton (slideBtn, "SLIDE", "Draw slide (glide) notes - the pitch glides from the previous note, great for 808s", true);
         setupButton (ghostBtn, "GHOST", "Show other channels' notes faintly (Alt+V)", true);
+        {
+            const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM" };
+            const char* tips[] { "Draw (P) - click to add, drag to move / resize", "Paint (B) - drag to paint a run of notes",
+                                 "Delete (D) - click or drag over notes to erase", "Mute (T) - click a note to mute / unmute it",
+                                 "Slice (C) - click a note to cut it at the snap line", "Select (E) - drag a box to select notes",
+                                 "Zoom (Z) - click to zoom in, Shift-click to zoom out" };
+            for (int i = 0; i < 7; ++i)
+            {
+                auto* b = toolBtns.add (new juce::TextButton());
+                setupButton (*b, labels[i], tips[i], true);
+                b->setRadioGroupId (4201);
+                b->onClick = [this, i] { editTool = (EditTool) i; };
+                addAndMakeVisible (b);
+            }
+            toolBtns[0]->setToggleState (true, juce::dontSendNotification);
+        }
         ghostBtn.onClick = [this] { repaint(); };
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
@@ -70,7 +86,8 @@ public:
         toolsBtn.setBounds (t.removeFromLeft (70)); t.removeFromLeft (4);
         slideBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
         ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (10);
-        glide.setBounds (t.removeFromLeft (28));
+        glide.setBounds (t.removeFromLeft (28)); t.removeFromLeft (10);
+        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (46)); t.removeFromLeft (2); }
     }
 
     void paint (juce::Graphics& g) override
@@ -120,11 +137,22 @@ public:
                     if (id != channelId)
                         for (auto& n : list) { g.setColour (col::dim.withAlpha (0.25f)); g.fillRect (noteRect (n)); }
             // notes
+            double playLocal = -1.0;
+            if (s.engine.isPlaying())
+            {
+                const double pos = p.songMode ? s.engine.positionBeats() : std::fmod (s.engine.positionBeats(), patLen);
+                playLocal = p.songMode ? -1.0 : pos;
+                if (p.songMode)
+                    for (auto& c : p.clips)
+                        if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) playLocal = std::fmod (pos - c.start, patLen);
+            }
             for (auto& n : s.notes (channelId))
             {
                 auto r = noteRect (n);
                 if (r.getRight() < ga.getX() || r.getX() > ga.getRight()) continue;
+                const bool playing = ! n.muted && playLocal >= n.start && playLocal < n.start + n.length;
                 auto c = n.muted ? col::dim : ch->colour.withMultipliedBrightness (0.55f + 0.45f * n.velocity);
+                if (playing) { g.setColour (ch->colour.brighter (0.9f).withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (2.0f), 3.5f); c = c.brighter (0.8f); }
                 g.setColour (c); g.fillRoundedRectangle (r, 2.5f);
                 g.setColour (n.selected ? juce::Colours::white : juce::Colours::black.withAlpha (0.5f));
                 g.drawRoundedRectangle (r, 2.5f, n.selected ? 1.6f : 1.0f);
@@ -206,7 +234,36 @@ public:
         int hit; bool edge;
         hitNote (e.position, hit, edge);
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
-        if (e.mods.isCommandDown())
+        if (editTool == EditTool::Delete) { drag = Drag::Delete; deleteAt (e.position); return; }
+        if (editTool == EditTool::Mute)
+        {
+            if (hit >= 0) s.edit ("Mute note", [&] (Project&) { auto& n = s.notes (channelId)[(size_t) hit]; n.muted = ! n.muted; });
+            return;
+        }
+        if (editTool == EditTool::Slice)
+        {
+            const double at = floorSnap (xToBeat (e.position.x));
+            if (hit >= 0)
+                s.edit ("Slice note", [&] (Project&) {
+                    auto& ns = s.notes (channelId);
+                    auto n = ns[(size_t) hit];
+                    if (at <= n.start + 1e-6 || at >= n.start + n.length - 1e-6) return;
+                    auto right = n; right.start = at; right.length = n.start + n.length - at;
+                    ns[(size_t) hit].length = at - n.start;
+                    ns.push_back (right);
+                    tools::sortNotes (ns);
+                });
+            return;
+        }
+        if (editTool == EditTool::Zoom)
+        {
+            const double at = xToBeat (e.position.x);
+            pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * (e.mods.isShiftDown() ? 1.0f / 1.5f : 1.5f));
+            scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
+            repaint();
+            return;
+        }
+        if (e.mods.isCommandDown() || editTool == EditTool::Select)
         {
             drag = Drag::Select;
             if (! e.mods.isShiftDown()) s.live ([&] (Project&) { tools::selectAll (notes, false); });
@@ -228,6 +285,13 @@ public:
                 hit = (int) notes.size() - 1; edge = false; changed = true;
             }
         });
+        if (editTool == EditTool::Paint && changed)
+        {
+            drag = Drag::Paint; paintLast = notes.back().start;
+            preview (notes.back().key);
+            repaint();
+            return;
+        }
         dragNote = hit;
         dragOrig = notes;
         drag = edge ? Drag::Resize : Drag::Move;
@@ -242,6 +306,22 @@ public:
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
         if (drag == Drag::Velocity) { setVelocityAt (e.position); return; }
         if (drag == Drag::Delete) { deleteAt (e.position); return; }
+        if (drag == Drag::Paint)
+        {
+            const double step = juce::jmax (1.0 / 64, p.snap > 0 ? p.snap : lastLength);
+            const double b = juce::jmax (0.0, floorSnap (xToBeat (e.position.x)));
+            if (std::abs (b - paintLast) < step - 1e-9) return;
+            const int key = juce::jlimit (0, 127, yToKey (e.position.y));
+            s.live ([&] (Project&) {
+                auto& ns = s.notes (channelId);
+                for (auto& n : ns) if (n.key == key && b < n.start + n.length - 1e-9 && b + lastLength > n.start + 1e-9) return;
+                Note n; n.key = key; n.start = b; n.length = lastLength; n.velocity = lastVelocity; n.slide = slideBtn.getToggleState();
+                ns.push_back (n);
+            });
+            paintLast = b; changed = true;
+            repaint();
+            return;
+        }
         if (drag == Drag::Select)
         {
             selRect = juce::Rectangle<float> (dragStart, e.position);
@@ -308,6 +388,7 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (isTypingNoteKey (k)) return false;
         if (s.channel (channelId) == nullptr) return false;
         const int alt = juce::ModifierKeys::altModifier, cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
@@ -315,6 +396,11 @@ public:
                                                  { 'q', Tool::Quantize }, { 'r', Tool::Randomize }, { 'k', Tool::Limit }, { 'l', Tool::Articulate },
                                                  { 'x', Tool::ScaleLevels }, { 'y', Tool::Flip }, { 'w', Tool::Claw }, { 'o', Tool::Lfo } };
         for (auto& [key, tool] : altTools) if (is (key, alt)) { showToolDialog (s, tool, channelId); return true; }
+        {
+            const std::pair<int, EditTool> keys[] { { 'p', EditTool::Draw }, { 'b', EditTool::Paint }, { 'd', EditTool::Delete }, { 't', EditTool::Mute },
+                                                    { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom } };
+            for (auto& [key, tool] : keys) if (is (key, 0)) { setTool (tool); return true; }
+        }
         const double snap = s.p().snap > 0 ? s.p().snap : 0.25;
         if (is ('m', alt)) return op ("Mute notes", [] (NoteList& n) { tools::muteSelected (n, true); });
         if (is ('m', alt | shift)) return op ("Unmute notes", [] (NoteList& n) { tools::muteSelected (n, false); });
@@ -357,7 +443,12 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint };
+    enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
+    EditTool editTool = EditTool::Draw;
+    juce::OwnedArray<juce::TextButton> toolBtns;
+    double paintLast = 0;
+    void setTool (EditTool t) { editTool = t; if (auto* b = toolBtns[(int) t]) b->setToggleState (true, juce::dontSendNotification); }
     Studio& s;
     int channelId = -1;
     double scrollX = 0;

@@ -69,6 +69,7 @@ struct Engine::ChannelRuntime
     struct Active { int key; double remaining; };
     std::array<Active, 128> active {}; int numActive = 0;
     int silentBlocks = 0;
+    int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
 };
 
@@ -78,8 +79,122 @@ struct FxRuntime
     juce::String signature;
     std::unique_ptr<BuiltinEffect> builtin;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
+    juce::AudioBuffer<float> buf;   // sized to the plugin's own channel count
+    juce::MidiBuffer midi;
     double tail = 0.0;
 };
+
+static int pluginChannels (const juce::AudioPluginInstance& p)
+{
+    return std::max (2, std::max (p.getTotalNumInputChannels(), p.getTotalNumOutputChannels()));
+}
+
+// Ask for plain stereo main buses with every extra (sidechain / aux) bus off, so the host buffer always
+// matches what the plugin will touch. Plugins that refuse keep their default layout; buffers are sized to it.
+static void configureBuses (juce::AudioPluginInstance& p)
+{
+    auto layout = p.getBusesLayout();
+    for (int i = 1; i < layout.inputBuses.size(); ++i) layout.inputBuses.getReference (i) = juce::AudioChannelSet::disabled();
+    for (int i = 1; i < layout.outputBuses.size(); ++i) layout.outputBuses.getReference (i) = juce::AudioChannelSet::disabled();
+    auto stereo = layout;
+    if (! stereo.inputBuses.isEmpty()) stereo.inputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+    if (! stereo.outputBuses.isEmpty()) stereo.outputBuses.getReference (0) = juce::AudioChannelSet::stereo();
+    if (! p.setBusesLayout (stereo)) p.setBusesLayout (layout);
+}
+
+// =============================================================== out-of-process plugin scanning
+namespace
+{
+juce::String enc (const juce::String& s) { return juce::Base64::toBase64 (s); }
+juce::String dec (const juce::String& s)
+{
+    juce::MemoryOutputStream m;
+    juce::Base64::convertFromBase64 (m, s.unquoted());
+    return m.toString();
+}
+
+class ChildProcessScanner : public juce::KnownPluginList::CustomScanner
+{
+public:
+    bool findPluginTypesFor (juce::AudioPluginFormat& format, juce::OwnedArray<juce::PluginDescription>& result,
+                             const juce::String& fileOrIdentifier) override
+    {
+        const auto out = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                             .getNonexistentChildFile ("hhs-scan", ".xml");
+        juce::ChildProcess proc;
+        const juce::StringArray args { juce::File::getSpecialLocation (juce::File::currentExecutableFile).getFullPathName(),
+                                       "--hhs-scan", enc (format.getName()), enc (fileOrIdentifier), enc (out.getFullPathName()) };
+        if (! proc.start (args, 0)) return false;
+        const auto deadline = juce::Time::getMillisecondCounter() + 120000;
+        while (proc.isRunning())
+        {
+            if (shouldExit() || juce::Time::getMillisecondCounter() > deadline) { proc.kill(); out.deleteFile(); return false; }
+            juce::Thread::sleep (20);
+        }
+        const bool ok = proc.getExitCode() == 0;
+        if (ok)
+            if (auto xml = juce::XmlDocument::parse (out))
+                for (auto* e : xml->getChildIterator())
+                {
+                    auto d = std::make_unique<juce::PluginDescription>();
+                    if (d->loadFromXml (*e)) result.add (d.release());
+                }
+        out.deleteFile();
+        return ok;   // false = plugin crashed or hung while scanning: it lands on the failed list
+    }
+};
+}
+
+bool isPluginScanChild (const juce::String& cmd) { return cmd.contains ("--hhs-scan"); }
+
+int runPluginScanChild (const juce::String& cmd)
+{
+   #if JUCE_MAC
+    juce::Process::setDockIconVisible (false);
+   #endif
+    const auto args = juce::StringArray::fromTokens (cmd, true);
+    const int i = args.indexOf ("--hhs-scan");
+    if (i < 0 || i + 3 >= args.size()) return 2;
+    const auto formatName = dec (args[i + 1]), id = dec (args[i + 2]);
+    const juce::File out (dec (args[i + 3]));
+    juce::AudioPluginFormatManager fm;
+    fm.addDefaultFormats();
+    juce::XmlElement xml ("PLUGINS");
+    for (auto* f : fm.getFormats())
+        if (f->getName() == formatName)
+        {
+            juce::OwnedArray<juce::PluginDescription> found;
+            f->findAllTypesForFile (found, id);
+            for (auto* d : found) xml.addChildElement (d->createXml().release());
+        }
+    return xml.writeTo (out) ? 0 : 3;
+}
+
+static juce::File pluginLoadMarker()
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+        .getChildFile ("HumHouse Studio").getChildFile ("loading-plugin.txt");
+}
+
+void Engine::beginRiskyPluginCall (const juce::PluginDescription& d)
+{
+    auto f = pluginLoadMarker();
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (d.fileOrIdentifier + "\n" + d.name);
+}
+
+void Engine::endRiskyPluginCall() { pluginLoadMarker().deleteFile(); }
+
+juce::String Engine::recoverFromPluginCrash()
+{
+    auto f = pluginLoadMarker();
+    if (! f.existsAsFile()) return {};
+    const auto lines = juce::StringArray::fromLines (f.loadFileAsString());
+    f.deleteFile();
+    if (lines.isEmpty() || lines[0].isEmpty()) return {};
+    knownPlugins.addToBlacklist (lines[0]);
+    return lines.size() > 1 && lines[1].isNotEmpty() ? lines[1] : lines[0];
+}
 
 struct Engine::TrackRuntime
 {
@@ -104,13 +219,17 @@ struct Engine::ClipRuntime
 
 static juce::String channelSignature (const Channel& c)
 {
-    return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId;
+    return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
+         + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
+         + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
+         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f);
 }
 
 // =============================================================== engine
 Engine::Engine()
 {
     formats.addDefaultFormats();
+    knownPlugins.setCustomScanner (std::make_unique<ChildProcessScanner>());
     proj = Project::createDefault();
     const int hw = (int) std::thread::hardware_concurrency();
     pool = std::make_unique<WorkerPool> (juce::jlimit (0, 7, hw - 1));
@@ -121,6 +240,7 @@ Engine::Engine()
 
 Engine::~Engine()
 {
+    alive->store (false);
     deviceManager.removeAudioCallback (this);
     finishRecordingWriters();
     diskThread.stopThread (2000);
@@ -149,6 +269,11 @@ void Engine::newProject (Project p)
         channelOrder.clear(); levels.clear(); sources.clear();
         position = 0.0;
     }
+    if (onPluginDiscard)
+    {
+        for (auto& [id, c] : oldC) if (c && c->plugin) onPluginDiscard (c->plugin.get());
+        for (auto& t : oldT) if (t) for (auto& f : t->fx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
+    }
     sync();
 }
 
@@ -156,14 +281,21 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 {
     auto desc = knownPlugins.getTypeForIdentifierString (identifier);
     if (desc == nullptr) { error = "Plugin not found - rescan in Plugin House"; return {}; }
+    if (knownPlugins.getBlacklistedFiles().contains (desc->fileOrIdentifier))
+    {
+        error = desc->name + " crashed before and is disabled (Options > Re-enable crashed plugins)";
+        return {};
+    }
+    beginRiskyPluginCall (*desc);
     auto inst = formats.createPluginInstance (*desc, sampleRate, maxBlock, error);
     if (inst)
     {
-        inst->enableAllBuses();
+        configureBuses (*inst);
         inst->setPlayHead (this);
         inst->setRateAndBufferSizeDetails (sampleRate, maxBlock);
         inst->prepareToPlay (sampleRate, maxBlock);
     }
+    endRiskyPluginCall();
     return inst;
 }
 
@@ -182,7 +314,12 @@ void Engine::sync()
         {
             juce::String err;
             rt->plugin = createPlugin (ch.pluginId, err);
-            if (rt->plugin && ch.pluginState.getSize() > 0) rt->plugin->setStateInformation (ch.pluginState.getData(), (int) ch.pluginState.getSize());
+            if (rt->plugin && ch.pluginState.getSize() > 0)
+            {
+                beginRiskyPluginCall (rt->plugin->getPluginDescription());
+                rt->plugin->setStateInformation (ch.pluginState.getData(), (int) ch.pluginState.getSize());
+                endRiskyPluginCall();
+            }
         }
         else
         {
@@ -192,11 +329,11 @@ void Engine::sync()
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
                 if (c == sampleCache.end()) c = sampleCache.emplace (key, loadSampleFile (ch.sampleFile, sampleRate)).first;
-                s = c->second;
+                s = processSample (c->second, ch, sampleRate);
             }
             rt->inst = createInstrument (ch, s, sampleRate);
         }
-        const int nch = rt->plugin ? std::max (2, std::max (rt->plugin->getTotalNumInputChannels(), rt->plugin->getTotalNumOutputChannels())) : 2;
+        const int nch = rt->plugin ? pluginChannels (*rt->plugin) : 2;
         rt->buf.setSize (nch, maxBlock);
         rt->midi.ensureSize (4096);
         newC[ch.id] = std::move (rt);
@@ -217,8 +354,18 @@ void Engine::sync()
             {
                 juce::String err;
                 f->plugin = createPlugin (slot.pluginId, err);
-                if (f->plugin && slot.pluginState.getSize() > 0) f->plugin->setStateInformation (slot.pluginState.getData(), (int) slot.pluginState.getSize());
-                if (f->plugin) f->tail = std::min (10.0, f->plugin->getTailLengthSeconds()) + 1.0;
+                if (f->plugin && slot.pluginState.getSize() > 0)
+                {
+                    beginRiskyPluginCall (f->plugin->getPluginDescription());
+                    f->plugin->setStateInformation (slot.pluginState.getData(), (int) slot.pluginState.getSize());
+                    endRiskyPluginCall();
+                }
+                if (f->plugin)
+                {
+                    f->tail = std::min (10.0, f->plugin->getTailLengthSeconds()) + 1.0;
+                    f->buf.setSize (pluginChannels (*f->plugin), maxBlock);
+                    f->midi.ensureSize (2048);
+                }
             }
             else if ((f->builtin = createBuiltinEffect (slot.type)))
             {
@@ -282,6 +429,7 @@ void Engine::sync()
         {
             auto* rt = channelRt[ch.id].get();
             if (rt->inst) rt->inst->update (ch);
+            rt->cutGroup = ch.cutGroup;
             channelOrder.push_back (rt);
         }
 
@@ -334,6 +482,13 @@ void Engine::sync()
         }
         updateSolo();
     }
+    // close editors before their plugin instance is deleted (the discard vectors die at the end of this scope)
+    if (onPluginDiscard)
+    {
+        for (auto& c : discardC) if (c && c->plugin) onPluginDiscard (c->plugin.get());
+        for (auto& f : discardFx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
+        for (auto& t : discardT) if (t) for (auto& f : t->fx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
+    }
     sendChangeMessage();
 }
 
@@ -366,7 +521,11 @@ void Engine::prepareRuntimes()
     {
         rt->buf.setSize (rt->buf.getNumChannels(), maxBlock);
         if (rt->inst) rt->inst->prepare (sampleRate, maxBlock);
-        if (rt->plugin) { rt->plugin->releaseResources(); rt->plugin->setRateAndBufferSizeDetails (sampleRate, maxBlock); rt->plugin->prepareToPlay (sampleRate, maxBlock); }
+        if (rt->plugin)
+        {
+            rt->plugin->releaseResources(); rt->plugin->setRateAndBufferSizeDetails (sampleRate, maxBlock); rt->plugin->prepareToPlay (sampleRate, maxBlock);
+            rt->buf.setSize (pluginChannels (*rt->plugin), maxBlock);
+        }
     }
     for (auto& t : trackRt)
     {
@@ -374,7 +533,11 @@ void Engine::prepareRuntimes()
         for (auto& f : t->fx)
         {
             if (f->builtin) f->builtin->prepare (sampleRate, maxBlock);
-            if (f->plugin) { f->plugin->releaseResources(); f->plugin->setRateAndBufferSizeDetails (sampleRate, maxBlock); f->plugin->prepareToPlay (sampleRate, maxBlock); }
+            if (f->plugin)
+            {
+                f->plugin->releaseResources(); f->plugin->setRateAndBufferSizeDetails (sampleRate, maxBlock); f->plugin->prepareToPlay (sampleRate, maxBlock);
+                f->buf.setSize (pluginChannels (*f->plugin), maxBlock);
+            }
         }
     }
     for (auto& [id, c] : clipRt) c->tmp.setSize (2, maxBlock * 4 + 8);
@@ -385,7 +548,7 @@ void Engine::prepareRuntimes()
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
-    juce::MessageManager::callAsync ([this] { sync(); });
+    juce::MessageManager::callAsync ([this, a = alive] { if (a->load()) sync(); });
 }
 void Engine::audioDeviceStopped() {}
 
@@ -476,8 +639,10 @@ void Engine::setPositionBeats (double b) { position = std::max (0.0, b); startBe
 
 void Engine::setRecording (bool r)
 {
+    if (r == recording.load()) return;
     recording = r;
     if (! r && playing) finishRecordingWriters();
+    else if (r && playing) startRecordingWriters();   // punch in on the fly
 }
 
 // =============================================================== recording
@@ -520,6 +685,7 @@ void Engine::finishRecordingWriters()
         const juce::int64 written = t->samplesWritten;
         t->writer.reset();       // flushes
         if (! t->started || written <= 0) { t->file.deleteFile(); continue; }
+        if (t->lane < 0 || t->lane >= (int) proj.lanes.size()) continue;   // lane deleted while recording: keep the WAV
         auto& lane = proj.lanes[(size_t) t->lane];
         const int insert = lane.mixerTrack;
         const int group = proj.newUid();
@@ -577,7 +743,7 @@ void Engine::finishRecordingWriters()
     }
     if (added)
     {
-        juce::MessageManager::callAsync ([this] { sync(); if (onRecordingAdded) onRecordingAdded(); });
+        juce::MessageManager::callAsync ([this, a = alive] { if (! a->load()) return; sync(); if (onRecordingAdded) onRecordingAdded(); });
     }
 }
 
@@ -788,13 +954,19 @@ struct EngineJobs
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
+                if (ev.key < 0) continue;
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
             if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
+            auto& pl = *rt->plugin;
+            const juce::ScopedTryLock cl (pl.getCallbackLock());
+            if (! cl.isLocked() || pl.isSuspended() || pluginChannels (pl) > rt->buf.getNumChannels() || n > rt->buf.getNumSamples())
+            { rt->numEvents = 0; return; }
             juce::AudioBuffer<float> view (rt->buf.getArrayOfWritePointers(), rt->buf.getNumChannels(), n);
-            rt->plugin->processBlock (view, rt->midi);
+            pl.processBlock (view, rt->midi);
+            if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
         }
         else if (rt->inst)
@@ -806,7 +978,8 @@ struct EngineJobs
             {
                 auto& ev = rt->events[(size_t) k];
                 if (ev.offset > pos) { rt->inst->render (rt->buf, pos, ev.offset - pos); pos = ev.offset; }
-                if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
+                if (ev.key < 0) rt->inst->choke();
+                else if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
             }
             if (pos < n) rt->inst->render (rt->buf, pos, n - pos);
         }
@@ -845,9 +1018,17 @@ void Engine::processTrack (int t)
             if (f.builtin) f.builtin->process (view, n, ctx);
             else if (f.plugin)
             {
-                juce::MidiBuffer none;
-                const int pch = f.plugin->getTotalNumInputChannels();
-                if (pch <= 2) f.plugin->processBlock (view, none);
+                auto& pl = *f.plugin;
+                const juce::ScopedTryLock cl (pl.getCallbackLock());
+                const int nch = f.buf.getNumChannels(), outs = pl.getTotalNumOutputChannels();
+                if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
+                for (int c = 0; c < nch; ++c)
+                    if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
+                juce::AudioBuffer<float> pv (f.buf.getArrayOfWritePointers(), nch, n);
+                f.midi.clear();
+                pl.processBlock (pv, f.midi);
+                view.copyFrom (0, 0, pv, 0, 0, n);
+                view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
             }
         }
     }
@@ -860,6 +1041,7 @@ void Engine::processTrack (int t)
     tr.out.applyGain (1, 0, n, gr);
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
     tr.peak.store (std::max (pk, tr.peak.load() * 0.85f));
+    if (auto* sc = trackScope (t)) { sc->rate = sampleRate; sc->push (tr.out.getReadPointer (0), tr.out.getReadPointer (1), n); }
 }
 
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
@@ -1017,6 +1199,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     masterPeakL = std::max (juce::FloatVectorOperations::findMaximum (l, n), -juce::FloatVectorOperations::findMinimum (l, n));
     masterPeakR = std::max (juce::FloatVectorOperations::findMaximum (r, n), -juce::FloatVectorOperations::findMinimum (r, n));
+    masterScope().rate = sampleRate;
+    masterScope().push (l, r, n);
     for (int c = 0; c < numOut; ++c)
     {
         if (! out[c]) continue;
@@ -1028,6 +1212,18 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
 void Engine::renderChannels (int n)
 {
+    // cut groups: a hit on one channel chokes every other channel in the same group at that sample offset
+    for (auto* a : channelOrder)
+    {
+        if (a->cutGroup <= 0) continue;
+        for (int k = 0, num = a->numEvents; k < num; ++k)
+        {
+            const auto ev = a->events[(size_t) k];
+            if (! ev.on || ev.key < 0) continue;
+            for (auto* b : channelOrder) if (b != a && b->cutGroup == a->cutGroup) b->addEvent ({ ev.offset, -1, 0.0f, false, false });
+        }
+    }
+
     juce::ignoreUnused (n);
     const int count = (int) channelOrder.size();
     if (count >= 4 && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);

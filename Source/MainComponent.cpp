@@ -1,9 +1,50 @@
 #include "UI.h"
+#include "BinaryData.h"
 
 namespace hhs
 {
 // ------------------------------------------------------------------ look and feel
-HHLookAndFeel::HHLookAndFeel()
+HHLookAndFeel::HHLookAndFeel() { refreshColours(); }
+
+static juce::File appDataFile (const char* name)
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio").getChildFile (name);
+}
+int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
+void setFontStyle (int st)
+{
+    fontStyle() = st;
+    appDataFile ("font.txt").getParentDirectory().createDirectory();
+    appDataFile ("font.txt").replaceWithText (juce::String (st));
+    juce::Typeface::clearTypefaceCache();
+    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
+}
+juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
+{
+    static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
+    static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
+    if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
+    if (fontStyle() == 1 && flash != nullptr) return flash;
+    return juce::LookAndFeel_V4::getTypefaceForFont (f);
+}
+void showWhatsNewIfUpdated()
+{
+    const auto v = juce::JUCEApplication::getInstance()->getApplicationVersion();
+    auto f = appDataFile ("last-version.txt");
+    if (f.loadFileAsString().trim() == v) return;
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (v);
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Crash-safe plugin scanning / loading and recording\n- HumHouse logo, color wheel, classic tattoo lettering (Options > Font)\n"
+        "- Playlist tools: select, paint, delete, mute, slice, group (Ctrl/Cmd+G), split pattern by channel\n"
+        "- Piano roll tool bar, notes and steps light up as they play\n- Channel settings SMP / INS / FUNC: normalize, reverse, trim, fades, Resample / Stretch / Stretch X\n"
+        "- One-shot, cut itself, cut groups (808s never overlap)\n- Scope: oscilloscope, waveform and spectrum (SCOPE button + Scope insert)\n"
+        "- Mixer routing wires, track select / insert / delete, 10 numbered tracks\n- Presets, FX chain presets (right-click a track), templates, UI scale\n"
+        "- Samples browser opens Downloads, with search\n- Shows up in OBS / Discord capture");
+}
+
+void HHLookAndFeel::refreshColours()
 {
     setColourScheme ({ col::bg, col::panel2, col::panel, col::gridBar, col::text, col::accent,
                        juce::Colours::black, col::accent, col::text });
@@ -164,10 +205,10 @@ namespace
 {
 enum MenuIds
 {
-    mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit,
+    mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
-    mBeat = 40, mRecord, mMix, mBrowser,
-    mAudio = 60, mPlugins, mAutoBackup,
+    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser,
+    mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
     mHistory = 1000
 };
@@ -204,10 +245,22 @@ public:
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
 
+        if (studio.settings->containsKey ("uiScale"))
+            juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
+        if (studio.settings->containsKey ("themeColour"))
+            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         if (auto pl = studio.settings->getXmlValue ("plugins")) engine.knownPlugins.recreateFromXml (*pl);
         engine.knownPlugins.addChangeListener (this);
+        engine.onPluginDiscard = [] (juce::AudioProcessor* p) { closeEditorsForPlugin (p); };
+        const auto crashed = engine.recoverFromPluginCrash();
+        if (crashed.isNotEmpty())
+            juce::MessageManager::callAsync ([crashed] {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Plugin disabled",
+                    crashed + " crashed HumHouse Studio last time, so it was switched off to keep your session safe.\n\n"
+                    "Your work is in File > Open backup. To try it again: Options > Re-enable crashed plugins.");
+            });
         engine.recordingFolder = docsDir().getChildFile ("Recordings");
         engine.recordingFolder.createDirectory();
         juce::Component::SafePointer<MainComponent> sp (this);
@@ -229,7 +282,6 @@ public:
         titleLabel.setText ("HUMHOUSE", juce::dontSendNotification);
         titleLabel.setFont (juce::FontOptions (19.0f, juce::Font::bold));
         titleLabel.setColour (juce::Label::textColourId, col::accent);
-        addAndMakeVisible (titleLabel);
 
         int i = 0;
         for (auto* t : { &beatTab, &recordTab, &mixTab })
@@ -260,7 +312,12 @@ public:
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
-        for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn }) addAndMakeVisible (b);
+        setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
+        themeBtn.onClick = [this] { showThemeDialog (studio); };
+        setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
+        scopeBtn.onClick = [this] { openScopeWindow (studio); };
+        addAndMakeVisible (scopeBtn);
+        for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn, &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -295,16 +352,26 @@ public:
         setSize (1440, 900);
         setView (0);
         syncControls();
+        typingKeyboard() = studio.settings->getBoolValue ("typingKeys", false);
+        liveMidi.fn = [safe = juce::Component::SafePointer<MainComponent> (this)] (int key, float vel, bool on)
+        {
+            if (safe != nullptr) safe->liveNote (key, vel, on);
+        };
+        enableMidiInputs();
+        engine.deviceManager.addMidiInputDeviceCallback ({}, &liveMidi);
         startTimerHz (30);
     }
 
     ~MainComponent() override
     {
         stopTimer();
+        engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
+        popouts.clear();
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
         closeAllEditorWindows();
+        engine.onPluginDiscard = nullptr;
         engine.knownPlugins.removeChangeListener (this);
         if (auto x = engine.deviceManager.createStateXml()) studio.settings->setValue ("audio", x.get());
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
@@ -316,6 +383,7 @@ public:
         g.fillAll (col::bg);
         g.setColour (col::panel);
         g.fillRect (topBar);
+        drawLogo (g, logoArea.toFloat(), true);
     }
 
     void resized() override
@@ -326,7 +394,7 @@ public:
 #endif
         topBar = r.removeFromTop (48);
         auto t = topBar.reduced (8, 8);
-        titleLabel.setBounds (t.removeFromLeft (120));
+        logoArea = t.removeFromLeft (150);
         for (auto* b : { &beatTab, &recordTab, &mixTab }) { b->setBounds (t.removeFromLeft (84)); t.removeFromLeft (4); }
         t.removeFromLeft (16);
         songBtn.setBounds (t.removeFromLeft (48)); t.removeFromLeft (4);
@@ -337,15 +405,25 @@ public:
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
+        themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
+        scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
-        browser->setVisible (showBrowser);
-        if (showBrowser) browser->setBounds (r.removeFromLeft (260));
-        rack->setVisible (view == 0); piano->setVisible (view == 0);
-        playlist->setVisible (view == 1); mixer->setVisible (view == 2);
-        if (view == 0) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
-        else if (view == 1) playlist->setBounds (r);
-        else mixer->setBounds (r);
+        auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
+        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (260)); }
+        const bool rackHere = here (rack), pianoHere = here (piano);
+        if (rackHere) rack->setVisible (view == 0);
+        if (pianoHere) piano->setVisible (view == 0);
+        if (here (playlist)) playlist->setVisible (view == 1);
+        if (here (mixer)) mixer->setVisible (view == 2);
+        if (view == 0)
+        {
+            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
+            else if (rackHere) rack->setBounds (r);
+            else if (pianoHere) piano->setBounds (r);
+        }
+        else if (view == 1) { if (here (playlist)) playlist->setBounds (r); }
+        else if (here (mixer)) mixer->setBounds (r);
     }
 
     bool keyPressed (const juce::KeyPress& k) override
@@ -353,6 +431,12 @@ public:
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
+        if (isTypingNoteKey (k))
+        {
+            const int key = 48 + typingKeyOffset (k.getKeyCode());
+            if (heldTyping.count (k.getKeyCode()) == 0) { heldTyping[k.getKeyCode()] = key; liveNote (key, 0.8f, true); }
+            return true;
+        }
         if (is ('r', 0)) { engine.setRecording (! engine.isRecording()); return true; }
         if (is ('l', 0)) { songBtn.setToggleState (! songBtn.getToggleState(), juce::sendNotificationSync); return true; }
         if (is (juce::KeyPress::F5Key, 0)) { setView (1); return true; }
@@ -368,6 +452,67 @@ public:
         if (is ('m', cmd)) { metroBtn.setToggleState (! metroBtn.getToggleState(), juce::sendNotificationSync); return true; }
         if (is ('r', cmd)) { exportWav (-1); return true; }
         return false;
+    }
+
+    bool keyStateChanged (bool) override
+    {
+        for (auto it = heldTyping.begin(); it != heldTyping.end();)
+        {
+            if (! juce::KeyPress::isKeyCurrentlyDown (it->first)) { liveNote (it->second, 0.0f, false); it = heldTyping.erase (it); }
+            else ++it;
+        }
+        return false;
+    }
+
+    // ---- live playing: MIDI keyboards + typing keyboard play the selected channel; recorded into the pattern while recording
+    struct LiveMidi : juce::MidiInputCallback
+    {
+        std::function<void (int, float, bool)> fn;
+        void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+        {
+            if (! (m.isNoteOn() || m.isNoteOff())) return;
+            const int key = m.getNoteNumber(); const float vel = m.getFloatVelocity(); const bool on = m.isNoteOn();
+            juce::MessageManager::callAsync ([f = fn, key, vel, on] { if (f) f (key, vel, on); });
+        }
+    };
+    LiveMidi liveMidi;
+    std::map<int, int> heldTyping;
+    std::map<int, std::pair<double, float>> heldNotes;
+
+    void enableMidiInputs()
+    {
+        for (auto& d : juce::MidiInput::getAvailableDevices())
+            if (! engine.deviceManager.isMidiInputDeviceEnabled (d.identifier))
+                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, true);
+    }
+
+    void liveNote (int key, float vel, bool on)
+    {
+        int ch = studio.selectedChannel;
+        if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
+        if (studio.channel (ch) == nullptr) return;
+        engine.previewNote (ch, key, vel, on);
+        if (on)
+        {
+            heldNotes[key] = { engine.isPlaying() && engine.isRecording() ? engine.positionBeats() : -1.0, vel };
+            return;
+        }
+        auto it = heldNotes.find (key);
+        if (it == heldNotes.end()) return;
+        const double start = it->second.first; const float velocity = it->second.second;
+        heldNotes.erase (it);
+        if (start < 0.0 || ! engine.isPlaying()) return;
+        const double end = engine.positionBeats();
+        studio.edit ("Record notes", [=] (Project& p) {
+            if (p.patterns.empty()) return;
+            auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
+            const double len = juce::jmax (1.0, pat.lengthBeats());
+            double s0 = std::fmod (start, len), e0 = s0 + juce::jmax (0.0, end - start);
+            Note n; n.key = key; n.velocity = velocity;
+            n.start = std::round (s0 * 16.0) / 16.0;
+            n.length = juce::jmax (1.0 / 16.0, e0 - n.start);
+            pat.notes[ch].push_back (n);
+        });
     }
 
     // ---- menus
@@ -387,6 +532,16 @@ public:
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
+            {
+                juce::PopupMenu tm;
+                auto ts = templateFiles();
+                for (int i = 0; i < ts.size() && i < 90; ++i) tm.addItem (300 + i, ts[i].getFileNameWithoutExtension());
+                if (ts.isEmpty()) tm.addItem (-1, "(no templates yet)", false);
+                m.addSubMenu ("New from template", tm);
+            }
+            add (mSaveTemplate, "Save as template...");
+            add (mDefaultTemplate, "Use this project as default template");
+            add (mClearDefaultTemplate, "Reset default template", {}, defaultTemplate().existsAsFile());
             m.addSeparator();
             add (mExport, "Export WAV...", "Ctrl+R"); add (mExportTrack, "Export selected mixer track (stem)...");
             m.addSeparator(); add (mQuit, "Quit");
@@ -408,12 +563,36 @@ public:
             add (mRecord, "Record (Playlist)", "F5", true, view == 1);
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
+            m.addSeparator();
+            add (mSamplesUsed, "Samples used in this project...");
+            m.addSeparator();
+            add (mDetachRack, "Detach Channel Rack (own window)", {}, true, popouts.count (rack.get()) > 0);
+            add (mDetachPiano, "Detach Piano Roll (own window)", {}, true, popouts.count (piano.get()) > 0);
+            add (mDetachPlaylist, "Detach Playlist (own window)", {}, true, popouts.count (playlist.get()) > 0);
+            add (mDetachMixer, "Detach Mixer (own window)", {}, true, popouts.count (mixer.get()) > 0);
+            add (mDetachBrowser, "Detach Plugin House / Browser (own window)", {}, true, popouts.count (browser.get()) > 0);
         }
         else if (index == 3)
         {
             add (mAudio, "Audio settings (device, buffer size, sample rate)...");
             add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup every 5 minutes", {}, true, autoBackup());
+            add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
+            add (mMidiInputs, "Connect MIDI keyboards");
+            m.addSeparator();
+            add (mTheme, "Theme color wheel...");
+            {
+                juce::PopupMenu sc;
+                const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
+                const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
+                for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
+                m.addSubMenu ("UI scale", sc);
+                juce::PopupMenu fm;
+                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "Clean" };
+                for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                m.addSubMenu ("Font", fm);
+            }
+            add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
         else
         {
@@ -425,9 +604,31 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= 300 && id < 390)
+        {
+            auto ts = templateFiles();
+            if (id - 300 < ts.size()) newProject (ts[id - 300]);
+            return;
+        }
+        if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id >= 200 && id < 208)
+        {
+            const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
+            const float f = (float) pcts[id - 200] / 100.0f;
+            juce::Desktop::getInstance().setGlobalScaleFactor (f);
+            if (studio.settings) { studio.settings->setValue ("uiScale", (double) f); studio.settings->saveIfNeeded(); }
+            return;
+        }
         switch (id)
         {
             case mNew: newProject(); break;
+            case mSaveTemplate: saveTemplate(); break;
+            case mDefaultTemplate:
+                engine.storePluginStates();
+                templatesDir().createDirectory();
+                saveProject (engine.project(), defaultTemplate());
+                break;
+            case mClearDefaultTemplate: defaultTemplate().deleteFile(); break;
             case mOpen: open (false); break;
             case mOpenBackup: open (true); break;
             case mSave: save (false); break;
@@ -438,12 +639,32 @@ public:
             case mUndo: studio.undoStep (-1); break;
             case mRedo: studio.undoStep (1); break;
             case mBackupFolder: backupDir().createDirectory(); backupDir().startAsProcess(); break;
+            case mDetachRack: toggleDetach (rack.get(), "Channel Rack"); break;
+            case mDetachPiano: toggleDetach (piano.get(), "Piano Roll"); break;
+            case mDetachPlaylist: toggleDetach (playlist.get(), "Playlist"); break;
+            case mDetachMixer: toggleDetach (mixer.get(), "Mixer"); break;
+            case mDetachBrowser: toggleDetach (browser.get(), "Plugin House"); break;
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;
+            case mSamplesUsed:
+            {
+                juce::StringArray used;
+                for (auto& c : engine.project().channels)
+                    if (c.type == ChannelType::Sampler && c.sampleFile != juce::File()) used.addIfNotAlreadyThere (c.name + "   -   " + c.sampleFile.getFullPathName());
+                for (auto& c : engine.project().clips)
+                    if (c.isAudio() && ! c.hidden) used.addIfNotAlreadyThere ("[audio] " + c.audioFile.getFileName() + "   -   " + c.audioFile.getFullPathName());
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "Samples used (" + juce::String (used.size()) + ")",
+                                                        used.isEmpty() ? juce::String ("No samples yet - built-in drums only.") : used.joinIntoString ("\n"));
+                break;
+            }
             case mBrowser: browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); break;
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
+            case mTheme: showThemeDialog (studio); break;
+            case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
+            case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
+            case mMidiInputs: enableMidiInputs(); break;
             case mAutoBackup: studio.settings->setValue ("autoBackup", ! autoBackup()); break;
             case mShortcuts: showShortcuts(); break;
             case mAbout:
@@ -462,10 +683,10 @@ private:
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn;
+    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
     juce::Slider bpm;
     juce::MenuBarComponent menuBar { this };
-    juce::Rectangle<int> topBar;
+    juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser;
     int view = 0, ticks = 0;
     bool showBrowser = true;
@@ -481,6 +702,44 @@ private:
     bool autoBackup() const { return studio.settings->getBoolValue ("autoBackup", true); }
 
     void flash (const juce::String& t) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + 2500; }
+
+    // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
+    struct PopOut : public juce::DocumentWindow
+    {
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) {}
+        std::function<void()> onClose;
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+    std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
+
+    void toggleDetach (juce::Component* c, const juce::String& title)
+    {
+        if (popouts.count (c) > 0) { reattach (c); return; }
+        auto w = std::make_unique<PopOut> (title);
+        w->setUsingNativeTitleBar (true);
+        w->setContentNonOwned (c, false);
+        c->setVisible (true);
+        w->setResizable (true, true);
+        w->setResizeLimits (360, 220, 10000, 8000);
+        w->centreWithSize (juce::jmax (900, c->getWidth()), juce::jmax (520, c->getHeight()));
+        w->setVisible (true);
+        makeCaptureFriendly (*w);
+        w->onClose = [safe = juce::Component::SafePointer<MainComponent> (this), c]
+        {
+            juce::MessageManager::callAsync ([safe, c] { if (safe != nullptr) safe->reattach (c); });
+        };
+        popouts[c] = std::move (w);
+        resized();
+    }
+    void reattach (juce::Component* c)
+    {
+        auto it = popouts.find (c);
+        if (it == popouts.end()) return;
+        it->second->clearContentComponent();
+        popouts.erase (it);
+        addAndMakeVisible (c);
+        resized();
+    }
 
     void setView (int v)
     {
@@ -610,11 +869,42 @@ private:
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
 
-    void newProject()
+    static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
+    static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
+    static juce::Array<juce::File> templateFiles()
+    {
+        auto fs = templatesDir().findChildFiles (juce::File::findFiles, false, "*.hhs");
+        fs.removeIf ([] (const juce::File& f) { return f.getFileName() == "_default.hhs"; });
+        fs.sort();
+        return fs;
+    }
+    void saveTemplate()
+    {
+        auto* aw = new juce::AlertWindow ("Save as template", "Name this template (tracks, mixer, FX and kit are saved)", juce::MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", "My template");
+        aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int r) {
+            const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+            if (r != 1 || name.isEmpty()) return;
+            engine.storePluginStates();
+            templatesDir().createDirectory();
+            saveProject (engine.project(), templatesDir().getChildFile (name + ".hhs"));
+        }), true);
+    }
+
+    void newProject (juce::File templ = {})
     {
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
         closeAllEditorWindows();
-        engine.newProject (Project::createDefault());
+        if (templ == juce::File()) templ = defaultTemplate();
+        Project fresh = Project::createDefault();
+        if (templ.existsAsFile())
+        {
+            Project t;
+            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; }
+        }
+        engine.newProject (std::move (fresh));
         studio.undo.clear();
         studio.undo.push (engine.project(), "New project");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;

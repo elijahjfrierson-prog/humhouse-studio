@@ -14,12 +14,14 @@ public:
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
-        rootKey = c.rootKey; pitch = c.pitch; glide = c.glide; mono = c.mono;
+        rootKey = c.rootKey; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
+        oneShot = c.oneShot; cutItself = c.cutItself; attack = c.ampAttack; hold = c.ampHold; release = c.ampRelease;
     }
     void noteOn (int key, float vel, bool slide) override
     {
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = key - rootKey + pitch;
+        if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
         if (mono || slide)
         {
             for (auto& v : voices) if (v.active && ! v.releasing)
@@ -32,7 +34,7 @@ public:
         for (auto& c : voices) if (! c.active) { v = &c; break; }
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
-        v->active = true; v->key = key; v->gain = vel;
+        v->active = true; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideRate = glide > 0.0f ? 1.0 / (glide * sampleRate) : 1.0;
@@ -40,9 +42,10 @@ public:
     }
     void noteOff (int key) override
     {
-        for (auto& v : voices) if (v.active && v.key == key && mono) v.releasing = true;
+        for (auto& v : voices) if (v.active && v.key == key && (mono || ! oneShot)) v.releasing = true;
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
+    void choke() override { for (auto& v : voices) if (v.active) { v.releasing = true; v.fadeLen = 0.003f; } }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
     void render (juce::AudioBuffer<float>& out, int start, int num) override
@@ -68,7 +71,10 @@ public:
                 if (i0 + 1 >= len) { v.active = false; break; }
                 const float f = (float) (v.pos - i0);
                 float g = v.gain;
-                if (v.releasing) { v.rel -= 1.0f / (0.01f * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
+                if (attack > 0.0f && v.age < attack * sampleRate) g *= (float) (v.age / (attack * sampleRate));
+                if (hold > 0.0f && ! v.releasing && v.age > hold * sampleRate) v.releasing = true;
+                v.age += 1.0;
+                if (v.releasing) { v.rel -= 1.0f / (v.fadeLen * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
                 oL[i] += (l[i0] + f * (l[i0 + 1] - l[i0])) * g;
                 oR[i] += (r[i0] + f * (r[i0 + 1] - r[i0])) * g;
                 v.pos += std::pow (2.0, v.semis / 12.0);
@@ -76,12 +82,13 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1; float gain = 1, rel = 1; };
+    struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1, age = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 16> voices {};
     int next = 0, rootKey = 60;
     double sampleRate = 44100.0, lastSemis = -999.0;
     float pitch = 0, glide = 0; bool mono = false;
+    bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };
 
 // ------------------------------------------------------------ synth
@@ -145,9 +152,12 @@ public:
                 if (! v.active) break;
                 double hz = keyToHz (v.current);
                 if (p.wave == 4) hz *= 1.0 + 1.5 * std::exp (-v.age * 40.0 / sampleRate); // 808 pitch drop
+                if (p.vibrato > 0.0f && p.lfoRate > 0.0f)
+                    hz *= std::pow (2.0, p.vibrato * std::sin (juce::MathConstants<double>::twoPi * p.lfoRate * v.age / sampleRate) / 12.0);
                 const float dt = (float) (hz / sampleRate);
-                float s = osc (v.ph1, dt);
-                if (p.detune != 0.0f || p.unison > 1) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
+                float s = p.wave >= 5 ? voiceOsc (v, dt) : osc (v.ph1, dt);
+                if (p.wave < 5 && (p.detune != 0.0f || p.unison > 1)) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
+                if (p.noise > 0.0f) s += p.noise * nextNoise (v);
                 v.ph1 += dt; if (v.ph1 >= 1.0f) v.ph1 -= 1.0f;
                 v.ph2 += dt * detRatio; if (v.ph2 >= 1.0f) v.ph2 -= 1.0f;
                 if (p.drive > 0.0f) s = std::tanh (s * (1.0f + p.drive * 8.0f)) / std::tanh (1.0f + p.drive * 8.0f) ;
@@ -162,7 +172,53 @@ public:
     }
 private:
     struct Voice { bool active = false; int key = 0, stage = 0; double current = 60, target = 60, glideRate = 1, age = 0;
-                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0; };
+                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
+                   std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
+                   uint32_t rng = 0x9e3779b9u; };
+    static float nextNoise (Voice& v)
+    {
+        v.rng = v.rng * 1664525u + 1013904223u;
+        return (float) (v.rng >> 8) * (1.0f / 8388608.0f) - 1.0f;
+    }
+    float voiceOsc (Voice& v, float dt)
+    {
+        constexpr float tp = juce::MathConstants<float>::twoPi;
+        const double t = v.age / sampleRate;
+        switch (p.wave)
+        {
+            case 5: // supersaw: 7 detuned saws
+            {
+                static constexpr float spread[6] { -1.0f, -0.62f, -0.3f, 0.3f, 0.62f, 1.0f };
+                const float amt = 0.004f + p.detune * 0.03f;
+                float s = 2.0f * v.ph1 - 1.0f - blep (v.ph1, dt);
+                for (size_t k = 0; k < 6; ++k)
+                {
+                    const float d = dt * (1.0f + spread[k] * amt);
+                    float& ph = v.sx[k];
+                    s += 0.7f * (2.0f * ph - 1.0f - blep (ph, d));
+                    ph += d; if (ph >= 1.0f) ph -= 1.0f;
+                }
+                return s * 0.3f;
+            }
+            case 6: // 2-op FM, index decays like a struck tine / bell
+            {
+                const float idx = p.fmIndex * (0.25f + 0.75f * (float) std::exp (-t * 2.5));
+                const float m = std::sin (tp * v.fmPh);
+                v.fmPh += dt * p.fmRatio; v.fmPh -= std::floor (v.fmPh);
+                return std::sin (tp * v.ph1 + idx * m);
+            }
+            case 7: // morphing wavetable swept by the LFO
+            {
+                const float m = juce::jlimit (0.0f, 1.0f, p.morph + 0.35f * std::sin (tp * (float) (p.lfoRate * t))) * 3.0f;
+                const float w[4] { std::sin (tp * v.ph1), 4.0f * std::abs (v.ph1 - 0.5f) - 1.0f,
+                                   2.0f * v.ph1 - 1.0f - blep (v.ph1, dt), v.ph1 < 0.5f ? 1.0f : -1.0f };
+                const int i0 = juce::jmin (2, (int) m);
+                return w[i0] + (w[i0 + 1] - w[i0]) * (m - (float) i0);
+            }
+            default: // air: noise over a sine body
+                return 0.5f * std::sin (tp * v.ph1) + 0.5f * nextNoise (v);
+        }
+    }
     static inline float blep (float t, float dt)
     {
         if (t < dt) { t /= dt; return t + t - t * t - 1.0f; }
@@ -216,5 +272,76 @@ SharedSample loadSampleFile (const juce::File& f, double targetRate)
         li.process (ratio, raw.getReadPointer (ch), res.getWritePointer (ch), outLen);
     }
     return std::make_shared<const juce::AudioBuffer<float>> (std::move (res));
+}
+
+static juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor)
+{
+    const int N = 2048, hopOut = N / 4, inLen = in.getNumSamples(), nch = in.getNumChannels();
+    const double hopIn = hopOut / factor;
+    const int outLen = juce::jmax (1, (int) (inLen * factor));
+    juce::AudioBuffer<float> out (nch, outLen + N); out.clear();
+    std::vector<float> win ((size_t) N), norm ((size_t) (outLen + N), 0.0f);
+    for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) N);
+    for (int frame = 0;; ++frame)
+    {
+        const int o = frame * hopOut;
+        if (o >= outLen) break;
+        const int ip = (int) (frame * hopIn);
+        for (int i = 0; i < N && ip + i < inLen; ++i)
+        {
+            for (int ch = 0; ch < nch; ++ch) out.addSample (ch, o + i, in.getSample (ch, ip + i) * win[(size_t) i]);
+            norm[(size_t) (o + i)] += win[(size_t) i];
+        }
+    }
+    for (int i = 0; i < outLen; ++i)
+        if (norm[(size_t) i] > 1.0e-3f) for (int ch = 0; ch < nch; ++ch) out.setSample (ch, i, out.getSample (ch, i) / norm[(size_t) i]);
+    out.setSize (nch, outLen, true);
+    return out;
+}
+
+SharedSample processSample (SharedSample src, const Channel& c, double sr)
+{
+    if (! src || src->getNumSamples() == 0) return src;
+    const bool stretch = c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f);
+    if (! (c.smpNormalize || c.smpReverse || c.smpInvert || c.smpDeclick || c.smpTrim || c.smpBoostDb != 0.0f
+           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || stretch))
+        return src;
+    juce::AudioBuffer<float> b (*src);
+    const int nch = b.getNumChannels();
+    if (c.smpTrim)
+    {
+        const float thr = juce::Decibels::decibelsToGain (-60.0f);
+        auto loud = [&] (int i) { for (int ch = 0; ch < nch; ++ch) if (std::abs (b.getSample (ch, i)) > thr) return true; return false; };
+        int s0 = 0, s1 = b.getNumSamples() - 1;
+        while (s0 < s1 && ! loud (s0)) ++s0;
+        while (s1 > s0 && ! loud (s1)) --s1;
+        juce::AudioBuffer<float> t (nch, s1 - s0 + 1);
+        for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, s0, t.getNumSamples());
+        b = std::move (t);
+    }
+    if (c.smpReverse) b.reverse (0, b.getNumSamples());
+    float gain = juce::Decibels::decibelsToGain (c.smpBoostDb) * (c.smpInvert ? -1.0f : 1.0f);
+    if (c.smpNormalize)
+    {
+        float peak = 0.0f;
+        for (int ch = 0; ch < nch; ++ch) peak = juce::jmax (peak, b.getMagnitude (ch, 0, b.getNumSamples()));
+        if (peak > 1.0e-6f) gain *= 0.98f / peak;
+    }
+    b.applyGain (gain);
+    if (stretch)
+    {
+        const double ratio = std::pow (2.0, c.pitch / 12.0);
+        auto st = olaStretch (b, juce::jlimit (0.05, 20.0, (double) c.stretchTime * ratio));
+        const int outLen = juce::jmax (1, (int) (st.getNumSamples() / ratio));
+        juce::AudioBuffer<float> res (nch, outLen);
+        for (int ch = 0; ch < nch; ++ch) { juce::LagrangeInterpolator li; li.process (ratio, st.getReadPointer (ch), res.getWritePointer (ch), outLen); }
+        b = std::move (res);
+    }
+    const int n = b.getNumSamples();
+    const int fi = juce::jmax (c.smpDeclick ? (int) (0.002 * sr) : 0, (int) (c.smpFadeIn * sr));
+    const int fo = juce::jmax (c.smpDeclick ? (int) (0.002 * sr) : 0, (int) (c.smpFadeOut * sr));
+    if (fi > 0) b.applyGainRamp (0, juce::jmin (fi, n), 0.0f, 1.0f);
+    if (fo > 0) { const int len = juce::jmin (fo, n); b.applyGainRamp (n - len, len, 1.0f, 0.0f); }
+    return std::make_shared<const juce::AudioBuffer<float>> (std::move (b));
 }
 }

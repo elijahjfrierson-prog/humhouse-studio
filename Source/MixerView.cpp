@@ -80,6 +80,7 @@ struct Strip : public juce::Component
         {
             g.setColour (col::accent2); g.drawText ("FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
         }
+        paintScope (g);
         // meter
         auto m = meterArea();
         g.setColour (col::bg); g.fillRect (m);
@@ -93,12 +94,35 @@ struct Strip : public juce::Component
             g.drawText (juce::String ((int) p.mixer[(size_t) index].fx.size()) + " FX", 0, getHeight() - 58, getWidth(), 12, juce::Justification::centred);
         }
     }
-    juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 64, 8, getHeight() - 64 - 96 }; }
+    juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 96, 8, getHeight() - 96 - 96 }; }
+    juce::Rectangle<int> scopeArea;
+    void paintScope (juce::Graphics& g)
+    {
+        auto a = scopeArea.toFloat();
+        g.setColour (col::bg); g.fillRoundedRectangle (a, 3);
+        auto* tap = s.engine.trackScope (index);
+        if (tap == nullptr || a.getWidth() < 8) return;
+        float buf[512];
+        tap->read (buf, 512, tap->pos.load (std::memory_order_acquire));
+        juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
+        for (int i = 0; i < 512; ++i)
+        {
+            const float x = a.getX() + a.getWidth() * (float) i / 511.0f, y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
+            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+        }
+        g.setColour (col::accent.withAlpha (0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
+        g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (scopeArea.contains (e.getPosition())) openTrackScopeWindow (s, index);
+    }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4);
         r.removeFromTop (28);
         pan.setBounds (r.removeFromTop (32).withSizeKeepingCentre (32, 32));
+        scopeArea = r.removeFromTop (28).reduced (0, 2);
         auto bottom = r.removeFromBottom (90);
         fader.setBounds (r.withTrimmedRight (14));
         auto ms = bottom.removeFromTop (22);
@@ -120,6 +144,7 @@ struct Strip : public juce::Component
             m.addItem (3, "Export this insert as a stem...");
             m.addSeparator();
             m.addItem (4, "Clear all FX");
+            m.addSubMenu ("Presets", trackPresetMenu (s, index));
             m.showMenuAsync ({}, [this] (int r) {
                 if (r == 1)
                 {
@@ -136,7 +161,7 @@ struct Strip : public juce::Component
     {
         const float pk = s.engine.trackPeak (index);
         level = juce::jmax (pk, level * 0.85f);
-        repaint (meterArea());
+        repaint (meterArea()); repaint (scopeArea);
     }
     Studio& s; int index; float level = 0;
     juce::Slider fader;
@@ -203,7 +228,7 @@ public:
         auto& p = s.p();
         if (p.mixer.empty()) return;
         auto& t = p.mixer[(size_t) track()];
-        title.setText ((track() == 0 ? juce::String ("Master") : "Insert " + juce::String (track()) + " - " + t.name), juce::dontSendNotification);
+        title.setText ((track() == 0 ? juce::String ("Master") : t.name), juce::dontSendNotification);
         const auto& infos = builtinEffects();
         for (int i = 0; i < maxSlots; ++i)
         {
@@ -315,6 +340,46 @@ private:
     }
 };
 
+// FL-style routing cables drawn over the strips: every insert -> each target it feeds
+class WireOverlay : public juce::Component
+{
+public:
+    WireOverlay (Studio& st, int w) : s (st), stripW (w) { setInterceptsMouseClicks (false, false); }
+    void paint (juce::Graphics& g) override
+    {
+        auto& p = s.p();
+        const float y0 = (float) getHeight() - 10.0f;
+        auto x = [this] (int i) { return (float) i * (float) stripW + (float) stripW * 0.5f; };
+        for (size_t i = 1; i < p.mixer.size(); ++i)
+        {
+            auto& t = p.mixer[i];
+            std::vector<std::pair<int, float>> targets;
+            for (auto& sd : t.sends) targets.push_back ({ sd.target, sd.level });
+            if (t.routesToMaster && t.sends.empty()) targets.push_back ({ 0, 1.0f });
+            else if (t.routesToMaster) targets.push_back ({ 0, 1.0f });
+            const bool hot = (int) i == s.selectedTrack;
+            for (auto [tg, lvl] : targets)
+            {
+                if (tg < 0 || tg >= (int) p.mixer.size() || tg == (int) i) continue;
+                const float xa = x ((int) i), xb = x (tg);
+                const float sag = 18.0f + std::abs (xb - xa) * 0.12f;
+                juce::Path cable;
+                cable.startNewSubPath (xa, y0);
+                cable.cubicTo (xa, y0 - sag, xb, y0 - sag, xb, y0);
+                auto c = tg == 0 ? col::dim : col::accent;
+                g.setColour (c.withAlpha (hot ? 0.95f : 0.35f + 0.3f * juce::jlimit (0.0f, 1.0f, lvl)));
+                g.strokePath (cable, juce::PathStrokeType (hot ? 2.4f : 1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+                g.fillEllipse (xb - 3.0f, y0 - 3.0f, 6.0f, 6.0f);
+            }
+            g.setColour (col::text.withAlpha (0.6f));
+            g.fillEllipse (x ((int) i) - 2.5f, y0 - 2.5f, 5.0f, 5.0f);
+        }
+    }
+private:
+    Studio& s;
+    int stripW;
+};
+
 class MixerView : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
@@ -326,7 +391,7 @@ public:
         addAndMakeVisible (viewport);
         addAndMakeVisible (fx);
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
-        addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Insert " + juce::String (p.mixer.size())); }); };
+        addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Track " + juce::String (p.mixer.size())); }); };
         addAndMakeVisible (addBtn);
         refresh();
         startTimerHz (25);
@@ -341,6 +406,8 @@ public:
         viewport.setBounds (r);
         holder.setSize ((int) strips.size() * stripW, juce::jmax (300, r.getHeight() - viewport.getScrollBarThickness()));
         for (size_t i = 0; i < strips.size(); ++i) strips[i]->setBounds ((int) i * stripW, 0, stripW, holder.getHeight());
+        wires.setBounds (holder.getLocalBounds());
+        wires.toFront (false);
     }
 
 private:
@@ -350,6 +417,7 @@ private:
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
     juce::TextButton addBtn;
+    WireOverlay wires { s, stripW };
 
     void refresh()
     {
@@ -361,6 +429,9 @@ private:
             resized();
         }
         for (auto& st : strips) st->refresh();
+        if (wires.getParentComponent() == nullptr) holder.addAndMakeVisible (wires);
+        wires.toFront (false);
+        wires.repaint();
         fx.refresh();
     }
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }

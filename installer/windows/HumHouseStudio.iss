@@ -1,7 +1,7 @@
 ; Produces HumHouse-Studio-Windows-Setup.exe: shows the EULA (must be accepted), then installs
 ; HumHouse Studio into Program Files with Start-menu and optional desktop shortcuts.
 #define MyAppName "HumHouse Studio"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "HumHouse"
 #define MyAppURL "https://github.com/elijahjfrierson-prog/humhouse-studio"
 #define MyAppExeName "HumHouse Studio.exe"
@@ -22,9 +22,13 @@ OutputBaseFilename=HumHouse-Studio-Windows-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\..\assets\humhouse.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 ArchitecturesAllowed=x64compatible
 PrivilegesRequired=admin
+CloseApplications=force
+RestartApplications=no
+UsePreviousAppDir=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 

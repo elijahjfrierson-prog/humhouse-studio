@@ -4,7 +4,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.2.0}"
 BUNDLE_ID="com.humhouse.studio.installer"
 PKG_OUT="${PKG_OUT:-HumHouse-Studio-macOS.pkg}"
 NAME="HumHouse Studio"
@@ -19,6 +19,9 @@ codesign --force --deep --sign "${APPLE_DEVELOPER_ID:--}" "$ROOT/$NAME.app" || t
 
 cat > "$STAGE/scripts/preinstall" <<PRE
 #!/bin/sh
+# the new version replaces the old one: quit it if running, then remove the old bundle
+pkill -x "$NAME" 2>/dev/null || true
+sleep 1
 rm -rf "/Applications/$NAME.app" 2>/dev/null || true
 exit 0
 PRE

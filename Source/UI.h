@@ -9,15 +9,54 @@ namespace hhs
 {
 namespace col
 {
-    const juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
+    // mutable so the theme color wheel can recolor the whole DAW
+    inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
         gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xffff8a3d), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+}
+
+// FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
+inline bool& typingKeyboard() { static bool on = false; return on; }
+inline int typingKeyOffset (int keyCode)
+{
+    static const juce::String lo ("zsxdcvgbhnjm,"), hi ("q2w3er5t6y7ui");
+    const auto c = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) keyCode);
+    int i = lo.indexOfChar (c);
+    if (i >= 0) return i;
+    i = hi.indexOfChar (c);
+    return i >= 0 ? 12 + i : -1;
+}
+inline bool isTypingNoteKey (const juce::KeyPress& k)
+{
+    return typingKeyboard() && ! k.getModifiers().isCommandDown() && ! k.getModifiers().isAltDown()
+           && ! k.getModifiers().isCtrlDown() && typingKeyOffset (k.getKeyCode()) >= 0;
+}
+
+// 0 = Tattoo (Pirata One), 1 = Flash (Rye), 2 = Clean; remembered between launches
+int& fontStyle();
+void setFontStyle (int);
+void showWhatsNewIfUpdated();
+
+// OBS / Discord capture: JUCE 8 Direct2D windows can capture black on Windows, so use the software renderer
+inline void makeCaptureFriendly (juce::Component& c)
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = c.getPeer())
+    {
+        const int i = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
+        if (i >= 0) peer->setCurrentRenderingEngine (i);
+    }
+   #else
+    juce::ignoreUnused (c);
+   #endif
 }
 
 class HHLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     HHLookAndFeel();
+    juce::Typeface::Ptr getTypefaceForFont (const juce::Font&) override;
+    void refreshColours();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
@@ -43,6 +82,8 @@ struct Studio : public juce::ChangeBroadcaster
     UndoHistory undo;
     juce::PropertiesFile* settings = nullptr;
     int selectedChannel = -1, selectedTrack = 1;
+    juce::SortedSet<int> selectedLanes;   // highlighted playlist tracks (click / Shift / Ctrl-Cmd)
+    int laneAnchor = -1;
     bool dirty = false;
     std::function<void (int view)> showView;   // 0 beat, 1 record, 2 mix
 
@@ -72,8 +113,18 @@ void addEffect (Studio&, int track, const juce::String& type, const juce::String
 void showPluginScanner (Studio&);
 
 void openEffectEditor (Studio&, int track, int slotUid);
+juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Presets on tracks / inserts
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
+juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);
+void openScopeWindow (Studio&);
+void openTrackScopeWindow (Studio&, int track);   // master scope, pops out + resizable
+void closeEditorsForPlugin (juce::AudioProcessor*);
+
+void applyTheme (juce::Colour accent, float tint);   // tint 0..1 = how much the accent colors the background
+void resetTheme();
+void showThemeDialog (Studio&);
+void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 
 enum class Tool { Arp, Strum, Chop, Flam, Quantize, Randomize, Limit, Articulate, ScaleLevels, Flip, Claw, Lfo };
 void showToolDialog (Studio&, Tool, int channelId);
