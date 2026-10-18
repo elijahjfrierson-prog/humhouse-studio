@@ -14,7 +14,7 @@ public:
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
-        rootKey = c.rootKey; pitch = c.pitch; glide = c.glide; mono = c.mono;
+        rootKey = c.rootKey; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
         oneShot = c.oneShot; cutItself = c.cutItself; attack = c.ampAttack; hold = c.ampHold; release = c.ampRelease;
     }
     void noteOn (int key, float vel, bool slide) override
@@ -223,5 +223,76 @@ SharedSample loadSampleFile (const juce::File& f, double targetRate)
         li.process (ratio, raw.getReadPointer (ch), res.getWritePointer (ch), outLen);
     }
     return std::make_shared<const juce::AudioBuffer<float>> (std::move (res));
+}
+
+static juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor)
+{
+    const int N = 2048, hopOut = N / 4, inLen = in.getNumSamples(), nch = in.getNumChannels();
+    const double hopIn = hopOut / factor;
+    const int outLen = juce::jmax (1, (int) (inLen * factor));
+    juce::AudioBuffer<float> out (nch, outLen + N); out.clear();
+    std::vector<float> win ((size_t) N), norm ((size_t) (outLen + N), 0.0f);
+    for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) N);
+    for (int frame = 0;; ++frame)
+    {
+        const int o = frame * hopOut;
+        if (o >= outLen) break;
+        const int ip = (int) (frame * hopIn);
+        for (int i = 0; i < N && ip + i < inLen; ++i)
+        {
+            for (int ch = 0; ch < nch; ++ch) out.addSample (ch, o + i, in.getSample (ch, ip + i) * win[(size_t) i]);
+            norm[(size_t) (o + i)] += win[(size_t) i];
+        }
+    }
+    for (int i = 0; i < outLen; ++i)
+        if (norm[(size_t) i] > 1.0e-3f) for (int ch = 0; ch < nch; ++ch) out.setSample (ch, i, out.getSample (ch, i) / norm[(size_t) i]);
+    out.setSize (nch, outLen, true);
+    return out;
+}
+
+SharedSample processSample (SharedSample src, const Channel& c, double sr)
+{
+    if (! src || src->getNumSamples() == 0) return src;
+    const bool stretch = c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f);
+    if (! (c.smpNormalize || c.smpReverse || c.smpInvert || c.smpDeclick || c.smpTrim || c.smpBoostDb != 0.0f
+           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || stretch))
+        return src;
+    juce::AudioBuffer<float> b (*src);
+    const int nch = b.getNumChannels();
+    if (c.smpTrim)
+    {
+        const float thr = juce::Decibels::decibelsToGain (-60.0f);
+        auto loud = [&] (int i) { for (int ch = 0; ch < nch; ++ch) if (std::abs (b.getSample (ch, i)) > thr) return true; return false; };
+        int s0 = 0, s1 = b.getNumSamples() - 1;
+        while (s0 < s1 && ! loud (s0)) ++s0;
+        while (s1 > s0 && ! loud (s1)) --s1;
+        juce::AudioBuffer<float> t (nch, s1 - s0 + 1);
+        for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, s0, t.getNumSamples());
+        b = std::move (t);
+    }
+    if (c.smpReverse) b.reverse (0, b.getNumSamples());
+    float gain = juce::Decibels::decibelsToGain (c.smpBoostDb) * (c.smpInvert ? -1.0f : 1.0f);
+    if (c.smpNormalize)
+    {
+        float peak = 0.0f;
+        for (int ch = 0; ch < nch; ++ch) peak = juce::jmax (peak, b.getMagnitude (ch, 0, b.getNumSamples()));
+        if (peak > 1.0e-6f) gain *= 0.98f / peak;
+    }
+    b.applyGain (gain);
+    if (stretch)
+    {
+        const double ratio = std::pow (2.0, c.pitch / 12.0);
+        auto st = olaStretch (b, juce::jlimit (0.05, 20.0, (double) c.stretchTime * ratio));
+        const int outLen = juce::jmax (1, (int) (st.getNumSamples() / ratio));
+        juce::AudioBuffer<float> res (nch, outLen);
+        for (int ch = 0; ch < nch; ++ch) { juce::LagrangeInterpolator li; li.process (ratio, st.getReadPointer (ch), res.getWritePointer (ch), outLen); }
+        b = std::move (res);
+    }
+    const int n = b.getNumSamples();
+    const int fi = juce::jmax (c.smpDeclick ? (int) (0.002 * sr) : 0, (int) (c.smpFadeIn * sr));
+    const int fo = juce::jmax (c.smpDeclick ? (int) (0.002 * sr) : 0, (int) (c.smpFadeOut * sr));
+    if (fi > 0) b.applyGainRamp (0, juce::jmin (fi, n), 0.0f, 1.0f);
+    if (fo > 0) { const int len = juce::jmin (fo, n); b.applyGainRamp (n - len, len, 1.0f, 0.0f); }
+    return std::make_shared<const juce::AudioBuffer<float>> (std::move (b));
 }
 }

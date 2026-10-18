@@ -226,6 +226,22 @@ void openEffectEditor (Studio& s, int track, int slotUid)
                                                    [&s, track, slotUid] { return findSlot (s, track, slotUid) != nullptr; }));
 }
 
+
+// FL-style channel settings: SMP / INS / FUNC pages (the "wrench" panel)
+struct ChannelTabs : juce::Component
+{
+    juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
+    int w = 360, h = 200;
+    ChannelTabs() { tabs.setTabBarDepth (28); tabs.setOutline (0); addAndMakeVisible (tabs); }
+    void add (const juce::String& name, juce::Component* page)
+    {
+        w = juce::jmax (w, page->getWidth()); h = juce::jmax (h, page->getHeight());
+        tabs.addTab (name, col::panel, page, true);
+    }
+    void finish() { setSize (w, h + tabs.getTabBarDepth()); tabs.setCurrentTabIndex (0); }
+    void resized() override { tabs.setBounds (getLocalBounds()); }
+};
+
 void openChannelEditor (Studio& s, int channelId)
 {
     auto* ch = s.channel (channelId);
@@ -247,38 +263,54 @@ void openChannelEditor (Studio& s, int channelId)
         EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
         return;
     }
-    std::vector<ParamGrid::P> ps;
-    ps.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
-    ps.push_back ({ "pan", "Pan", -1, 1, 0, ch->pan, {} });
-    ps.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
-    ps.push_back ({ "glide", "Glide (s)", 0, 1, 0, ch->glide, {} });
-    ps.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
-    ps.push_back ({ "root", "Step note", 24, 96, 60, (float) ch->rootKey, {} });
-    if (ch->type == ChannelType::Sampler)
+    const bool sampler = ch->type == ChannelType::Sampler;
+    std::vector<ParamGrid::P> smp, ins, func;
+    if (sampler)
     {
-        ps.push_back ({ "oneShot", "Mode", 0, 1, 1, ch->oneShot ? 1.0f : 0.0f, { "Gated (note length)", "One-shot" } });
-        ps.push_back ({ "cutSelf", "Cut itself", 0, 1, 0, ch->cutItself ? 1.0f : 0.0f, { "Off", "On (808s never overlap)" } });
-        ps.push_back ({ "cutGroup", "Cut group", 0, 8, 0, (float) ch->cutGroup, { "None", "1", "2", "3", "4", "5", "6", "7", "8" } });
-        ps.push_back ({ "ampA", "Attack (s)", 0, 0.5f, 0, ch->ampAttack, {} });
-        ps.push_back ({ "ampH", "Hold (s, 0=all)", 0, 4, 0, ch->ampHold, {} });
-        ps.push_back ({ "ampR", "Release (s)", 0.002f, 2, 0.01f, ch->ampRelease, {} });
+        smp.push_back ({ "smpNorm", "Normalize", 0, 1, 0, ch->smpNormalize ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpBoost", "Boost (dB)", -24, 24, 0, ch->smpBoostDb, {} });
+        smp.push_back ({ "smpRev", "Reverse", 0, 1, 0, ch->smpReverse ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpInv", "Polarity", 0, 1, 0, ch->smpInvert ? 1.0f : 0.0f, { "Normal", "Inverted" } });
+        smp.push_back ({ "smpDeclick", "Declick", 0, 1, 1, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpTrim", "Trim silence", 0, 1, 0, ch->smpTrim ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpFadeIn", "Fade in (s)", 0, 2, 0, ch->smpFadeIn, {} });
+        smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
+        smp.push_back ({ "stretchMode", "Time mode", 0, 2, 0, (float) ch->stretchMode, { "Resample", "Stretch", "Stretch X" } });
+        smp.push_back ({ "stretchTime", "Time mul", 0.25f, 4, 1, ch->stretchTime, {} });
+        smp.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
+        smp.push_back ({ "root", "Root / step note", 24, 96, 60, (float) ch->rootKey, {} });
     }
-    if (ch->type == ChannelType::Synth)
+    ins.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+    ins.push_back ({ "pan", "Pan", -1, 1, 0, ch->pan, {} });
+    if (sampler)
+    {
+        ins.push_back ({ "oneShot", "Mode", 0, 1, 1, ch->oneShot ? 1.0f : 0.0f, { "Gated (note length)", "One-shot" } });
+        ins.push_back ({ "cutSelf", "Cut itself", 0, 1, 0, ch->cutItself ? 1.0f : 0.0f, { "Off", "On (808s never overlap)" } });
+        ins.push_back ({ "cutGroup", "Cut group", 0, 8, 0, (float) ch->cutGroup, { "None", "1", "2", "3", "4", "5", "6", "7", "8" } });
+        ins.push_back ({ "ampA", "Attack (s)", 0, 0.5f, 0, ch->ampAttack, {} });
+        ins.push_back ({ "ampH", "Hold (s, 0=all)", 0, 4, 0, ch->ampHold, {} });
+        ins.push_back ({ "ampR", "Release (s)", 0.002f, 2, 0.01f, ch->ampRelease, {} });
+    }
+    else
     {
         auto& sp = ch->synth;
-        ps.push_back ({ "wave", "Wave", 0, 4, 0, (float) sp.wave, { "Saw", "Square", "Sine", "Triangle", "808" } });
-        ps.push_back ({ "attack", "Attack", 0.001f, 2, 0.002f, sp.attack, {} });
-        ps.push_back ({ "decay", "Decay", 0.01f, 4, 0.3f, sp.decay, {} });
-        ps.push_back ({ "sustain", "Sustain", 0, 1, 0.7f, sp.sustain, {} });
-        ps.push_back ({ "release", "Release", 0.01f, 4, 0.25f, sp.release, {} });
-        ps.push_back ({ "cutoff", "Cutoff", 40, 20000, 12000, sp.cutoff, {} });
-        ps.push_back ({ "res", "Resonance", 0, 1, 0.2f, sp.resonance, {} });
-        ps.push_back ({ "detune", "Detune", 0, 1, 0, sp.detune, {} });
-        ps.push_back ({ "unison", "Unison", 1, 7, 1, (float) sp.unison, {} });
-        ps.push_back ({ "drive", "Drive", 0, 1, 0, sp.drive, {} });
+        ins.push_back ({ "wave", "Wave", 0, 4, 0, (float) sp.wave, { "Saw", "Square", "Sine", "Triangle", "808" } });
+        ins.push_back ({ "attack", "Attack", 0.001f, 2, 0.002f, sp.attack, {} });
+        ins.push_back ({ "decay", "Decay", 0.01f, 4, 0.3f, sp.decay, {} });
+        ins.push_back ({ "sustain", "Sustain", 0, 1, 0.7f, sp.sustain, {} });
+        ins.push_back ({ "release", "Release", 0.01f, 4, 0.25f, sp.release, {} });
+        ins.push_back ({ "cutoff", "Cutoff", 40, 20000, 12000, sp.cutoff, {} });
+        ins.push_back ({ "res", "Resonance", 0, 1, 0.2f, sp.resonance, {} });
+        ins.push_back ({ "detune", "Detune", 0, 1, 0, sp.detune, {} });
+        ins.push_back ({ "unison", "Unison", 1, 7, 1, (float) sp.unison, {} });
+        ins.push_back ({ "drive", "Drive", 0, 1, 0, sp.drive, {} });
+        func.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
+        func.push_back ({ "root", "Step note", 24, 96, 60, (float) ch->rootKey, {} });
     }
-    auto* grid = new ParamGrid (ch->name + (ch->type == ChannelType::Synth ? "  |  Synth" : "  |  Sampler"), ps,
-        [&s, channelId] (const juce::String& id, float v) {
+    func.push_back ({ "glide", "Portamento / glide (s)", 0, 1, 0, ch->glide, {} });
+    func.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
+
+    auto setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
                 auto* c = s.channel (channelId);
                 if (c == nullptr) return;
@@ -292,10 +324,21 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "oneShot") c->oneShot = v > 0.5f; else if (id == "cutSelf") c->cutItself = v > 0.5f;
                 else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
                 else if (id == "ampH") c->ampHold = v; else if (id == "ampR") c->ampRelease = v;
+                else if (id == "smpNorm") c->smpNormalize = v > 0.5f; else if (id == "smpBoost") c->smpBoostDb = v;
+                else if (id == "smpRev") c->smpReverse = v > 0.5f; else if (id == "smpInv") c->smpInvert = v > 0.5f;
+                else if (id == "smpDeclick") c->smpDeclick = v > 0.5f; else if (id == "smpTrim") c->smpTrim = v > 0.5f;
+                else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
+                else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
             });
-        },
-        [&s] { s.commit ("Channel settings"); }, ch->type == ChannelType::Synth ? "Synth" : "Sampler");
-    EditorWindow::windows().add (new EditorWindow (ch->name, grid, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
+        };
+    auto commit = [&s] { s.commit ("Channel settings"); };
+    const juce::String kind = sampler ? "Sampler" : "Synth";
+    auto* tabs = new ChannelTabs();
+    if (sampler) tabs->add ("SMP", new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP"));
+    tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
+    tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
+    tabs->finish();
+    EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }

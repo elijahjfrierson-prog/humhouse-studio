@@ -219,7 +219,10 @@ struct Engine::ClipRuntime
 
 static juce::String channelSignature (const Channel& c)
 {
-    return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId;
+    return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
+         + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
+         + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
+         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f);
 }
 
 // =============================================================== engine
@@ -326,7 +329,7 @@ void Engine::sync()
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
                 if (c == sampleCache.end()) c = sampleCache.emplace (key, loadSampleFile (ch.sampleFile, sampleRate)).first;
-                s = c->second;
+                s = processSample (c->second, ch, sampleRate);
             }
             rt->inst = createInstrument (ch, s, sampleRate);
         }
