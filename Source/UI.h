@@ -37,10 +37,17 @@ int& fontStyle();
 void setFontStyle (int);
 void showWhatsNewIfUpdated();
 
+inline constexpr int kNumSnaps = 11;
+inline const double kSnapValues[kNumSnaps] { 0.0, 1.0 / 24, 1.0 / 16, 1.0 / 12, 0.125, 0.25, 1.0 / 6, 1.0 / 3, 0.5, 1.0, 4.0 };
+inline const char* const kSnapNames[kNumSnaps] { "(none)", "1/6 step", "1/4 step", "1/3 step", "1/2 step", "Step", "1/6 beat", "1/3 beat", "1/2 beat", "Beat", "Bar" };
+
+bool& captureFriendlyDrawing();   // Options > OBS / Discord capture-friendly drawing (Windows)
+
 // OBS / Discord capture: JUCE 8 Direct2D windows can capture black on Windows, so use the software renderer
 inline void makeCaptureFriendly (juce::Component& c)
 {
    #if JUCE_WINDOWS
+    if (! captureFriendlyDrawing()) return;
     if (auto* peer = c.getPeer())
     {
         const int i = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");

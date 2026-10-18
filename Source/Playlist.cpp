@@ -222,6 +222,11 @@ public:
             setupButton (groupBtn, "GROUP", "Group the selected clips so they select and move together (Ctrl/Cmd+G, ungroup Ctrl/Cmd+Shift+G)");
             groupBtn.onClick = [this] { groupSelected (true); };
             addAndMakeVisible (groupBtn);
+            for (int i = 0; i < kNumSnaps; ++i) snapBox.addItem (juce::String ("Snap: ") + kSnapNames[i], i + 1);
+            snapBox.setSelectedItemIndex (9, juce::dontSendNotification);
+            snapBox.setTooltip ("Playlist snap: (none) = free placement; 1/2, 1/3, 1/6 step or beat for meticulous edits (hold Alt while dragging to bypass)");
+            snapBox.onChange = [this] { plSnap = kSnapValues[juce::jmax (0, snapBox.getSelectedItemIndex())]; repaint(); };
+            addAndMakeVisible (snapBox);
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
@@ -257,7 +262,8 @@ public:
         t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
-        groupBtn.setBounds (t.removeFromLeft (60));
+        groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
+        snapBox.setBounds (t.removeFromLeft (120));
         layoutHeaders();
     }
 
@@ -286,12 +292,38 @@ public:
                 g.setColour (bar ? col::gridBar : col::grid);
                 g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
             }
+            if (plSnap > 0 && plSnap < 1.0 && plSnap * pxPerBeat >= 6)
+            {
+                g.setColour (col::grid.withAlpha (0.35f));
+                for (double b = std::floor (scrollX / plSnap) * plSnap; b <= b1; b += plSnap)
+                    if (std::abs (b - std::round (b)) > 1e-6) g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
+            }
             if (p.hasPunch())
             {
                 g.setColour (col::rec.withAlpha (0.07f));
                 g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
             }
-            for (auto& c : p.clips) if (! c.hidden) drawClip (g, c);
+            for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) drawClip (g, c);
+            // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
+            s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
+                if (lane < 0 || lane >= (int) p.lanes.size() || num <= 0) return;
+                const float y0 = (float) laneY (lane), h = (float) laneHOf (lane);
+                const float x0 = beatToX (startBeat), x1 = beatToX (startBeat + num * bpp);
+                juce::Rectangle<float> r (x0, y0 + 2.0f, juce::jmax (2.0f, x1 - x0), h - 4.0f);
+                g.setColour (col::rec.withAlpha (0.25f)); g.fillRoundedRectangle (r, 4);
+                g.setColour (col::rec); g.fillRoundedRectangle (r.withHeight (14), 4);
+                float mx = 0.02f;
+                for (int i = 0; i < num; ++i) mx = std::max (mx, pk[i]);
+                const float scale = juce::jlimit (1.0f, 10.0f, 0.8f / mx);
+                auto body = r.withTrimmedTop (14).reduced (1, 2);
+                const float mid = body.getCentreY(), half = body.getHeight() * 0.5f;
+                g.setColour (col::rec.brighter (0.5f));
+                for (int i = 0; i < num; ++i)
+                {
+                    const float a = std::min (1.0f, pk[i] * scale) * half;
+                    g.drawVerticalLine ((int) beatToX (startBeat + i * bpp), mid - a, mid + a);
+                }
+            });
             const float px = beatToX (s.engine.positionBeats());
             const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
             g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
@@ -333,6 +365,7 @@ public:
         lastMouse = e.getPosition();
         Part part; const int i = hitClip (e.position, part);
         setMouseCursor (i < 0 ? juce::MouseCursor::NormalCursor
+                        : part == Part::Curve ? juce::MouseCursor::UpDownResizeCursor
                         : part == Part::FadeIn || part == Part::FadeOut ? juce::MouseCursor::PointingHandCursor
                         : part == Part::Right || part == Part::Left ? juce::MouseCursor::LeftRightResizeCursor
                         : juce::MouseCursor::DraggingHandCursor);
@@ -408,7 +441,7 @@ public:
         });
         lastClipUid = p.clips[(size_t) i].uid;
         dragClip = i; dragOrig = p.clips;
-        drag = part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
+        drag = part == Part::Curve ? Drag::Curve : part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
              : part == Part::Left ? Drag::Trim : Drag::Move;
         repaint();
     }
@@ -427,16 +460,16 @@ public:
         if (drag == Drag::None || dragClip < 0 || dragOrig.size() != p.clips.size()) return;
         const bool noSnap = e.mods.isAltDown();
         double d = xToBeat (e.position.x) - xToBeat (dragStart.x);
-        if (! noSnap && drag != Drag::FadeIn && drag != Drag::FadeOut) d = std::round (d / gridSnap()) * gridSnap();
+        if (! noSnap && plSnap > 0 && drag != Drag::FadeIn && drag != Drag::FadeOut && drag != Drag::Curve) d = std::round (d / plSnap) * plSnap;
         const int dLane = drag == Drag::Move ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
         s.live ([&] (Project&) {
             for (size_t i = 0; i < p.clips.size(); ++i)
             {
                 auto o = dragOrig[i];
-                if (drag == Drag::FadeIn || drag == Drag::FadeOut)
+                if (drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve)
                 {
                     if ((int) i != dragClip) continue;
-                    if (e.mods.isAltDown()) o.fadeCurve = juce::jlimit (-1.0f, 1.0f, o.fadeCurve - (e.position.y - dragStart.y) / 80.0f);
+                    if (drag == Drag::Curve || e.mods.isAltDown()) o.fadeCurve = juce::jlimit (-2.0f, 2.0f, o.fadeCurve + (e.position.y - dragStart.y) / 50.0f);
                     else if (drag == Drag::FadeIn) o.fadeIn = juce::jlimit (0.0, o.length - o.fadeOut, o.fadeIn + d);
                     else o.fadeOut = juce::jlimit (0.0, o.length - o.fadeIn, o.fadeOut - d);
                 }
@@ -465,7 +498,7 @@ public:
         if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
         else if (changed)
         {
-            s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut ? "Fade" : "Edit clips", [&] (Project&) {
+            s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
                 // routing follows the recording: a moved audio clip keeps playing through the insert it came from
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
                     for (size_t i = 0; i < p.clips.size(); ++i)
@@ -507,6 +540,14 @@ public:
         });
     }
 
+    void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
+    {
+        if (e.position.x < headerW) return;
+        const double at = xToBeat (e.position.x);
+        pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * scale);
+        scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
+        repaint();
+    }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
@@ -515,10 +556,10 @@ public:
             layoutHeaders(); repaint();
             return;
         }
-        if (e.mods.isCommandDown())
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
             const double at = xToBeat (e.position.x);
-            pxPerBeat = juce::jlimit (2.0f, 400.0f, pxPerBeat * (w.deltaY > 0 ? 1.15f : 1.0f / 1.15f));
+            pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * std::pow (1.15f, juce::jlimit (-4.0f, 4.0f, w.deltaY * 8.0f)));
             scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
@@ -596,7 +637,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut };
+    enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut, Curve };
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -612,10 +653,20 @@ private:
             if (on && n < 2) for (auto& c : pr.clips) if (c.group == g) c.group = 0;
         });
     }
-    enum class Part { Body, Left, Right, FadeIn, FadeOut };
+    enum class Part { Body, Left, Right, FadeIn, FadeOut, Curve };
+    juce::Point<float> fadeHandle (const Clip& c, juce::Rectangle<float> r, bool in) const
+    {
+        const float len = (float) ((in ? c.fadeIn : c.fadeOut) * pxPerBeat);
+        const float gn = std::pow (0.5f, std::exp (c.fadeCurve));
+        return { in ? r.getX() + len * 0.5f : r.getRight() - len * 0.5f, r.getBottom() - gn * r.getHeight() };
+    }
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
     juce::TextButton addTrack, loopRec, rts, preroll, clearPunch;
+    juce::ComboBox snapBox;
+    double plSnap = 1.0;
+    float lastPx = -1.0f;
+    bool wasPlaying = false;
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
@@ -656,7 +707,7 @@ private:
         while (g * pxPerBeat > 80 && g > p.snap && g > 0.0625) g *= 0.5;
         return g;
     }
-    double snap (double b) const { const double g = gridSnap(); return std::round (b / g) * g; }
+    double snap (double b) const { return plSnap > 0 ? std::round (b / plSnap) * plSnap : b; }
     double beatsFromSeconds (double secs) const { return secondsToBeats (secs, const_cast<Studio&> (s).p().bpm); }
     juce::Rectangle<float> clipRect (const Clip& c) const
     {
@@ -672,6 +723,11 @@ private:
             if (c.hidden) continue;
             auto r = clipRect (c);
             if (! r.contains (pt)) continue;
+            if (c.isAudio())
+            {
+                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
+                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
+            }
             if (c.isAudio() && pt.y < r.getY() + 12)
             {
                 const float fi = r.getX() + (float) (c.fadeIn * pxPerBeat), fo = r.getRight() - (float) (c.fadeOut * pxPerBeat);
@@ -711,19 +767,31 @@ private:
             {
                 const double secs = beatsToSeconds (c.length, p.bpm);
                 g.setColour (colour.brighter (0.4f));
-                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain);
+                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, t->getApproximatePeak())));   // quiet takes stay visible
             }
             // fades
             const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);
             g.setColour (juce::Colours::black.withAlpha (0.45f));
-            juce::Path pin, pout;
-            const float bend = c.fadeCurve * 0.5f;
-            pin.startNewSubPath (r.getX(), r.getBottom()); pin.quadraticTo (r.getX() + fi * (0.5f - bend), r.getY() + r.getHeight() * (0.5f + bend), r.getX() + fi, r.getY());
-            pin.lineTo (r.getX(), r.getY()); pin.closeSubPath();
-            pout.startNewSubPath (r.getRight(), r.getBottom()); pout.quadraticTo (r.getRight() - fo * (0.5f - bend), r.getY() + r.getHeight() * (0.5f + bend), r.getRight() - fo, r.getY());
-            pout.lineTo (r.getRight(), r.getY()); pout.closeSubPath();
-            if (fi > 1) g.fillPath (pin);
-            if (fo > 1) g.fillPath (pout);
+            const float ex = std::exp (c.fadeCurve);
+            auto fadeShape = [&] (bool in, float len, juce::Path& line) {
+                juce::Path pth; const float x0 = in ? r.getX() : r.getRight();
+                pth.startNewSubPath (x0, r.getY());
+                for (int k = 0; k <= 24; ++k)
+                {
+                    const float t = (float) k / 24.0f, x = in ? x0 + t * len : x0 - t * len, y = r.getBottom() - std::pow (t, ex) * r.getHeight();
+                    pth.lineTo (x, y);
+                    if (k == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
+                }
+                pth.closeSubPath(); return pth; };
+            for (int side = 0; side < 2; ++side)
+            {
+                const bool in = side == 0; const float len = in ? fi : fo;
+                if (len <= 1) continue;
+                juce::Path line; auto shape = fadeShape (in, len, line);
+                g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillPath (shape);
+                g.setColour (col::text.withAlpha (0.7f)); g.strokePath (line, juce::PathStrokeType (1.2f));
+                if (len > 10) { auto h = fadeHandle (c, r, in); g.setColour (col::accent2); g.fillEllipse (h.x - 4, h.y - 4, 8, 8); g.setColour (col::text); g.drawEllipse (h.x - 4, h.y - 4, 8, 8, 1.0f); }
+            }
             g.setColour (col::text);
             g.fillRect (r.getX() + fi - 3, r.getY(), 6.0f, 6.0f);
             g.fillRect (r.getRight() - fo - 3, r.getY(), 6.0f, 6.0f);
@@ -901,10 +969,26 @@ private:
     }
     void timerCallback() override
     {
-        if (! s.engine.isPlaying()) return;
-        const float px = beatToX (s.engine.positionBeats());
-        if (px > getWidth() - 40) { scrollX = s.engine.positionBeats() - 2.0; }
-        repaint();
+        const bool playing = s.engine.isPlaying();
+        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; return; }
+        wasPlaying = true;
+        const double pos = s.engine.positionBeats();
+        float px = beatToX (pos);
+        if (px > getWidth() - 40 || px < headerW) { scrollX = juce::jmax (0.0, pos - 2.0); repaint(); lastPx = beatToX (pos); }
+        else
+        {
+            // only redraw what moves: the old + new playhead strips, and the growing take while recording
+            auto strip = [this] (float x) { if (x >= 0) repaint ((int) x - 8, toolbarH, 16, getHeight() - toolbarH); };
+            strip (lastPx); strip (px);
+            if (s.engine.isRecording())
+            {
+                double b0 = pos;
+                s.engine.forEachLiveTake ([&] (int, double sb, const float*, int, double) { b0 = std::min (b0, sb); });
+                const int x0 = juce::jmax (headerW, (int) beatToX (b0) - 2);
+                if (px + 8 > x0) repaint (x0, toolbarH + rulerH, (int) px + 8 - x0, getHeight() - toolbarH - rulerH);
+            }
+            lastPx = px;
+        }
         for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();
     }
 };

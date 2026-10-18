@@ -5,8 +5,8 @@ namespace hhs
 namespace
 {
 const char* rootNames[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-const double snapValues[] { 0.0, 0.25 / 6, 0.0625, 0.25 / 3, 0.125, 0.25, 0.5, 1.0, 4.0 };
-const char* snapNames[] { "None", "1/6 step", "1/4 step", "1/3 step", "1/2 step", "Step", "1/2 beat", "Beat", "Bar" };
+const double* const snapValues = kSnapValues;
+const char* const* const snapNames = kSnapNames;
 bool isBlack (int key) { const int k = key % 12; return k == 1 || k == 3 || k == 6 || k == 8 || k == 10; }
 
 class PianoRoll : public juce::Component, public juce::TooltipClient, private juce::ChangeListener, private juce::Timer
@@ -24,7 +24,7 @@ public:
         scaleBox.onChange = [this] { const int v = scaleBox.getSelectedItemIndex(); s.edit ("Scale", [v] (Project& p) { p.scaleIndex = v; }); };
         setupButton (highlightBtn, "SCALE", "Highlight the notes of the key / scale", true);
         highlightBtn.onClick = [this] { const bool on = highlightBtn.getToggleState(); s.edit ("Scale highlight", [on] (Project& p) { p.highlightScale = on; }); };
-        for (int i = 0; i < 9; ++i) snapBox.addItem (snapNames[i], i + 1);
+        for (int i = 0; i < kNumSnaps; ++i) snapBox.addItem (snapNames[i], i + 1);
         snapBox.setTooltip ("Snap grid for drawing and moving notes (hold Alt while dragging to bypass)");
         snapBox.onChange = [this] { const double v = snapValues[juce::jmax (0, snapBox.getSelectedItemIndex())]; s.live ([v] (Project& p) { p.snap = v; }); repaint(); };
         setupButton (toolsBtn, "TOOLS", "Piano roll tools: arp/rolls, strum, chop, flam, quantize, randomize, limit...");
@@ -375,12 +375,19 @@ public:
         if (hit >= 0) s.edit ("Slide note", [&] (Project&) { auto& n = s.notes (channelId)[(size_t) hit]; n.slide = ! n.slide; });
     }
 
+    void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
+    {
+        const double at = xToBeat (e.position.x);
+        pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * scale);
+        scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
+        repaint();
+    }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
-        if (e.mods.isCommandDown())
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
             const double at = xToBeat (e.position.x);
-            pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * (w.deltaY > 0 ? 1.15f : 1.0f / 1.15f));
+            pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * std::pow (1.15f, juce::jlimit (-4.0f, 4.0f, w.deltaY * 8.0f)));
             scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
         }
         else if (e.mods.isAltDown()) rowH = juce::jlimit (6.0f, 30.0f, rowH + (w.deltaY > 0 ? 1.0f : -1.0f));
@@ -631,7 +638,7 @@ private:
         scaleBox.setSelectedItemIndex (p.scaleIndex, juce::dontSendNotification);
         highlightBtn.setToggleState (p.highlightScale, juce::dontSendNotification);
         int si = 5;
-        for (int i = 0; i < 9; ++i) if (std::abs (snapValues[i] - p.snap) < 1e-9) si = i;
+        for (int i = 0; i < kNumSnaps; ++i) if (std::abs (snapValues[i] - p.snap) < 1e-9) si = i;
         snapBox.setSelectedItemIndex (si, juce::dontSendNotification);
         if (auto* c = s.channel (channelId))
         {
@@ -642,7 +649,14 @@ private:
         repaint();
     }
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
-    void timerCallback() override { if (s.engine.isPlaying() || isShowing()) if (s.engine.isPlaying()) repaint(); }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        const bool playing = s.engine.isPlaying();
+        if (playing || wasPlaying) repaint (keyW, barH, getWidth() - keyW, getHeight() - barH);   // grid + ruler + velocity only, not the toolbar / keyboard
+        wasPlaying = playing;
+    }
+    bool wasPlaying = false;
 };
 }
 

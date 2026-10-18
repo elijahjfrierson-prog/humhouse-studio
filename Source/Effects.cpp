@@ -286,6 +286,109 @@ private:
     juce::dsp::Chorus<float> d;
 };
 
+// modulated short delay used by Flanger and Flangus (0 latency: wet taps only look back in time)
+struct ModTap
+{
+    std::vector<float> buf; int w = 0, size = 0;
+    void prepare (double sr) { size = (int) (sr * 0.05) + 4; buf.assign ((size_t) size, 0.0f); w = 0; }
+    void push (float x) { buf[(size_t) w] = x; if (++w >= size) w = 0; }
+    float read (float delaySamples) const
+    {
+        float r = (float) w - 1.0f - juce::jlimit (0.0f, (float) size - 3.0f, delaySamples);
+        while (r < 0) r += (float) size;
+        const int i0 = (int) r; const float fr = r - (float) i0;
+        const int i1 = (i0 + 1) % size;
+        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
+    }
+};
+
+class Flanger : public BuiltinEffect
+{
+public:
+    Flanger() { initDefaults(); }
+    const char* typeId() const override { return "flanger"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "rate", "Rate Hz", 0.02f, 10, 0.25f }, { "depth", "Depth", 0, 1, 0.7f },
+                                                 { "delay", "Delay ms", 0.1f, 10, 1.5f }, { "feedback", "Feedback", -0.95f, 0.95f, 0.5f },
+                                                 { "stereo", "Stereo (deg)", 0, 180, 90 }, { "invert", "Polarity", 0, 1, 0, { "Normal", "Inverted (zero-style)" } },
+                                                 { "mix", "Mix", 0, 1, 0.5f } };
+        return ps;
+    }
+    void prepare (double s, int) override { sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0; }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const float rate = p (0), depth = p (1), dMs = p (2), feed = p (3), mix = p (6);
+        const float off = p (4) / 360.0f, sign = p (5) > 0.5f ? -1.0f : 1.0f;
+        const float inc = rate / (float) sr;
+        for (int i = 0; i < n; ++i)
+        {
+            for (int c = 0; c < juce::jmin (2, b.getNumChannels()); ++c)
+            {
+                float ph = phase + (c == 1 ? off : 0.0f); ph -= std::floor (ph);
+                const float lfo = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * ph);
+                const float d = (0.05f + dMs * (1.0f - depth * lfo)) * 0.001f * (float) sr;
+                auto* x = b.getWritePointer (c);
+                const float wet = taps[c].read (d);
+                taps[c].push (x[i] + feed * fb[c]);
+                fb[c] = wet;
+                x[i] = x[i] * (1.0f - 0.5f * mix) + sign * wet * mix * 0.5f * 1.4f;
+            }
+            phase += inc; if (phase >= 1.0f) phase -= 1.0f;
+        }
+    }
+private:
+    double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
+};
+
+// FL Flangus-style multi-voice flanger / chorus: voices, spread, cross feedback
+class Flangus : public BuiltinEffect
+{
+public:
+    Flangus() { initDefaults(); }
+    const char* typeId() const override { return "flangus"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "voices", "Order (voices)", 1, 6, 2 }, { "depth", "Depth", 0, 1, 0.5f },
+                                                 { "speed", "Speed Hz", 0.02f, 5, 0.3f }, { "delay", "Delay ms", 0.5f, 20, 3 },
+                                                 { "spread", "Spread", 0, 1, 0.6f }, { "cross", "Cross", 0, 1, 0.3f },
+                                                 { "feedback", "Feedback", -0.9f, 0.9f, 0.2f }, { "mix", "Dry / Wet", 0, 1, 0.5f } };
+        return ps;
+    }
+    void prepare (double s, int) override { sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0; }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const int nv = juce::jlimit (1, 6, (int) std::round (p (0)));
+        const float depth = p (1), dMs = p (3), spread = p (4), cross = p (5), feed = p (6), mix = p (7);
+        const float inc = p (2) / (float) sr;
+        const bool st = b.getNumChannels() > 1;
+        auto* L = b.getWritePointer (0); auto* R = st ? b.getWritePointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = R[i];
+            taps[0].push (inL + feed * ((1.0f - cross) * fb[0] + cross * fb[1]));
+            taps[1].push (inR + feed * ((1.0f - cross) * fb[1] + cross * fb[0]));
+            float wl = 0, wr = 0;
+            for (int v = 0; v < nv; ++v)
+            {
+                float ph = phase + (float) v / (float) nv; ph -= std::floor (ph);
+                const float lfo = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * ph);
+                const float d = (0.1f + dMs * (1.0f - depth * lfo)) * 0.001f * (float) sr;
+                const float pan = nv == 1 ? 0.0f : spread * (2.0f * (float) v / (float) (nv - 1) - 1.0f);
+                const float a = taps[0].read (d), c = taps[1].read (d);
+                wl += a * (1.0f - juce::jmax (0.0f, pan)); wr += c * (1.0f + juce::jmin (0.0f, pan));
+            }
+            const float norm = 1.0f / std::sqrt ((float) nv);
+            wl *= norm; wr *= norm; fb[0] = wl; fb[1] = wr;
+            L[i] = inL * (1.0f - 0.5f * mix) + wl * mix * 0.7f;
+            if (st) R[i] = inR * (1.0f - 0.5f * mix) + wr * mix * 0.7f;
+            phase += inc; if (phase >= 1.0f) phase -= 1.0f;
+        }
+    }
+private:
+    double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
+};
+
 class PhaseSwirl : public BuiltinEffect
 {
 public:
@@ -823,7 +926,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
         { "pump", "Pump (Sidechain)", "Dynamics" }, { "clip", "Soft Clipper", "Dynamics" },
-        { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" },
+        { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
         { "glitch", "Glitch Gate", "Time FX" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
@@ -840,6 +943,8 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "verb") return std::make_unique<RoomVerb>();
     if (id == "delay") return std::make_unique<EchoTape>();
     if (id == "chorus") return std::make_unique<Chorus>();
+    if (id == "flanger") return std::make_unique<Flanger>();
+    if (id == "flangus") return std::make_unique<Flangus>();
     if (id == "phaser") return std::make_unique<PhaseSwirl>();
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();

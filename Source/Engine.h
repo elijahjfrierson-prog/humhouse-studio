@@ -72,6 +72,8 @@ public:
     int  processingThreads() const { return (pool ? pool->size() : 0) + 1; }
     long poolStat (bool workers) const { return pool ? (workers ? pool->workerJobs.load() : pool->runs.load()) : 0; }
     float fxLoad (int track, int slotUid) const;      // share of the audio block this slot used (0..1)
+    // live recording waveform: (lane, start beat, peaks, count, beats per peak) for each take being recorded
+    void forEachLiveTake (const std::function<void (int, double, const float*, int, double)>& fn);
     bool isCountingIn() const { return countingIn.load(); }
 
     // preview (computer keyboard / clicking keys / browser)
@@ -170,6 +172,7 @@ private:
         bool started = false;
         juce::int64 samplesWritten = 0;
         std::array<std::pair<juce::int64, double>, 256> passes {}; int numPasses = 0; // loop-record pass boundaries
+        std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform
     };
     std::vector<std::unique_ptr<Take>> takes;
     juce::SpinLock takeLock;
