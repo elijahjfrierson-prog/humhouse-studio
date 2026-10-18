@@ -96,3 +96,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: Playlist laneH even-fill (min 60), + Track / Add insert name 'Track N', mixer title shows track name.
 - DONE: Options > UI scale 75-200% (saved uiScale).
 - DONE: Templates (File > Save as template / New from template / default template in ~/Music/HumHouse Studio/Templates).
+- DONE: PRESETS button on every built-in effect and synth/sampler editor (~/Music/HumHouse Studio/Presets/<kind>/*.hhpreset). Third-party plugin state presets still TODO.

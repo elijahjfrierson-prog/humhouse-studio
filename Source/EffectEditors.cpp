@@ -47,9 +47,16 @@ class ParamGrid : public juce::Component
 {
 public:
     struct P { juce::String id, name; float mn, mx, def, value; std::vector<const char*> choices; };
-    ParamGrid (const juce::String& title, std::vector<P> ps, std::function<void (const juce::String&, float)> setLive, std::function<void()> commit)
-        : params (std::move (ps)), onSet (std::move (setLive)), onCommit (std::move (commit))
+    ParamGrid (const juce::String& title, std::vector<P> ps, std::function<void (const juce::String&, float)> setLive, std::function<void()> commit,
+               const juce::String& presetKind = {})
+        : params (std::move (ps)), onSet (std::move (setLive)), onCommit (std::move (commit)), kind (presetKind)
     {
+        if (kind.isNotEmpty())
+        {
+            setupButton (presetBtn, "PRESETS", "Save or load a preset for this effect / instrument");
+            presetBtn.onClick = [this] { showPresetMenu(); };
+            addAndMakeVisible (presetBtn);
+        }
         heading.setText (title, juce::dontSendNotification);
         heading.setFont (juce::FontOptions (16.0f, juce::Font::bold));
         heading.setColour (juce::Label::textColourId, col::accent);
@@ -68,7 +75,7 @@ public:
                 cb->setSelectedItemIndex ((int) std::round (p.value - p.mn), juce::dontSendNotification);
                 cb->setTooltip (p.name);
                 const float mn = p.mn;
-                cb->onChange = [this, cb, id, mn] { onSet (id, mn + (float) cb->getSelectedItemIndex()); onCommit(); };
+                cb->onChange = [this, cb, id, mn] { set (id, mn + (float) cb->getSelectedItemIndex()); onCommit(); };
                 controls.add (cb);
             }
             else
@@ -76,7 +83,7 @@ public:
                 auto* k = new Knob (p.name, "drag up / down, double-click resets", p.mn, p.mx, p.def);
                 k->setValue (p.value, juce::dontSendNotification);
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
-                k->onValueChange = [this, k, id] { onSet (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
+                k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
                 controls.add (k);
             }
@@ -90,7 +97,9 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().reduced (10);
-        heading.setBounds (r.removeFromTop (28));
+        auto top = r.removeFromTop (28);
+        if (kind.isNotEmpty()) presetBtn.setBounds (top.removeFromRight (80).reduced (0, 2));
+        heading.setBounds (top);
         const int cols = juce::jlimit (1, 6, (int) params.size());
         for (int i = 0; i < controls.size(); ++i)
         {
@@ -102,6 +111,67 @@ public:
     }
 
 private:
+    juce::String kind;
+    juce::TextButton presetBtn;
+    std::unique_ptr<juce::FileChooser> chooser;
+    void set (const juce::String& id, float v)
+    {
+        for (auto& p : params) if (p.id == id) p.value = v;
+        onSet (id, v);
+    }
+    juce::File presetDir() const
+    {
+        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio")
+            .getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (kind));
+    }
+    void showPresetMenu()
+    {
+        juce::PopupMenu menu;
+        menu.addItem (1, "Save preset...");
+        auto files = presetDir().findChildFiles (juce::File::findFiles, false, "*.hhpreset");
+        files.sort();
+        if (! files.isEmpty()) menu.addSeparator();
+        for (int i = 0; i < files.size() && i < 200; ++i) menu.addItem (100 + i, files[i].getFileNameWithoutExtension());
+        menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
+            if (r == 1) savePreset();
+            else if (r >= 100 && r - 100 < files.size()) loadPreset (files[r - 100]);
+        });
+    }
+    void savePreset()
+    {
+        auto* aw = new juce::AlertWindow ("Save preset", "Preset name", juce::MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", "My preset");
+        aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        juce::Component::SafePointer<ParamGrid> safe (this);
+        aw->enterModalState (true, juce::ModalCallbackFunction::create ([safe, aw] (int r) {
+            const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+            if (r != 1 || name.isEmpty() || safe == nullptr) return;
+            juce::XmlElement x ("HUMHOUSE_PRESET");
+            x.setAttribute ("kind", safe->kind);
+            for (auto& p : safe->params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+            safe->presetDir().createDirectory();
+            x.writeTo (safe->presetDir().getChildFile (name + ".hhpreset"));
+        }), true);
+    }
+    void loadPreset (const juce::File& f)
+    {
+        auto x = juce::XmlDocument::parse (f);
+        if (x == nullptr) return;
+        for (auto* e : x->getChildWithTagNameIterator ("P"))
+        {
+            const auto id = e->getStringAttribute ("id");
+            for (size_t i = 0; i < params.size(); ++i)
+            {
+                if (params[i].id != id) continue;
+                const float v = juce::jlimit (params[i].mn, params[i].mx, (float) e->getDoubleAttribute ("v", params[i].value));
+                if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) std::round (v - params[i].mn), juce::dontSendNotification);
+                else if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) k->setValue (v, juce::dontSendNotification);
+                set (id, v);
+            }
+        }
+        onCommit();
+    }
     std::vector<P> params;
     std::function<void (const juce::String&, float)> onSet;
     std::function<void()> onCommit;
@@ -151,7 +221,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
             s.live ([&] (Project&) { if (auto* sl = findSlot (s, track, slotUid)) sl->params[id] = v; });
             if (auto* e = s.engine.builtinFx (track, slotUid)) e->setParam (id, v);
         },
-        [&s, title] { s.commit (title); });
+        [&s, title] { s.commit (title); }, slot->type);
     EditorWindow::windows().add (new EditorWindow (title + " - " + trackName, grid, key,
                                                    [&s, track, slotUid] { return findSlot (s, track, slotUid) != nullptr; }));
 }
@@ -224,7 +294,7 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "ampH") c->ampHold = v; else if (id == "ampR") c->ampRelease = v;
             });
         },
-        [&s] { s.commit ("Channel settings"); });
+        [&s] { s.commit ("Channel settings"); }, ch->type == ChannelType::Synth ? "Synth" : "Sampler");
     EditorWindow::windows().add (new EditorWindow (ch->name, grid, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
 }
 
