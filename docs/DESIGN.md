@@ -72,3 +72,6 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
   its sample, onto empty rack space adds a channel; browser highlights samples used in the project; menu "Samples used"
   lists every sample file in the project.
 - Alt+A arp/rolls already implemented (ToolDialogs Tool::Arp, rack right-click roll x2..x8) - user re-asked, told them.
+- UI sizing (requested 2026-10-18): Options > UI scale 75-200% (Desktop::setGlobalScaleFactor, saved "uiScale");
+  playlist lane height per track: drag lane bottom edge / Alt+wheel on header (Lane::height already in model+IO, Playlist uses const laneH=60 -> make per-lane);
+  "All tracks: small/medium/large"; detach Mixer / Piano Roll / Channel Rack / Browser into own resizable DocumentWindow (FL detached).
