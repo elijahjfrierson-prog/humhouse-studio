@@ -351,8 +351,14 @@ public:
         auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
         const int steps = numSteps();
         const float w = stepW();
-        int playStep = -1;
-        if (s.engine.isPlaying()) playStep = (int) (std::fmod (s.engine.positionBeats(), pat.lengthBeats()) / 0.25);
+        double localPos = -1.0;
+        {
+            const double plen = pat.lengthBeats(), pos = s.engine.positionBeats();
+            if (! p.songMode) localPos = std::fmod (pos, plen);
+            else for (auto& c : p.clips)
+                if (! c.isAudio() && c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) localPos = std::fmod (pos - c.start, plen);
+        }
+        const int playStep = s.engine.isPlaying() && localPos >= 0 ? (int) (localPos / 0.25) : -1;
         for (size_t ri = 0; ri < rows.size(); ++ri)
         {
             const int y = headerH + (int) ri * rowH - scrollY;
@@ -384,6 +390,13 @@ public:
                     g.setColour (col::text); g.drawRoundedRectangle (r, 3, 1.5f);
                 }
             }
+        }
+        if (localPos >= 0)   // playhead line across the whole rack
+        {
+            const float x = (float) ctlW + (float) (localPos / 0.25) * w;
+            const float y0 = (float) headerH, y1 = (float) juce::jmin (getHeight(), headerH + (int) rows.size() * rowH - scrollY);
+            g.setColour (col::accent2.withAlpha (0.22f)); g.fillRect (x - 2.5f, y0, 5.0f, y1 - y0);
+            g.setColour (col::accent2); g.fillRect (x - 0.75f, y0, 1.5f, y1 - y0);
         }
     }
 

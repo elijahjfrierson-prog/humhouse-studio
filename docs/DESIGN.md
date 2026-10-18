@@ -109,3 +109,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: View > Detach Channel Rack / Piano Roll / Playlist / Mixer / Plugin House into own resizable windows; per-track height (drag header bottom edge), Alt+wheel all tracks, right-click > Make all tracks small/medium/large.
 - DONE: mini scope on every mixer insert (double-click = full Scope for that track), channel editor WAVE page (sample after SMP edits) + SCOPE page.
 - DONE (1.2.1): per-lane Mono/Stereo record input (mono centred in both ears, default), FX slot dry/wet Mix applied in the engine, double-click channel to change sound in place.
+- DONE (1.2.1): playhead line in rack/roll/playlist + note chase on play/jump/loop/edit, Studio EQ 7 graph + Natural/Linear (FIR, 1024 smp latency, no PDC yet) + per-band dynamic EQ, comp transfer curve/GR, effect pictures, per-insert Duck sidechain, wires lane under strips.

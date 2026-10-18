@@ -525,16 +525,17 @@ private:
     }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {
-        if (! s.engine.isPlaying()) return;
         auto& p = s.p();
         const double len = p.patterns[(size_t) p.currentPattern].lengthBeats();
         const double pos = p.songMode ? s.engine.positionBeats() : std::fmod (s.engine.positionBeats(), len);
-        double local = pos;
+        double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
                 if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
-        g.setColour (col::accent2);
-        g.drawVerticalLine ((int) beatToX (local), (float) ga.getY(), (float) ga.getBottom());
+        if (local < 0) return;
+        const float x = (float) beatToX (local);
+        g.setColour (col::accent2.withAlpha (0.22f)); g.fillRect (x - 2.5f, (float) ga.getY(), 5.0f, (float) ga.getHeight());
+        g.setColour (col::accent2); g.fillRect (x - 0.75f, (float) ga.getY(), 1.5f, (float) ga.getHeight());
     }
     void toolsMenu()
     {

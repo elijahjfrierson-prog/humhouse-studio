@@ -129,6 +129,54 @@ int main()
         CHECK (pl > 0.01f);
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
     }
+    // Studio EQ 7: natural boost, linear-phase FIR of the same curve, dynamic band pulls a loud band down
+    {
+        auto run = [] (BuiltinEffect& fx, float hz, float amp, int blocks, bool wait) {
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; double ph = 0; float in = 0, out = 0;
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float v = amp * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * hz / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                in = b.getRMSLevel (0, 0, 512); fx.process (b, 512, ctx); out = b.getRMSLevel (0, 0, 512);
+                if (wait) juce::Thread::sleep (2);
+            }
+            return out / std::max (in, 1.0e-9f);
+        };
+        auto eq = createBuiltinEffect ("steq7");
+        eq->setParam ("b2G", 12.0f); eq->setParam ("b2F", 1000.0f);
+        eq->prepare (48000, 512);
+        const float nat = run (*eq, 1000, 0.1f, 40, false);
+        CHECK (nat > 3.0f && nat < 5.0f);
+        CHECK (std::abs (eq->responseDb (1000.0) - 12.0f) < 0.5f);
+        CHECK (eq->latencySamples() == 0);
+        eq->setParam ("phase", 1.0f);
+        CHECK (eq->latencySamples() == 1024);
+        const float lin = run (*eq, 1000, 0.1f, 300, true);
+        CHECK (lin > 3.0f && lin < 5.0f);
+        const float linFlat = run (*eq, 8000, 0.1f, 80, true);
+        CHECK (linFlat > 0.8f && linFlat < 1.25f);
+        auto dq = createBuiltinEffect ("steq7");
+        dq->setParam ("b2F", 1000.0f); dq->setParam ("b2Dyn", 1.0f); dq->setParam ("b2DTh", -40.0f); dq->setParam ("b2DRg", -12.0f);
+        dq->prepare (48000, 512);
+        CHECK (run (*dq, 1000, 0.5f, 100, false) < 0.5f);
+        CHECK (dq->meter (2) < -6.0f);
+        CHECK (run (*dq, 1000, 0.001f, 400, false) > 0.9f);
+    }
+    // starting playback in the middle of a long synth note still sounds it (FL-style chase)
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        auto& p = e.project();
+        p.songMode = false;
+        Channel c; c.type = ChannelType::Synth; c.name = "Pad"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        Note nt; nt.key = 60; nt.start = 0.0; nt.length = 8.0; nt.velocity = 0.9f;
+        p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+        e.sync();
+        e.setPositionBeats (2.0);
+        e.play();
+        CHECK (renderPeak (e, 20) > 0.01f);
+        e.stop();
+    }
     // every built-in effect stays finite and silent-in gives finite out
     for (auto& info : builtinEffects())
     {

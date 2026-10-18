@@ -144,6 +144,10 @@ struct MixerTrack
     std::vector<Send> sends;       // master is implicit if sends empty and track != 0
     juce::Colour colour { 0xff2a2f36 };
     bool routesToMaster = true;
+    // sidechain duck (one knob): dips this insert under the SC source track
+    float duck = 0.0f;             // 0 = off .. 1 = full
+    int   duckSource = -1;         // -1 = auto (first armed vocal track)
+    float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
 };
 
 // ---------------------------------------------------------------- project

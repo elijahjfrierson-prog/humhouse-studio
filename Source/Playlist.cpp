@@ -288,8 +288,9 @@ public:
             }
             for (auto& c : p.clips) if (! c.hidden) drawClip (g, c);
             const float px = beatToX (s.engine.positionBeats());
-            g.setColour (s.engine.isRecording() ? col::rec : col::accent2);
-            g.drawVerticalLine ((int) px, (float) area.getY(), (float) area.getBottom());
+            const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
+            g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
+            g.setColour (phc); g.fillRect (px - 0.75f, (float) area.getY(), 1.5f, (float) area.getHeight());
         }
         // ruler
         juce::Rectangle<int> ruler (headerW, toolbarH, getWidth() - headerW, rulerH);

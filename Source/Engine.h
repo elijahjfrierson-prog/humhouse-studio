@@ -133,6 +133,7 @@ private:
 
     std::atomic<bool> playing { false }, recording { false }, countingIn { false };
     std::atomic<double> position { 0.0 };
+    std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;
     juce::TimeSliceThread diskThread { "HHS disk" };

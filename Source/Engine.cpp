@@ -199,6 +199,8 @@ juce::String Engine::recoverFromPluginCrash()
 struct Engine::TrackRuntime
 {
     juce::AudioBuffer<float> in, out, dry;
+    std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
+    float duckGain = 1.0f;
     std::vector<std::unique_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
     int silentSamples = 0;
@@ -301,6 +303,7 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 
 void Engine::sync()
 {
+    if (playing.load()) chasePending = true;
     // ---- build new objects outside the audio lock (sample loading / plugin creation can be slow)
     std::map<int, std::unique_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
@@ -615,6 +618,7 @@ void Engine::play()
         countInRemaining = countInOn.load() && ! (proj.songMode && proj.hasPunch()) ? proj.beatsPerBar : 0.0;
         countingIn = countInRemaining > 0.0;
     }
+    chasePending = true;
     playing = true;
 }
 
@@ -635,7 +639,7 @@ void Engine::stop()
     if (proj.returnToStart) position = startBeat;
 }
 
-void Engine::setPositionBeats (double b) { position = std::max (0.0, b); startBeat = position; }
+void Engine::setPositionBeats (double b) { position = std::max (0.0, b); startBeat = position; chasePending = true; }
 
 void Engine::setRecording (bool r)
 {
@@ -842,6 +846,19 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         if (rt->numActive < (int) rt->active.size())
             rt->active[(size_t) rt->numActive++] = { note.key, note.length * spb + (o - off) };
     };
+    // FL-style: when playback starts, jumps, loops or the pattern is edited mid-note, the note still sounds
+    const bool chase = chasePending.exchange (false);
+    auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
+    {
+        const double end = std::min (absStart + note.length, limit);
+        if (absStart >= b0 || end <= b0 + 1.0 / 32.0) return;
+        auto& c = proj.channels[ci];
+        if (c.type == ChannelType::Sampler && c.oneShot) return;
+        auto* rt = channelOrder[ci];
+        for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
+        Note tail = note; tail.length = end - b0; tail.slide = false;
+        emit (ci, tail, b0);
+    };
 
     for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
     {
@@ -858,6 +875,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 if (note.muted) continue;
                 const double s = swingBeat (note.start);
                 if (s >= b0 && s < b1) emit (ci, note, s);
+                else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
             }
         }
         else
@@ -880,6 +898,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                         if (note.muted) continue;
                         const double s = clip.start + rep * plen + swingBeat (note.start);
                         if (s >= b0 && s < b1 && s < clip.start + clip.length && s >= clip.start) emit (ci, note, s);
+                        else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
                     }
             }
         }
@@ -1040,6 +1059,31 @@ void Engine::processTrack (int t)
     }
     else if (idle && ! tr.frozen) tr.out.clear (0, n);
 
+    tr.level.store (std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n)));
+    // one-knob sidechain duck: this insert dips under its SC source (default: the armed vocal track)
+    if (t > 0 && mt.duck > 0.0f)
+    {
+        int src = mt.duckSource;
+        if (src < 0) for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { src = ln.mixerTrack; break; }
+        float target = 1.0f;
+        if (src > 0 && src != t && src < (int) trackRt.size())
+        {
+            const float over = juce::Decibels::gainToDecibels (trackRt[(size_t) src]->level.load(), -100.0f) - mt.duckThreshold;
+            const float grDb = over > 0.0f ? std::min (over * (1.0f - 1.0f / std::max (1.0f, mt.duckRatio)), 30.0f) * mt.duck : 0.0f;
+            target = juce::Decibels::decibelsToGain (-grDb);
+        }
+        const float a = std::exp (-1.0f / (0.001f * std::max (0.1f, mt.duckAttack) * (float) sampleRate));
+        const float r = std::exp (-1.0f / (0.001f * std::max (1.0f, mt.duckRelease) * (float) sampleRate));
+        auto* L = tr.out.getWritePointer (0); auto* R = tr.out.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            const float c = target < tr.duckGain ? a : r;
+            tr.duckGain = c * tr.duckGain + (1.0f - c) * target;
+            L[i] *= tr.duckGain; R[i] *= tr.duckGain;
+        }
+    }
+    else tr.duckGain = 1.0f;
+
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : mt.volume * mt.volume * 1.5f;
     const float gl = vol * std::min (1.0f, 1.0f - mt.pan), gr = vol * std::min (1.0f, 1.0f + mt.pan);
@@ -1122,6 +1166,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 renderSegment (pos, segEnd, done, len);
                 done += len;
                 pos = wrap ? loopStart : segEnd;
+                if (wrap) chasePending = true;
                 if (wrap)
                 {
                     const juce::SpinLock::ScopedTryLockType tl (takeLock);

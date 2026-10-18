@@ -26,7 +26,7 @@ struct ParamDef
 class BuiltinEffect
 {
 public:
-    static constexpr int maxParams = 24;
+    static constexpr int maxParams = 64;
     virtual ~BuiltinEffect() = default;
     virtual const char* typeId() const = 0;
     virtual const std::vector<ParamDef>& params() const = 0;
@@ -35,6 +35,9 @@ public:
     virtual void process (juce::AudioBuffer<float>&, int numSamples, const PlayContext&) = 0;
     virtual double tailSeconds() const { return 0.0; }
     virtual int latencySamples() const { return 0; }
+    virtual float meter (int) const { return 0.0f; }          // GR / dynamic band offset in dB, for editor visuals
+    virtual bool  hasResponse() const { return false; }
+    virtual float responseDb (double) { return 0.0f; }        // EQ curve at hz (after prepare + params)
 
     int   paramIndex (const juce::String& id) const;
     void  setParam (const juce::String& id, float v);

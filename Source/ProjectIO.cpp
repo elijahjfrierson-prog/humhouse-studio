@@ -114,6 +114,8 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("name", m.name, nullptr); t.setProperty ("vol", m.volume, nullptr); t.setProperty ("pan", m.pan, nullptr);
         t.setProperty ("mute", m.muted, nullptr); t.setProperty ("solo", m.solo, nullptr); t.setProperty ("frozen", m.frozen, nullptr);
         t.setProperty ("frozenFile", fileStr (m.frozenFile), nullptr); t.setProperty ("master", m.routesToMaster, nullptr);
+        t.setProperty ("duck", m.duck, nullptr); t.setProperty ("duckSrc", m.duckSource, nullptr); t.setProperty ("duckTh", m.duckThreshold, nullptr);
+        t.setProperty ("duckRatio", m.duckRatio, nullptr); t.setProperty ("duckAtt", m.duckAttack, nullptr); t.setProperty ("duckRel", m.duckRelease, nullptr);
         t.setProperty ("colour", (juce::int64) m.colour.getARGB(), nullptr);
         for (auto& s : m.sends) { juce::ValueTree st ("SEND"); st.setProperty ("to", s.target, nullptr); st.setProperty ("lvl", s.level, nullptr); t.appendChild (st, nullptr); }
         for (auto& f : m.fx)
@@ -188,6 +190,8 @@ Project projectFromTree (const juce::ValueTree& root)
         MixerTrack m; m.name = t["name"].toString(); m.volume = t.getProperty ("vol", 0.8f); m.pan = t["pan"];
         m.muted = t["mute"]; m.solo = t["solo"]; m.frozen = t["frozen"]; m.frozenFile = strFile (t["frozenFile"].toString());
         m.routesToMaster = t.getProperty ("master", true);
+        m.duck = t.getProperty ("duck", 0.0f); m.duckSource = t.getProperty ("duckSrc", -1); m.duckThreshold = t.getProperty ("duckTh", -40.0f);
+        m.duckRatio = t.getProperty ("duckRatio", 4.0f); m.duckAttack = t.getProperty ("duckAtt", 5.0f); m.duckRelease = t.getProperty ("duckRel", 150.0f);
         m.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff2a2f36));
         for (auto c : t)
         {
