@@ -75,3 +75,7 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - UI sizing (requested 2026-10-18): Options > UI scale 75-200% (Desktop::setGlobalScaleFactor, saved "uiScale");
   playlist lane height per track: drag lane bottom edge / Alt+wheel on header (Lane::height already in model+IO, Playlist uses const laneH=60 -> make per-lane);
   "All tracks: small/medium/large"; detach Mixer / Piano Roll / Channel Rack / Browser into own resizable DocumentWindow (FL detached).
+- Clean rack (requested 2026-10-18): Project::createDefault() should start with an EMPTY channel rack (no starter drums/808/keys,
+  empty pattern) - rack only shows samples the user chose; keep lanes + mixer. Update tests that rely on default channels
+  (engine renders default beat test -> add a sampler/drum channel in the test instead).
+- Sleek pass: flatter thinner controls, softer rounded panels w/ subtle gradients, quieter grid lines, cleaner spacing/type (HHLookAndFeel + view paints).
