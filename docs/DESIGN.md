@@ -67,7 +67,7 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - Sampler/808 channel playback modes: One-shot (ignore note-off), Cut itself (new hit chokes previous voice), Cut group id
   (e.g. hats choke each other), amp envelope A/H/D/R per channel, ~3 ms declick fade on choke. Expose in Channel settings + rack menu.
 - DONE (uncommitted->commit): sampler oneShot / cutItself / cutGroup / amp A-H-R (Model, Instruments, Engine renderChannels choke events, ProjectIO, channel editor, rack menu).
-- Kit browsing like FL (requested 2026-10-18): on a sampler channel, Up/Down arrows or mouse wheel over the channel name
+- PARTLY DONE (shuffle committed; drag-replace, used-samples list DONE (View menu); drag-replace + browser highlight, FL tool toolbar, mixer wires still TODO). Kit browsing like FL (requested 2026-10-18): on a sampler channel, Up/Down arrows or mouse wheel over the channel name
   shuffle to prev/next audio file in the same folder (live while playing); drag a browser sample onto a rack row replaces
   its sample, onto empty rack space adds a channel; browser highlights samples used in the project; menu "Samples used"
   lists every sample file in the project.
