@@ -15,10 +15,30 @@ namespace col
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
 }
 
+// 0 = Tattoo (Pirata One), 1 = Flash (Rye), 2 = Clean; remembered between launches
+int& fontStyle();
+void setFontStyle (int);
+void showWhatsNewIfUpdated();
+
+// OBS / Discord capture: JUCE 8 Direct2D windows can capture black on Windows, so use the software renderer
+inline void makeCaptureFriendly (juce::Component& c)
+{
+   #if JUCE_WINDOWS
+    if (auto* peer = c.getPeer())
+    {
+        const int i = peer->getAvailableRenderingEngines().indexOf ("Software Renderer");
+        if (i >= 0) peer->setCurrentRenderingEngine (i);
+    }
+   #else
+    juce::ignoreUnused (c);
+   #endif
+}
+
 class HHLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
     HHLookAndFeel();
+    juce::Typeface::Ptr getTypefaceForFont (const juce::Font&) override;
     void refreshColours();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;

@@ -1,9 +1,48 @@
 #include "UI.h"
+#include "BinaryData.h"
 
 namespace hhs
 {
 // ------------------------------------------------------------------ look and feel
 HHLookAndFeel::HHLookAndFeel() { refreshColours(); }
+
+static juce::File appDataFile (const char* name)
+{
+    return juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio").getChildFile (name);
+}
+int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
+void setFontStyle (int st)
+{
+    fontStyle() = st;
+    appDataFile ("font.txt").getParentDirectory().createDirectory();
+    appDataFile ("font.txt").replaceWithText (juce::String (st));
+    juce::Typeface::clearTypefaceCache();
+    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+        if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
+}
+juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
+{
+    static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
+    static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
+    if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
+    if (fontStyle() == 1 && flash != nullptr) return flash;
+    return juce::LookAndFeel_V4::getTypefaceForFont (f);
+}
+void showWhatsNewIfUpdated()
+{
+    const auto v = juce::JUCEApplication::getInstance()->getApplicationVersion();
+    auto f = appDataFile ("last-version.txt");
+    if (f.loadFileAsString().trim() == v) return;
+    f.getParentDirectory().createDirectory();
+    f.replaceWithText (v);
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Crash-safe plugin scanning / loading and recording\n- HumHouse logo, color wheel, classic tattoo lettering (Options > Font)\n"
+        "- Playlist tools: select, paint, delete, mute, slice, group (Ctrl/Cmd+G), split pattern by channel\n"
+        "- Piano roll tool bar, notes and steps light up as they play\n- Channel settings SMP / INS / FUNC: normalize, reverse, trim, fades, Resample / Stretch / Stretch X\n"
+        "- One-shot, cut itself, cut groups (808s never overlap)\n- Scope: oscilloscope, waveform and spectrum (SCOPE button + Scope insert)\n"
+        "- Mixer routing wires, track select / insert / delete, 10 numbered tracks\n- Presets, FX chain presets (right-click a track), templates, UI scale\n"
+        "- Samples browser opens Downloads, with search\n- Shows up in OBS / Discord capture");
+}
 
 void HHLookAndFeel::refreshColours()
 {
@@ -456,6 +495,10 @@ public:
                 const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
+                juce::PopupMenu fm;
+                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "Clean" };
+                for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                m.addSubMenu ("Font", fm);
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
         }
@@ -475,6 +518,7 @@ public:
             if (id - 300 < ts.size()) newProject (ts[id - 300]);
             return;
         }
+        if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
         if (id >= 200 && id < 208)
         {
             const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };

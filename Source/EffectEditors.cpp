@@ -16,6 +16,7 @@ public:
         setResizable (false, false);
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
+        makeCaptureFriendly (*this);
         startTimer (400);
     }
     void closeButtonPressed() override { close (this); }
