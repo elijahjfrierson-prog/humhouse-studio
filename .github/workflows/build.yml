@@ -1,0 +1,125 @@
+name: Build HumHouse Studio
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (universal .pkg)
+            os: macos-14
+            artifact: HumHouse-Studio-macOS
+          - name: Windows (Setup.exe)
+            os: windows-2022
+            artifact: HumHouse-Studio-Windows-x64
+          - name: Linux (tests)
+            os: ubuntu-22.04
+            artifact: HumHouse-Studio-Linux-x86_64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev libxrender-dev \
+            libxcomposite-dev libxext-dev libgtk-3-dev
+
+      - name: Configure (macOS, universal)
+        if: runner.os == 'macOS'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -A x64
+
+      # Unbounded -j runs hosted runners out of memory compiling JUCE.
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package .pkg (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID }}
+          APPLE_INSTALLER_ID: ${{ secrets.APPLE_INSTALLER_ID }}
+        run: |
+          mkdir -p artifacts
+          ./scripts/package_macos_pkg.sh
+          mv HumHouse-Studio-macOS.pkg artifacts/
+
+      - name: Verify macOS installer
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          pkgutil --expand artifacts/HumHouse-Studio-macOS.pkg /tmp/pkg_expanded
+          test -s /tmp/pkg_expanded/Resources/license.txt || { echo "no EULA pane"; exit 1; }
+          sudo installer -pkg artifacts/HumHouse-Studio-macOS.pkg -target /
+          sudo installer -pkg artifacts/HumHouse-Studio-macOS.pkg -target /
+          test -x "/Applications/HumHouse Studio.app/Contents/MacOS/HumHouse Studio" || {
+            echo "app not in /Applications"; pkgutil --pkg-info com.humhouse.studio.installer.app || true
+            pkgutil --files com.humhouse.studio.installer.app | head || true; exit 1; }
+
+      - name: Package Setup.exe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc installer/windows/HumHouseStudio.iss
+          Copy-Item HumHouse-Studio-Windows-Setup.exe artifacts/
+
+      - name: Verify Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $exe = 'artifacts/HumHouse-Studio-Windows-Setup.exe'
+          if ((Get-Item $exe).Length -lt 1MB) { throw "installer too small" }
+          Start-Process -Wait -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          Start-Process -Wait -FilePath $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          foreach ($p in @("$env:ProgramFiles\HumHouse\HumHouse Studio\HumHouse Studio.exe", "$env:ProgramFiles\HumHouse\HumHouse Studio\LICENSE.txt")) {
+            if (-not (Test-Path -LiteralPath $p)) { throw "missing $p" }
+          }
+
+      - name: Stage artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p artifacts
+          cp "build/HumHouseStudio_artefacts/Release/HumHouse Studio" artifacts/
+          cp installer/LICENSE.txt artifacts/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Upload release asset
+        if: github.event_name == 'release' && runner.os != 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ runner.os == 'macOS' && 'artifacts/HumHouse-Studio-macOS.pkg' || '' }}
+            ${{ runner.os == 'Windows' && 'artifacts/HumHouse-Studio-Windows-Setup.exe' || '' }}
