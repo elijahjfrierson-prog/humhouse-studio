@@ -198,7 +198,7 @@ juce::String Engine::recoverFromPluginCrash()
 
 struct Engine::TrackRuntime
 {
-    juce::AudioBuffer<float> in, out;
+    juce::AudioBuffer<float> in, out, dry;
     std::vector<std::unique_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
     int silentSamples = 0;
@@ -439,7 +439,7 @@ void Engine::sync()
         {
             std::unique_ptr<TrackRuntime> rt;
             if (t < trackRt.size() && trackRt[t]) rt = std::move (trackRt[t]);
-            else { rt = std::make_unique<TrackRuntime>(); rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); }
+            else { rt = std::make_unique<TrackRuntime>(); rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock); }
             std::vector<std::unique_ptr<FxRuntime>> chain;
             for (auto& slot : proj.mixer[t].fx)
             {
@@ -529,7 +529,7 @@ void Engine::prepareRuntimes()
     }
     for (auto& t : trackRt)
     {
-        t->in.setSize (2, maxBlock); t->out.setSize (2, maxBlock);
+        t->in.setSize (2, maxBlock); t->out.setSize (2, maxBlock); t->dry.setSize (2, maxBlock);
         for (auto& f : t->fx)
         {
             if (f->builtin) f->builtin->prepare (sampleRate, maxBlock);
@@ -1014,7 +1014,13 @@ void Engine::processTrack (int t)
         {
             auto& slot = mt.fx[k];
             auto& f = *tr.fx[k];
-            if (slot.bypass) continue;
+            const float mix = juce::jlimit (0.0f, 1.0f, slot.mix);
+            if (slot.bypass || mix <= 0.0f) continue;
+            const bool blend = mix < 0.999f && n <= tr.dry.getNumSamples();
+            if (blend) for (int c = 0; c < 2; ++c) tr.dry.copyFrom (c, 0, view, c, 0, n);
+            struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
+                ~Blend() { if (on) for (int c = 0; c < 2; ++c) { v.applyGain (c, 0, n, mix); v.addFrom (c, 0, d, c, 0, n, 1.0f - mix); } } }
+                blendOut { view, tr.dry, n, mix, blend };
             if (f.builtin) f.builtin->process (view, n, ctx);
             else if (f.plugin)
             {
@@ -1154,8 +1160,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         {
             auto& lane = proj.lanes[l];
             if (! lane.armed) continue;
-            const int c0 = lane.inputPair * 2, c1 = c0 + 1;
-            const float* il = c0 < numIn ? in[c0] : nullptr;
+            const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
+            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
             const float* ir = c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;

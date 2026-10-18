@@ -4,7 +4,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-VERSION="${VERSION:-1.2.0}"
+VERSION="${VERSION:-1.2.1}"
 BUNDLE_ID="com.humhouse.studio.installer"
 PKG_OUT="${PKG_OUT:-HumHouse-Studio-macOS.pkg}"
 NAME="HumHouse Studio"

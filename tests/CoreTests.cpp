@@ -105,6 +105,30 @@ int main()
         run (10);
         CHECK (true);
     }
+    // MONO input (mic on in 1 only) is heard in both ears; STEREO keeps the pair
+    for (int stereo = 0; stereo < 2; ++stereo)
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[0].armed = true; p.lanes[0].monitor = true;
+        p.lanes[0].stereoIn = stereo == 1; p.lanes[0].inputCh = 0; p.lanes[0].inputPair = 0;
+        juce::AudioBuffer<float> mic (2, 512), out (2, 512);
+        mic.clear();
+        for (int i = 0; i < 512; ++i) mic.setSample (0, i, 0.3f * std::sin (i * 0.07f));
+        float pl = 0, pr = 0;
+        for (int b = 0; b < 20; ++b)
+        {
+            const float* ins[2] { mic.getReadPointer (0), mic.getReadPointer (1) };
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (ins, 2, o, 2, 512);
+            pl = std::max (pl, out.getMagnitude (0, 0, 512)); pr = std::max (pr, out.getMagnitude (1, 0, 512));
+        }
+        CHECK (pl > 0.01f);
+        if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
+    }
     // every built-in effect stays finite and silent-in gives finite out
     for (auto& info : builtinEffects())
     {

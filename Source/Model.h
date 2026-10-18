@@ -111,6 +111,8 @@ struct Lane
 {
     juce::String name;
     int  inputPair = 0;            // stereo input pair (0 = in 1/2)
+    int  inputCh = 0;              // mono input channel (0 = in 1)
+    bool stereoIn = false;         // false: mono input centred in both ears
     int  mixerTrack = 0;
     bool armed = false, muted = false;
     bool monitor = true;

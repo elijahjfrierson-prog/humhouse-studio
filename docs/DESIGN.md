@@ -108,3 +108,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: Instrument Pool (Prism, Drift, Lava, Glass, Haze, Nebula + piano/EP/Rhodes/guitar/bass/strings/brass/flute/choir), new synth engines (supersaw, FM, morph, air) + LFO/vibrato; live play from MIDI keyboards and the FL typing keyboard, recorded into the pattern while recording.
 - DONE: View > Detach Channel Rack / Piano Roll / Playlist / Mixer / Plugin House into own resizable windows; per-track height (drag header bottom edge), Alt+wheel all tracks, right-click > Make all tracks small/medium/large.
 - DONE: mini scope on every mixer insert (double-click = full Scope for that track), channel editor WAVE page (sample after SMP edits) + SCOPE page.
+- DONE (1.2.1): per-lane Mono/Stereo record input (mono centred in both ears, default), FX slot dry/wet Mix applied in the engine, double-click channel to change sound in place.

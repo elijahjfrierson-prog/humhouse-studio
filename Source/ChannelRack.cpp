@@ -94,6 +94,8 @@ class ChannelRack;
 struct NameTag : public juce::Component, public juce::SettableTooltipClient
 {
     std::function<void (const juce::MouseEvent&)> onMouse;
+    std::function<void()> onDouble;
+    void mouseDoubleClick (const juce::MouseEvent&) override { if (onDouble) onDouble(); }
     juce::String text; juce::Colour colour; bool selected = false;
     void paint (juce::Graphics& g) override
     {
@@ -150,7 +152,8 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.setTooltip ("Click: open in Piano Roll. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.onDouble = [this] { changeSoundMenu(); };
+        name.setTooltip ("Click: open in Piano Roll. Double-click: change the sound (keeps notes, steps, routing). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
             auto* c = s.channel (channelId);
@@ -199,6 +202,7 @@ struct Row : public juce::Component
         m.addItem (3, "Rename...");
         m.addItem (4, "Route to selected mixer insert (" + juce::String (s.selectedTrack) + ")");
         m.addItem (5, "New mixer insert for this channel");
+        m.addItem (10, "Change sound...");
         m.addItem (6, "Clear notes in this pattern");
         m.addItem (8, "Cut itself (808s never overlap)", c->type == ChannelType::Sampler, c->cutItself);
         m.addItem (9, "One-shot (play whole sample)", c->type == ChannelType::Sampler, c->oneShot);
@@ -207,6 +211,7 @@ struct Row : public juce::Component
         m.showMenuAsync ({}, [this] (int r) {
             const int id = channelId;
             if (r == 1) select (true);
+            else if (r == 10) changeSoundMenu();
             else if (r == 2) openChannelEditor (s, id);
             else if (r == 3) { auto* c = s.channel (id); if (c) askText ("Rename channel", c->name, [this, id] (juce::String t) { s.edit ("Rename", [&] (Project&) { if (auto* ch = s.channel (id)) ch->name = t; }); }); }
             else if (r == 4) s.edit ("Route channel", [&] (Project&) { if (auto* ch = s.channel (id)) ch->mixerTrack = s.selectedTrack; });
@@ -220,6 +225,65 @@ struct Row : public juce::Component
             });
         });
     }
+    void replaceSound (const std::function<void (Channel&)>& make)
+    {
+        const int id = channelId;
+        s.edit ("Change sound", [&] (Project&) {
+            auto* ch = s.channel (id);
+            if (ch == nullptr) return;
+            Channel nc; make (nc);
+            nc.id = ch->id; nc.mixerTrack = ch->mixerTrack; nc.volume = ch->volume; nc.pan = ch->pan; nc.muted = ch->muted; nc.solo = ch->solo;
+            *ch = nc;
+        });
+        s.selectedChannel = id;
+        s.sendChangeMessage();
+    }
+    void changeSoundMenu()
+    {
+        auto* c = s.channel (channelId);
+        if (c == nullptr) return;
+        juce::PopupMenu m, pool, inst;
+        m.addSectionHeader ("Change sound - " + c->name);
+        m.addItem (1, "Sample...");
+        m.addItem (2, "Synth (keys / lead)");
+        m.addItem (3, "808 (glide bass)");
+        pool.addSectionHeader ("Psychedelic synths");
+        for (int i = 0; i < (int) instrumentPool().size(); ++i)
+        {
+            if (i == 6) pool.addSectionHeader ("Live instruments");
+            pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
+        }
+        m.addSubMenu ("Instrument Pool", pool);
+        auto types = s.engine.knownPlugins.getTypes();
+        for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");
+        m.addSubMenu ("Plugin instrument", inst, inst.getNumItems() > 0);
+        const auto startDir = c->sampleFile.existsAsFile() ? c->sampleFile.getParentDirectory()
+                                                           : juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads");
+        m.showMenuAsync ({}, [this, types, startDir] (int r) {
+            if (r == 1)
+            {
+                chooser = std::make_unique<juce::FileChooser> ("Change sample", startDir, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
+                    const auto f = fc.getResult();
+                    if (! f.existsAsFile()) return;
+                    replaceSound ([&] (Channel& n) { n.type = ChannelType::Sampler; n.sampleFile = f; n.name = f.getFileNameWithoutExtension(); });
+                    if (! s.engine.isPlaying()) s.engine.previewFile (f);
+                });
+            }
+            else if (r == 2) replaceSound ([] (Channel& n) { n.type = ChannelType::Synth; n.name = "Synth"; n.colour = juce::Colour (0xff8a7dff); });
+            else if (r == 3) replaceSound ([] (Channel& n) { n.type = ChannelType::Synth; n.name = "808"; n.synth.wave = 4; n.glide = 0.08f; n.mono = true; n.rootKey = 36; n.colour = juce::Colour (0xffff5d8a); });
+            else if (r >= 2000 && r < 2000 + (int) instrumentPool().size())
+                replaceSound ([r] (Channel& n) { n = poolChannel (instrumentPool()[(size_t) (r - 2000)]); });
+            else if (r >= 1000 && r - 1000 < types.size())
+            {
+                const auto d = types[r - 1000];
+                if (s.dirty) writeBackup (s.p());
+                replaceSound ([&d] (Channel& n) { n.type = ChannelType::Plugin; n.name = d.name; n.pluginId = d.createIdentifierString(); n.colour = col::accent2; });
+                openChannelEditor (s, channelId);
+            }
+        });
+    }
+    std::unique_ptr<juce::FileChooser> chooser;
     void resized() override
     {
         auto r = getLocalBounds().reduced (2);
