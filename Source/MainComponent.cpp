@@ -53,6 +53,7 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
         "- Studio EQ: 12-band graph EQ like Parametric EQ 2 (7 on by default, double-click to add, drag, wheel = Q, right-click = type / dynamic)\n"
         "- Factory presets on every effect (PRESETS menu)\n"
         "- Options > Performance: processing threads, multithreading, smart disable; CPU % per FX slot\n"
@@ -161,7 +162,12 @@ Knob::Knob (const juce::String& name, const juce::String& help, double mn, doubl
 {
     setName (name);
     setTooltip (name + " - " + help + "  (double-click resets)");
-    setRange (mn, mx, 0.0);
+    // clean steps (0.01 / 0.1 / 1 / 10 by range) instead of 0.000001 values
+    const double span = mx - mn;
+    const double step = span <= 2.0 ? 0.01 : span <= 60.0 ? 0.1 : span <= 3000.0 ? 1.0 : 10.0;
+    setRange (mn, mx, step);
+    setNumDecimalPlacesToDisplay (step < 0.1 ? 2 : step < 1.0 ? 1 : 0);
+    setVelocityModeParameters (0.4, 1, 0.0, true, juce::ModifierKeys::shiftModifier);   // Shift = fine
     setValue (def, juce::dontSendNotification);
     setDoubleClickReturnValue (true, def);
     setTextValueSuffix (suffix);
