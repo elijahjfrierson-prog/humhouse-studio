@@ -98,5 +98,7 @@ target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
 add_test(NAME HHSTests COMMAND HHSTests)
 
 # classic tattoo lettering (SIL Open Font License, see Resources/Fonts/OFL-*.txt)
-juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf)
-target_link_libraries(HumHouseStudio PRIVATE HHSFonts)
+if(TARGET HumHouseStudio)
+    juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf)
+    target_link_libraries(HumHouseStudio PRIVATE HHSFonts)
+endif()
