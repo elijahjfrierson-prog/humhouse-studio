@@ -19,6 +19,7 @@ public:
     ~WorkerPool();
     void run (int count, Job job, void* ctx);   // blocks until all indices are done
     int size() const { return (int) threads.size(); }
+    std::atomic<long> workerJobs { 0 }, runs { 0 };
 private:
     void workerLoop();
     std::vector<std::thread> threads;
@@ -69,6 +70,7 @@ public:
     // performance (Options > Performance): threads = total processing threads (0 = auto, all cores)
     void setPerformance (int threads, bool multithreaded, bool smartDisable);
     int  processingThreads() const { return (pool ? pool->size() : 0) + 1; }
+    long poolStat (bool workers) const { return pool ? (workers ? pool->workerJobs.load() : pool->runs.load()) : 0; }
     float fxLoad (int track, int slotUid) const;      // share of the audio block this slot used (0..1)
     bool isCountingIn() const { return countingIn.load(); }
 

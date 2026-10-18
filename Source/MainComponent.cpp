@@ -53,6 +53,9 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Studio EQ: 12-band graph EQ like Parametric EQ 2 (7 on by default, double-click to add, drag, wheel = Q, right-click = type / dynamic)\n"
+        "- Factory presets on every effect (PRESETS menu)\n"
+        "- Options > Performance: processing threads, multithreading, smart disable; CPU % per FX slot\n"
         "- AutoPitch: Pitch (+/-12 st), Detune (+/-100 cents), Tuning A4 400-500 Hz; no more cracks (note hold, octave-error filter, smooth bypass)\n"
         "- Recording input Mono (centred in both ears) or Stereo per track\n- Mix knob on every FX slot now blends dry / wet (e.g. 10% EQ)\n- Double-click a channel to change its sound (keeps notes, steps, routing)\n"
         "- Chord stamp in the Piano Roll (STAMP / Alt+T): 24 chords, inversions, lock to scale\n"

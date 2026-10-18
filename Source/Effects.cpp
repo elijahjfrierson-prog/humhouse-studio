@@ -808,7 +808,7 @@ ScopeTap& masterScope() { static ScopeTap t; return t; }
 const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
-        { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ 7", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
+        { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
         { "satur", "Saturator", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },

@@ -26,7 +26,7 @@ struct ParamDef
 class BuiltinEffect
 {
 public:
-    static constexpr int maxParams = 64;
+    static constexpr int maxParams = 128;
     virtual ~BuiltinEffect() = default;
     virtual const char* typeId() const = 0;
     virtual const std::vector<ParamDef>& params() const = 0;

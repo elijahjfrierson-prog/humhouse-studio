@@ -41,6 +41,7 @@ void WorkerPool::workerLoop()
             const int i = next.fetch_add (1);
             if (i >= total.load()) break;
             job.load() (ctx.load(), i);
+            workerJobs.fetch_add (1, std::memory_order_relaxed);
             done.fetch_add (1);
         }
     }
@@ -49,6 +50,7 @@ void WorkerPool::run (int count, Job j, void* c)
 {
     if (count <= 0) return;
     if (threads.empty() || count == 1) { for (int i = 0; i < count; ++i) j (c, i); return; }
+    runs.fetch_add (1, std::memory_order_relaxed);
     job = j; ctx = c; done = 0; total = count; next = 0;
     generation.fetch_add (1, std::memory_order_release);
     cv.notify_all();

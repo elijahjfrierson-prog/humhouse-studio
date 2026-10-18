@@ -143,7 +143,7 @@ int main()
             return out / std::max (in, 1.0e-9f);
         };
         auto eq = createBuiltinEffect ("steq7");
-        eq->setParam ("b2G", 12.0f); eq->setParam ("b2F", 1000.0f);
+        eq->setParam ("e4G", 12.0f); eq->setParam ("e4F", 1000.0f);
         eq->prepare (48000, 512);
         const float nat = run (*eq, 1000, 0.1f, 40, false);
         CHECK (nat > 3.0f && nat < 5.0f);
@@ -156,10 +156,14 @@ int main()
         const float linFlat = run (*eq, 8000, 0.1f, 80, true);
         CHECK (linFlat > 0.8f && linFlat < 1.25f);
         auto dq = createBuiltinEffect ("steq7");
-        dq->setParam ("b2F", 1000.0f); dq->setParam ("b2Dyn", 1.0f); dq->setParam ("b2DTh", -40.0f); dq->setParam ("b2DRg", -12.0f);
+        dq->setParam ("e4F", 1000.0f); dq->setParam ("e4Dyn", 1.0f); dq->setParam ("e4DTh", -40.0f); dq->setParam ("e4DRg", -12.0f);
         dq->prepare (48000, 512);
         CHECK (run (*dq, 1000, 0.5f, 100, false) < 0.5f);
-        CHECK (dq->meter (2) < -6.0f);
+        CHECK (dq->meter (3) < -6.0f);
+        auto e12 = createBuiltinEffect ("steq7");
+        CHECK (e12->params().size() == 122);
+        e12->setParam ("e12On", 1.0f); e12->setParam ("e12F", 1000.0f); e12->setParam ("e12G", -12.0f); e12->prepare (48000, 512);
+        CHECK (std::abs (e12->responseDb (1000.0) + 12.0f) < 0.6f);
         CHECK (run (*dq, 1000, 0.001f, 400, false) > 0.9f);
     }
     // starting playback in the middle of a long synth note still sounds it (FL-style chase)
@@ -260,6 +264,7 @@ int main()
         };
         runFor (50);
         const double mtLoad = runFor (400);
+        std::cout << "pool runs " << e.poolStat (false) << " worker jobs " << e.poolStat (true) << std::endl;
         e.setPerformance (1, false, true);
         const double stLoad = runFor (200);
         e.setPerformance (0, true, true);
