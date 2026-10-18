@@ -59,6 +59,8 @@ void showWhatsNewIfUpdated()
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
         "- FL Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
         "- Ctrl/Cmd+C / X / V copy, cut, paste at the playhead; Ctrl/Cmd+B duplicate; Shift+drag clones; Ctrl/Cmd+D deselect\n"
+        "- Play / Stop / Rec buttons, draggable playhead handle in the ruler, 4 ms declick when starting mid-sound\n"
+        "- Fixed: first note cut when a held note (808 tail) ran over the loop; crash on New project; auto-backup every 8 edits\n"
         "- New Flanger and Flangus (multi-voice) effects with factory presets\n"
         "- Fade bends: drag the round handle on any fade up / down for curved fades\n"
         "- Smoother UI: Playlist / Piano Roll only redraw what moves while playing; Options > capture-friendly drawing toggle (Windows)\n"
@@ -212,6 +214,7 @@ void Studio::commit (const juce::String& what)
     undo.push (p(), what);
     engine.sync();
     dirty = true;
+    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackup (p()); }   // auto-backup every few edits
     sendChangeMessage();
 }
 
@@ -249,6 +252,38 @@ Channel* Studio::channel (int id)
 // ------------------------------------------------------------------ main component
 namespace
 {
+struct BpmSlider : public juce::Slider   // drag / wheel in whole BPM, Shift for 0.01, double-click to type e.g. 144.23
+{
+    double snapValue (double v, DragMode m) override
+    {
+        return (m == notDragging || juce::ModifierKeys::currentModifiers.isShiftDown()) ? std::round (v * 100.0) / 100.0 : std::round (v);
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (w.deltaY == 0.0f) return;
+        const double step = e.mods.isShiftDown() ? 0.01 : 1.0;
+        setValue (std::round ((getValue() + (w.deltaY > 0 ? step : -step)) / step) * step, juce::sendNotificationSync);
+    }
+    juce::String getTextFromValue (double v) override
+    {
+        return juce::String (v, std::abs (v - std::round (v)) < 0.005 ? 0 : 2) + " BPM";
+    }
+};
+struct TransportButton : public juce::TextButton   // drawn icons: font glyphs can be missing in the tattoo fonts
+{
+    int kind = 0;   // 0 play/pause, 1 stop, 2 record
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        getLookAndFeel().drawButtonBackground (g, *this, findColour (getToggleState() ? buttonOnColourId : buttonColourId), over, down);
+        auto r = getLocalBounds().toFloat().withSizeKeepingCentre (14.0f, 14.0f);
+        const bool on = getToggleState();
+        g.setColour (kind == 2 ? (on ? juce::Colours::white : col::rec) : (on ? juce::Colours::black : col::text));
+        if (kind == 0 && on) { g.fillRect (r.removeFromLeft (5.0f)); r.removeFromLeft (4.0f); g.fillRect (r.removeFromLeft (5.0f)); }
+        else if (kind == 0) { juce::Path p; p.addTriangle (r.getX() + 1, r.getY(), r.getX() + 1, r.getBottom(), r.getRight(), r.getCentreY()); g.fillPath (p); }
+        else if (kind == 1) g.fillRect (r.reduced (1.0f));
+        else g.fillEllipse (r);
+    }
+};
 enum MenuIds
 {
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
@@ -344,11 +379,11 @@ public:
         }
         setupButton (songBtn, "PAT", "Pattern / Song mode (L)", true);
         songBtn.onClick = [this] { studio.edit ("Pattern/Song", [this] (Project& p) { p.songMode = songBtn.getToggleState(); }); };
-        setupButton (playBtn, juce::String::fromUTF8 ("\xe2\x96\xb6"), "Play / pause (Space)");
+        setupButton (playBtn, {}, "Play / pause (Space)"); playBtn.kind = 0;
         playBtn.onClick = [this] { engine.togglePlay(); };
-        setupButton (stopBtn, juce::String::fromUTF8 ("\xe2\x96\xa0"), "Stop and return to start");
+        setupButton (stopBtn, {}, "Stop: back to where you started (press again for the song start)"); stopBtn.kind = 1;
         stopBtn.onClick = [this] { engine.stop(); };
-        setupButton (recBtn, juce::String::fromUTF8 ("\xe2\x97\x8f"), "Record (R): records every armed track at once. Drag the playlist ruler to punch in/out");
+        recBtn.kind = 2; setupButton (recBtn, {}, "Record (R): records every armed track at once. Drag the playlist ruler to punch in/out");
         recBtn.setColour (juce::TextButton::buttonOnColourId, col::rec);
         recBtn.onClick = [this] { toggleRecord(); };
         setupButton (metroBtn, "METRO", "Metronome (Ctrl/Cmd+M)", true);
@@ -364,12 +399,11 @@ public:
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
-        for (auto* b : { &songBtn, &playBtn, &stopBtn, &recBtn, &metroBtn, &countBtn, &browserBtn, &themeBtn }) addAndMakeVisible (b);
+        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
-        bpm.setTextValueSuffix (" BPM");
-        bpm.setTooltip ("Tempo - drag up/down or double-click to type");
+        bpm.setTooltip ("Tempo - drag / scroll in whole BPM, Shift for 0.01, double-click to type (e.g. 144.23)");
         bpm.setColour (juce::Slider::trackColourId, col::panel2);
         bpm.setValue (engine.project().bpm, juce::dontSendNotification);
         bpm.onValueChange = [this] { studio.live ([this] (Project& p) { p.bpm = bpm.getValue(); }); if (! bpm.isMouseButtonDown()) studio.commit ("Tempo"); };
@@ -623,7 +657,7 @@ public:
         {
             add (mAudio, "Audio settings (device, buffer size, sample rate)...");
             add (mPlugins, "Plugin House: scan / manage plugins...");
-            add (mAutoBackup, "Auto-backup every 5 minutes", {}, true, autoBackup());
+            add (mAutoBackup, "Auto-backup (every 8 edits + every 2 minutes)", {}, true, autoBackup());
             add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
             add (mMidiInputs, "Connect MIDI keyboards");
             m.addSeparator();
@@ -770,8 +804,9 @@ private:
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    juce::TextButton songBtn, playBtn, stopBtn, recBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
-    juce::Slider bpm;
+    TransportButton playBtn, stopBtn, recBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
+    BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser;
@@ -887,7 +922,7 @@ private:
         }
         if (hint != hintBar.getText()) hintBar.setText (hint, juce::dontSendNotification);
 
-        if (++ticks >= 30 * 300)
+        if (++ticks >= 30 * 120)
         {
             ticks = 0;
             if (autoBackup() && studio.dirty)
@@ -941,6 +976,7 @@ private:
         if (f.getParentDirectory().getFileName() == "Backup") q.projectFile = juce::File();
         closeAllEditorWindows();
         engine.newProject (std::move (q));
+        studio.selectedTrack = 1; studio.selectedLanes.clear(); studio.laneAnchor = -1;
         studio.undo.clear();
         studio.undo.push (engine.project(), "Open");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
@@ -992,6 +1028,7 @@ private:
             if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; }
         }
         engine.newProject (std::move (fresh));
+        studio.selectedTrack = 1; studio.selectedLanes.clear(); studio.laneAnchor = -1;
         studio.undo.clear();
         studio.undo.push (engine.project(), "New project");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;

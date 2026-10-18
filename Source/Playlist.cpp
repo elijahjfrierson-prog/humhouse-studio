@@ -357,8 +357,9 @@ public:
         const float px = beatToX (s.engine.positionBeats());
         if (px >= headerW)
         {
-            juce::Path tri; tri.addTriangle (px - 6, (float) toolbarH, px + 6, (float) toolbarH, px, (float) (toolbarH + 10));
+            juce::Path tri; tri.addTriangle (px - 7, (float) toolbarH + 1, px + 7, (float) toolbarH + 1, px, (float) (toolbarH + 13));
             g.setColour (col::accent2); g.fillPath (tri);
+            g.fillRect (px - 0.75f, (float) toolbarH + 10, 1.5f, (float) (getHeight() - toolbarH - 10));   // line from the handle down through the tracks
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
@@ -382,7 +383,11 @@ public:
         auto& p = s.p();
         changed = false;
         dragStart = e.position;
-        if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW) { drag = Drag::Ruler; return; }
+        if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
+        {
+            drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub : Drag::Ruler;   // grab the playhead handle
+            return;
+        }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
@@ -463,6 +468,12 @@ public:
     {
         auto& p = s.p();
         lastMouse = e.getPosition();
+        if (drag == Drag::Scrub)
+        {
+            const double b = xToBeat (e.position.x);
+            s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : snap (b)));
+            repaint(); return;
+        }
         if (drag == Drag::Ruler)
         {
             if (std::abs (e.position.x - dragStart.x) < 4) return;
@@ -702,7 +713,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee };
+    enum class Drag { None, Ruler, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee };
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
     juce::OwnedArray<juce::TextButton> toolBtns;

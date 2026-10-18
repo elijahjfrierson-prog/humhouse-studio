@@ -174,6 +174,47 @@ int main()
         }
         if (amp < 0.1f) CHECK (pk > 0.15f); else CHECK (pk < 1.0f && pk > 0.3f);
     }
+    // WAV export: right length, real level, first note at the very start is there
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = false;
+        Channel c; c.type = ChannelType::Synth; c.name = "Lead"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        Note nt; nt.key = 48; nt.start = 0.0; nt.length = 1.0; nt.velocity = 0.9f;
+        p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+        e.sync();
+        const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_export_test.wav");
+        CHECK (e.renderToWav (f, false, {}, -1));
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> rd (wav.createReaderFor (f.createInputStream().release(), true));
+        CHECK (rd != nullptr);
+        if (rd)
+        {
+            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats() + 2.0;
+            CHECK (std::abs ((double) rd->lengthInSamples - secs * 44100.0) < 1024.0);
+            juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples);
+            rd->read (&b, 0, b.getNumSamples(), 0, true, true);
+            CHECK (b.getMagnitude (0, 0, 2048) > 0.02f);
+            CHECK (b.getMagnitude (0, b.getNumSamples()) < 1.5f);
+        }
+        f.deleteFile();
+    }
+    // a held note longer than the loop must not cut the same note when the loop comes round
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = false;
+        Channel c; c.type = ChannelType::Synth; c.name = "808"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        auto& pat = p.patterns[(size_t) p.currentPattern];
+        const double len = pat.lengthBeats();
+        Note nt; nt.key = 36; nt.start = 0.0; nt.length = len * 2.0; nt.velocity = 0.9f;
+        pat.notes[id].push_back (nt);
+        e.sync(); e.setPositionBeats (0.0); e.play();
+        const double spbS = 60.0 / p.bpm * 44100.0;
+        renderPeak (e, (int) ((len * 2.0 + 0.3) * spbS / 512.0));
+        CHECK (renderPeak (e, 8) > 0.01f);
+        e.stop();
+    }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
     for (const char* id : { "flanger", "flangus" })
     {

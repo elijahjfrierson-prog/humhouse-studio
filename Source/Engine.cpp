@@ -26,7 +26,7 @@ void WorkerPool::workerLoop()
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
-            if (std::chrono::steady_clock::now() - lastWork < std::chrono::milliseconds (40)) std::this_thread::yield();
+            if (std::chrono::steady_clock::now() - lastWork < std::chrono::microseconds (300)) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
             else
             {
                 std::unique_lock<std::mutex> lk (m);
@@ -82,6 +82,7 @@ struct Engine::ChannelRuntime
     int silentBlocks = 0;
     int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
+    bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
 
 struct FxRuntime
@@ -268,6 +269,8 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
 
 void Engine::newProject (Project p)
 {
+    if (recording.load()) setRecording (false);
+    if (playing.load()) stop();
     {
         const juce::ScopedLock sl (lock);
         playing = false;
@@ -669,6 +672,7 @@ void Engine::play()
         countingIn = countInRemaining > 0.0;
     }
     chasePending = true;
+    if (std::abs (std::fmod (position.load() * 4.0, 1.0)) > 1.0e-6) declickGain = 0.0f;   // off the grid: fade in
     playing = true;
 }
 
@@ -689,7 +693,11 @@ void Engine::stop()
     if (proj.returnToStart) position = startBeat;
 }
 
-void Engine::setPositionBeats (double b) { position = std::max (0.0, b); startBeat = position; chasePending = true; }
+void Engine::setPositionBeats (double b)
+{
+    position = std::max (0.0, b); startBeat = position; chasePending = true;
+    if (playing.load()) declickGain = 0.0f;
+}
 
 void Engine::setRecording (bool r)
 {
@@ -913,6 +921,17 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     {
         auto* rt = channelOrder[ci];
         const int o = toOffset (absStart);
+        // a held note on the same key (e.g. a long 808 tail across the loop) must not cut this new one:
+        // end it right here and drop its later note-off
+        for (int k = 0; k < rt->numEvents;)
+        {
+            const auto& ev = rt->events[(size_t) k];
+            if (! ev.on && ev.key == note.key && ev.offset >= o) rt->events[(size_t) k] = rt->events[(size_t) --rt->numEvents];
+            else ++k;
+        }
+        for (int k = 0; k < rt->numActive;)
+            if (rt->active[(size_t) k].key == note.key) { rt->addEvent ({ o, note.key, 0, false, false }); rt->active[(size_t) k] = rt->active[(size_t) --rt->numActive]; }
+            else ++k;
         rt->addEvent ({ o, note.key, note.velocity, true, note.slide });
         if (rt->numActive < (int) rt->active.size())
             rt->active[(size_t) rt->numActive++] = { note.key, note.length * spb + (o - off) };
@@ -929,6 +948,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
         Note tail = note; tail.length = end - b0; tail.slide = false;
         emit (ci, tail, b0);
+        declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in
     };
 
     for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
@@ -1196,7 +1216,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         previewFifo.prepareToRead (previewFifo.getNumReady(), s1, n1, s2, n2);
         auto handle = [&] (const PreviewEvent& ev)
         {
-            for (auto* rt : channelOrder) if (rt->id == ev.channelId) rt->addEvent ({ 0, ev.key, ev.vel, ev.on, false });
+            for (auto* rt : channelOrder)
+                if (rt->id == ev.channelId && (ev.on || ! playing.load() || ! rt->holds (ev.key)))   // a preview release must not cut a playing note
+                    rt->addEvent ({ 0, ev.key, ev.vel, ev.on, false });
         };
         for (int i = 0; i < n1; ++i) handle (previewEvents[(size_t) (s1 + i)]);
         for (int i = 0; i < n2; ++i) handle (previewEvents[(size_t) (s2 + i)]);
@@ -1348,6 +1370,12 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     auto* l = master.getWritePointer (0); auto* r = master.getWritePointer (1);
     if (renderTrackOnly > 0 && renderTrackOnly < (int) trackRt.size())
     { l = trackRt[(size_t) renderTrackOnly]->out.getWritePointer (0); r = trackRt[(size_t) renderTrackOnly]->out.getWritePointer (1); }
+    if (float gn = declickGain.load(); gn < 1.0f)
+    {
+        const float step = 1.0f / (float) (0.004 * sampleRate);
+        for (int i = 0; i < n; ++i) { l[i] *= gn; r[i] *= gn; gn = std::min (1.0f, gn + step); }
+        declickGain = gn;
+    }
     if (doClick) click (l, r, n, clickB0, clickB1);
 
     // browser preview
