@@ -168,7 +168,7 @@ enum MenuIds
 {
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit,
     mUndo = 20, mRedo, mBackupFolder,
-    mBeat = 40, mRecord, mMix, mBrowser,
+    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist,
     mShortcuts = 80, mAbout,
     mHistory = 1000
@@ -424,6 +424,8 @@ public:
             add (mRecord, "Record (Playlist)", "F5", true, view == 1);
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
+            m.addSeparator();
+            add (mSamplesUsed, "Samples used in this project...");
         }
         else if (index == 3)
         {
@@ -460,6 +462,17 @@ public:
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;
+            case mSamplesUsed:
+            {
+                juce::StringArray used;
+                for (auto& c : engine.project().channels)
+                    if (c.type == ChannelType::Sampler && c.sampleFile != juce::File()) used.addIfNotAlreadyThere (c.name + "   -   " + c.sampleFile.getFullPathName());
+                for (auto& c : engine.project().clips)
+                    if (c.isAudio() && ! c.hidden) used.addIfNotAlreadyThere ("[audio] " + c.audioFile.getFileName() + "   -   " + c.audioFile.getFullPathName());
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "Samples used (" + juce::String (used.size()) + ")",
+                                                        used.isEmpty() ? juce::String ("No samples yet - built-in drums only.") : used.joinIntoString ("\n"));
+                break;
+            }
             case mBrowser: browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); break;
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
