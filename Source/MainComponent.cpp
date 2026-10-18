@@ -166,7 +166,7 @@ namespace
 {
 enum MenuIds
 {
-    mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit,
+    mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
     mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist,
@@ -405,6 +405,16 @@ public:
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
+            {
+                juce::PopupMenu tm;
+                auto ts = templateFiles();
+                for (int i = 0; i < ts.size() && i < 90; ++i) tm.addItem (300 + i, ts[i].getFileNameWithoutExtension());
+                if (ts.isEmpty()) tm.addItem (-1, "(no templates yet)", false);
+                m.addSubMenu ("New from template", tm);
+            }
+            add (mSaveTemplate, "Save as template...");
+            add (mDefaultTemplate, "Use this project as default template");
+            add (mClearDefaultTemplate, "Reset default template", {}, defaultTemplate().existsAsFile());
             m.addSeparator();
             add (mExport, "Export WAV...", "Ctrl+R"); add (mExportTrack, "Export selected mixer track (stem)...");
             m.addSeparator(); add (mQuit, "Quit");
@@ -455,6 +465,12 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= 300 && id < 390)
+        {
+            auto ts = templateFiles();
+            if (id - 300 < ts.size()) newProject (ts[id - 300]);
+            return;
+        }
         if (id >= 200 && id < 208)
         {
             const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
@@ -466,6 +482,13 @@ public:
         switch (id)
         {
             case mNew: newProject(); break;
+            case mSaveTemplate: saveTemplate(); break;
+            case mDefaultTemplate:
+                engine.storePluginStates();
+                templatesDir().createDirectory();
+                saveProject (engine.project(), defaultTemplate());
+                break;
+            case mClearDefaultTemplate: defaultTemplate().deleteFile(); break;
             case mOpen: open (false); break;
             case mOpenBackup: open (true); break;
             case mSave: save (false); break;
@@ -661,11 +684,42 @@ private:
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
 
-    void newProject()
+    static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
+    static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
+    static juce::Array<juce::File> templateFiles()
+    {
+        auto fs = templatesDir().findChildFiles (juce::File::findFiles, false, "*.hhs");
+        fs.removeIf ([] (const juce::File& f) { return f.getFileName() == "_default.hhs"; });
+        fs.sort();
+        return fs;
+    }
+    void saveTemplate()
+    {
+        auto* aw = new juce::AlertWindow ("Save as template", "Name this template (tracks, mixer, FX and kit are saved)", juce::MessageBoxIconType::NoIcon);
+        aw->addTextEditor ("name", "My template");
+        aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int r) {
+            const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
+            if (r != 1 || name.isEmpty()) return;
+            engine.storePluginStates();
+            templatesDir().createDirectory();
+            saveProject (engine.project(), templatesDir().getChildFile (name + ".hhs"));
+        }), true);
+    }
+
+    void newProject (juce::File templ = {})
     {
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
         closeAllEditorWindows();
-        engine.newProject (Project::createDefault());
+        if (templ == juce::File()) templ = defaultTemplate();
+        Project fresh = Project::createDefault();
+        if (templ.existsAsFile())
+        {
+            Project t;
+            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; }
+        }
+        engine.newProject (std::move (fresh));
         studio.undo.clear();
         studio.undo.push (engine.project(), "New project");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;

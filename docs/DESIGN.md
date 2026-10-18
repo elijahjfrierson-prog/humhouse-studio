@@ -95,3 +95,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - SHIP POLICY (user 2026-10-18 'no ship as all'): do NOT send partial installers; build every item above, then one CI-green .pkg + Setup.exe.
 - DONE: Playlist laneH even-fill (min 60), + Track / Add insert name 'Track N', mixer title shows track name.
 - DONE: Options > UI scale 75-200% (saved uiScale).
+- DONE: Templates (File > Save as template / New from template / default template in ~/Music/HumHouse Studio/Templates).
