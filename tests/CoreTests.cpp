@@ -131,6 +131,28 @@ int main()
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
         if (! stereo) CHECK (std::abs (pl - 0.3f) < 0.03f);   // default insert + master faders = unity gain (0 dB)
     }
+    // a second take over the same spot drops to the next lane instead of covering the first
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        p.songMode = true;
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[1].armed = true;
+        e.countInOn = false;
+        juce::AudioBuffer<float> mic (1, 512), out (2, 512);
+        for (int i = 0; i < 512; ++i) mic.setSample (0, i, 0.3f * std::sin (i * 0.07f));
+        auto take = [&] {
+            e.setPositionBeats (0.0); e.setRecording (true); e.play();
+            for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
+            e.stop(); e.setRecording (false);
+        };
+        take(); take();
+        int onLane1 = 0, onLane2 = 0;
+        for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { onLane1 += c.lane == 1; onLane2 += c.lane == 2; }
+        CHECK (onLane1 == 1 && onLane2 == 1);
+    }
     // NORM: a quiet mic comes up strong, a loud one never clips
     for (float amp : { 0.02f, 0.9f })
     {

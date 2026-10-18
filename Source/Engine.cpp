@@ -754,6 +754,27 @@ void Engine::finishRecordingWriters()
             newClips.push_back (c);
         }
         if (newClips.empty()) continue;
+        if (! proj.hasPunch())
+        {
+            // FL-style: a new take never covers an earlier one - it drops to the next free lane (same vocal insert)
+            const double a0 = newClips.front().start, a1 = a0 + newClips.front().length;
+            auto overlaps = [&] (int ln) {
+                for (auto& c : proj.clips) if (c.lane == ln && c.isAudio() && ! c.hidden && c.start < a1 && c.start + c.length > a0) return true;
+                return false; };
+            int ln = t->lane;
+            while (overlaps (ln)) ++ln;
+            if (ln != t->lane)
+            {
+                while (ln >= (int) proj.lanes.size()) { Lane nl; nl.name = "Track " + juce::String ((int) proj.lanes.size() + 1); nl.mixerTrack = insert; proj.lanes.push_back (nl); }
+                for (size_t i = 0; i < newClips.size(); ++i)
+                {
+                    newClips[i].lane = ln;
+                    newClips[i].hidden = i + 1 < newClips.size();
+                    proj.clips.push_back (newClips[i]);
+                }
+                continue;
+            }
+        }
         // punch: cut existing clips on this lane at the new take's range (5 ms crossfade via fades)
         const double r0 = newClips.front().start, r1 = newClips.front().start + newClips.front().length;
         std::vector<Clip> keep;

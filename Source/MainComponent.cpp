@@ -53,6 +53,7 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
         "- NORM button on every track: zero-latency auto-normalize for your voice\n"
         "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
         "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
