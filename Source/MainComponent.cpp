@@ -37,6 +37,7 @@ void showWhatsNewIfUpdated()
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
         "- Recording input Mono (centred in both ears) or Stereo per track\n- Mix knob on every FX slot now blends dry / wet (e.g. 10% EQ)\n- Double-click a channel to change its sound (keeps notes, steps, routing)\n"
+        "- Chord stamp in the Piano Roll (STAMP / Alt+T): 24 chords, inversions, lock to scale\n"
         "- Playhead line across Channel Rack, Piano Roll and Playlist; notes under the playhead always sound\n"
         "- Studio EQ 7: draggable EQ graph + live spectrum, Natural / Linear phase, right-click any band for Dynamic EQ\n"
         "- Compressor transfer curve + GR meter; reverb / delay / filter pictures\n"
