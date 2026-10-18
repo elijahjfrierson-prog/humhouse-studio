@@ -175,6 +175,24 @@ public:
                 Lane l; l.name = "Track " + juce::String (p.lanes.size() + 1); l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
             });
         };
+        {
+            const char* labels[] { "SEL", "PAINT", "DEL", "MUTE", "SLICE" };
+            const char* tips[] { "Select / move (E) - click a clip to select, drag to move", "Paint (B) - click empty space to paint copies of the last clip",
+                                 "Delete (D) - click clips to delete them", "Mute (T) - click a clip to mute / unmute it",
+                                 "Slice (C) - click an audio clip to cut it at the snap line" };
+            for (int i = 0; i < 5; ++i)
+            {
+                auto* b = toolBtns.add (new juce::TextButton());
+                setupButton (*b, labels[i], tips[i], true);
+                b->setRadioGroupId (4301);
+                b->onClick = [this, i] { tool = (PTool) i; };
+                addAndMakeVisible (b);
+            }
+            toolBtns[0]->setToggleState (true, juce::dontSendNotification);
+            setupButton (groupBtn, "GROUP", "Group the selected clips so they select and move together (Ctrl/Cmd+G, ungroup Ctrl/Cmd+Shift+G)");
+            groupBtn.onClick = [this] { groupSelected (true); };
+            addAndMakeVisible (groupBtn);
+        }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
         setupButton (rts, "RETURN", "On stop, jump back to where playback started (FL style)", true);
@@ -206,6 +224,10 @@ public:
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
+        t.removeFromLeft (10);
+        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
+        t.removeFromLeft (6);
+        groupBtn.setBounds (t.removeFromLeft (60));
         layoutHeaders();
     }
 
@@ -295,6 +317,52 @@ public:
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
+        if (i < 0 && tool == PTool::Paint)
+        {
+            const int lane = laneAt (e.position.y);
+            if (lane < 0 || lane >= (int) p.lanes.size()) return;
+            const double at = juce::jmax (0.0, std::floor (xToBeat (e.position.x) / gridSnap()) * gridSnap());
+            s.edit ("Paint clip", [&] (Project& pr) {
+                Clip c;
+                auto src = std::find_if (pr.clips.begin(), pr.clips.end(), [this] (const Clip& o) { return o.uid == lastClipUid; });
+                if (src != pr.clips.end()) c = *src;
+                else if (! pr.patterns.empty()) { c.patternIndex = juce::jlimit (0, (int) pr.patterns.size() - 1, pr.currentPattern); c.length = pr.patterns[(size_t) c.patternIndex].lengthBeats(); }
+                else return;
+                c.uid = pr.newUid(); c.lane = lane; c.start = at; c.selected = false; c.group = 0; c.takeGroup = 0; c.hidden = false;
+                pr.clips.push_back (c);
+            });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Delete)
+        {
+            const int g = p.clips[(size_t) i].group, uid = p.clips[(size_t) i].uid;
+            s.edit ("Delete clip", [&] (Project& pr) {
+                pr.clips.erase (std::remove_if (pr.clips.begin(), pr.clips.end(), [&] (const Clip& c) { return c.uid == uid || (g > 0 && c.group == g); }), pr.clips.end());
+            });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Mute)
+        {
+            const int uid = p.clips[(size_t) i].uid;
+            s.edit ("Mute clip", [&] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.muted = ! c.muted; });
+            return;
+        }
+        if (i >= 0 && tool == PTool::Slice)
+        {
+            const int uid = p.clips[(size_t) i].uid;
+            const double at = snap (xToBeat (e.position.x));
+            s.edit ("Slice clip", [&] (Project& pr) {
+                auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+                if (it == pr.clips.end() || ! it->isAudio() || at <= it->start || at >= it->start + it->length) return;
+                Clip b = *it; b.uid = pr.newUid();
+                const double shortFade = secondsToBeats (0.005, pr.bpm);
+                b.start = at; b.length = it->start + it->length - at; b.sourceOffset += beatsToSeconds (at - it->start, pr.bpm);
+                b.fadeIn = shortFade; b.selected = false;
+                it->length = at - it->start; it->fadeOut = shortFade;
+                pr.clips.push_back (b);
+            });
+            return;
+        }
         if (i < 0)
         {
             s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
@@ -305,7 +373,9 @@ public:
         s.live ([&] (Project&) {
             if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) for (auto& c : p.clips) c.selected = false;
             p.clips[(size_t) i].selected = true;
+            if (const int g = p.clips[(size_t) i].group; g > 0) for (auto& c : p.clips) if (c.group == g) c.selected = true;
         });
+        lastClipUid = p.clips[(size_t) i].uid;
         dragClip = i; dragOrig = p.clips;
         drag = part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
              : part == Part::Left ? Drag::Trim : Drag::Move;
@@ -439,6 +509,15 @@ public:
             s.edit ("Delete clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
         }
+        if (k == juce::KeyPress ('g', cmd, 0)) { groupSelected (true); return true; }
+        if (k == juce::KeyPress ('g', cmd | juce::ModifierKeys::shiftModifier, 0)) { groupSelected (false); return true; }
+        if (k.getModifiers().isAnyModifierKeyDown() == false)
+        {
+            const std::pair<int, PTool> keys[] { { 'e', PTool::Select }, { 'b', PTool::Paint }, { 'd', PTool::Delete }, { 't', PTool::Mute }, { 'c', PTool::Slice } };
+            for (auto& [key, tl] : keys)
+                if (k.getKeyCode() == key || k.getKeyCode() == juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key))
+                { tool = tl; toolBtns[(int) tl]->setToggleState (true, juce::dontSendNotification); return true; }
+        }
         if (k == juce::KeyPress ('b', cmd, 0))
         {
             s.edit ("Duplicate clips", [] (Project& p) {
@@ -480,6 +559,21 @@ public:
 
 private:
     enum class Drag { None, Ruler, Move, Resize, Trim, FadeIn, FadeOut };
+    enum class PTool { Select, Paint, Delete, Mute, Slice };
+    PTool tool = PTool::Select;
+    juce::OwnedArray<juce::TextButton> toolBtns;
+    juce::TextButton groupBtn;
+    int lastClipUid = 0;
+    void groupSelected (bool on)
+    {
+        s.edit (on ? "Group clips" : "Ungroup clips", [on] (Project& pr) {
+            int g = 0;
+            if (on) { for (auto& c : pr.clips) g = juce::jmax (g, c.group); ++g; }
+            int n = 0;
+            for (auto& c : pr.clips) if (c.selected) { c.group = on ? g : 0; ++n; }
+            if (on && n < 2) for (auto& c : pr.clips) if (c.group == g) c.group = 0;
+        });
+    }
     enum class Part { Body, Left, Right, FadeIn, FadeOut };
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
@@ -638,6 +732,8 @@ private:
         for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
         m.addSubMenu ("Takes", takes, group.size() > 1);
         m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+        m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
+        m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
             s.edit ("Clip edit", [&] (Project& pr) {
@@ -660,6 +756,42 @@ private:
                 }
                 else if (r == 3) c.muted = ! c.muted;
                 else if (r == 4) c.reversed = ! c.reversed;
+                else if (r == 6 || r == 7)
+                {
+                    int g = 0;
+                    if (r == 6) { for (auto& o : pr.clips) g = juce::jmax (g, o.group); ++g; }
+                    const int old = c.group;
+                    for (auto& o : pr.clips) if (o.selected || o.uid == uid || (r == 7 && old > 0 && o.group == old)) o.group = g;
+                }
+                else if (r == 5 && c.patternIndex >= 0 && c.patternIndex < (int) pr.patterns.size())
+                {
+                    const Clip orig = c;
+                    const Pattern src = pr.patterns[(size_t) orig.patternIndex];
+                    std::vector<Clip> made;
+                    int lane = orig.lane;
+                    for (auto& ch : pr.channels)
+                    {
+                        auto nit = src.notes.find (ch.id);
+                        if (nit == src.notes.end() || nit->second.empty()) continue;
+                        Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour;
+                        one.notes[ch.id] = nit->second;
+                        pr.patterns.push_back (one);
+                        while (lane >= (int) pr.lanes.size())
+                        {
+                            Lane l; l.name = "Track " + juce::String (pr.lanes.size() + 1); l.mixerTrack = pr.addMixerTrack (l.name); pr.lanes.push_back (l);
+                        }
+                        Clip nc = orig; nc.uid = pr.newUid(); nc.lane = lane++; nc.patternIndex = (int) pr.patterns.size() - 1; nc.group = 0; nc.selected = true;
+                        made.push_back (nc);
+                    }
+                    if (made.size() > 1)
+                    {
+                        pr.clips.erase (std::remove_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& o) { return o.uid == uid; }), pr.clips.end());
+                        for (auto& o : pr.clips) o.selected = false;
+                        for (auto& nc : made) pr.clips.push_back (nc);
+                    }
+                    else if (! made.empty()) pr.patterns.pop_back();
+                    return;
+                }
                 else if (r == 10) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = shortFade; });
                 else if (r == 11) forSel ([] (Clip& o) { o.fadeIn = juce::jmin (1.0, o.length * 0.5); });
                 else if (r == 12) forSel ([] (Clip& o) { o.fadeOut = juce::jmin (1.0, o.length * 0.5); });

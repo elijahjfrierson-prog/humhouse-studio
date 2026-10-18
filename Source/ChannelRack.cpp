@@ -270,7 +270,15 @@ public:
                     g.setColour (juce::Colours::black.withAlpha (0.6f));
                     for (int k = 1; k < count; ++k) g.fillRect (r.getX() + r.getWidth() * k / count, r.getY() + 3, 1.5f, r.getHeight() - 6);
                 }
-                if (st == playStep) { g.setColour (col::text); g.drawRoundedRectangle (r, 3, 1.5f); }
+                if (st == playStep)
+                {
+                    if (count > 0)   // FL-style: the step lights up as it plays
+                    {
+                        g.setColour (ch->colour.brighter (0.9f).withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (2.0f), 4);
+                        g.setColour (ch->colour.brighter (0.7f)); g.fillRoundedRectangle (r, 3);
+                    }
+                    g.setColour (col::text); g.drawRoundedRectangle (r, 3, 1.5f);
+                }
             }
         }
     }

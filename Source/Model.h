@@ -94,6 +94,7 @@ struct Clip
     float  fadeCurve = 0.0f;        // -1..1 (0 = linear)
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
+    int    group = 0;               // FL-style clip group: grouped clips select / move together
     bool isAudio() const { return patternIndex < 0; }
 };
 

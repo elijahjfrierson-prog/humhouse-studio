@@ -137,11 +137,22 @@ public:
                     if (id != channelId)
                         for (auto& n : list) { g.setColour (col::dim.withAlpha (0.25f)); g.fillRect (noteRect (n)); }
             // notes
+            double playLocal = -1.0;
+            if (s.engine.isPlaying())
+            {
+                const double pos = p.songMode ? s.engine.positionBeats() : std::fmod (s.engine.positionBeats(), patLen);
+                playLocal = p.songMode ? -1.0 : pos;
+                if (p.songMode)
+                    for (auto& c : p.clips)
+                        if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) playLocal = std::fmod (pos - c.start, patLen);
+            }
             for (auto& n : s.notes (channelId))
             {
                 auto r = noteRect (n);
                 if (r.getRight() < ga.getX() || r.getX() > ga.getRight()) continue;
+                const bool playing = ! n.muted && playLocal >= n.start && playLocal < n.start + n.length;
                 auto c = n.muted ? col::dim : ch->colour.withMultipliedBrightness (0.55f + 0.45f * n.velocity);
+                if (playing) { g.setColour (ch->colour.brighter (0.9f).withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (2.0f), 3.5f); c = c.brighter (0.8f); }
                 g.setColour (c); g.fillRoundedRectangle (r, 2.5f);
                 g.setColour (n.selected ? juce::Colours::white : juce::Colours::black.withAlpha (0.5f));
                 g.drawRoundedRectangle (r, 2.5f, n.selected ? 1.6f : 1.0f);

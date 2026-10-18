@@ -95,7 +95,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); t.setProperty ("file", fileStr (c.audioFile), nullptr);
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
-        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr);
+        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         t.setProperty ("hidden", c.hidden, nullptr);
         clips.appendChild (t, nullptr);
     }
@@ -169,7 +169,7 @@ Project projectFromTree (const juce::ValueTree& root)
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"];
         c.audioFile = strFile (t["file"].toString()); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
-        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.hidden = t["hidden"];
+        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
         p.clips.push_back (c);
     }
     for (auto t : root.getChildWithName ("MIXER"))

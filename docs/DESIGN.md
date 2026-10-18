@@ -101,3 +101,4 @@ Classic, Modern, Hard (robot), Natural. Pitch detect = YIN on downsampled mono.
 - DONE: Mixer routing wires (WireOverlay cables from each insert to send targets/master; selected insert highlighted).
 - DONE: Right-click track header / mixer insert > Presets (add effect from saved preset, FX chain presets save/load incl. plugin state).
 - DONE: Piano roll FL toolbar DRAW/PAINT/DEL/MUTE/SLICE/SEL/ZOOM + keys P B D T C E Z.
+- DONE: Playlist tools SEL/PAINT/DEL/MUTE/SLICE (+E B D T C), clip GROUP (Ctrl/Cmd+G, Shift ungroup, Clip.group saved), Split by channel, notes/steps light up as they play.
