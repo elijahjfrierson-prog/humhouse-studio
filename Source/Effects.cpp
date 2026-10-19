@@ -945,7 +945,7 @@ const std::vector<EffectInfo>& builtinEffects()
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
-        { "satur", "Saturator", "Studio" },
+        { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },

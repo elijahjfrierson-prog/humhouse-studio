@@ -467,8 +467,87 @@ private:
     double sr = 44100; CompCore core; Biquad eq[4]; float gate = 1;
 };
 
+// Studio Vocal: zero-latency vocal smoother. Four dynamic bell cuts (box, nasal, harsh, sibilance) only dip when
+// their band rings out above the rest of the voice, stereo-linked, plus tube-style warmth and "silk" air harmonics.
+class StudioVocal : public BuiltinEffect
+{
+public:
+    StudioVocal() { initDefaults(); }
+    const char* typeId() const override { return "stvocal"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "smooth", "Smooth", 0, 1, 0.5f }, { "deess", "De-Ess", 0, 1, 0.4f },
+                                                 { "silk", "Silk (air)", 0, 1, 0.3f }, { "warmth", "Warmth", 0, 1, 0.2f },
+                                                 { "out", "Output", -12, 12, 0 }, { "mix", "Mix", 0, 1, 1 } };
+        return ps;
+    }
+    void prepare (double s, int) override
+    {
+        sr = s;
+        static const float fq[kBands] = { 300.0f, 1000.0f, 3200.0f, 7000.0f }, qs[kBands] = { 1.4f, 1.8f, 2.0f, 1.5f };
+        for (int b = 0; b < kBands; ++b) { cut[b].set (fq[b], qs[b], sr); det[b] = cut[b]; for (auto& st : stCut[b]) st = {}; stDet[b] = {}; env[b] = 0.0f; gain[b] = 1.0f; }
+        air.set (5000.0f, 0.7f, sr); stAir[0] = stAir[1] = {};
+        envAll = 0.0f;
+        atk = (float) (1.0 - std::exp (-1.0 / (0.003 * sr))); rel = (float) (1.0 - std::exp (-1.0 / (0.08 * sr)));
+    }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        static const float relTh[kBands] = { -6.0f, -10.0f, -14.0f, -16.0f };
+        const float amt[kBands] = { p (0), p (0), p (0), p (1) };
+        const float silk = p (2), warm = p (3), og = dB (p (4)), mix = p (5);
+        const float drive = 1.0f + 3.0f * warm;
+        auto* L = b.getWritePointer (0); auto* R = b.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = 0.5f * (L[i] + R[i]);
+            envAll += (m * m - envAll) * (m * m > envAll ? atk : rel);
+            float x[2] = { L[i], R[i] };
+            const float dryL = x[0], dryR = x[1];
+            for (int k = 0; k < kBands; ++k)
+            {
+                const float bp = det[k].band (stDet[k], m);
+                const float e2 = bp * bp;
+                env[k] += (e2 - env[k]) * (e2 > env[k] ? atk : rel);
+                float target = 1.0f;
+                if (amt[k] > 0.0f && envAll > 1.0e-9f)
+                {
+                    const float over = 10.0f * std::log10 ((env[k] + 1.0e-12f) / envAll) - relTh[k];
+                    if (over > 0.0f) target = dB (-std::min (over * (0.4f + 0.6f * amt[k]), 12.0f * amt[k]));
+                }
+                gain[k] += (target - gain[k]) * (target < gain[k] ? atk : rel);
+                for (int c = 0; c < 2; ++c) x[c] -= (1.0f - gain[k]) * cut[k].band (stCut[k][c], x[c]);
+            }
+            for (int c = 0; c < 2; ++c)
+            {
+                float y = warm > 0.0f ? std::tanh (drive * x[c]) / drive : x[c];
+                if (silk > 0.0f) { const float h = air.high (stAir[c], y); y += silk * 0.5f * std::tanh (2.5f * h); }
+                x[c] = y;
+            }
+            L[i] = (dryL * (1.0f - mix) + x[0] * mix) * og;
+            R[i] = (dryR * (1.0f - mix) + x[1] * mix) * og;
+        }
+    }
+    int latencySamples() const override { return 0; }
+private:
+    static constexpr int kBands = 4;
+    struct St { float ic1 = 0, ic2 = 0; };
+    struct Svf   // TPT state-variable filter; band() has unity peak gain
+    {
+        float a1 = 0, a2 = 0, a3 = 0, k = 1;
+        void set (float f, float q, double s) { const float g = std::tan (juce::MathConstants<float>::pi * juce::jmin (f, (float) s * 0.45f) / (float) s); k = 1.0f / q; a1 = 1.0f / (1.0f + g * (g + k)); a2 = g * a1; a3 = g * a2; }
+        void tick (St& s, float x, float& v1, float& v2) const { const float v3 = x - s.ic2; v1 = a1 * s.ic1 + a2 * v3; v2 = s.ic2 + a2 * s.ic1 + a3 * v3; s.ic1 = 2 * v1 - s.ic1; s.ic2 = 2 * v2 - s.ic2; }
+        float band (St& s, float x) const { float v1, v2; tick (s, x, v1, v2); return k * v1; }
+        float high (St& s, float x) const { float v1, v2; tick (s, x, v1, v2); return x - k * v1 - v2; }
+    };
+    Svf cut[kBands], det[kBands], air;
+    St stCut[kBands][2], stDet[kBands], stAir[2];
+    float env[kBands] {}, gain[kBands] { 1, 1, 1, 1 }, envAll = 0, atk = 0.01f, rel = 0.001f;
+    double sr = 44100;
+};
+
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id)
 {
+    if (id == "stvocal") return std::make_unique<StudioVocal>();
     if (id == "steq7") return std::make_unique<StudioEQ7>();
     if (id == "stdyn") return std::make_unique<StudioDyn>();
     if (id == "fet76") return std::make_unique<Fet76>();

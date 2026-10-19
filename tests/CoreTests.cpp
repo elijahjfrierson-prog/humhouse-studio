@@ -272,6 +272,15 @@ int main()
         CHECK (lin > 3.0f && lin < 5.0f);
         const float linFlat = run (*eq, 8000, 0.1f, 80, true);
         CHECK (linFlat > 0.8f && linFlat < 1.25f);
+        {   // Studio Vocal: dips a ringing 3.2 kHz resonance, leaves the low voice alone, 0 latency
+            auto sv = createBuiltinEffect ("stvocal"); CHECK (sv != nullptr);
+            sv->setParam ("smooth", 1.0f); sv->setParam ("silk", 0.0f); sv->setParam ("warmth", 0.0f); sv->prepare (48000, 512);
+            const float harsh = run (*sv, 3200, 0.2f, 60, false);
+            sv->prepare (48000, 512);
+            const float low = run (*sv, 120, 0.2f, 60, false);
+            std::printf ("studio vocal: 3.2 kHz resonance %.1f dB, 120 Hz %.1f dB\n", 20 * std::log10 (harsh), 20 * std::log10 (low));
+            CHECK (harsh < 0.7f); CHECK (low > 0.8f && low < 1.15f); CHECK (sv->latencySamples() == 0);
+        }
         auto dq = createBuiltinEffect ("steq7");
         dq->setParam ("e4F", 1000.0f); dq->setParam ("e4Dyn", 1.0f); dq->setParam ("e4DTh", -40.0f); dq->setParam ("e4DRg", -12.0f);
         dq->prepare (48000, 512);
