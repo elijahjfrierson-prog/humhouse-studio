@@ -419,6 +419,7 @@ void Engine::sync()
             }
             else if ((f->builtin = createBuiltinEffect (slot.type)))
             {
+                for (auto& [id, v] : slot.params) f->builtin->setParam (id, v);   // saved knobs first, so prepare() sets up e.g. linear phase off the audio thread
                 f->builtin->prepare (sampleRate, maxBlock);
                 f->tail = f->builtin->tailSeconds() + 0.5;
             }

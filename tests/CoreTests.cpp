@@ -525,6 +525,12 @@ int main()
         Project q; CHECK (loadProject (q, f));
         CHECK (q.bpm == 151 && q.channels.size() == p.channels.size() && q.mixer[1].fx.size() == 1);
         CHECK (q.patterns[0].notes.size() == p.patterns[0].notes.size());
+        {   // reopening a project brings every built-in effect back with its saved knobs, not defaults
+            Engine e; e.prepare (44100, 512);
+            e.project() = q; e.sync();
+            auto* fx = e.builtinFx (1, q.mixer[1].fx[0].uid);
+            CHECK (fx != nullptr && std::abs (fx->getParam ("ratio") - 6.0f) < 1.0e-4f);
+        }
         UndoHistory h; h.push (p, "a"); p.bpm = 90; h.push (p, "b");
         CHECK (h.undo (p) && p.bpm == 151 && h.redo (p) && p.bpm == 90);
         f.deleteFile();
