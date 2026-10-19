@@ -418,6 +418,13 @@ public:
         mixer = createMixer (studio);
         browser = createBrowser (studio);
         for (auto* c : { rack.get(), piano.get(), playlist.get(), mixer.get(), browser.get() }) addChildComponent (c);
+        addChildComponent (pianoSplit);
+        pianoSplit.onDrag = [this] (int y) {
+            if (splitTotal <= 0) return;
+            pianoMin = y > splitTop + splitTotal - 70;
+            if (! pianoMin) rackFrac = juce::jlimit (0.15f, 0.9f, (float) (y - splitTop) / (float) splitTotal);
+            resized(); };
+        pianoSplit.onToggle = [this] { pianoMin = ! pianoMin; resized(); };
 
         titleLabel.setText ("HUMHOUSE", juce::dontSendNotification);
         titleLabel.setFont (juce::FontOptions (19.0f, juce::Font::bold));
@@ -569,9 +576,17 @@ public:
         if (pianoHere) piano->setVisible (view == 0);
         if (here (playlist)) playlist->setVisible (view == 1);
         if (here (mixer)) mixer->setVisible (view == 2);
+        pianoSplit.setVisible (false);
         if (view == 0)
         {
-            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (260, (int) (r.getHeight() * 0.55f)))); piano->setBounds (r); }
+            if (rackHere && pianoHere)
+            {
+                splitTop = r.getY(); splitTotal = r.getHeight();
+                const int rh = pianoMin ? splitTotal - 22 : juce::jlimit (80, juce::jmax (80, splitTotal - 140), (int) (splitTotal * rackFrac));
+                rack->setBounds (r.removeFromTop (rh));
+                pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (22)); pianoSplit.repaint();
+                piano->setVisible (! pianoMin); piano->setBounds (r);
+            }
             else if (rackHere) rack->setBounds (r);
             else if (pianoHere) piano->setBounds (r);
         }
@@ -881,6 +896,23 @@ private:
         Engine& e;
     } previewStopper { engine };
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
+    struct SplitBar : juce::Component   // drag to resize Channel Rack vs Piano Roll; click to minimize / show the Piano Roll
+    {
+        SplitBar() { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); }
+        std::function<void (int)> onDrag; std::function<void()> onToggle; bool minimized = false; int startY = 0;
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff15181d));
+            g.setColour (juce::Colour (0xffff8a4c).withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
+            g.setColour (juce::Colours::white.withAlpha (0.6f)); g.setFont (12.0f);
+            g.drawText (minimized ? "PIANO ROLL  [+] click to show" : "PIANO ROLL  [-] click to minimize  |  drag to resize",
+                        getLocalBounds(), juce::Justification::centred);
+        }
+        void mouseDown (const juce::MouseEvent&) override { startY = getY(); }
+        void mouseDrag (const juce::MouseEvent& e) override { if (onDrag && std::abs (e.getDistanceFromDragStartY()) > 2) onDrag (startY + e.getDistanceFromDragStartY()); }
+        void mouseUp (const juce::MouseEvent& e) override { if (! e.mouseWasDraggedSinceMouseDown() && onToggle) onToggle(); }
+    } pianoSplit;
+    float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton playBtn, stopBtn, recBtn;

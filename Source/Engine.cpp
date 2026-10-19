@@ -277,6 +277,30 @@ struct Engine::TrackRuntime
     juce::File frozenFile;
 };
 
+// short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
+struct MemoryClipReader : juce::AudioFormatReader
+{
+    explicit MemoryClipReader (juce::AudioFormatReader& src) : juce::AudioFormatReader (nullptr, "HHS memory")
+    {
+        sampleRate = src.sampleRate; numChannels = juce::jmax (1u, src.numChannels); lengthInSamples = src.lengthInSamples;
+        bitsPerSample = 32; usesFloatingPointData = true;
+        data.setSize ((int) numChannels, (int) lengthInSamples);
+        src.read (&data, 0, (int) lengthInSamples, 0, true, true);
+    }
+    bool readSamples (int* const* dest, int numDest, int startOffsetInDest, juce::int64 start, int num) override
+    {
+        for (int ch = 0; ch < numDest; ++ch)
+        {
+            if (dest[ch] == nullptr) continue;
+            auto* d = reinterpret_cast<float*> (dest[ch]) + startOffsetInDest;
+            const auto* src = data.getReadPointer (juce::jmin (ch, data.getNumChannels() - 1));
+            for (int i = 0; i < num; ++i) { const auto p = start + i; d[i] = p >= 0 && p < lengthInSamples ? src[p] : 0.0f; }
+        }
+        return true;
+    }
+    juce::AudioBuffer<float> data;
+};
+
 struct Engine::ClipRuntime
 {
     int uid = 0;
@@ -462,8 +486,16 @@ void Engine::sync()
         if (auto* r = fm.createReaderFor (c.audioFile))
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
-            rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
-            static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
+            if (r->lengthInSamples > 0 && r->lengthInSamples < (juce::int64) (r->sampleRate * 360))
+            {
+                rt->reader = std::make_unique<MemoryClipReader> (*r);
+                delete r;
+            }
+            else
+            {
+                rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
+                static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
+            }
         }
         rt->tmp.setSize (2, maxBlock * 4 + 8);
         newClips[c.uid] = std::move (rt);
@@ -1388,7 +1420,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             double loopStart = 0.0, loopEnd = loopLength();
             if (proj.songMode && proj.hasPunch() && recording.load() && proj.loopRecord)
             { loopStart = std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar); loopEnd = proj.punchOut; }
-            else if (proj.songMode && proj.hasPunch() && ! recording.load()) { loopStart = proj.punchIn; loopEnd = proj.punchOut; }
+            else if (proj.songMode && proj.hasPunch() && ! recording.load() && ! offline.load()) { loopStart = proj.punchIn; loopEnd = proj.punchOut; }
             if (metronomeOn.load() || (recording.load() && countInOn.load() && false)) { clickB0 = pos; clickB1 = pos + blockBeats; doClick = metronomeOn.load(); }
             int done = 0;
             recordFrom = 0;
@@ -1661,6 +1693,12 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         for (auto& t : trackRt) { t->silentSamples = 0; }
         position = 0.0; playing = true; countingIn = false;
     }
+    // export plays the whole song from bar 1 (no selection loop) and waits for every disk read (no silent gaps)
+    auto setTimeouts = [this] (int ms) {
+        for (auto& [uid, cr] : clipRt) if (auto* br = dynamic_cast<juce::BufferingAudioReader*> (cr->reader.get())) br->setReadTimeout (ms);
+        for (auto& t : trackRt) if (auto* br = dynamic_cast<juce::BufferingAudioReader*> (t->frozen.get())) br->setReadTimeout (ms);
+    };
+    setTimeouts (10000);
     offline = true;
     renderTrackOnly = track;
     const bool rec = recording.load(); recording = false;
@@ -1682,6 +1720,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     writer.reset();
     if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits, format);
     offline = false;
+    setTimeouts (0);
     renderTrackOnly = -1;
     recording = rec;
     {
