@@ -571,7 +571,7 @@ public:
         if (here (mixer)) mixer->setVisible (view == 2);
         if (view == 0)
         {
-            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
+            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (260, (int) (r.getHeight() * 0.55f)))); piano->setBounds (r); }
             else if (rackHere) rack->setBounds (r);
             else if (pianoHere) piano->setBounds (r);
         }

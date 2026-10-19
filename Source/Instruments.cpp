@@ -50,6 +50,7 @@ public:
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
+        if (v->semis != target) v->slid = true;   // a fresh voice that glides in sustains like a legato slide (no dying 808 chains)
         lastSemis = target;
     }
     // Glide = the time the slide takes, whatever the interval (FL): a 1 s glide reaches the note after 1 s

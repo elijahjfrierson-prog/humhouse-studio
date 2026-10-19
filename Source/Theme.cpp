@@ -207,6 +207,8 @@ void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)
     g.strokePath (roof, juce::PathStrokeType (64.0f * k, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.fillRoundedRectangle (X (300), Y (470), 72 * k, 330 * k, 36 * k);
     g.fillRoundedRectangle (X (652), Y (470), 72 * k, 330 * k, 36 * k);
+    g.fillRoundedRectangle (X (120), Y (520), 68 * k, 250 * k, 34 * k);   // headphone cups either side of the house
+    g.fillRoundedRectangle (X (836), Y (520), 68 * k, 250 * k, 34 * k);
     g.setColour (juce::Colours::white);
     const float bx[] { 402, 462, 522, 582 }, bh[] { 120, 240, 170, 80 };
     for (int i = 0; i < 4; ++i) g.fillRoundedRectangle (X (bx[i]), Y (635 - bh[i] / 2), 40 * k, bh[i] * k, 20 * k);
