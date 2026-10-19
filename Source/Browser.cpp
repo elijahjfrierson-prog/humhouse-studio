@@ -245,7 +245,8 @@ public:
         results.setTooltip ("Search results: click to hear, double-click to add to the Channel Rack");
         addChildComponent (results);
         loadFolders();
-        setRoot (juce::File (roots[0]));
+        folders.setSelectedItemIndex (firstKit, juce::dontSendNotification);
+        setRoot (juce::File (roots[firstKit]));   // opens on the built-in kits
     }
     ~SampleBrowser() override { tree.removeListener (this); }
     void paint (juce::Graphics& g) override
@@ -289,6 +290,7 @@ private:
     juce::TextEditor search;
     juce::TextButton addFolder, removeFolder, kitBtn, rackBtn;
     juce::StringArray roots;
+    int firstKit = 0;
     juce::Rectangle<int> header;
     std::unique_ptr<juce::FileChooser> chooser;
 
@@ -306,9 +308,11 @@ private:
         const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
         roots.removeString (lib.getFullPathName());
         if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());
-        const auto kits = bundledSounds();
-        roots.removeString (kits.getFullPathName());
-        if (kits.isDirectory()) roots.insert (1, kits.getFullPathName());   // kits that ship with the app   // sound library: Classic Trap, Etherea Instruments, Triple S Hitters
+        // kits that ship with the app (Classic Trap, Etherea Instruments, Triple S Hitters): each one in the folder list, right after Downloads
+        auto kits = bundledSounds().findChildFiles (juce::File::findDirectories, false);
+        kits.sort();
+        for (int k = kits.size(); --k >= 0;) { roots.removeString (kits[k].getFullPathName()); roots.insert (1, kits[k].getFullPathName()); }
+        firstKit = kits.isEmpty() ? 0 : 1;
         refreshFolders();
     }
     void refreshFolders()

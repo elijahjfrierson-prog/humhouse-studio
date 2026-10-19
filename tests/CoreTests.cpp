@@ -383,7 +383,7 @@ int main()
             double ph = 0; int zc = 0; float prev = 0;
             for (int k = 0; k < 200; ++k)
             {
-                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.5 * std::sin (2 * ph) + 0.33 * std::sin (3 * ph)); ph += juce::MathConstants<double>::twoPi * 261.63 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }   // voice-like: has harmonics
                 ap->process (b, 512, ctx);
                 if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
             }
@@ -530,6 +530,31 @@ int main()
         std::printf ("autopitch ratio %.2f: max delay %.2f ms, max step %.3f\n", ratio, dMax / 48.0, jump);
         CHECK (dMax < 0.012 * 48000);
         CHECK (jump < 0.2 * ratio);
+    }
+    // PSOLA (Retune / Humanize styles): pitch moves, the voice's tone (formant) stays put - no chipmunk
+    {
+        const double fs = 48000, f0 = 168.0, fc = 1000.0, ratio = 1.12;
+        const double rr = std::exp (-juce::MathConstants<double>::pi * 60.0 / fs), cw = std::cos (juce::MathConstants<double>::twoPi * fc / fs);
+        double y1 = 0, y2 = 0, ph = 0, dMax = 0; float prev = 0, jump = 0;
+        PsolaShifter sh; sh.prepare (fs);
+        std::vector<float> out;
+        for (int i = 0; i < 96000; ++i)
+        {
+            ph += f0 / fs; double x = 0; if (ph >= 1.0) { ph -= 1.0; x = 1.0; }
+            const double y = x + 2 * rr * cw * y1 - rr * rr * y2; y2 = y1; y1 = y;
+            float l = 0.02f * (float) y, r = l;
+            sh.process (l, r, ratio, fs / f0);
+            if (i >= 48000) { out.push_back (l); dMax = std::max (dMax, sh.delaySamples()); jump = std::max (jump, std::abs (l - prev)); }
+            prev = l;
+        }
+        auto mag = [&] (double hz) { double re = 0, im = 0; const int N = (int) out.size();
+            for (int i = 0; i < N; ++i) { const double w = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * i / N), a = juce::MathConstants<double>::twoPi * hz * i / fs; re += w * out[(size_t) i] * std::cos (a); im += w * out[(size_t) i] * std::sin (a); }
+            return std::sqrt (re * re + im * im); };
+        int best = 0; double bm = 0;
+        for (int k = 3; k <= 10; ++k) { const double m = mag (k * f0 * ratio); if (m > bm) { bm = m; best = k; } }
+        std::printf ("psola: formant harmonic %d (%.0f Hz, tone kept at ~1 kHz), delay %.1f ms\n", best, best * f0 * ratio, dMax / 48.0);
+        CHECK (best == 5);   // 5 x 188 Hz = 941 Hz stays nearest the 1 kHz formant; a sped-up (chipmunk) voice peaks at 6 x 188 = 1129 Hz
+        CHECK (dMax < 0.03 * fs);
     }
     // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
     {

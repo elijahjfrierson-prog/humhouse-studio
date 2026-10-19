@@ -821,6 +821,55 @@ void SpliceShifter::process (float& l, float& r, double ratio, double period)
     l = yl; r = yr;
 }
 
+void PsolaShifter::prepare (double s)
+{
+    sr = s;
+    int sz = 1; while (sz < (int) (s * 0.5)) sz <<= 1;
+    for (auto* v : { &inL, &inR, &outL, &outR, &wsum }) v->assign ((size_t) sz, 0.0f);
+    mask = sz - 1; n = 0; ts = 0; mark = 0; lat = 0.006 * s; dryL = dryR = 0;
+}
+
+float PsolaShifter::read (const std::vector<float>& b, double pos) const
+{
+    const double fl = std::floor (pos);
+    const long long i = (long long) fl; const float t = (float) (pos - fl);
+    const float y0 = b[(size_t) ((i - 1) & mask)], y1 = b[(size_t) (i & mask)], y2 = b[(size_t) ((i + 1) & mask)], y3 = b[(size_t) ((i + 2) & mask)];
+    const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+    return ((c3 * t + c2) * t + c1) * t + y1;
+}
+
+void PsolaShifter::process (float& l, float& r, double ratio, double period)
+{
+    inL[(size_t) (n & mask)] = l; inR[(size_t) (n & mask)] = r;
+    const double P = juce::jlimit (0.0015 * sr, 0.02 * sr, period > 8.0 ? period : 0.006 * sr);
+    ratio = juce::jlimit (0.25, 4.0, ratio);
+    if (ts < (double) n) ts = (double) n;
+    while (ts - P <= (double) n)   // next grain starts now: lay it out centred on ts
+    {
+        lat += juce::jlimit (-0.05 * P, 0.05 * P, 2.3 * P - lat);              // latency follows the voice slowly (no skips)
+        const double want = ts - lat;
+        double c = mark + P * std::round ((want - mark) / P);                   // stay on the voice's cycle grid
+        if (std::abs (c - want) > P) c = want;                                  // first grain / after a long jump
+        while (c + P > (double) n - 1.0) c -= P;                                // only use input we already have
+        mark = c;
+        for (long long j = (long long) std::ceil (ts - P); j <= (long long) std::floor (ts + P); ++j)
+        {
+            if (j < n) continue;
+            const double off = (double) j - ts;
+            const float w = 0.5f + 0.5f * std::cos (kPi * (float) (off / P));
+            const size_t o = (size_t) (j & mask);
+            outL[o] += w * read (inL, c + off); outR[o] += w * read (inR, c + off); wsum[o] += w;
+        }
+        ts += P / ratio;
+    }
+    const size_t o = (size_t) (n & mask);
+    const float g = 1.0f / std::max (0.5f, wsum[o]);
+    l = outL[o] * g; r = outR[o] * g;
+    outL[o] = outR[o] = wsum[o] = 0.0f;
+    dryL = read (inL, (double) n - lat); dryR = read (inR, (double) n - lat);
+    ++n;
+}
+
 float detectPitchYin (const float* x, int n, double sr, float thresh, float fallback, float loHz, float hiHz, bool* rough)
 {
     if (rough != nullptr) *rough = false;
@@ -895,7 +944,7 @@ public:
     void prepare (double s, int) override
     {
         sr = s;
-        shifter.prepare (s); period = (float) (0.008 * s);
+        shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; detectedMidi.store (0); correctedMidi.store (0);
@@ -991,15 +1040,18 @@ public:
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
             float ratio = currentRatio * offset;
             if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
-            float wl = l[i], wr = r[i];
+            float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
+            // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             shifter.process (wl, wr, ratio, period);
+            psola.process (pl, pr, ratio, period);
+            if (style != 3) { wl = pl; wr = pr; l[i] = psola.dryL; r[i] = psola.dryR; }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
     }
 private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
-    std::vector<float> analysis; SpliceShifter shifter;
+    std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0;
