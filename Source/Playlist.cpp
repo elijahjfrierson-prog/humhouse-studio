@@ -962,6 +962,7 @@ private:
         g.setColour (juce::Colours::black); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
+        else if (! c.isAudio() && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
     }
     void clipMenu (int index)
     {
@@ -985,6 +986,7 @@ private:
         m.addSubMenu ("Takes", takes, group.size() > 1);
         m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
         m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
+        m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
@@ -1007,6 +1009,12 @@ private:
                     }
                 }
                 else if (r == 3) c.muted = ! c.muted;
+                else if (r == 8)
+                {
+                    const int pat = c.patternIndex;
+                    for (auto& o : pr.clips) o.selected = ! o.isAudio() && o.patternIndex == pat;
+                    pr.currentPattern = pat;
+                }
                 else if (r == 4) c.reversed = ! c.reversed;
                 else if (r == 6 || r == 7)
                 {
@@ -1053,6 +1061,18 @@ private:
                 else if (r >= 100 && r < 1000) forSel ([r] (Clip& o) { o.mixerTrack = r - 100; });
                 else if (r >= 1000) { const int keep = r - 1000; for (auto& o : pr.clips) if (o.takeGroup == c.takeGroup) o.hidden = o.uid != keep; }
             });
+            if (r == 8)   // jump the view to the first use
+            {
+                double first = 1.0e9; int lane = 0;
+                for (auto& o : s.p().clips) if (o.selected && o.start < first) { first = o.start; lane = o.lane; }
+                if (first < 1.0e9)
+                {
+                    scrollX = juce::jmax (0.0, first - (double) s.p().beatsPerBar);
+                    scrollY = juce::jmax (0, laneY (lane) + scrollY - (toolbarH + rulerH));
+                    resized();
+                }
+                repaint();
+            }
         });
     }
     void layoutHeaders()
