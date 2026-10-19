@@ -190,6 +190,9 @@ struct Project
     std::vector<Lane>       lanes;
     std::vector<Clip>       clips;
     std::vector<MixerTrack> mixer;   // [0] master
+    std::vector<juce::File> audioPool;   // every audio clip ever used, kept until "Clear unused / Clear all"
+    int  insertPatternAfter (int after, Pattern pt);                 // returns the new index; clip indices are remapped
+    void removePatterns (const std::function<bool (int)>& drop);    // drops patterns + their clips, remaps the rest
     juce::File projectFile;
 
     int nextChannelId = 1;

@@ -737,9 +737,33 @@ public:
         return false;
     }
 
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString() == "sample"; }
-    void itemDropped (const SourceDetails& d) override   // drag from the Samples browser
+    bool isInterestedInDragSource (const SourceDetails& d) override
     {
+        const auto t = d.description.toString();
+        return t == "sample" || t.startsWith ("pattern:") || t.startsWith ("audio:");
+    }
+    void itemDropped (const SourceDetails& d) override   // drag from the Samples browser / PATTERNS tab
+    {
+        const auto desc = d.description.toString();
+        if (desc.startsWith ("audio:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("audio:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
+        if (desc.startsWith ("pattern:"))
+        {
+            const int pat = desc.fromFirstOccurrenceOf ("pattern:", false, false).getIntValue();
+            const double at = juce::jmax (0.0, snap (xToBeat ((float) d.localPosition.x)));
+            int lane = laneAt ((float) d.localPosition.y);
+            s.edit ("Place pattern", [&] (Project& p) {
+                if (pat < 0 || pat >= (int) p.patterns.size()) return;
+                if (lane < 0 || lane >= (int) p.lanes.size())
+                {
+                    Lane l; l.name = p.patterns[(size_t) pat].name; l.mixerTrack = p.addMixerTrack (l.name);
+                    p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                }
+                Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.patternIndex = pat;
+                c.length = p.patterns[(size_t) pat].lengthBeats();
+                p.clips.push_back (c);
+            });
+            return;
+        }
         if (auto* t = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get()))
         {
             juce::StringArray files;

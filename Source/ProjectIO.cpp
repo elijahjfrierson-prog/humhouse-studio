@@ -113,6 +113,9 @@ juce::ValueTree projectToTree (const Project& p)
         clips.appendChild (t, nullptr);
     }
     root.appendChild (clips, nullptr);
+    juce::ValueTree pool ("POOL");
+    for (auto& f : p.audioPool) { juce::ValueTree t ("F"); t.setProperty ("file", fileStr (f), nullptr); pool.appendChild (t, nullptr); }
+    root.appendChild (pool, nullptr);
 
     juce::ValueTree mix ("MIXER");
     for (auto& m : p.mixer)
@@ -197,6 +200,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
         p.clips.push_back (c);
     }
+    for (auto t : root.getChildWithName ("POOL")) p.audioPool.push_back (strFile (t["file"].toString()));
     for (auto t : root.getChildWithName ("MIXER"))
     {
         MixerTrack m; m.name = t["name"].toString(); m.volume = t.getProperty ("vol", 0.8f); m.pan = t["pan"];

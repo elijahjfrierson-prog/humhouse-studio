@@ -1697,6 +1697,9 @@ static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<floa
 
 bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track, int bits, double rate, int format)
 {
+   #if HHS_LICENSED
+    if (! licensed) return false;   // no valid key: nothing exports
+   #endif
     format = juce::jlimit (0, 2, format);
     bits = bits == 16 || bits == 32 || bits == 64 ? bits : 24;
     const bool wasPlaying = playing.load();

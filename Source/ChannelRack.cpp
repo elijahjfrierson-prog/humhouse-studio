@@ -338,7 +338,14 @@ public:
         patternBox.onChange = [this] {
             const int i = patternBox.getSelectedItemIndex();
             if (i == (int) s.p().patterns.size())
-                s.edit ("New pattern", [] (Project& p) { Pattern pt; pt.name = "Pattern " + juce::String (p.patterns.size() + 1); p.patterns.push_back (pt); p.currentPattern = (int) p.patterns.size() - 1; });
+                s.edit ("New pattern", [] (Project& p) {
+                    Pattern pt; pt.name = "Pattern " + juce::String (p.patterns.size() + 1);
+                   #if HHS_LICENSED
+                    p.patterns.push_back (pt); p.currentPattern = (int) p.patterns.size() - 1;
+                   #else
+                    p.currentPattern = p.insertPatternAfter (p.currentPattern, pt);   // stacks right after the pattern you were editing
+                   #endif
+                });
             else if (i >= 0 && i != s.p().currentPattern)
                 s.edit ("Select pattern", [i] (Project& p) { p.currentPattern = i; });
         };

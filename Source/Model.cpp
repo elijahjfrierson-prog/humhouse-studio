@@ -286,4 +286,28 @@ std::vector<int> Project::processingOrder() const
     for (auto& l : processingLevels()) order.insert (order.end(), l.begin(), l.end());
     return order;
 }
+
+int Project::insertPatternAfter (int after, Pattern pt)
+{
+    const int at = juce::jlimit (0, (int) patterns.size(), after + 1);
+    patterns.insert (patterns.begin() + at, std::move (pt));
+    for (auto& c : clips) if (c.patternIndex >= at) ++c.patternIndex;
+    if (currentPattern >= at) ++currentPattern;
+    return at;
+}
+
+void Project::removePatterns (const std::function<bool (int)>& drop)
+{
+    const int n = (int) patterns.size();
+    std::vector<int> remap ((size_t) n, -1);
+    std::vector<Pattern> kept;
+    for (int i = 0; i < n; ++i) if (! drop (i)) { remap[(size_t) i] = (int) kept.size(); kept.push_back (patterns[(size_t) i]); }
+    clips.erase (std::remove_if (clips.begin(), clips.end(), [&] (const Clip& c) {
+        return c.patternIndex >= 0 && (c.patternIndex >= n || remap[(size_t) c.patternIndex] < 0); }), clips.end());
+    for (auto& c : clips) if (c.patternIndex >= 0) c.patternIndex = remap[(size_t) c.patternIndex];
+    const int cur = currentPattern >= 0 && currentPattern < n ? remap[(size_t) currentPattern] : -1;
+    patterns = std::move (kept);
+    if (patterns.empty()) { Pattern pt; pt.name = "Pattern 1"; patterns.push_back (pt); }
+    currentPattern = juce::jlimit (0, (int) patterns.size() - 1, cur < 0 ? 0 : cur);
+}
 }

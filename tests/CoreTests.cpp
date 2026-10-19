@@ -1280,6 +1280,20 @@ int main()
         f.deleteFile();
     }
 
+    // pattern pool: insert after the edited pattern + clear unused keep every clip pointing at the right pattern
+    {
+        Project p; p.patterns.resize (3); for (int i = 0; i < 3; ++i) p.patterns[(size_t) i].name = "P" + juce::String (i);
+        Clip a; a.patternIndex = 0; Clip b; b.patternIndex = 2; p.clips = { a, b }; p.currentPattern = 0;
+        Pattern n; n.name = "new";
+        p.currentPattern = p.insertPatternAfter (0, n);
+        CHECK (p.currentPattern == 1 && p.patterns[1].name == "new" && p.clips[0].patternIndex == 0 && p.clips[1].patternIndex == 3);
+        std::set<int> used { 0, 3 };
+        p.removePatterns ([&] (int i) { return used.count (i) == 0; });
+        CHECK (p.patterns.size() == 2 && p.patterns[1].name == "P2" && p.clips.size() == 2 && p.clips[1].patternIndex == 1 && p.currentPattern == 0);
+        p.removePatterns ([] (int) { return true; });
+        CHECK (p.patterns.size() == 1 && p.clips.empty());
+    }
+
     // license keys: signed, locked to up to 2 Machine IDs; forged / edited keys and other computers fail
     {
         const juce::String key = "HHS1.eyJsaWNfaWQiOiJISFMtQTIwMzlFNUYxMTQxIiwibmFtZSI6IlRlc3QgQnV5ZXIiLCJ1c2VyX2VtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInByb2R1Y3Rfc2t1IjoiaHVtaG91c2Vfc3R1ZGlvIiwiaXNzdWVkX2F0IjoxNzkyNDUwMzEzLCJleHBpcmVzX2F0IjowLCJoYXJkd2FyZV9pZHMiOlsiVEVTVC0wMDAwLTAwMDAtMDAwMSIsIlRFU1QtMDAwMC0wMDAwLTAwMDIiXX0=.8d558a1ac19d617fcc65dde9a510ce053a2b202eaa463b71aecd35ae106260e0a196320924eedb62dba420876a02b952069d1521f7b3d9ea629840d060a6990fa14b442a9c5e89e794f784db0cff1e6e1374e7f6d17636a71889761e10397437d58b2c7b55cf115aa2b9b9ca559d14e4633d0e0c2d77c03943f7c5d59881184d2e929e6e9575dddd8c854262b5b169bfe334775d77ef280186d0757ec2be3e173b73207bd7c7ed178bc3a2864509b0b195ba28a2804eaad4a215fb82b295b24b75f33bb9f92c96e508c91acb45e91c7536998d3137521a3a7782c5139c45d81d87dd2c91e14dda96873be39b75c9f545af8b56ed4d5e4f657b6ed1e739b9abfa";
