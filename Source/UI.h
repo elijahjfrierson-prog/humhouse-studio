@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "Engine.h"
@@ -79,6 +80,61 @@ inline void updateFloating (juce::Component& c)
     if (! floatWithTopmost) return;
     const bool front = juce::Process::isForegroundProcess();
     if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
+}
+
+// FL-style tool cursors (white icon, dark outline so it reads on any background)
+enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom };
+inline juce::MouseCursor toolCursor (CursorIcon k)
+{
+    static std::map<int, juce::MouseCursor> cache;
+    if (auto it = cache.find ((int) k); it != cache.end()) return it->second;
+    constexpr int S = 32;
+    juce::Image img (juce::Image::ARGB, S, S, true);
+    juce::Graphics g (img);
+    juce::Path p;
+    int hx = 2, hy = 2;
+    using juce::AffineTransform;
+    switch (k)
+    {
+        case CursorIcon::Pencil:
+        {
+            juce::Path body; body.addRectangle (-2.5f, 0.0f, 5.0f, 18.0f); body.startNewSubPath (-2.5f, 18.0f);
+            body.lineTo (0.0f, 24.0f); body.lineTo (2.5f, 18.0f); body.closeSubPath();
+            p.addPath (body, AffineTransform::rotation (juce::MathConstants<float>::pi * 0.75f).translated (19.0f, 19.0f));
+            hx = 2; hy = 2; break;
+        }
+        case CursorIcon::Brush:
+        {
+            juce::Path b; b.addRoundedRectangle (-2.0f, 0.0f, 4.0f, 14.0f, 1.5f); b.addEllipse (-4.0f, 13.0f, 8.0f, 9.0f);
+            p.addPath (b, AffineTransform::rotation (juce::MathConstants<float>::pi * 0.75f).translated (24.0f, 24.0f));
+            hx = 4; hy = 4; break;
+        }
+        case CursorIcon::Bin:
+            p.addRectangle (7.0f, 4.0f, 14.0f, 3.0f); p.addRectangle (11.0f, 1.5f, 6.0f, 3.0f);
+            p.startNewSubPath (8.0f, 8.0f); p.lineTo (20.0f, 8.0f); p.lineTo (18.5f, 24.0f); p.lineTo (9.5f, 24.0f); p.closeSubPath();
+            hx = 14; hy = 14; break;
+        case CursorIcon::Mute:
+            p.startNewSubPath (4.0f, 11.0f); p.lineTo (9.0f, 11.0f); p.lineTo (15.0f, 5.0f); p.lineTo (15.0f, 23.0f);
+            p.lineTo (9.0f, 17.0f); p.lineTo (4.0f, 17.0f); p.closeSubPath();
+            p.addLineSegment ({ 18.0f, 9.0f, 26.0f, 19.0f }, 2.5f); p.addLineSegment ({ 26.0f, 9.0f, 18.0f, 19.0f }, 2.5f);
+            hx = 9; hy = 14; break;
+        case CursorIcon::Scissors:
+            p.addEllipse (3.0f, 18.0f, 8.0f, 8.0f); p.addEllipse (17.0f, 18.0f, 8.0f, 8.0f);
+            p.addLineSegment ({ 9.5f, 19.0f, 19.0f, 2.0f }, 2.5f); p.addLineSegment ({ 18.5f, 19.0f, 9.0f, 2.0f }, 2.5f);
+            hx = 14; hy = 2; break;
+        case CursorIcon::Zoom:
+            p.addEllipse (3.0f, 3.0f, 15.0f, 15.0f); p.addLineSegment ({ 16.0f, 16.0f, 26.0f, 26.0f }, 4.0f);
+            hx = 10; hy = 10; break;
+    }
+    g.setColour (juce::Colours::black.withAlpha (0.9f)); g.strokePath (p, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (juce::Colours::white); g.fillPath (p); g.strokePath (p, juce::PathStrokeType (1.0f));
+    if (k == CursorIcon::Scissors || k == CursorIcon::Zoom)
+    {
+        g.setColour (juce::Colours::black); // keep ring holes see-through-ish
+        if (k == CursorIcon::Scissors) { g.fillEllipse (5.5f, 20.5f, 3.0f, 3.0f); g.fillEllipse (19.5f, 20.5f, 3.0f, 3.0f); }
+        else g.fillEllipse (6.0f, 6.0f, 9.0f, 9.0f);
+    }
+    return cache.emplace ((int) k, juce::MouseCursor (img, hx, hy)).first->second;
 }
 
 class HHLookAndFeel : public juce::LookAndFeel_V4

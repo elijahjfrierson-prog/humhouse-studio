@@ -387,6 +387,12 @@ public:
     {
         lastMouse = e.getPosition();
         Part part; const int i = hitClip (e.position, part);
+        if (tool != PTool::Select && e.position.y > toolbarH + rulerH && e.position.x > headerW)
+        {
+            setMouseCursor (tool == PTool::Paint ? toolCursor (CursorIcon::Brush) : tool == PTool::Delete ? toolCursor (CursorIcon::Bin)
+                            : tool == PTool::Mute ? toolCursor (CursorIcon::Mute) : toolCursor (CursorIcon::Scissors));
+            return;
+        }
         setMouseCursor (i < 0 ? juce::MouseCursor::NormalCursor
                         : part == Part::Curve ? juce::MouseCursor::UpDownResizeCursor
                         : part == Part::FadeIn || part == Part::FadeOut ? juce::MouseCursor::PointingHandCursor

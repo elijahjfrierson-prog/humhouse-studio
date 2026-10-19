@@ -252,7 +252,15 @@ public:
         lastMouse = e.getPosition();
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        setMouseCursor (hit >= 0 && edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
+        const bool sizes = hit >= 0 && edge && (editTool == EditTool::Draw || editTool == EditTool::Select || editTool == EditTool::Paint);
+        setMouseCursor (sizes ? juce::MouseCursor (juce::MouseCursor::LeftRightResizeCursor)
+                        : editTool == EditTool::Draw   ? toolCursor (CursorIcon::Pencil)
+                        : editTool == EditTool::Paint  ? toolCursor (CursorIcon::Brush)
+                        : editTool == EditTool::Delete ? toolCursor (CursorIcon::Bin)
+                        : editTool == EditTool::Mute   ? toolCursor (CursorIcon::Mute)
+                        : editTool == EditTool::Slice  ? toolCursor (CursorIcon::Scissors)
+                        : editTool == EditTool::Zoom   ? toolCursor (CursorIcon::Zoom)
+                        : juce::MouseCursor (juce::MouseCursor::NormalCursor));
     }
 
     void mouseDown (const juce::MouseEvent& e) override
