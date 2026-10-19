@@ -373,6 +373,25 @@ int main()
         CHECK (renderPeak (e, 20) > 0.01f);
         e.stop();
     }
+    // every built-in effect: 10 s of stereo audio must cost well under real time (CPU budget per insert)
+    for (auto& info : builtinEffects())
+    {
+        auto fx = createBuiltinEffect (info.id);
+        if (fx == nullptr) continue;
+        fx->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.bpm = 140; ctx.playing = true;
+        juce::Random rnd (7); double ph = 0;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int k = 0; k < 938; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph) + 0.05f * (rnd.nextFloat() - 0.5f); ph += 0.0377; b.setSample (0, i, v); b.setSample (1, i, -v); }
+            ctx.beatPos = k * 512 / (48000.0 * 60.0 / 140.0);
+            fx->process (b, 512, ctx);
+        }
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        std::printf ("cpu %-10s %7.1f ms per 10 s (%.2f%%)\n", info.id, ms, ms / 100.0);
+        CHECK (ms < 3000.0);
+    }
     // AutoPitch CPU: 10 s of a sung note must take a small fraction of real time in every style
     for (int style : { 0, 1, 3 })
     {
