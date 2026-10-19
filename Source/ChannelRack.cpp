@@ -165,7 +165,7 @@ struct Row : public juce::Component
                                     (juce::Component*) &glide, (juce::Component*) &shift, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
         name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
-        name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Drop a sample here: replace this channel's sound. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
             auto* c = s.channel (channelId);
@@ -463,7 +463,7 @@ public:
         }
     }
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
-    void filesDropped (const juce::StringArray& files, int, int) override
+    void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         juce::Array<juce::File> samples;
         for (auto& f : files)
@@ -472,7 +472,30 @@ public:
             if (file.isDirectory()) importKit (s, file);
             else if (isAudioFile (file)) samples.add (file);
         }
+        if (samples.size() == 1 && replaceSampleAt ({ x, y }, samples[0])) return;
         if (! samples.isEmpty()) addSampleChannels (s, samples, samples.size() > 1 ? "Samples" : juce::String());
+    }
+    // FL: a sample dropped onto a channel swaps that channel's sound; its notes, steps, routing and settings stay
+    bool replaceSampleAt (juce::Point<int> pt, const juce::File& f)
+    {
+        if (pt.y < headerH) return false;
+        const int row = (pt.y - headerH + scrollY) / rowH;
+        if (row < 0 || row >= (int) rows.size()) return false;
+        const int id = rows[(size_t) row]->channelId;
+        auto* c = s.channel (id);
+        if (c == nullptr) return false;
+        s.edit ("Replace sample", [&] (Project&) {
+            auto* ch = s.channel (id);
+            if (ch == nullptr) return;
+            if (ch->type != ChannelType::Sampler) { ch->type = ChannelType::Sampler; ch->pluginId = {}; ch->pluginState.reset(); ch->builtinDrum = -1; }
+            ch->sampleFile = f;
+            ch->keyTrack = isMelodicSample (f);
+            ch->name = f.getFileNameWithoutExtension();
+        });
+        s.selectedChannel = id;
+        s.sendChangeMessage();
+        if (! s.engine.isPlaying()) s.engine.previewFile (f);
+        return true;
     }
 
 private:
