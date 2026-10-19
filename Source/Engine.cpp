@@ -870,10 +870,11 @@ void Engine::finishRecordingWriters()
         for (auto& c : proj.clips)
         {
             if (c.lane != t->lane || ! c.isAudio() || c.hidden || c.start >= r1 || c.start + c.length <= r0) { keep.push_back (c); continue; }
-            if (c.start < r0) { Clip a = c; a.length = r0 - c.start; a.fadeOut = 0.02; keep.push_back (a); }
+            // the part after punch-out keeps the old uid, so its already-streaming reader keeps playing with no dropout
+            if (c.start < r0) { Clip a = c; a.uid = proj.newUid(); a.length = r0 - c.start; a.fadeOut = 0.02; keep.push_back (a); }
             if (c.start + c.length > r1)
             {
-                Clip b = c; b.uid = proj.newUid();
+                Clip b = c;
                 b.sourceOffset += (r1 - c.start) * 60.0 / proj.bpm; b.start = r1; b.length = c.start + c.length - r1; b.fadeIn = 0.02;
                 keep.push_back (b);
             }
@@ -893,7 +894,7 @@ void Engine::finishRecordingWriters()
     }
     if (added)
     {
-        juce::MessageManager::callAsync ([this, a = alive] { if (! a->load()) return; sync(); if (onRecordingAdded) onRecordingAdded(); });
+        juce::MessageManager::callAsync ([this, a = alive] { if (! a->load()) return; sync(); primeClipReaders (position.load()); if (onRecordingAdded) onRecordingAdded(); });
     }
 }
 
