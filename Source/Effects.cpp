@@ -875,7 +875,7 @@ public:
         shifter.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -888,7 +888,7 @@ public:
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = juce::jmap (speed, 400.0f, 1.0f);   // retune glide time
+        const float timeMs = 1.0f + 200.0f * (1.0f - speed) * (1.0f - speed);   // retune glide: 0.75 = ~13 ms, so it lands and holds
         const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = style == 3 ? 0.0f : p (2);
@@ -910,14 +910,16 @@ public:
                     if (midi > 0)
                     {
                         period = (float) (sr / hz);
-                        const int target = snapToScale ((int) std::round (midi), root, scale);
+                        int target = snapToScale ((int) std::round (midi), root, scale);
+                        // note hold: stay on the current note through vibrato/drift until the voice is clearly on another one
+                        if (heldNote > 0 && target != heldNote && std::abs (midi - (float) heldNote) < 0.8f && inScale (heldNote, root, scale)) target = heldNote;
+                        heldNote = target;
                         float semis = (float) target - midi;
-                        if (std::abs (semis) < humanize * 0.6f) semis *= (1.0f - humanize);   // let small natural drift through
-                        if (style == 0) semis *= 0.8f;
+                        if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
-                    else targetRatio = 1.0f;
+                    else { targetRatio = 1.0f; heldNote = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -932,6 +934,7 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter;
     float currentRatio = 1, targetRatio = 1;
+    int heldNote = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
