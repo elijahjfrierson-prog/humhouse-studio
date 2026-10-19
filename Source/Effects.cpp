@@ -882,21 +882,29 @@ float detectPitchYin (const float* x, int n, double sr, float thresh, float fall
     const int W = n - maxTau;
     float running = 0;
     d[0] = 1;
-    for (int tau = 1; tau < maxTau && tau < (int) d.size(); ++tau)
+    // difference function computed lag by lag, stopping at the first dip under the threshold (same answer as
+    // computing every lag, but high and mid voices only need a fraction of the lags = much less CPU)
+    const int lim = std::min (maxTau, (int) d.size());
+    for (int tau = 1; tau < lim; ++tau)
     {
-        float s = 0;
-        for (int i = 0; i < W; ++i) { const float df = x[i] - x[i + tau]; s += df * df; }
+        float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+        const float* a = x; const float* b = x + tau;
+        int i = 0;
+        for (; i + 4 <= W; i += 4)
+        {
+            const float d0 = a[i] - b[i], d1 = a[i + 1] - b[i + 1], d2 = a[i + 2] - b[i + 2], d3 = a[i + 3] - b[i + 3];
+            s0 += d0 * d0; s1 += d1 * d1; s2 += d2 * d2; s3 += d3 * d3;
+        }
+        for (; i < W; ++i) { const float df = a[i] - b[i]; s0 += df * df; }
+        const float s = (s0 + s1) + (s2 + s3);
         running += s;
         d[(size_t) tau] = running > 0 ? s * (float) tau / running : 1.0f;
-    }
-    for (int tau = minTau; tau < maxTau - 1 && tau < (int) d.size() - 1; ++tau)
-    {
-        if (d[(size_t) tau] < thresh)
+        const int c = tau - 1;   // first local minimum below the threshold
+        if (c >= minTau && c >= 1 && d[(size_t) c] < thresh && d[(size_t) tau] >= d[(size_t) c])
         {
-            while (tau + 1 < maxTau && d[(size_t) tau + 1] < d[(size_t) tau]) ++tau;
-            const float a = d[(size_t) tau - 1], b = d[(size_t) tau], c = d[(size_t) tau + 1];
-            const float den = a + c - 2 * b;
-            const float t = (float) tau + (std::abs (den) > 1e-9f ? 0.5f * (a - c) / den : 0.0f);
+            const float pa = d[(size_t) c - 1], pb = d[(size_t) c], pc = d[(size_t) tau];
+            const float den = pa + pc - 2 * pb;
+            const float t = (float) c + (std::abs (den) > 1e-9f ? 0.5f * (pa - pc) / den : 0.0f);
             return (float) sr / t;
         }
     }
@@ -1042,9 +1050,9 @@ public:
             if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
-            shifter.process (wl, wr, ratio, period);
-            psola.process (pl, pr, ratio, period);
-            if (style != 3) { wl = pl; wr = pr; l[i] = psola.dryL; r[i] = psola.dryR; }
+            // only the shifter in use runs (half the CPU)
+            if (style == 3) shifter.process (wl, wr, ratio, period);
+            else { psola.process (pl, pr, ratio, period); wl = pl; wr = pr; l[i] = psola.dryL; r[i] = psola.dryR; }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }

@@ -373,6 +373,24 @@ int main()
         CHECK (renderPeak (e, 20) > 0.01f);
         e.stop();
     }
+    // AutoPitch CPU: 10 s of a sung note must take a small fraction of real time in every style
+    for (int style : { 0, 1, 3 })
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", (float) style);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0;
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int k = 0; k < 938; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.5 * std::sin (2 * ph)); ph += juce::MathConstants<double>::twoPi * 228.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            ap->process (b, 512, ctx);
+        }
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        std::printf ("autopitch style %d cpu: %.1f ms per 10 s (%.2f%% of real time)\n", style, ms, ms / 100.0);
+        CHECK (ms < 2000.0);
+    }
     // AutoPitch Pitch +12 doubles the frequency; Detune moves it by cents
     {
         auto crossings = [] (float pitchSt, float cents) {
