@@ -79,34 +79,33 @@ public:
         if (lastMouse.y > g.getBottom()) return "Velocity - drag the bars up / down";
         if (g.contains (lastMouse))
             return "Click = add note | drag = move | drag right edge = length | right-click = delete | Ctrl-drag = select | double-click = slide | Alt+A rolls, Alt+S strum";
-        if (lastMouse.y > barH && lastMouse.y < g.getY()) return "Ruler - click to move the playhead";
+        if (lastMouse.y > barH && lastMouse.y < g.getY()) return "Ruler - click or drag the playhead (Alt = no snap)";
         return {};
     }
 
     void resized() override
     {
-        // one toolbar row when it fits, otherwise two rows (tools + glide below) so nothing hides behind anything else
-        const int row1 = 150 + 6 + 60 + 4 + 150 + 4 + 60 + 10 + 100 + 10 + 70 + 4 + 60 + 4 + (stampChord >= 0 ? 110 : 64) + 4 + 60 + 4 + 56 + 4 + 52 + 10;
-        const int row2 = 28 + 48 + toolBtns.size() * 48;
-        const int wantH = getWidth() - 12 >= row1 + row2 ? 34 : 64;
+        // flow layout: controls wrap onto as many rows as the width needs, so nothing is ever offscreen or hidden
+        struct Item { juce::Component* c; int w, gap; };
+        std::vector<Item> items { { &chLabel, 150, 6 }, { &rootBox, 60, 4 }, { &scaleBox, 150, 4 }, { &highlightBtn, 60, 10 },
+                                  { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
+                                  { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
+        for (auto* b : toolBtns) items.push_back ({ b, 46, 2 });
+        const int avail = juce::jmax (100, getWidth() - 12);
+        auto layout = [&] (bool apply)
+        {
+            int x = 0, row = 0;
+            for (auto& it : items)
+            {
+                if (x > 0 && x + it.w > avail) { x = 0; ++row; }
+                if (apply) it.c->setBounds (6 + x, 4 + row * 30, it.w, 26);
+                x += it.w + it.gap;
+            }
+            return row + 1;
+        };
+        const int wantH = layout (false) * 30 + 4;
         if (wantH != barH) { barH = wantH; repaint(); }
-        auto area = getLocalBounds().removeFromTop (barH).reduced (6, 2);
-        auto t = (barH > 34 ? area.removeFromTop (area.getHeight() / 2) : area).reduced (0, 2);
-        area = area.reduced (0, 2);
-        juce::Rectangle<int>& t2 = barH > 34 ? area : t;
-        chLabel.setBounds (t.removeFromLeft (150)); t.removeFromLeft (6);
-        rootBox.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
-        scaleBox.setBounds (t.removeFromLeft (150)); t.removeFromLeft (4);
-        highlightBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (10);
-        snapBox.setBounds (t.removeFromLeft (100)); t.removeFromLeft (10);
-        toolsBtn.setBounds (t.removeFromLeft (70)); t.removeFromLeft (4);
-        slideBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
-        stampBtn.setBounds (t.removeFromLeft (stampChord >= 0 ? 110 : 64)); t.removeFromLeft (4);
-        ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
-        muteBtn.setBounds (t.removeFromLeft (56)); t.removeFromLeft (4);
-        lockBtn.setBounds (t.removeFromLeft (52)); t.removeFromLeft (10);
-        glide.setBounds (t2.removeFromLeft (28)); t2.removeFromLeft (48);   // room for the GLIDE label
-        for (auto* b : toolBtns) { b->setBounds (t2.removeFromLeft (46)); t2.removeFromLeft (2); }
+        layout (true);
     }
 
     void paint (juce::Graphics& g) override
@@ -215,6 +214,13 @@ public:
             g.drawText (juce::String (bar + 1), (int) x + 3, barH, 40, rulerH, juce::Justification::centredLeft);
             g.drawVerticalLine ((int) x, (float) barH, (float) (barH + rulerH));
         }
+        if (const double ph = playheadLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
+        {
+            const float px = (float) beatToX (ph);
+            juce::Path tri; tri.addTriangle (px - 7, (float) barH + 1, px + 7, (float) barH + 1, px, (float) (barH + 13));
+            g.setColour (col::accent2); g.fillPath (tri);
+            g.fillRect (px - 0.75f, (float) barH + 10, 1.5f, (float) rulerH - 10);
+        }
         // velocity lane
         juce::Rectangle<int> vel (keyW, ga.getBottom(), getWidth() - keyW, velH);
         g.setColour (col::panel); g.fillRect (vel);
@@ -245,7 +251,7 @@ public:
         dragStart = e.position; changed = false;
         if (s.channel (channelId) == nullptr) return;
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
-        if (e.y > barH && e.y < ga.getY()) { s.engine.setPositionBeats (juce::jmax (0.0, xToBeat (e.position.x))); return; }
+        if (e.y > barH && e.y < ga.getY()) { drag = Drag::Scrub; scrubTo (e); return; }   // click or drag anywhere on the bar numbers moves the playhead
         if (e.y >= ga.getBottom()) { drag = Drag::Velocity; setVelocityAt (e.position); return; }
         if (! ga.contains (e.getPosition())) return;
 
@@ -324,6 +330,7 @@ public:
         lastMouse = e.getPosition();
         auto& p = s.p();
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
+        if (drag == Drag::Scrub) { scrubTo (e); return; }
         if (drag == Drag::Velocity) { setVelocityAt (e.position); return; }
         if (drag == Drag::Delete) { deleteAt (e.position); return; }
         if (drag == Drag::Paint)
@@ -472,7 +479,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub };
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -556,6 +563,24 @@ private:
     {
         s.edit (name, [&] (Project&) { auto& n = s.notes (channelId); f (n); tools::sortNotes (n); });
         return true;
+    }
+    void scrubTo (const juce::MouseEvent& e)   // Alt = free, otherwise snaps to the grid (FL)
+    {
+        const double b = juce::jmax (0.0, xToBeat (juce::jmax ((float) keyW, e.position.x)));
+        const double sn = s.p().snap > 0 ? s.p().snap : 0.25;
+        s.engine.setPositionBeats (e.mods.isAltDown() ? b : std::round (b / sn) * sn);
+        repaint();
+    }
+    double playheadLocal() const
+    {
+        auto& p = s.p();
+        const double len = p.patterns[(size_t) p.currentPattern].lengthBeats();
+        const double pos = p.songMode ? s.engine.positionBeats() : std::fmod (s.engine.positionBeats(), len);
+        double local = p.songMode ? -1.0 : pos;
+        if (p.songMode)
+            for (auto& c : p.clips)
+                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
+        return local;
     }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {

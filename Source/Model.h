@@ -69,7 +69,7 @@ struct Channel
     int   cutGroup = 0;
     float ampAttack = 0.0f, ampHold = 0.0f, ampRelease = 0.01f;   // seconds; hold 0 = play to the end
     // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
-    bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = true, smpTrim = false;
+    bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = false, smpTrim = false;   // defaults: the sample plays exactly like the WAV
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
     int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X

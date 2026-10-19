@@ -247,7 +247,7 @@ public:
     juce::String getTooltip() override
     {
         if (lastMouse.y >= toolbarH && lastMouse.y < toolbarH + rulerH && lastMouse.x > headerW)
-            return "Ruler: click = move playhead, drag = set punch-in / out range, double-click = clear punch";
+            return "Ruler: click / drag = move playhead (Alt = no snap), E + drag = time selection, Shift + drag = punch range, double-click = clear";
         if (lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH)
             return "Double-click = place pattern | drag clip = move | drag edges = trim | top corners = fades (Alt = curve) | right-click = takes, routing, split";
         return {};
@@ -396,12 +396,15 @@ public:
         dragStart = e.position;
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
+            // handle = always scrub; Shift+drag = punch; E (select) + drag = time selection; otherwise click / drag moves the playhead
             drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
-                 : (tool == PTool::Select && ! e.mods.isShiftDown()) ? Drag::TimeSel : Drag::Ruler;   // FL: E + drag the ruler = time selection; Shift+drag = punch
+                 : e.mods.isShiftDown() ? Drag::Ruler : tool == PTool::Select ? Drag::TimeSel : Drag::Scrub;
+            if (drag == Drag::Scrub) mouseDrag (e);
             return;
         }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
+        if (i >= 0 && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) timeSelA = timeSelB = -1;   // picking another clip drops the old ruler range
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
@@ -574,6 +577,7 @@ public:
         if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
         else if (changed)
         {
+            if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
             s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
                 // routing follows the recording: a moved audio clip keeps playing through the insert it came from
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
@@ -678,7 +682,7 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
-            if (timeSelB > timeSelA) clipLo = timeSelA;   // time selection: paste keeps the empty space before the first clip
+            if (timeSelB > timeSelA) clipLo = std::min (clipLo, timeSelA);   // time selection: paste keeps the empty space before the first clip
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;

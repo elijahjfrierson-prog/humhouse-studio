@@ -924,7 +924,7 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "smpBoost", "Boost (dB)", -24, 24, 0, ch->smpBoostDb, {} });
         smp.push_back ({ "smpRev", "Reverse", 0, 1, 0, ch->smpReverse ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpInv", "Polarity", 0, 1, 0, ch->smpInvert ? 1.0f : 0.0f, { "Normal", "Inverted" } });
-        smp.push_back ({ "smpDeclick", "Declick", 0, 1, 1, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpDeclick", "Declick", 0, 1, 0, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpTrim", "Trim silence", 0, 1, 0, ch->smpTrim ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpFadeIn", "Fade in (s)", 0, 2, 0, ch->smpFadeIn, {} });
         smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
