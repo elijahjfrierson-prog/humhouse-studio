@@ -492,7 +492,8 @@ private:
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
     juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
-    int lockKey (int k) const { return lockBtn.getToggleState() ? juce::jlimit (0, 127, snapToScale (k, s.p().keyRoot, s.p().scaleIndex)) : k; }
+    int scaleKey (int k) const { int r = snapToScale (k, s.p().keyRoot, s.p().scaleIndex); if (r < 0) r += 12; if (r > 127) r -= 12; return r; }   // octave-wrap at the edges stays in scale
+    int lockKey (int k) const { return lockBtn.getToggleState() ? scaleKey (k) : k; }
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
     juce::Label chLabel;
 
@@ -595,8 +596,8 @@ private:
         for (int d : iv)
         {
             int k = n.key + d;
-            if (stampLock || lockBtn.getToggleState()) k = snapToScale (k, s.p().keyRoot, s.p().scaleIndex);
             k = juce::jlimit (0, 127, k);
+            if (stampLock || lockBtn.getToggleState()) k = scaleKey (k);
             if (std::find (used.begin(), used.end(), k) != used.end()) continue;
             used.push_back (k);
             Note c = n; c.key = k; c.slide = c.slide && d == iv.front();

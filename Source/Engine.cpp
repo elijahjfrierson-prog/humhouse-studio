@@ -1466,7 +1466,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             int p = previewPos.load();
             const int len = std::min (n, previewSample->getNumSamples() - p);
             for (int i = 0; i < len; ++i) { l[i] += previewSample->getSample (0, p + i) * 0.8f; r[i] += previewSample->getSample (1 % previewSample->getNumChannels(), p + i) * 0.8f; }
-            previewPos = len < n ? -1 : p + len;
+            int expected = p;   // a stopPreview() from the UI during this block wins
+            previewPos.compare_exchange_strong (expected, len < n ? -1 : p + len);
         }
     }
 

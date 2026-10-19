@@ -58,7 +58,10 @@ public:
         for (auto& v : voices) if (v.active && v.key == key && (mono || ! oneShot)) v.releasing = true;
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
-    void choke() override { for (auto& v : voices) if (v.active && ! v.releasing) { v.releasing = true; v.fadeLen = 0.006f; } }   // 6 ms: an 808 sub cut any faster clicks
+    void choke() override   // 6 ms: an 808 sub cut any faster clicks; voices already in a long release get cut too
+    {
+        for (auto& v : voices) if (v.active) { v.fadeLen = v.releasing ? juce::jmin (v.fadeLen, 0.006f) : 0.006f; v.releasing = true; }
+    }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
     void render (juce::AudioBuffer<float>& out, int start, int num) override
