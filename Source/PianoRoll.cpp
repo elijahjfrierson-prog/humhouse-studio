@@ -53,6 +53,9 @@ public:
         setupButton (muteBtn, "MUTE", "Mute note previews (M): clicking / drawing notes stays silent, playback still sounds", true);
         muteBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prMutePreview", false), juce::dontSendNotification);
         muteBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prMutePreview", muteBtn.getToggleState()); };
+        setupButton (lockBtn, "LOCK", "Scale lock: notes you draw, drag or stamp snap to the chosen key and scale", true);
+        lockBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prScaleLock", false), juce::dontSendNotification);
+        lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
             if (! glide.isMouseButtonDown()) s.commit ("Glide");
@@ -60,7 +63,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -92,7 +95,8 @@ public:
         slideBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
         stampBtn.setBounds (t.removeFromLeft (stampChord >= 0 ? 110 : 64)); t.removeFromLeft (4);
         ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
-        muteBtn.setBounds (t.removeFromLeft (56)); t.removeFromLeft (10);
+        muteBtn.setBounds (t.removeFromLeft (56)); t.removeFromLeft (4);
+        lockBtn.setBounds (t.removeFromLeft (52)); t.removeFromLeft (10);
         glide.setBounds (t.removeFromLeft (28)); t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (46)); t.removeFromLeft (2); }
     }
@@ -352,7 +356,7 @@ public:
             {
                 if (! dragOrig[i].selected) continue;
                 auto n = dragOrig[i];
-                if (drag == Drag::Move) { n.start = juce::jmax (0.0, n.start + dBeat); n.key = juce::jlimit (0, 127, n.key + dKey); }
+                if (drag == Drag::Move) { n.start = juce::jmax (0.0, n.start + dBeat); n.key = lockKey (juce::jlimit (0, 127, n.key + dKey)); }
                 else n.length = juce::jmax (noSnap ? 1.0 / 64 : p.snap, n.length + dBeat);
                 notes[i] = n;
             }
@@ -478,7 +482,8 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn;
+    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
+    int lockKey (int k) const { return lockBtn.getToggleState() ? juce::jlimit (0, 127, snapToScale (k, s.p().keyRoot, s.p().scaleIndex)) : k; }
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
     juce::Label chLabel;
 
@@ -573,7 +578,7 @@ private:
     bool stampLock = false;
     void stamp (NoteList& ns, const Note& n)
     {
-        if (stampChord < 0 || stampChord >= (int) chords().size()) { ns.push_back (n); return; }
+        if (stampChord < 0 || stampChord >= (int) chords().size()) { Note c = n; c.key = lockKey (c.key); ns.push_back (c); return; }
         auto iv = chords()[(size_t) stampChord].iv;
         for (int i = 0; i < stampInv && i < (int) iv.size() - 1; ++i) iv[(size_t) i] += 12;
         std::sort (iv.begin(), iv.end());
@@ -581,7 +586,7 @@ private:
         for (int d : iv)
         {
             int k = n.key + d;
-            if (stampLock) k = snapToScale (k, s.p().keyRoot, s.p().scaleIndex);
+            if (stampLock || lockBtn.getToggleState()) k = snapToScale (k, s.p().keyRoot, s.p().scaleIndex);
             k = juce::jlimit (0, 127, k);
             if (std::find (used.begin(), used.end(), k) != used.end()) continue;
             used.push_back (k);
