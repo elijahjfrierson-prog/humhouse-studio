@@ -32,6 +32,7 @@ public:
         }
         Voice* v = nullptr;
         for (auto& c : voices) if (! c.active) { v = &c; break; }
+        if (v == nullptr) for (auto& c : voices) if (c.releasing) { v = &c; break; }   // steal a fading voice before a held one
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
         v->active = true; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
@@ -39,6 +40,18 @@ public:
         v->targetSemis = target;
         v->glideRate = glide > 0.0f ? 1.0 / (glide * sampleRate) : 1.0;
         lastSemis = target;
+    }
+    void noteOnAt (int key, float vel, bool slide, double secondsIn) override
+    {
+        noteOn (key, vel, slide);
+        if (secondsIn <= 0.0) return;
+        for (auto& v : voices)
+            if (v.active && ! v.releasing && v.key == key && v.pos == 0.0)
+            {
+                v.pos = secondsIn * sampleRate * std::pow (2.0, v.semis / 12.0);
+                if (sample && v.pos >= sample->getNumSamples() - 2) v.active = false;
+                break;
+            }
     }
     void noteOff (int key) override
     {
@@ -84,7 +97,7 @@ public:
 private:
     struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1, age = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
-    std::array<Voice, 16> voices {};
+    std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
     double sampleRate = 44100.0, lastSemis = -999.0;
     float pitch = 0, glide = 0; bool mono = false;
@@ -107,6 +120,7 @@ public:
         if (mono) for (auto& v : voices) if (v.active) v.stage = 3;
         Voice* v = nullptr;
         for (auto& c : voices) if (! c.active) { v = &c; break; }
+        if (v == nullptr) for (auto& c : voices) if (c.stage >= 3) { v = &c; break; }   // steal a releasing voice before a held one
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
         v->active = true; v->key = key; v->velocity = vel; v->target = k;
@@ -236,7 +250,7 @@ private:
         }
     }
     SynthParams p;
-    std::array<Voice, 12> voices {};
+    std::array<Voice, 24> voices {};
     int next = 0; double sampleRate = 44100.0, lastKey = -1; float glide = 0, pitch = 0; bool mono = false;
 };
 

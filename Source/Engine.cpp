@@ -26,7 +26,7 @@ void WorkerPool::workerLoop()
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
-            if (std::chrono::steady_clock::now() - lastWork < std::chrono::milliseconds (40)) std::this_thread::yield();
+            if (std::chrono::steady_clock::now() - lastWork < std::chrono::microseconds (300)) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
             else
             {
                 std::unique_lock<std::mutex> lk (m);
@@ -66,7 +66,7 @@ void WorkerPool::run (int count, Job j, void* c)
 }
 
 // =============================================================== runtimes
-struct Event { int offset; int key; float vel; bool on; bool slide; };
+struct Event { int offset; int key; float vel; bool on; bool slide; double startSec = 0.0; };
 
 struct Engine::ChannelRuntime
 {
@@ -82,6 +82,36 @@ struct Engine::ChannelRuntime
     int silentBlocks = 0;
     int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
+    bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
+};
+
+// plugin delay compensation: a ring buffer that delays a stereo signal by a changing number of samples
+static constexpr int kPdcSize = 16384;   // ~0.34 s at 48 kHz
+struct PdcDelay
+{
+    juce::AudioBuffer<float> buf; int w = 0, mask = 0;
+    void prepare (int size) { buf.setSize (2, size); buf.clear(); w = 0; mask = size - 1; }
+    bool ready() const { return buf.getNumSamples() > 0; }
+    void delayInPlace (juce::AudioBuffer<float>& x, int n, int d)
+    {
+        d = juce::jlimit (0, mask, d);
+        for (int c = 0; c < 2; ++c)
+        {
+            auto* s = x.getWritePointer (c); auto* r = buf.getWritePointer (c);
+            for (int i = 0, ww = w; i < n; ++i, ww = (ww + 1) & mask) { r[ww] = s[i]; s[i] = r[(ww - d) & mask]; }
+        }
+        w = (w + n) & mask;
+    }
+    void addDelayed (const juce::AudioBuffer<float>& x, juce::AudioBuffer<float>& dst, int n, int d, float g)
+    {
+        d = juce::jlimit (0, mask, d);
+        for (int c = 0; c < 2; ++c)
+        {
+            auto* s = x.getReadPointer (c); auto* o = dst.getWritePointer (c); auto* r = buf.getWritePointer (c);
+            for (int i = 0, ww = w; i < n; ++i, ww = (ww + 1) & mask) { r[ww] = s[i]; o[i] += g * r[(ww - d) & mask]; }
+        }
+        w = (w + n) & mask;
+    }
 };
 
 struct FxRuntime
@@ -91,6 +121,7 @@ struct FxRuntime
     std::unique_ptr<BuiltinEffect> builtin;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::AudioBuffer<float> buf;   // sized to the plugin's own channel count
+    PdcDelay dryDelay;              // Mix knob: dry waits for a latent wet, so blending never comb-filters
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
@@ -211,6 +242,8 @@ juce::String Engine::recoverFromPluginCrash()
 struct Engine::TrackRuntime
 {
     juce::AudioBuffer<float> in, out, dry;
+    PdcDelay inDelay; std::vector<PdcDelay> edge;   // per sources[] entry
+    int ownLatency = 0, inputAlign = 0, arrival = 0;   // samples: this insert's FX, latest input, output
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     float duckGain = 1.0f;
     std::vector<std::unique_ptr<FxRuntime>> fx;
@@ -268,6 +301,8 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
 
 void Engine::newProject (Project p)
 {
+    if (recording.load()) setRecording (false);
+    if (playing.load()) stop();
     {
         const juce::ScopedLock sl (lock);
         playing = false;
@@ -469,6 +504,7 @@ void Engine::sync()
             }
             for (auto& o : rt->fx) if (o) discardFx.push_back (std::move (o));
             rt->fx = std::move (chain);
+            for (auto& f : rt->fx) if (! f->dryDelay.ready()) f->dryDelay.prepare (8192);
             rt->tailSeconds = 0.5;
             for (auto& f : rt->fx) rt->tailSeconds = std::max (rt->tailSeconds, f->tail);
             auto& mt = proj.mixer[t];
@@ -498,6 +534,12 @@ void Engine::sync()
             auto& mt = proj.mixer[(size_t) t];
             for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) proj.mixer.size()) sources[(size_t) s.target].push_back ({ t, s.level });
             if (mt.routesToMaster) sources[0].push_back ({ t, 1.0f });
+        }
+        for (size_t t = 0; t < trackRt.size() && t < sources.size(); ++t)
+        {
+            auto& rt = *trackRt[t];
+            if (! rt.inDelay.ready()) rt.inDelay.prepare (kPdcSize);
+            if (rt.edge.size() != sources[t].size()) { rt.edge.resize (sources[t].size()); for (auto& d : rt.edge) if (! d.ready()) d.prepare (kPdcSize); }
         }
         updateSolo();
     }
@@ -655,8 +697,29 @@ double Engine::loopLength() const
 
 static double startBeat = 0.0;
 
+// Audio clips stream from disk with no wait on the audio thread; load the audio at the play position
+// (and each later clip's start) before playback, so the first beat isn't silent.
+void Engine::primeClipReaders (double beat)
+{
+    const auto deadline = juce::Time::getMillisecondCounter() + 800;
+    for (auto& clip : proj.clips)
+    {
+        if (! clip.isAudio() || beat >= clip.start + clip.length) continue;
+        auto it = clipRt.find (clip.uid);
+        if (it == clipRt.end() || ! it->second->reader) continue;
+        auto* br = dynamic_cast<juce::BufferingAudioReader*> (it->second->reader.get());
+        if (br == nullptr || juce::Time::getMillisecondCounter() > deadline) continue;
+        const double srcSec = clip.sourceOffset + beatsToSeconds (std::max (0.0, beat - clip.start), proj.bpm);
+        juce::AudioBuffer<float> tmp ((int) juce::jmax (1u, br->numChannels), 2048);
+        br->setReadTimeout (250);
+        br->read (&tmp, 0, 2048, (juce::int64) (srcSec * it->second->fileRate), true, true);
+        br->setReadTimeout (0);
+    }
+}
+
 void Engine::play()
 {
+    if (! playing.load()) primeClipReaders (position.load());
     const juce::ScopedLock sl (lock);
     if (playing) return;
     startBeat = position.load();
@@ -669,6 +732,7 @@ void Engine::play()
         countingIn = countInRemaining > 0.0;
     }
     chasePending = true;
+    if (std::abs (std::fmod (position.load() * 4.0, 1.0)) > 1.0e-6) declickGain = 0.0f;   // off the grid: fade in
     playing = true;
 }
 
@@ -689,7 +753,11 @@ void Engine::stop()
     if (proj.returnToStart) position = startBeat;
 }
 
-void Engine::setPositionBeats (double b) { position = std::max (0.0, b); startBeat = position; chasePending = true; }
+void Engine::setPositionBeats (double b)
+{
+    position = std::max (0.0, b); startBeat = position; chasePending = true;
+    if (playing.load()) declickGain = 0.0f;
+}
 
 void Engine::setRecording (bool r)
 {
@@ -909,11 +977,23 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     bool anySolo = false;
     for (auto& c : proj.channels) anySolo |= c.solo;
 
-    auto emit = [&] (size_t ci, const Note& note, double absStart)
+    auto emit = [&] (size_t ci, const Note& note, double absStart, double startSec = 0.0)
     {
         auto* rt = channelOrder[ci];
         const int o = toOffset (absStart);
-        rt->addEvent ({ o, note.key, note.velocity, true, note.slide });
+        // a held note on the same key (e.g. a long 808 tail across the loop) must not cut this new one:
+        // end it right here and drop its later note-off
+        for (int k = 0; k < rt->numEvents;)
+        {
+            const auto& ev = rt->events[(size_t) k];
+            if (! ev.on && ev.key == note.key && ev.offset >= o) rt->events[(size_t) k] = rt->events[(size_t) --rt->numEvents];
+            else ++k;
+        }
+        for (int k = 0; k < rt->numActive;)
+            if (rt->active[(size_t) k].key == note.key) { rt->addEvent ({ o, note.key, 0, false, false }); rt->active[(size_t) k] = rt->active[(size_t) --rt->numActive]; }
+            else ++k;
+        Event on { o, note.key, note.velocity, true, note.slide }; on.startSec = startSec;
+        rt->addEvent (on);
         if (rt->numActive < (int) rt->active.size())
             rt->active[(size_t) rt->numActive++] = { note.key, note.length * spb + (o - off) };
     };
@@ -921,14 +1001,16 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     const bool chase = chasePending.exchange (false);
     auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
     {
-        const double end = std::min (absStart + note.length, limit);
-        if (absStart >= b0 || end <= b0 + 1.0 / 32.0) return;
+        if (absStart >= b0) return;
         auto& c = proj.channels[ci];
-        if (c.type == ChannelType::Sampler && c.oneShot) return;
+        const bool shot = c.type == ChannelType::Sampler && c.oneShot;   // one-shots play the whole sample, whatever the note length
+        const double end = std::min (absStart + note.length, limit);
+        if (shot ? b0 - absStart > 64.0 : end <= b0 + 1.0 / 32.0) return;
         auto* rt = channelOrder[ci];
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
-        Note tail = note; tail.length = end - b0; tail.slide = false;
-        emit (ci, tail, b0);
+        Note tail = note; tail.length = std::max (end - b0, 1.0 / 32.0); tail.slide = false;
+        emit (ci, tail, b0, (b0 - absStart) * 60.0 / proj.bpm);   // samplers start from the matching point in the sample
+        declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in
     };
 
     for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
@@ -1055,7 +1137,7 @@ struct EngineJobs
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
-            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
+            if (rt->numEvents == 0 && rt->numActive == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
             auto& pl = *rt->plugin;
             const juce::ScopedTryLock cl (pl.getCallbackLock());
@@ -1076,7 +1158,7 @@ struct EngineJobs
                 auto& ev = rt->events[(size_t) k];
                 if (ev.offset > pos) { rt->inst->render (rt->buf, pos, ev.offset - pos); pos = ev.offset; }
                 if (ev.key < 0) rt->inst->choke();
-                else if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
+                else if (ev.on) rt->inst->noteOnAt (ev.key, ev.vel, ev.slide, ev.startSec); else rt->inst->noteOff (ev.key);
             }
             if (pos < n) rt->inst->render (rt->buf, pos, n - pos);
         }
@@ -1099,9 +1181,19 @@ void Engine::processTrack (int t)
     auto& tr = *trackRt[(size_t) t];
     auto& mt = proj.mixer[(size_t) t];
     tr.out.makeCopyOf (tr.in, true);
+    // delay compensation: everything arriving here is lined up with the latest (most delayed) input
+    if (tr.inputAlign > 0 && tr.inDelay.ready()) tr.inDelay.delayInPlace (tr.out, n, tr.inputAlign);
     if (! tr.frozen)
-        for (auto& [src, g] : sources[(size_t) t])
-            for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, trackRt[(size_t) src]->out, ch, 0, n, g);
+    {
+        auto& S = sources[(size_t) t];
+        for (size_t k = 0; k < S.size(); ++k)
+        {
+            auto& srt = *trackRt[(size_t) S[k].first];
+            const int dl = tr.inputAlign - srt.arrival;
+            if (dl > 0 && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
+            else for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, srt.out, ch, 0, n, S[k].second);
+        }
+    }
 
     const float mag = tr.out.getMagnitude (0, n);
     if (mag > 1.0e-6f) tr.silentSamples = 0; else tr.silentSamples += n;
@@ -1120,6 +1212,8 @@ void Engine::processTrack (int t)
                 meterLoad { f.load, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
             const bool blend = mix < 0.999f && n <= tr.dry.getNumSamples();
             if (blend) for (int c = 0; c < 2; ++c) tr.dry.copyFrom (c, 0, view, c, 0, n);
+            const int slotLat = f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+            if (blend && slotLat > 0 && f.dryDelay.ready()) f.dryDelay.delayInPlace (tr.dry, n, slotLat);
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
                 ~Blend() { if (on) for (int c = 0; c < 2; ++c) { v.applyGain (c, 0, n, mix); v.addFrom (c, 0, d, c, 0, n, 1.0f - mix); } } }
                 blendOut { view, tr.dry, n, mix, blend };
@@ -1132,6 +1226,8 @@ void Engine::processTrack (int t)
                 if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
                 for (int c = 0; c < nch; ++c)
                     if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
+                if (pl.getMainBusNumInputChannels() == 1)   // mono plugin on a stereo bus: feed it the mono sum, not just the left side
+                { f.buf.addFrom (0, 0, view, 1, 0, n); f.buf.applyGain (0, 0, n, 0.5f); }
                 juce::AudioBuffer<float> pv (f.buf.getArrayOfWritePointers(), nch, n);
                 f.midi.clear();
                 pl.processBlock (pv, f.midi);
@@ -1196,7 +1292,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         previewFifo.prepareToRead (previewFifo.getNumReady(), s1, n1, s2, n2);
         auto handle = [&] (const PreviewEvent& ev)
         {
-            for (auto* rt : channelOrder) if (rt->id == ev.channelId) rt->addEvent ({ 0, ev.key, ev.vel, ev.on, false });
+            for (auto* rt : channelOrder)
+                if (rt->id == ev.channelId && (ev.on || ! playing.load() || ! rt->holds (ev.key)))   // a preview release must not cut a playing note
+                    rt->addEvent ({ 0, ev.key, ev.vel, ev.on, false });
         };
         for (int i = 0; i < n1; ++i) handle (previewEvents[(size_t) (s1 + i)]);
         for (int i = 0; i < n2; ++i) handle (previewEvents[(size_t) (s2 + i)]);
@@ -1348,6 +1446,12 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     auto* l = master.getWritePointer (0); auto* r = master.getWritePointer (1);
     if (renderTrackOnly > 0 && renderTrackOnly < (int) trackRt.size())
     { l = trackRt[(size_t) renderTrackOnly]->out.getWritePointer (0); r = trackRt[(size_t) renderTrackOnly]->out.getWritePointer (1); }
+    if (float gn = declickGain.load(); gn < 1.0f)
+    {
+        const float step = 1.0f / (float) (0.004 * sampleRate);
+        for (int i = 0; i < n; ++i) { l[i] *= gn; r[i] *= gn; gn = std::min (1.0f, gn + step); }
+        declickGain = gn;
+    }
     if (doClick) click (l, r, n, clickB0, clickB1);
 
     // browser preview
@@ -1399,6 +1503,26 @@ void Engine::renderChannels (int n)
 
 void Engine::mixTracks (const float* const*, int, int)
 {
+    // plugin delay compensation (like FL): each insert's latency = its active FX; inputs wait for the slowest path
+    for (auto& L : levels)
+        for (int t : L)
+        {
+            if (t < 0 || t >= (int) trackRt.size() || t >= (int) proj.mixer.size() || t >= (int) sources.size()) continue;
+            auto& tr = *trackRt[(size_t) t];
+            auto& mt = proj.mixer[(size_t) t];
+            int own = 0;
+            if (! tr.frozen)
+                for (size_t k = 0; k < tr.fx.size() && k < mt.fx.size(); ++k)
+                {
+                    if (mt.fx[k].bypass || mt.fx[k].mix <= 0.0f) continue;
+                    auto& f = *tr.fx[k];
+                    own += f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+                }
+            int in = 0;
+            for (auto& sg : sources[(size_t) t]) if (sg.first < (int) trackRt.size()) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
+            tr.ownLatency = own; tr.inputAlign = std::min (in, kPdcSize - 1);
+            tr.arrival = std::min (tr.inputAlign + std::max (0, own), kPdcSize - 1);
+        }
     for (size_t lv = 0; lv < levels.size(); ++lv)
     {
         currentLevel = (int) lv;

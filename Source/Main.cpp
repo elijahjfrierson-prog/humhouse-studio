@@ -9,7 +9,7 @@ public:
        #ifdef JUCE_APPLICATION_VERSION_STRING
         return JUCE_APPLICATION_VERSION_STRING;
        #else
-        return "1.2.3";
+        return "1.2.5";
        #endif
     }
     bool moreThanOneInstanceAllowed() override { return true; }

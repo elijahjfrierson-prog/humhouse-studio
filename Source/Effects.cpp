@@ -745,30 +745,77 @@ public:
 };
 
 // ------------------------------------------------------------ AutoPitch (real-time key/scale tuner)
-void PitchShifter::prepare (double sr)
+void SpliceShifter::prepare (double s)
 {
-    size = (int) (sr * 0.1); buf.assign ((size_t) size, 0.0f); write = 0; phase = 0;
-    grain = (float) (sr * 0.03);
+    sr = s;
+    int n = 1; while (n < (int) (s * 0.25)) n <<= 1;
+    bufL.assign ((size_t) n, 0.0f); bufR.assign ((size_t) n, 0.0f);
+    mask = n - 1; w = 0; d = 0.0015 * s; d2 = d; xfLen = xfPos = 0;
 }
 
-float PitchShifter::process (float x)
+float SpliceShifter::read (const std::vector<float>& b, double delay) const
 {
-    buf[(size_t) write] = x;
-    if (targetGrain > 0.0f) grain += (targetGrain - grain) * 0.0005f;
-    phase += (1.0 - ratio) / grain;
-    phase -= std::floor (phase);
-    auto tap = [&] (double ph)
+    const double pos = (double) w - delay, fl = std::floor (pos);
+    const int i = (int) fl; const float t = (float) (pos - fl);
+    const float y0 = b[(size_t) ((i - 1) & mask)], y1 = b[(size_t) (i & mask)], y2 = b[(size_t) ((i + 1) & mask)], y3 = b[(size_t) ((i + 2) & mask)];
+    const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+    return ((c3 * t + c2) * t + c1) * t + y1;
+}
+
+// best delay near `target`: the spot whose recent waveform matches what the head just played
+double SpliceShifter::findSplice (double target, int span, int len) const
+{
+    const int cur = (int) std::lround (d);
+    float xx = 1.0e-9f;
+    for (int j = 0; j < len; ++j) { const size_t a = (size_t) ((w - cur - j) & mask); const float x = bufL[a] + bufR[a]; xx += x * x; }
+    double best = target; float bestScore = -2.0f;
+    for (int k = -span; k <= span; ++k)
     {
-        const double d = 2.0 + ph * grain;
-        double rp = write - d; if (rp < 0) rp += size;
-        const int i0 = (int) rp, i1 = (i0 + 1) % size; const float f = (float) (rp - i0);
-        const float w = std::sin (kPi * (float) ph);
-        return (buf[(size_t) i0] + f * (buf[(size_t) i1] - buf[(size_t) i0])) * w * w;
-    };
-    double ph2 = phase + 0.5; if (ph2 >= 1.0) ph2 -= 1.0;
-    const float y = tap (phase) + tap (ph2);
-    if (++write >= size) write = 0;
-    return y;
+        const int cand = (int) std::lround (target) + k;
+        if (cand < 4 || cand + len + 8 > mask) continue;
+        float xy = 0, yy = 1.0e-9f;
+        for (int j = 0; j < len; ++j)
+        {
+            const size_t a = (size_t) ((w - cur - j) & mask), c = (size_t) ((w - cand - j) & mask);
+            const float x = bufL[a] + bufR[a], y = bufL[c] + bufR[c];
+            xy += x * y; yy += y * y;
+        }
+        const float score = xy / std::sqrt (xx * yy);
+        if (score > bestScore) { bestScore = score; best = cand + (d - cur); }
+    }
+    return best;
+}
+
+void SpliceShifter::process (float& l, float& r, double ratio, double period)
+{
+    bufL[(size_t) w] = l; bufR[(size_t) w] = r;
+    const double P = period > 8.0 ? period : 0.008 * sr;
+    if (xfLen == 0)
+    {
+        const int X = juce::jlimit (16, (int) (0.0025 * sr), (int) (P * 0.5));
+        const int span = std::max (2, (int) (P / 6.0));
+        const double lo = 4.0 + std::max (0.0, ratio - 1.0) * X, hi = lo + P + span + 2.0;
+        if (d < lo || d > hi)
+        {
+            const double target = d < lo ? d + P : d - P;
+            d2 = findSplice (target, span, X);
+            if (d2 < 4.0) d2 = target;
+            // pitching up, the old head catches the input: shorten the crossfade so it never overtakes
+            xfLen = ratio > 1.0 ? juce::jlimit (1, X, (int) ((d - 3.0) / (ratio - 1.0))) : X; xfPos = 0;
+        }
+    }
+    float yl = read (bufL, d), yr = read (bufR, d);
+    if (xfLen > 0)
+    {
+        const float g = 0.5f - 0.5f * std::cos (kPi * (float) xfPos / (float) xfLen);
+        yl += g * (read (bufL, d2) - yl); yr += g * (read (bufR, d2) - yr);
+    }
+    const double step = 1.0 - ratio;
+    d += step;
+    if (xfLen > 0) { d2 += step; if (++xfPos >= xfLen) { d = d2; xfLen = 0; } }
+    d = juce::jlimit (2.0, (double) (mask / 2), d);
+    w = (w + 1) & mask;
+    l = yl; r = yr;
 }
 
 float detectPitchYin (const float* x, int n, double sr, float thresh)
@@ -824,11 +871,10 @@ public:
     void prepare (double s, int) override
     {
         sr = s;
-        for (auto& sh : shifters) sh.prepare (s);
+        shifter.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         currentRatio = 1.0f; targetRatio = 1.0f; detectedMidi.store (0); correctedMidi.store (0);
-        lastTarget = -1; pendingCount = 0; unvoiced = 0; lastMidi = 0; dryMix = 1;
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -841,9 +887,8 @@ public:
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = style == 3 ? 6.0f : juce::jmap (speed, 400.0f, 4.0f);   // retune glide time (hard tune: short glide, no clicks)
+        const float timeMs = juce::jmap (speed, 400.0f, 1.0f);   // retune glide time
         const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
-        const float xfade = 1.0f - std::exp (-1.0f / (0.01f * (float) sr));
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = style == 3 ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
@@ -854,60 +899,39 @@ public:
             if ((dsCount++ % dsFactor) == 0)
             {
                 analysis[(size_t) aw] = mono; aw = (aw + 1) % (int) analysis.size();
-                if (++hopCount >= 256)
+                if (++hopCount >= 128)
                 {
                     hopCount = 0;
                     std::array<float, 1024> win {};
                     for (int k = 0; k < 1024; ++k) win[(size_t) k] = analysis[(size_t) ((aw - 1024 + k + (int) analysis.size()) % (int) analysis.size())];
                     const float hz = detectPitchYin (win.data(), 1024, dsr, style == 0 ? 0.12f : 0.18f);
-                    float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
-                    if (midi > 0 && lastMidi > 0 && std::abs (std::abs (midi - lastMidi) - 12.0f) < 1.0f) midi = 0.0f;   // octave misread: ignore
+                    const float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
                     if (midi > 0)
                     {
-                        unvoiced = 0; lastMidi = midi;
-                        {
-                            // grain = 2 x whole periods, so the two overlapping taps stay in phase (full, not thin / plastic)
-                            const float period = (float) (sr / hz);
-                            const float k = std::max (1.0f, std::round (0.015f * (float) sr / period));
-                            const float gs = juce::jlimit ((float) (0.01 * sr), (float) (0.05 * sr), 2.0f * k * period);
-                            for (auto& sh : shifters) sh.setGrain (gs);
-                        }
-                        const int cand = snapToScale ((int) std::round (midi), root, scale);
-                        int target = lastTarget < 0 ? cand : lastTarget;
-                        if (cand == lastTarget) pendingCount = 0;
-                        else if (lastTarget >= 0)
-                        {
-                            // hysteresis: sitting between two notes stays on the current one; small moves must persist
-                            const float dist = std::abs (midi - (float) lastTarget);
-                            if (dist >= 1.6f || (dist >= 0.7f && ++pendingCount >= 2)) { target = cand; pendingCount = 0; }
-                        }
-                        lastTarget = target;
+                        period = (float) (sr / hz);
+                        const int target = snapToScale ((int) std::round (midi), root, scale);
                         float semis = (float) target - midi;
                         if (std::abs (semis) < humanize * 0.6f) semis *= (1.0f - humanize);   // let small natural drift through
                         if (style == 0) semis *= 0.8f;
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
-                    else if (++unvoiced > 6) { targetRatio = 1.0f; lastTarget = -1; lastMidi = 0; }   // hold through short gaps
+                    else targetRatio = 1.0f;
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
             const float ratio = currentRatio * offset;
-            for (auto& sh : shifters) sh.setRatio (ratio);
-            const float tl = shifters[0].process (l[i]), tr = shifters[1].process (r[i]);
-            const bool wantDry = std::abs (ratio - 1.0f) < 1.0e-4f && targetRatio == 1.0f && offset == 1.0f;
-            dryMix += ((wantDry ? 1.0f : 0.0f) - dryMix) * xfade;      // crossfade, never hard-switch (that was the crack)
-            const float wl = tl + (l[i] - tl) * dryMix, wr = tr + (r[i] - tr) * dryMix;
+            float wl = l[i], wr = r[i];
+            shifter.process (wl, wr, ratio, period);
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
     }
 private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
-    std::vector<float> analysis; PitchShifter shifters[2];
+    std::vector<float> analysis; SpliceShifter shifter;
     float currentRatio = 1, targetRatio = 1;
-    int lastTarget = -1, pendingCount = 0, unvoiced = 0;
-    float lastMidi = 0, dryMix = 1;
+    float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 
@@ -921,7 +945,7 @@ const std::vector<EffectInfo>& builtinEffects()
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
-        { "satur", "Saturator", "Studio" },
+        { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },

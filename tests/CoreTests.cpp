@@ -174,6 +174,63 @@ int main()
         }
         if (amp < 0.1f) CHECK (pk > 0.15f); else CHECK (pk < 1.0f && pk > 0.3f);
     }
+    // WAV export: right length, real level, first note at the very start is there
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = false;
+        Channel c; c.type = ChannelType::Synth; c.name = "Lead"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        Note nt; nt.key = 48; nt.start = 0.0; nt.length = 1.0; nt.velocity = 0.9f;
+        p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+        e.sync();
+        const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_export_test.wav");
+        CHECK (e.renderToWav (f, false, {}, -1));
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> rd (wav.createReaderFor (f.createInputStream().release(), true));
+        CHECK (rd != nullptr);
+        if (rd)
+        {
+            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats() + 2.0;
+            CHECK (std::abs ((double) rd->lengthInSamples - secs * 44100.0) < 1024.0);
+            juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples);
+            rd->read (&b, 0, b.getNumSamples(), 0, true, true);
+            CHECK (b.getMagnitude (0, 0, 2048) > 0.02f);
+            CHECK (b.getMagnitude (0, b.getNumSamples()) < 1.5f);
+        }
+        f.deleteFile();
+    }
+    // a held note longer than the loop must not cut the same note when the loop comes round
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = false;
+        Channel c; c.type = ChannelType::Synth; c.name = "808"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        auto& pat = p.patterns[(size_t) p.currentPattern];
+        const double len = pat.lengthBeats();
+        Note nt; nt.key = 36; nt.start = 0.0; nt.length = len * 2.0; nt.velocity = 0.9f;
+        pat.notes[id].push_back (nt);
+        e.sync(); e.setPositionBeats (0.0); e.play();
+        const double spbS = 60.0 / p.bpm * 44100.0;
+        renderPeak (e, (int) ((len * 2.0 + 0.3) * spbS / 512.0));
+        CHECK (renderPeak (e, 8) > 0.01f);
+        e.stop();
+    }
+    // starting mid-note: a sampler jumps into the sample instead of staying silent
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>> (2, 44100);
+        for (int i = 0; i < 44100; ++i) { buf->setSample (0, i, 0.5f * (float) i / 44100.0f); buf->setSample (1, i, 0.5f * (float) i / 44100.0f); }
+        Channel c; c.type = ChannelType::Sampler; c.oneShot = true; c.rootKey = 60;
+        auto at = [&] (double secondsIn) {
+            auto inst = createInstrument (c, buf, 44100.0);
+            inst->prepare (44100.0, 512);
+            inst->noteOnAt (60, 1.0f, false, secondsIn);
+            juce::AudioBuffer<float> out (2, 512); out.clear();
+            inst->render (out, 0, 512);
+            return std::abs (out.getSample (0, 300));
+        };
+        CHECK (at (0.5) > 0.1f);
+        CHECK (at (0.0) < 0.02f);
+    }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
     for (const char* id : { "flanger", "flangus" })
     {
@@ -215,6 +272,15 @@ int main()
         CHECK (lin > 3.0f && lin < 5.0f);
         const float linFlat = run (*eq, 8000, 0.1f, 80, true);
         CHECK (linFlat > 0.8f && linFlat < 1.25f);
+        {   // Studio Vocal: dips a ringing 3.2 kHz resonance, leaves the low voice alone, 0 latency
+            auto sv = createBuiltinEffect ("stvocal"); CHECK (sv != nullptr);
+            sv->setParam ("smooth", 1.0f); sv->setParam ("silk", 0.0f); sv->setParam ("warmth", 0.0f); sv->prepare (48000, 512);
+            const float harsh = run (*sv, 3200, 0.2f, 60, false);
+            sv->prepare (48000, 512);
+            const float low = run (*sv, 120, 0.2f, 60, false);
+            std::printf ("studio vocal: 3.2 kHz resonance %.1f dB, 120 Hz %.1f dB\n", 20 * std::log10 (harsh), 20 * std::log10 (low));
+            CHECK (harsh < 0.7f); CHECK (low > 0.8f && low < 1.15f); CHECK (sv->latencySamples() == 0);
+        }
         auto dq = createBuiltinEffect ("steq7");
         dq->setParam ("e4F", 1000.0f); dq->setParam ("e4Dyn", 1.0f); dq->setParam ("e4DTh", -40.0f); dq->setParam ("e4DRg", -12.0f);
         dq->prepare (48000, 512);
@@ -274,6 +340,41 @@ int main()
             if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; }
         }
         CHECK (std::abs ((float) zc / (float) base - 1.0f) > 0.03f);
+    }
+    // AutoPitch: a 452 Hz tone snaps to A 440, stays at full level
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0, inE = 0, outE = 0; int zc = 0, counted = 0; float prev = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 452.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); outE += y * y; if (prev <= 0 && y > 0) ++zc; prev = y; ++counted; }
+        }
+        const double hz = zc * 48000.0 / counted;
+        std::printf ("autopitch 452 Hz -> %.1f Hz, level %.2f dB\n", hz, 10.0 * std::log10 (outE / inE));
+        CHECK (std::abs (hz - 440.0) < 3.0);
+        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
+    }
+    // AutoPitch shifter latency stays tiny while correcting up or down
+    for (double ratio : { 0.97, 1.03, 2.0 })
+    {
+        SpliceShifter sh; sh.prepare (48000);
+        double ph = 0, dMax = 0, jump = 0; float prev = 0;
+        for (int i = 0; i < 48000; ++i)
+        {
+            float l = 0.5f * (float) (std::sin (ph) + 0.5 * std::sin (2 * ph) + 0.25 * std::sin (3 * ph)), r = l;
+            ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0;
+            sh.process (l, r, ratio, 48000.0 / 220.0);
+            if (i > 4800) { dMax = std::max (dMax, sh.delaySamples()); jump = std::max (jump, (double) std::abs (l - prev)); }
+            prev = l;
+        }
+        std::printf ("autopitch ratio %.2f: max delay %.2f ms, max step %.3f\n", ratio, dMax / 48.0, jump);
+        CHECK (dMax < 0.012 * 48000);
+        CHECK (jump < 0.2 * ratio);
     }
     // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
     {

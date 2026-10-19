@@ -123,6 +123,7 @@ private:
     void renderChannels (int n);
     void mixTracks (const float* const* in, int numIn, int n);
     void startRecordingWriters();
+    void primeClipReaders (double beat);
     void finishRecordingWriters();
     void click (float* l, float* r, int n, double b0, double b1);
     void updateSolo();
@@ -145,6 +146,7 @@ private:
 
     std::atomic<bool> playing { false }, recording { false }, countingIn { false };
     std::atomic<double> position { 0.0 };
+    std::atomic<float> declickGain { 1.0f };   // 4 ms fade-in after starting / jumping mid-sound
     std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;

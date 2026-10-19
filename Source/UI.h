@@ -75,6 +75,7 @@ class Knob : public juce::Slider
 {
 public:
     Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix = {});
+    void mouseDoubleClick (const juce::MouseEvent&) override;   // type an exact value (Alt-click resets)
 };
 
 void setupButton (juce::Button&, const juce::String& text, const juce::String& tooltip, bool toggle = false);
@@ -89,6 +90,7 @@ struct Studio : public juce::ChangeBroadcaster
     UndoHistory undo;
     juce::PropertiesFile* settings = nullptr;
     int selectedChannel = -1, selectedTrack = 1;
+    int editsSinceBackup = 0;
     juce::SortedSet<int> selectedLanes;   // highlighted playlist tracks (click / Shift / Ctrl-Cmd)
     int laneAnchor = -1;
     bool dirty = false;
