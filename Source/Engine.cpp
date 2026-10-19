@@ -85,6 +85,35 @@ struct Engine::ChannelRuntime
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
 
+// plugin delay compensation: a ring buffer that delays a stereo signal by a changing number of samples
+static constexpr int kPdcSize = 16384;   // ~0.34 s at 48 kHz
+struct PdcDelay
+{
+    juce::AudioBuffer<float> buf; int w = 0, mask = 0;
+    void prepare (int size) { buf.setSize (2, size); buf.clear(); w = 0; mask = size - 1; }
+    bool ready() const { return buf.getNumSamples() > 0; }
+    void delayInPlace (juce::AudioBuffer<float>& x, int n, int d)
+    {
+        d = juce::jlimit (0, mask, d);
+        for (int c = 0; c < 2; ++c)
+        {
+            auto* s = x.getWritePointer (c); auto* r = buf.getWritePointer (c);
+            for (int i = 0, ww = w; i < n; ++i, ww = (ww + 1) & mask) { r[ww] = s[i]; s[i] = r[(ww - d) & mask]; }
+        }
+        w = (w + n) & mask;
+    }
+    void addDelayed (const juce::AudioBuffer<float>& x, juce::AudioBuffer<float>& dst, int n, int d, float g)
+    {
+        d = juce::jlimit (0, mask, d);
+        for (int c = 0; c < 2; ++c)
+        {
+            auto* s = x.getReadPointer (c); auto* o = dst.getWritePointer (c); auto* r = buf.getWritePointer (c);
+            for (int i = 0, ww = w; i < n; ++i, ww = (ww + 1) & mask) { r[ww] = s[i]; o[i] += g * r[(ww - d) & mask]; }
+        }
+        w = (w + n) & mask;
+    }
+};
+
 struct FxRuntime
 {
     int uid = 0;
@@ -92,6 +121,7 @@ struct FxRuntime
     std::unique_ptr<BuiltinEffect> builtin;
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     juce::AudioBuffer<float> buf;   // sized to the plugin's own channel count
+    PdcDelay dryDelay;              // Mix knob: dry waits for a latent wet, so blending never comb-filters
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
@@ -212,6 +242,8 @@ juce::String Engine::recoverFromPluginCrash()
 struct Engine::TrackRuntime
 {
     juce::AudioBuffer<float> in, out, dry;
+    PdcDelay inDelay; std::vector<PdcDelay> edge;   // per sources[] entry
+    int ownLatency = 0, inputAlign = 0, arrival = 0;   // samples: this insert's FX, latest input, output
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     float duckGain = 1.0f;
     std::vector<std::unique_ptr<FxRuntime>> fx;
@@ -472,6 +504,7 @@ void Engine::sync()
             }
             for (auto& o : rt->fx) if (o) discardFx.push_back (std::move (o));
             rt->fx = std::move (chain);
+            for (auto& f : rt->fx) if (! f->dryDelay.ready()) f->dryDelay.prepare (8192);
             rt->tailSeconds = 0.5;
             for (auto& f : rt->fx) rt->tailSeconds = std::max (rt->tailSeconds, f->tail);
             auto& mt = proj.mixer[t];
@@ -501,6 +534,12 @@ void Engine::sync()
             auto& mt = proj.mixer[(size_t) t];
             for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) proj.mixer.size()) sources[(size_t) s.target].push_back ({ t, s.level });
             if (mt.routesToMaster) sources[0].push_back ({ t, 1.0f });
+        }
+        for (size_t t = 0; t < trackRt.size() && t < sources.size(); ++t)
+        {
+            auto& rt = *trackRt[t];
+            if (! rt.inDelay.ready()) rt.inDelay.prepare (kPdcSize);
+            if (rt.edge.size() != sources[t].size()) { rt.edge.resize (sources[t].size()); for (auto& d : rt.edge) if (! d.ready()) d.prepare (kPdcSize); }
         }
         updateSolo();
     }
@@ -1142,9 +1181,19 @@ void Engine::processTrack (int t)
     auto& tr = *trackRt[(size_t) t];
     auto& mt = proj.mixer[(size_t) t];
     tr.out.makeCopyOf (tr.in, true);
+    // delay compensation: everything arriving here is lined up with the latest (most delayed) input
+    if (tr.inputAlign > 0 && tr.inDelay.ready()) tr.inDelay.delayInPlace (tr.out, n, tr.inputAlign);
     if (! tr.frozen)
-        for (auto& [src, g] : sources[(size_t) t])
-            for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, trackRt[(size_t) src]->out, ch, 0, n, g);
+    {
+        auto& S = sources[(size_t) t];
+        for (size_t k = 0; k < S.size(); ++k)
+        {
+            auto& srt = *trackRt[(size_t) S[k].first];
+            const int dl = tr.inputAlign - srt.arrival;
+            if (dl > 0 && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
+            else for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, srt.out, ch, 0, n, S[k].second);
+        }
+    }
 
     const float mag = tr.out.getMagnitude (0, n);
     if (mag > 1.0e-6f) tr.silentSamples = 0; else tr.silentSamples += n;
@@ -1163,6 +1212,8 @@ void Engine::processTrack (int t)
                 meterLoad { f.load, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
             const bool blend = mix < 0.999f && n <= tr.dry.getNumSamples();
             if (blend) for (int c = 0; c < 2; ++c) tr.dry.copyFrom (c, 0, view, c, 0, n);
+            const int slotLat = f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+            if (blend && slotLat > 0 && f.dryDelay.ready()) f.dryDelay.delayInPlace (tr.dry, n, slotLat);
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
                 ~Blend() { if (on) for (int c = 0; c < 2; ++c) { v.applyGain (c, 0, n, mix); v.addFrom (c, 0, d, c, 0, n, 1.0f - mix); } } }
                 blendOut { view, tr.dry, n, mix, blend };
@@ -1175,6 +1226,8 @@ void Engine::processTrack (int t)
                 if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
                 for (int c = 0; c < nch; ++c)
                     if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
+                if (pl.getMainBusNumInputChannels() == 1)   // mono plugin on a stereo bus: feed it the mono sum, not just the left side
+                { f.buf.addFrom (0, 0, view, 1, 0, n); f.buf.applyGain (0, 0, n, 0.5f); }
                 juce::AudioBuffer<float> pv (f.buf.getArrayOfWritePointers(), nch, n);
                 f.midi.clear();
                 pl.processBlock (pv, f.midi);
@@ -1450,6 +1503,26 @@ void Engine::renderChannels (int n)
 
 void Engine::mixTracks (const float* const*, int, int)
 {
+    // plugin delay compensation (like FL): each insert's latency = its active FX; inputs wait for the slowest path
+    for (auto& L : levels)
+        for (int t : L)
+        {
+            if (t < 0 || t >= (int) trackRt.size() || t >= (int) proj.mixer.size() || t >= (int) sources.size()) continue;
+            auto& tr = *trackRt[(size_t) t];
+            auto& mt = proj.mixer[(size_t) t];
+            int own = 0;
+            if (! tr.frozen)
+                for (size_t k = 0; k < tr.fx.size() && k < mt.fx.size(); ++k)
+                {
+                    if (mt.fx[k].bypass || mt.fx[k].mix <= 0.0f) continue;
+                    auto& f = *tr.fx[k];
+                    own += f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+                }
+            int in = 0;
+            for (auto& sg : sources[(size_t) t]) if (sg.first < (int) trackRt.size()) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
+            tr.ownLatency = own; tr.inputAlign = std::min (in, kPdcSize - 1);
+            tr.arrival = std::min (tr.inputAlign + std::max (0, own), kPdcSize - 1);
+        }
     for (size_t lv = 0; lv < levels.size(); ++lv)
     {
         currentLevel = (int) lv;
