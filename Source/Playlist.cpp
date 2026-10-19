@@ -247,7 +247,7 @@ public:
     juce::String getTooltip() override
     {
         if (lastMouse.y >= toolbarH && lastMouse.y < toolbarH + rulerH && lastMouse.x > headerW)
-            return "Ruler: click / drag = move playhead (Alt = no snap), E + drag = time selection, Shift + drag = punch range, double-click = clear";
+            return "Ruler: click = move playhead, drag the triangle = scrub (Alt = no snap), drag the numbers = loop range (E: also selects), double-click = clear";
         if (lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH)
             return "Double-click = place pattern | drag clip = move | drag edges = trim | top corners = fades (Alt = curve) | right-click = takes, routing, split";
         return {};
@@ -396,9 +396,9 @@ public:
         dragStart = e.position;
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
-            // handle = always scrub; Shift+drag = punch; E (select) + drag = time selection; otherwise click / drag moves the playhead
+            // handle = drag the playhead; drag on the numbers = loop range (E: also selects clips in it); click = move playhead
             drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
-                 : e.mods.isShiftDown() ? Drag::Ruler : tool == PTool::Select ? Drag::TimeSel : Drag::Scrub;
+                 : tool == PTool::Select && ! e.mods.isShiftDown() ? Drag::TimeSel : Drag::Ruler;
             if (drag == Drag::Scrub) mouseDrag (e);
             return;
         }
@@ -572,6 +572,7 @@ public:
         if (drag == Drag::TimeSel)
         {
             if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x)))); }
+            else if (timeSelB > timeSelA) s.edit ("Loop range", [a = timeSelA, b = timeSelB] (Project& pr) { pr.punchIn = a; pr.punchOut = b; });   // FL: playback loops the selection
             drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
