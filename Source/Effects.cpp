@@ -821,10 +821,11 @@ void SpliceShifter::process (float& l, float& r, double ratio, double period)
     l = yl; r = yr;
 }
 
-float detectPitchYin (const float* x, int n, double sr, float thresh)
+float detectPitchYin (const float* x, int n, double sr, float thresh, float fallback, float loHz, float hiHz, bool* rough)
 {
-    const int maxTau = std::min (n / 2, (int) (sr / 70.0));
-    const int minTau = (int) (sr / 1100.0);
+    if (rough != nullptr) *rough = false;
+    const int maxTau = std::min (n / 2, (int) (sr / loHz));
+    const int minTau = std::max (2, (int) (sr / hiHz));
     if (maxTau <= minTau + 2) return 0.0f;
     float energy = 0; for (int i = 0; i < n; ++i) energy += x[i] * x[i];
     if (energy / (float) n < 1.0e-6f) return 0.0f;
@@ -850,6 +851,24 @@ float detectPitchYin (const float* x, int n, double sr, float thresh)
             return (float) sr / t;
         }
     }
+    if (fallback > thresh)
+    {
+        // breathy / short / mumbled sounds: take the first dip close to the best one (avoids picking an octave too low)
+        const int hi = std::min (maxTau - 1, (int) d.size() - 1);
+        float best = 1.0f;
+        for (int tau = minTau; tau < hi; ++tau) best = std::min (best, d[(size_t) tau]);
+        if (best < fallback)
+            for (int tau = minTau; tau < hi; ++tau)
+                if (d[(size_t) tau] <= best * 1.15f + 0.02f)
+                {
+                    while (tau + 1 < hi && d[(size_t) tau + 1] < d[(size_t) tau]) ++tau;
+                    const float a = d[(size_t) tau - 1], b = d[(size_t) tau], c = d[(size_t) tau + 1];
+                    const float den = a + c - 2 * b;
+                    const float t = (float) tau + (std::abs (den) > 1e-9f ? 0.5f * (a - c) / den : 0.0f);
+                    if (rough != nullptr) *rough = true;
+                    return (float) sr / t;
+                }
+    }
     return 0.0f;
 }
 
@@ -865,7 +884,7 @@ public:
             { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
             { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
-                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "voice", "Voice", 0, 2, 1, { "Low", "Mid", "High" } },
+                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "voice", "Voice", 0, 2, 1, { "Low Male", "Alto / Tenor", "Soprano" } },
             { "mix", "Mix", 0, 1, 1 },
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 } };
@@ -878,7 +897,7 @@ public:
         shifter.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -903,17 +922,38 @@ public:
             if ((dsCount++ % dsFactor) == 0)
             {
                 analysis[(size_t) aw] = mono; aw = (aw + 1) % (int) analysis.size();
-                if (++hopCount >= (style == 3 ? 64 : 128))   // Hard Tune (Antares retune 0): track twice as often
+                const int hop = style == 3 ? 64 : 128;   // Hard Tune (Antares retune 0): track twice as often
+                if (++hopCount >= hop)
                 {
                     hopCount = 0;
-                    // shorter window for Mid/High voices = less tracking lag (Low keeps the long window for deep notes)
-                    const int wn = (int) p (5) >= 2 ? 512 : (int) p (5) == 1 ? 768 : 1024;
+                    // shorter window for Mid/High voices = less tracking lag (Low keeps the long window for deep notes);
+                    // at a word's start use the short window so short ad-libs lock right away
+                    const int vc = (int) p (5);
+                    const int wn = vc >= 2 || (heldNote == 0 && vc == 1) ? 512 : vc == 1 ? 768 : (heldNote == 0 ? 768 : 1024);
                     std::array<float, 1024> win {};
                     for (int k = 0; k < wn; ++k) win[(size_t) k] = analysis[(size_t) ((aw - wn + k + (int) analysis.size()) % (int) analysis.size())];
-                    const float hz = detectPitchYin (win.data(), wn, dsr, style == 0 ? 0.12f : 0.18f);
-                    const float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    // Antares-style input type: each voice only searches its own range (no wrong-octave guesses)
+                    static const float loHz[] { 55.0f, 80.0f, 150.0f }, hiHz[] { 450.0f, 900.0f, 1300.0f };
+                    const int vi = juce::jlimit (0, 2, vc);
+                    bool rough = false;
+                    const float hz = detectPitchYin (win.data(), wn, dsr, style == 0 ? 0.12f : 0.18f, style == 0 ? 0.3f : 0.45f, loHz[vi], hiHz[vi], &rough);
+                    float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
+                    if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
+                    // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
+                    if (rough && midi > 0 && heldNote > 0) { missHops = 0; midi = -1.0f; }
+                    if (midi > 0 && lastMidi > 0)
+                    {
+                        // octave error guard: a sudden exact octave jump inside a note is a detector slip - fold it back
+                        const float dj = midi - lastMidi;
+                        if (std::abs (dj - 12.0f) < 0.7f && octSlip < 8) { midi -= 12.0f; ++octSlip; }
+                        else if (std::abs (dj + 12.0f) < 0.7f && octSlip < 8) { midi += 12.0f; ++octSlip; }
+                        else octSlip = 0;
+                    }
                     if (midi > 0)
                     {
+                        const bool onset = heldNote == 0;
+                        missHops = 0; lastMidi = midi;
                         period = (float) (sr / hz);
                         int target = snapToScale ((int) std::round (midi), root, scale);
                         // note hold: stay on the current note through vibrato/drift until the voice is clearly on another one
@@ -922,9 +962,11 @@ public:
                         float semis = (float) target - midi;
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
+                        if (onset && (style == 3 || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
-                    else { targetRatio = 1.0f; heldNote = 0; }
+                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
+                    else if (midi == 0.0f && ++missHops > (int) (0.08 * dsr / hop)) { targetRatio = 1.0f; heldNote = 0; lastMidi = 0; octSlip = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -939,7 +981,8 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter;
     float currentRatio = 1, targetRatio = 1;
-    int heldNote = 0;
+    int heldNote = 0, missHops = 0, octSlip = 0;
+    float lastMidi = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };

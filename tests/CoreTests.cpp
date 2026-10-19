@@ -409,6 +409,39 @@ int main()
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
     }
+    // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
+    {
+        auto run = [] (int scenario) {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", 3.0f);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (3); double ph = 0; std::vector<float> out;
+            const int blocks = scenario == 1 ? 32 : 160;
+            for (int k = 0; k < blocks; ++k)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const bool voiced = scenario == 1 ? k >= 20 : ! (scenario == 2 && k >= 120 && k < 124);
+                    const float noise = (rnd.nextFloat() * 2 - 1) * (scenario == 0 ? 0.12f : scenario == 2 && ! voiced ? 0.08f : 0.0f);
+                    float v = 0;
+                    if (voiced) { v = 0.25f * (float) std::sin (ph) + 0.1f * (float) std::sin (2 * ph) + 0.05f * (float) std::sin (3 * ph); ph += juce::MathConstants<double>::twoPi * 452.0 / 48000.0; }
+                    b.setSample (0, i, v + noise); b.setSample (1, i, v + noise);
+                }
+                ap->process (b, 512, ctx);
+                for (int i = 0; i < 512; ++i) out.push_back (b.getSample (0, i));
+            }
+            // measure: breathy = end, short yeah = its last 100 ms, gap = 16-48 ms after the voice comes back
+            const size_t at = scenario == 0 ? out.size() - 2048 : scenario == 1 ? (size_t) (20 * 512 + 1536) : (size_t) (124 * 512 + 768);
+            const int len = scenario == 2 ? 1536 : 2048;
+            return detectPitchYin (out.data() + at, len, 48000.0, 0.3f, 0.5f);
+        };
+        const float breathy = run (0), shortYeah = run (1), gap = run (2);
+        std::printf ("autopitch rough vocals -> breathy %.1f Hz, short yeah %.1f Hz, after gap %.1f Hz\n", breathy, shortYeah, gap);
+        CHECK (std::abs (breathy - 440.0f) < 4.0f);
+        CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
+        CHECK (std::abs (gap - 440.0f) < 4.0f);
+    }
     // AutoPitch shifter latency stays tiny while correcting up or down
     for (double ratio : { 0.97, 1.03, 2.0 })
     {

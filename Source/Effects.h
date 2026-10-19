@@ -122,5 +122,5 @@ private:
     double sr = 44100, d = 64, d2 = 64;
 };
 
-float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f); // Hz or 0
+float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
 }
