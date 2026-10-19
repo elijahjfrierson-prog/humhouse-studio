@@ -54,6 +54,8 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Playlist: E + drag the bar ruler = time selection (copy / paste / Ctrl+B whole bars incl. empty space); Shift+drag ruler = punch\n"
+        "- Piano Roll toolbar wraps to two rows when narrow; Glide always visible\n"
         "- Note names match FL: middle C = C5 (C0 to G10)\n"
         "- One-shots: smoother pitched playback (Hermite), SET (wrench) button on every channel, on/off buttons for Normalize, Reverse, Declick...\n"
         "- One-shots / 808 cut mode: no click at the start or when the next hit cuts the last one\n"

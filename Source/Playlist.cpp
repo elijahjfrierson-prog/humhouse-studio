@@ -303,6 +303,11 @@ public:
                 g.setColour (col::rec.withAlpha (0.07f));
                 g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
             }
+            if (timeSelB > timeSelA)
+            {
+                g.setColour (col::accent.withAlpha (0.10f));
+                g.fillRect (beatToX (timeSelA), (float) area.getY(), (float) ((timeSelB - timeSelA) * pxPerBeat), (float) area.getHeight());
+            }
             for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) drawClip (g, c);
             // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
             s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
@@ -354,6 +359,12 @@ public:
             g.fillRect (x0, (float) toolbarH + 2, x1 - x0, (float) rulerH - 4);
             g.setColour (col::text); g.drawText ("PUNCH", (int) x0 + 4, toolbarH, 60, rulerH, juce::Justification::centredLeft);
         }
+        if (timeSelB > timeSelA)
+        {
+            const float x0 = juce::jmax ((float) headerW, beatToX (timeSelA)), x1 = beatToX (timeSelB);
+            g.setColour (col::accent.withAlpha (0.45f));
+            g.fillRect (x0, (float) toolbarH + 2, x1 - x0, (float) rulerH - 4);
+        }
         const float px = beatToX (s.engine.positionBeats());
         if (px >= headerW)
         {
@@ -385,7 +396,8 @@ public:
         dragStart = e.position;
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
-            drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub : Drag::Ruler;   // grab the playhead handle
+            drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
+                 : (tool == PTool::Select && ! e.mods.isShiftDown()) ? Drag::TimeSel : Drag::Ruler;   // FL: E + drag the ruler = time selection; Shift+drag = punch
             return;
         }
         if (! clipArea().contains (e.getPosition())) return;
@@ -393,7 +405,7 @@ public:
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
-            if (! e.mods.isShiftDown()) s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
+            if (! e.mods.isShiftDown()) { timeSelA = timeSelB = -1; s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; }); }
             drag = Drag::Marquee; marquee = {}; marqueeBase.clear();
             for (auto& c : p.clips) marqueeBase.push_back (c.selected);
             repaint(); return;
@@ -446,6 +458,7 @@ public:
         }
         if (i < 0)
         {
+            timeSelA = timeSelB = -1;
             s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
             s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
             repaint();
@@ -473,6 +486,14 @@ public:
             const double b = xToBeat (e.position.x);
             s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : snap (b)));
             repaint(); return;
+        }
+        if (drag == Drag::TimeSel)
+        {
+            if (std::abs (e.position.x - dragStart.x) < 4) return;
+            const double a = juce::jmax (0.0, snap (xToBeat (dragStart.x))), b = juce::jmax (0.0, snap (xToBeat (e.position.x)));
+            timeSelA = juce::jmin (a, b); timeSelB = juce::jmax (a, b);
+            s.live ([&] (Project& pr) { for (auto& c : pr.clips) c.selected = ! c.hidden && c.start < timeSelB && c.start + c.length > timeSelA; });
+            changed = true; repaint(); return;
         }
         if (drag == Drag::Ruler)
         {
@@ -545,6 +566,11 @@ public:
             if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
             marquee = {}; drag = Drag::None; repaint(); return;
         }
+        if (drag == Drag::TimeSel)
+        {
+            if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x)))); }
+            drag = Drag::None; repaint(); return;
+        }
         if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
         else if (changed)
         {
@@ -567,7 +593,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         auto& p = s.p();
-        if (e.y >= toolbarH && e.y < toolbarH + rulerH) { s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
+        if (e.y >= toolbarH && e.y < toolbarH + rulerH) { timeSelA = timeSelB = -1; s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (i >= 0)
@@ -652,6 +678,7 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
+            if (timeSelB > timeSelA) clipLo = timeSelA;   // time selection: paste keeps the empty space before the first clip
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
@@ -672,12 +699,15 @@ public:
             });
             return true;
         }
-        if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'd') { s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = false; }); repaint(); return true; }
+        if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'd') { timeSelA = timeSelB = -1; s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = false; }); repaint(); return true; }
         if (k == juce::KeyPress ('b', cmd, 0))
         {
-            s.edit ("Duplicate clips", [] (Project& p) {
+            const double ta = timeSelA, tb = timeSelB;
+            if (tb > ta) { timeSelA = tb; timeSelB = tb + (tb - ta); }   // the selection moves onto the copy, so Ctrl+B again keeps stacking
+            s.edit ("Duplicate clips", [ta, tb] (Project& p) {
                 double lo = 1e9, hi = 0;
                 for (auto& c : p.clips) if (c.selected) { lo = std::min (lo, c.start); hi = std::max (hi, c.start + c.length); }
+                if (tb > ta) { lo = ta; hi = tb; }   // time selection: duplicate by the whole range (full bars), not the clip ends
                 const auto n = p.clips.size();
                 for (size_t i = 0; i < n; ++i)
                     if (p.clips[i].selected) { auto c = p.clips[i]; c.uid = p.newUid(); c.start += hi - lo; p.clips[i].selected = false; p.clips.push_back (c); }
@@ -723,7 +753,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee };
+    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee };
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -761,6 +791,7 @@ private:
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
+    double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
     std::vector<Clip> clipboard; double clipLo = 0; bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW); }
