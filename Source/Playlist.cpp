@@ -685,6 +685,15 @@ public:
         }
         if (k == juce::KeyPress ('g', cmd, 0)) { groupSelected (true); return true; }
         if (k == juce::KeyPress ('g', cmd | juce::ModifierKeys::shiftModifier, 0)) { groupSelected (false); return true; }
+       #if ! HHS_LICENSED
+        if (k.getModifiers().isAltDown() && (k.getKeyCode() == 'a' || k.getKeyCode() == 'A'))   // Alt+A: hi-hat style roll on the selected audio clips
+        {
+            std::vector<int> u;
+            for (auto& c : s.p().clips) if (c.selected && c.isAudio()) u.push_back (c.uid);
+            if (! u.empty()) rollMenu (u);
+            return true;
+        }
+       #endif
         if (k.getModifiers().isAnyModifierKeyDown() == false)
         {
             const std::pair<int, PTool> keys[] { { 'e', PTool::Select }, { 'p', PTool::Paint }, { 'b', PTool::Paint }, { 'd', PTool::Delete }, { 't', PTool::Mute }, { 'c', PTool::Slice } };
@@ -996,6 +1005,42 @@ private:
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
         else if (! c.isAudio() && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
     }
+    static void addRollItems (juce::PopupMenu& m)
+    {
+        const char* names[] { "1/4", "1/8", "1/16", "1/32", "1/8 triplet", "1/16 triplet" };
+        for (int i = 0; i < 6; ++i) m.addItem (300 + i, juce::String ("Roll ") + names[i]);
+    }
+    void rollMenu (std::vector<int> uids)
+    {
+        juce::PopupMenu m; addRollItems (m);
+        m.showMenuAsync ({}, [this, uids] (int r) { applyRoll (uids, r); });
+    }
+    // repeats the start of each clip every `div` beats across its length (grouped, click-free edges)
+    void applyRoll (const std::vector<int>& uids, int r)
+    {
+        static const double divs[] { 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
+        if (r < 300 || r > 305) return;
+        const double div = divs[r - 300];
+        s.edit ("Roll clip", [&] (Project& p) {
+            const double fade = secondsToBeats (0.002, p.bpm);
+            int g = 0; for (auto& o : p.clips) g = juce::jmax (g, o.group);
+            std::vector<Clip> made;
+            for (int uid : uids)
+            {
+                auto it = std::find_if (p.clips.begin(), p.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+                if (it == p.clips.end() || ! it->isAudio() || it->length < div * 1.5) continue;
+                const Clip src = *it; p.clips.erase (it); ++g;
+                const int n = (int) std::floor (src.length / div + 1e-6);
+                for (int k = 0; k < n; ++k)
+                {
+                    Clip c = src; c.uid = p.newUid(); c.start = src.start + k * div; c.length = div;
+                    c.fadeIn = k == 0 ? src.fadeIn : fade; c.fadeOut = fade; c.group = g; c.takeGroup = 0; c.selected = true;
+                    made.push_back (c);
+                }
+            }
+            p.clips.insert (p.clips.end(), made.begin(), made.end());
+        });
+    }
     void clipMenu (int index)
     {
         auto& p = s.p();
@@ -1017,11 +1062,22 @@ private:
         for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
         m.addSubMenu ("Takes", takes, group.size() > 1);
         m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+       #if ! HHS_LICENSED
+        juce::PopupMenu roll; addRollItems (roll);
+        m.addSubMenu ("Roll (hi-hat style)   Alt+A", roll, clip.isAudio());
+       #endif
         m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
         m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
+            if (r >= 300 && r <= 305)
+            {
+                std::vector<int> u;
+                for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio()) u.push_back (o.uid);
+                applyRoll (u, r);
+                return;
+            }
             s.edit ("Clip edit", [&] (Project& pr) {
                 auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
                 if (it == pr.clips.end()) return;
