@@ -58,6 +58,29 @@ inline void makeCaptureFriendly (juce::Component& c)
    #endif
 }
 
+// Pop-out Mixer / plug-in windows float over the app. On macOS a real "always on top" (floating level) window is hidden
+// from OBS / screen-capture window lists, so there they stay normal windows and are raised above the app after each click.
+#if JUCE_MAC
+inline constexpr bool floatWithTopmost = false;
+#else
+inline constexpr bool floatWithTopmost = true;
+#endif
+inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
+inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
+inline void raiseFloatingWindows()
+{
+    auto& d = juce::Desktop::getInstance();
+    for (int i = 0; i < d.getNumComponents(); ++i)
+        if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
+            c->toFront (false);
+}
+inline void updateFloating (juce::Component& c)
+{
+    if (! floatWithTopmost) return;
+    const bool front = juce::Process::isForegroundProcess();
+    if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
+}
+
 class HHLookAndFeel : public juce::LookAndFeel_V4
 {
 public:

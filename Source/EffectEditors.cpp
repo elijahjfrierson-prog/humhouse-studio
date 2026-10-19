@@ -19,7 +19,8 @@ public:
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         makeCaptureFriendly (*this);
-        setAlwaysOnTop (true);
+        markFloating (*this);
+        if (floatWithTopmost) setAlwaysOnTop (true);
         startTimer (300);
     }
     void closeButtonPressed() override { close (this); }
@@ -35,8 +36,7 @@ private:
     {
         if (valid && ! valid()) { stopTimer(); close (this); return; }
         // FL-style: plug-in windows float over the app while you click around it, but not over other apps
-        const bool front = juce::Process::isForegroundProcess();
-        if (front != isAlwaysOnTop()) setAlwaysOnTop (front);
+        updateFloating (*this);
     }
 };
 

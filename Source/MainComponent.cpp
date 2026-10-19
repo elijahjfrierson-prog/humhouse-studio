@@ -489,6 +489,7 @@ public:
         addAndMakeVisible (hintBar);
 
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+        if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
 #else
@@ -518,6 +519,7 @@ public:
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
         hostKeyHandler = nullptr;
+        juce::Desktop::getInstance().removeGlobalMouseListener (&floatRaiser);
         closeAllEditorWindows();
         engine.onPluginDiscard = nullptr;
         engine.knownPlugins.removeChangeListener (this);
@@ -884,6 +886,14 @@ private:
     TransportButton playBtn, stopBtn, recBtn;
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn, saveBtn;
     int savedFlash = 0;
+    struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
+    {
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            auto* top = e.eventComponent != nullptr ? e.eventComponent->getTopLevelComponent() : nullptr;
+            if (top != nullptr && ! isFloating (top) && juce::Process::isForegroundProcess()) raiseFloatingWindows();
+        }
+    } floatRaiser;
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
@@ -906,15 +916,11 @@ private:
     // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
     struct PopOut : public juce::DocumentWindow, private juce::Timer
     {
-        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { startTimer (300); }
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { markFloating (*this); startTimer (300); }
         std::function<void()> onClose;
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
-        void timerCallback() override   // stays visible over the main window while you work, not over other apps
-        {
-            const bool front = juce::Process::isForegroundProcess();
-            if (front != isAlwaysOnTop()) setAlwaysOnTop (front);
-        }
+        void timerCallback() override { updateFloating (*this); }   // stays visible over the main window while you work, not over other apps
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
 
