@@ -114,7 +114,16 @@ public:
             l->setFont (juce::FontOptions (11.0f));
             addAndMakeVisible (l);
             const auto id = p.id;
-            if (! p.choices.empty())
+            if (p.choices.size() == 2 && juce::String (p.choices[0]) == "Off")
+            {
+                auto* b = new juce::TextButton();   // FL-style on/off button (Normalize, Reverse, Declick, ...)
+                setupButton (*b, juce::String (p.name).toUpperCase(), p.name + " on / off", true);
+                b->setToggleState (p.value > p.mn + 0.5f, juce::dontSendNotification);
+                const float mn = p.mn;
+                b->onClick = [this, b, id, mn] { set (id, mn + (b->getToggleState() ? 1.0f : 0.0f)); onCommit(); };
+                controls.add (b);
+            }
+            else if (! p.choices.empty())
             {
                 auto* cb = new juce::ComboBox();
                 for (size_t c = 0; c < p.choices.size(); ++c) cb->addItem (p.choices[c], (int) c + 1);
@@ -151,7 +160,8 @@ public:
         {
             if (params[i].id != id) continue;
             v = juce::jlimit (params[i].mn, params[i].mx, v);
-            if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) std::round (v - params[i].mn), juce::dontSendNotification);
+            if (auto* tb = dynamic_cast<juce::TextButton*> (controls[(int) i])) tb->setToggleState (v > params[i].mn + 0.5f, juce::dontSendNotification);
+            else if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) std::round (v - params[i].mn), juce::dontSendNotification);
             else if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) k->setValue (v, juce::dontSendNotification);
             set (id, v);
         }
@@ -402,7 +412,7 @@ public:
             static const char* nn[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
             const int midi = juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0));
             g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-            g.drawText (hzText ((float) hz) + "  " + nn[((midi % 12) + 12) % 12] + juce::String (midi / 12 - 1) + "  " + juce::String (dbAt (hover.y), 1) + " dB",
+            g.drawText (hzText ((float) hz) + "  " + nn[((midi % 12) + 12) % 12] + juce::String (midi / 12) + "  " + juce::String (dbAt (hover.y), 1) + " dB",
                         (int) a.getX() + 30, (int) a.getY() + 2, 220, 14, juce::Justification::left);
         }
         g.setColour (col::panel2.withAlpha (0.9f)); g.fillRect (getLocalBounds().removeFromBottom (barH + 4).reduced (6, 2).toFloat());

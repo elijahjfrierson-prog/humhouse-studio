@@ -58,7 +58,10 @@ public:
         for (auto& v : voices) if (v.active && v.key == key && (mono || ! oneShot)) v.releasing = true;
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
-    void choke() override { for (auto& v : voices) if (v.active && ! v.releasing) { v.releasing = true; v.fadeLen = 0.006f; } }   // 6 ms: an 808 sub cut any faster clicks
+    void choke() override   // 6 ms: an 808 sub cut any faster clicks; voices already in a long release get cut too
+    {
+        for (auto& v : voices) if (v.active) { v.fadeLen = v.releasing ? juce::jmin (v.fadeLen, 0.006f) : 0.006f; v.releasing = true; }
+    }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
     void render (juce::AudioBuffer<float>& out, int start, int num) override
@@ -91,8 +94,14 @@ public:
                 if (hold > 0.0f && ! v.releasing && v.age > hold * sampleRate) v.releasing = true;
                 v.age += 1.0;
                 if (v.releasing) { v.rel -= 1.0f / (v.fadeLen * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
-                oL[i] += (l[i0] + f * (l[i0 + 1] - l[i0])) * g;
-                oR[i] += (r[i0] + f * (r[i0 + 1] - r[i0])) * g;
+                auto herm = [&] (const float* x)   // 4-point Hermite: pitched hits stay smooth instead of gritty/blocky
+                {
+                    const float xm = x[i0 > 0 ? i0 - 1 : 0], x0 = x[i0], x1 = x[i0 + 1], x2 = x[i0 + 2 < len ? i0 + 2 : i0 + 1];
+                    const float c1 = 0.5f * (x1 - xm), c2 = xm - 2.5f * x0 + 2.0f * x1 - 0.5f * x2, c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
+                    return ((c3 * f + c2) * f + c1) * f + x0;
+                };
+                oL[i] += herm (l) * g;
+                oR[i] += herm (r) * g;
                 v.pos += std::pow (2.0, v.semis / 12.0);
             }
         }

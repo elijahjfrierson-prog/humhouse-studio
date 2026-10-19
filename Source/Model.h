@@ -11,7 +11,7 @@ namespace hhs
 // ---------------------------------------------------------------- scales
 struct ScaleDef { const char* name; std::vector<int> steps; };
 const std::vector<ScaleDef>& allScales();
-const char* noteName (int midiKey);          // "C#4"
+const char* noteName (int midiKey);          // FL naming: 60 = "C5"
 const char* pitchClassName (int pc);         // "C#"
 bool inScale (int midiKey, int root, int scaleIndex);
 int  snapToScale (int midiKey, int root, int scaleIndex); // nearest in-scale key

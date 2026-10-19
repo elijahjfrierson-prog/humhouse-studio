@@ -149,6 +149,9 @@ struct Row : public juce::Component
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");
         insert.onValueChange = [this] { s.edit ("Route channel", [&] (Project&) { if (auto* c = s.channel (channelId)) c->mixerTrack = (int) insert.getValue(); }); };
         name.onMouse = [this] (const juce::MouseEvent& e) { e.mods.isPopupMenu() ? menu() : select (true); };
+        setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
+        wrench.onClick = [this] { openChannelEditor (s, channelId); };
+        addAndMakeVisible (wrench);
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
@@ -291,10 +294,11 @@ struct Row : public juce::Component
         for (auto* k : { &vol, &pan, &pitch, &glide }) k->setBounds (r.removeFromLeft (30));
         r.removeFromLeft (4);
         insert.setBounds (r.removeFromRight (34).reduced (0, 4));
+        wrench.setBounds (r.removeFromRight (30).reduced (1, 4));
         name.setBounds (r.reduced (2, 1));
     }
     Studio& s; int channelId;
-    juce::TextButton mute;
+    juce::TextButton mute, wrench;
     Knob vol { "Volume", "channel level", 0.0, 1.25, 0.8 }, pan { "Pan", "left / right", -1.0, 1.0, 0.0 },
          pitch { "Pitch", "transpose in semitones", -24.0, 24.0, 0.0, " st" },
          glide { "Glide", "slide time between notes (808s, melodies); 0 = off", 0.0, 1.0, 0.0, " s" };

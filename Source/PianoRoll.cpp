@@ -85,7 +85,15 @@ public:
 
     void resized() override
     {
-        auto t = getLocalBounds().removeFromTop (barH).reduced (6, 4);
+        // one toolbar row when it fits, otherwise two rows (tools + glide below) so nothing hides behind anything else
+        const int row1 = 150 + 6 + 60 + 4 + 150 + 4 + 60 + 10 + 100 + 10 + 70 + 4 + 60 + 4 + (stampChord >= 0 ? 110 : 64) + 4 + 60 + 4 + 56 + 4 + 52 + 10;
+        const int row2 = 28 + 48 + toolBtns.size() * 48;
+        const int wantH = getWidth() - 12 >= row1 + row2 ? 34 : 64;
+        if (wantH != barH) { barH = wantH; repaint(); }
+        auto area = getLocalBounds().removeFromTop (barH).reduced (6, 2);
+        auto t = (barH > 34 ? area.removeFromTop (area.getHeight() / 2) : area).reduced (0, 2);
+        area = area.reduced (0, 2);
+        juce::Rectangle<int>& t2 = barH > 34 ? area : t;
         chLabel.setBounds (t.removeFromLeft (150)); t.removeFromLeft (6);
         rootBox.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
         scaleBox.setBounds (t.removeFromLeft (150)); t.removeFromLeft (4);
@@ -97,8 +105,8 @@ public:
         ghostBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (4);
         muteBtn.setBounds (t.removeFromLeft (56)); t.removeFromLeft (4);
         lockBtn.setBounds (t.removeFromLeft (52)); t.removeFromLeft (10);
-        glide.setBounds (t.removeFromLeft (28)); t.removeFromLeft (10);
-        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (46)); t.removeFromLeft (2); }
+        glide.setBounds (t2.removeFromLeft (28)); t2.removeFromLeft (48);   // room for the GLIDE label
+        for (auto* b : toolBtns) { b->setBounds (t2.removeFromLeft (46)); t2.removeFromLeft (2); }
     }
 
     void paint (juce::Graphics& g) override
@@ -107,7 +115,7 @@ public:
         g.fillAll (col::bg);
         g.setColour (col::panel); g.fillRect (0, 0, getWidth(), barH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText ("GLIDE", glide.getRight() + 2, 0, 50, barH, juce::Justification::centredLeft);
+        g.drawText ("GLIDE", glide.getRight() + 2, glide.getY(), 46, glide.getHeight(), juce::Justification::centredLeft);
         auto ga = gridArea();
         auto* ch = s.channel (channelId);
         if (ch == nullptr)
@@ -474,7 +482,8 @@ private:
     int channelId = -1;
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 14.0f;
-    static constexpr int keyW = 64, barH = 34, rulerH = 18, velH = 70;
+    static constexpr int keyW = 64, rulerH = 18, velH = 70;
+    int barH = 34;   // 64 when the toolbar wraps to two rows
     double lastLength = 0.25; float lastVelocity = 0.78f;
     Drag drag = Drag::None;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
@@ -483,7 +492,8 @@ private:
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
     juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
-    int lockKey (int k) const { return lockBtn.getToggleState() ? juce::jlimit (0, 127, snapToScale (k, s.p().keyRoot, s.p().scaleIndex)) : k; }
+    int scaleKey (int k) const { int r = snapToScale (k, s.p().keyRoot, s.p().scaleIndex); if (r < 0) r += 12; if (r > 127) r -= 12; return r; }   // octave-wrap at the edges stays in scale
+    int lockKey (int k) const { return lockBtn.getToggleState() ? scaleKey (k) : k; }
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
     juce::Label chLabel;
 
@@ -586,8 +596,8 @@ private:
         for (int d : iv)
         {
             int k = n.key + d;
-            if (stampLock || lockBtn.getToggleState()) k = snapToScale (k, s.p().keyRoot, s.p().scaleIndex);
             k = juce::jlimit (0, 127, k);
+            if (stampLock || lockBtn.getToggleState()) k = scaleKey (k);
             if (std::find (used.begin(), used.end(), k) != used.end()) continue;
             used.push_back (k);
             Note c = n; c.key = k; c.slide = c.slide && d == iv.front();
