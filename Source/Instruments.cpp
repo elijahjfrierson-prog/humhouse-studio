@@ -34,6 +34,7 @@ public:
                 {
                     v.targetSemis = target; v.key = key; v.holdFrom = v.age;
                     v.glideStep = glideStepFor (target - v.semis);
+                    if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; }   // a slid note sustains to the end of the note
                     lastSemis = target;
                     return;
                 }
@@ -93,8 +94,11 @@ public:
             {
                 if (v.semis != v.targetSemis)
                 {
+                    // smooth ease in and out (not a hard straight ramp): lands on the note exactly at the Glide time
                     const double d = v.targetSemis - v.semis;
-                    v.semis = std::abs (d) <= v.glideStep ? v.targetSemis : v.semis + (d > 0 ? v.glideStep : -v.glideStep);
+                    const double left = std::abs (d) / juce::jmax (1.0e-12, v.glideStep * glide * sampleRate);   // share of the slide still to go
+                    const double eased = v.glideStep * juce::jlimit (0.35, 1.8, 1.8 * std::sqrt (left));
+                    v.semis = std::abs (d) <= eased ? v.targetSemis : v.semis + (d > 0 ? eased : -eased);
                 }
                 const int i0 = (int) v.pos;
                 if (i0 + 1 >= len) { v.active = false; break; }
@@ -114,7 +118,7 @@ public:
                     return ((c3 * f + c2) * f + c1) * f + x0;
                 };
                 const double rate = std::pow (2.0, v.semis / 12.0);
-                if (! keepTime)
+                if (! keepTime && ! v.slid)
                 {
                     oL[i] += herm (l) * g;
                     oR[i] += herm (r) * g;
@@ -128,7 +132,10 @@ public:
                 const float wA = (float) std::pow (std::sin (juce::MathConstants<double>::pi * v.phase / G), 2.0);
                 oL[i] += (wA * readAt (l, len, v.headA) + (1.0f - wA) * readAt (l, len, v.headB)) * g;
                 oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * g;
-                v.pos += 1.0; v.headA += rate; v.headB += rate;
+                // a slid note keeps sounding for as long as it's held (an 808 slide never "gives up" half way):
+                // past the middle of the sample the time stops and the heads keep cycling the body of the sound
+                if (! (v.slid && ! v.releasing && v.pos >= 0.5 * len)) v.pos += 1.0;
+                v.headA += rate; v.headB += rate;
                 if (++v.phase >= G) { v.phase = 0; v.headA = alignHead (l, len, v.pos, v.headB, rate); }
                 else if (v.phase == G / 2) v.headB = alignHead (l, len, v.pos, v.headA, rate);
             }
@@ -147,7 +154,7 @@ private:
     // that is playing (so the crossfade doesn't comb or flutter); at the sample's own pitch that's exactly `t`
     double alignHead (const float* x, int len, double t, double other, double rate) const
     {
-        if (std::abs (rate - 1.0) < 1.0e-6) return other;
+        if (std::abs (rate - 1.0) < 1.0e-6 && std::abs (other - t) < 0.012 * sampleRate) return other;
         const int tol = (int) (0.012 * sampleRate), N = 384;
         const int o = (int) other;
         if (o < 0 || o + N >= len) return t;
@@ -161,7 +168,7 @@ private:
         }
         return at;
     }
-    struct Voice { bool active = false, releasing = false, midStart = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
+    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
@@ -439,10 +446,33 @@ static juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, 
     return out;
 }
 
-SharedSample processSample (SharedSample src, const Channel& c, double sr)
+double sampleTempo (const Channel& c)
+{
+    if (c.sampleBpm > 0.0f) return c.sampleBpm;
+    const auto name = c.sampleFile.getFileNameWithoutExtension().toLowerCase();
+    for (int at = name.indexOf ("bpm"); at >= 0; at = name.indexOf (at + 3, "bpm"))
+    {
+        auto number = [&] (int i, int dir)   // digits right before (dir -1) or after (dir +1) "bpm", skipping spaces/_/-
+        {
+            while (i >= 0 && i < name.length() && juce::String (" _-").containsChar (name[i])) i += dir;
+            int a = i, b = i;
+            while (a >= 0 && a < name.length() && juce::CharacterFunctions::isDigit (name[a])) a += dir;
+            if (a == b) return 0.0;
+            return name.substring (juce::jmin (a, b) + (dir < 0 ? 1 : 0), juce::jmax (a, b) + (dir < 0 ? 1 : 0)).getDoubleValue();
+        };
+        for (double v : { number (at - 1, -1), number (at + 3, 1) })
+            if (v >= 50.0 && v <= 250.0) return v;
+    }
+    return 0.0;
+}
+
+SharedSample processSample (SharedSample src, const Channel& c, double sr, double songBpm)
 {
     if (! src || src->getNumSamples() == 0) return src;
-    const bool stretch = c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f);
+    const double own = c.tempoSync && songBpm > 0.0 ? sampleTempo (c) : 0.0;
+    const double syncMul = own > 0.0 ? own / songBpm : 1.0;   // 140 BPM loop in a 70 BPM song = twice as long, same pitch
+    const bool stretch = (c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f))
+                      || std::abs (syncMul - 1.0) > 1.0e-4;
     if (! (c.smpNormalize || c.smpReverse || c.smpInvert || c.smpDeclick || c.smpTrim || c.smpBoostDb != 0.0f
            || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || stretch))
         return src;
@@ -470,8 +500,9 @@ SharedSample processSample (SharedSample src, const Channel& c, double sr)
     b.applyGain (gain);
     if (stretch)
     {
-        const double ratio = std::pow (2.0, c.pitch / 12.0);
-        auto st = olaStretch (b, juce::jlimit (0.05, 20.0, (double) c.stretchTime * ratio));
+        const double ratio = c.stretchMode != 0 ? std::pow (2.0, c.pitch / 12.0) : 1.0;
+        const double timeMul = (c.stretchMode != 0 ? (double) c.stretchTime : 1.0) * syncMul;
+        auto st = olaStretch (b, juce::jlimit (0.05, 20.0, timeMul * ratio));
         const int outLen = juce::jmax (1, (int) (st.getNumSamples() / ratio));
         juce::AudioBuffer<float> res (nch, outLen);
         for (int ch = 0; ch < nch; ++ch) { juce::LagrangeInterpolator li; li.process (ratio, st.getReadPointer (ch), res.getWritePointer (ch), outLen); }

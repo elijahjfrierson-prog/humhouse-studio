@@ -84,6 +84,8 @@ struct Channel
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
     int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
+    bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
+    float sampleBpm = 0.0f;                // the sample's own tempo; 0 = read it from the file name
     juce::Colour colour { 0xffff8a3d };
 };
 

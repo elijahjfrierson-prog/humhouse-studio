@@ -67,6 +67,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("keyTrack", c.keyTrack, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
         t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
         t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
+        t.setProperty ("tempoSync", c.tempoSync, nullptr); t.setProperty ("sampleBpm", c.sampleBpm, nullptr);
         auto& s = c.synth;
         t.setProperty ("wave", s.wave, nullptr); t.setProperty ("a", s.attack, nullptr); t.setProperty ("d", s.decay, nullptr);
         t.setProperty ("s", s.sustain, nullptr); t.setProperty ("r", s.release, nullptr); t.setProperty ("cut", s.cutoff, nullptr);
@@ -162,6 +163,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
         c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
+        c.tempoSync = t.getProperty ("tempoSync", true); c.sampleBpm = t.getProperty ("sampleBpm", 0.0f);
         // v1 projects turned KEY off for every non-808 sample, so Piano Roll notes all played the same pitch
         if ((int) root.getProperty ("version", 1) < 2 && c.type == ChannelType::Sampler && ! c.keyTrack
             && ! isDrumSampleName (c.sampleFile.getFileNameWithoutExtension()))

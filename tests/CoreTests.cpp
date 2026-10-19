@@ -1167,6 +1167,38 @@ int main()
         if (mode == 1) CHECK (late > 0.12f && end > 0.1f);   // Stretch: still playing to the sample's end
     }
 
+    // a slid note keeps sounding while it's held, past the end of a short sample (resample and stretch)
+    for (int mode : { 0, 1 })
+    {
+        Channel c; c.type = ChannelType::Sampler; c.stretchMode = mode; c.glide = 0.1f; c.mono = true; c.rootKey = 60;
+        auto raw = std::make_shared<juce::AudioBuffer<float>> (2, 24000);
+        for (int i = 0; i < 24000; ++i) { const float v = (0.6f - 0.4f * i / 24000.0f) * (float) std::sin (juce::MathConstants<double>::twoPi * 110.0 * i / 48000.0); raw->setSample (0, i, v); raw->setSample (1, i, v); }
+        auto inst = createInstrument (c, raw, 48000.0);
+        inst->prepare (48000.0, 512); inst->update (c);
+        juce::AudioBuffer<float> o (2, 72000); o.clear();
+        inst->noteOn (60, 1.0f, false); inst->render (o, 0, 4800);
+        inst->noteOff (60); inst->noteOn (67, 1.0f, true); inst->render (o, 4800, 67200);
+        float lo = 1; for (int w = 9600; w + 960 < 72000; w += 960) lo = std::min (lo, o.getRMSLevel (0, w, 960));
+        std::printf ("held slide %s: lowest level over 1.5 s %.3f\n", mode ? "stretch" : "resample", lo);
+        CHECK (lo > 0.08f);
+    }
+    // tempo sync: a 120 BPM loop in a 60 BPM song plays twice as long at the same pitch; one-shots are untouched
+    {
+        auto raw = std::make_shared<juce::AudioBuffer<float>> (2, 48000);
+        for (int i = 0; i < 48000; ++i) { const float v = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 220.0 * i / 48000.0); raw->setSample (0, i, v); raw->setSample (1, i, v); }
+        Channel c; c.type = ChannelType::Sampler; c.sampleFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("Dark Loop 120 BPM Cm.wav");
+        CHECK (std::abs (sampleTempo (c) - 120.0) < 1e-6);
+        auto synced = processSample (raw, c, 48000.0, 60.0);
+        int zc = 0; for (int i = 4800; i < 91200; ++i) if (synced->getSample (0, i - 1) <= 0 && synced->getSample (0, i) > 0) ++zc;
+        std::printf ("tempo sync: %d -> %d samples, %.1f Hz (220)\n", raw->getNumSamples(), synced->getNumSamples(), zc / (86400.0 / 48000.0));
+        CHECK (std::abs (synced->getNumSamples() - 96000) < 200);
+        CHECK (std::abs (zc / (86400.0 / 48000.0) - 220.0) < 3.0);
+        c.tempoSync = false; CHECK (processSample (raw, c, 48000.0, 60.0)->getNumSamples() == 48000);
+        c.tempoSync = true; c.sampleFile = c.sampleFile.getSiblingFile ("808 - ENDWALKER.wav");
+        CHECK (sampleTempo (c) == 0.0 && processSample (raw, c, 48000.0, 60.0) == raw);
+        c.sampleFile = c.sampleFile.getSiblingFile ("hat_loop_140bpm.wav"); CHECK (std::abs (sampleTempo (c) - 140.0) < 1e-6);
+    }
+
     // save / load / undo
     {
         auto p = Project::createDemo();

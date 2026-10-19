@@ -1036,6 +1036,8 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
         smp.push_back ({ "stretchMode", "Time mode", 0, 2, 0, (float) ch->stretchMode, { "Resample", "Stretch", "Stretch X" } });
         smp.push_back ({ "stretchTime", "Time mul", 0.25f, 4, 1, ch->stretchTime, {} });
+        smp.push_back ({ "tempoSync", "Tempo sync", 0, 1, 1, ch->tempoSync ? 1.0f : 0.0f, { "Off", "On" } });   // loops follow the song BPM
+        smp.push_back ({ "sampleBpm", "Sample BPM (0 = name)", 0, 250, 0, ch->sampleBpm, {} });
         smp.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
         smp.push_back ({ "root", "Root / step note", 24, 96, 60, (float) ch->rootKey, {} });
         smp.push_back ({ "keyTrack", "Key", 0, 1, 0, ch->keyTrack ? 1.0f : 0.0f, { "Off", "On" } });   // off = every note plays the sample as-is
@@ -1097,6 +1099,7 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "smpDeclick") c->smpDeclick = v > 0.5f; else if (id == "smpTrim") c->smpTrim = v > 0.5f;
                 else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
                 else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
+                else if (id == "tempoSync") c->tempoSync = v > 0.5f; else if (id == "sampleBpm") c->sampleBpm = v;
             });
         };
     auto commit = [&s] { s.commit ("Channel settings"); };

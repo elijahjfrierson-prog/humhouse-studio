@@ -266,12 +266,13 @@ struct Engine::ClipRuntime
     juce::AudioBuffer<float> tmp;
 };
 
-static juce::String channelSignature (const Channel& c)
+static juce::String channelSignature (const Channel& c, double bpm)
 {
     return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
          + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
          + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
-         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f);
+         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f)
+         + "|" + juce::String (c.type == ChannelType::Sampler && c.tempoSync && sampleTempo (c) > 0.0 ? sampleTempo (c) / bpm : 1.0);
 }
 
 // =============================================================== engine
@@ -357,7 +358,7 @@ void Engine::sync()
     std::map<int, std::unique_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
     {
-        const auto sig = channelSignature (ch);
+        const auto sig = channelSignature (ch, proj.bpm);
         auto it = channelRt.find (ch.id);
         if (it != channelRt.end() && it->second->signature == sig) continue;
         auto rt = std::make_unique<ChannelRuntime>();
@@ -381,7 +382,7 @@ void Engine::sync()
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
                 if (c == sampleCache.end()) c = sampleCache.emplace (key, loadSampleFile (ch.sampleFile, sampleRate)).first;
-                s = processSample (c->second, ch, sampleRate);
+                s = processSample (c->second, ch, sampleRate, proj.bpm);
             }
             rt->inst = createInstrument (ch, s, sampleRate);
         }
