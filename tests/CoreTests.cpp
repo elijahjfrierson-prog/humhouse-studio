@@ -332,6 +332,41 @@ int main()
         }
         CHECK (std::abs ((float) zc / (float) base - 1.0f) > 0.03f);
     }
+    // AutoPitch: a 452 Hz tone snaps to A 440, stays at full level
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 3.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0, inE = 0, outE = 0; int zc = 0, counted = 0; float prev = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 452.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); outE += y * y; if (prev <= 0 && y > 0) ++zc; prev = y; ++counted; }
+        }
+        const double hz = zc * 48000.0 / counted;
+        std::printf ("autopitch 452 Hz -> %.1f Hz, level %.2f dB\n", hz, 10.0 * std::log10 (outE / inE));
+        CHECK (std::abs (hz - 440.0) < 3.0);
+        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
+    }
+    // AutoPitch shifter latency stays tiny while correcting up or down
+    for (double ratio : { 0.97, 1.03, 2.0 })
+    {
+        SpliceShifter sh; sh.prepare (48000);
+        double ph = 0, dMax = 0, jump = 0; float prev = 0;
+        for (int i = 0; i < 48000; ++i)
+        {
+            float l = 0.5f * (float) (std::sin (ph) + 0.5 * std::sin (2 * ph) + 0.25 * std::sin (3 * ph)), r = l;
+            ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0;
+            sh.process (l, r, ratio, 48000.0 / 220.0);
+            if (i > 4800) { dMax = std::max (dMax, sh.delaySamples()); jump = std::max (jump, (double) std::abs (l - prev)); }
+            prev = l;
+        }
+        std::printf ("autopitch ratio %.2f: max delay %.2f ms, max step %.3f\n", ratio, dMax / 48.0, jump);
+        CHECK (dMax < 0.012 * 48000);
+        CHECK (jump < 0.2 * ratio);
+    }
     // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
     {
         auto ap = createBuiltinEffect ("autopitch");

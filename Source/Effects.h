@@ -106,18 +106,20 @@ struct Biquad
 };
 
 // YIN pitch detector + granular shifter, shared by AutoPitch
-class PitchShifter
+// Auto-Tune style shifter: one resampling read head (full sound, no phasing), re-spliced by whole
+// pitch periods at a waveform-matched point with a short crossfade, so it doesn't click. Latency ~0.1-6 ms.
+class SpliceShifter
 {
 public:
     void prepare (double sr);
-    void setRatio (float r) { ratio = r; }
-    void setGrain (float samples) { targetGrain = samples; }   // pitch-synchronous grains: taps add up instead of cancelling
-    float process (float x);
+    void process (float& l, float& r, double ratio, double period);   // period in samples (0 = unknown)
+    double delaySamples() const { return d; }
 private:
-    std::vector<float> buf;
-    int write = 0, size = 0;
-    double phase = 0.0;
-    float ratio = 1.0f, grain = 1.0f, targetGrain = 0.0f;
+    float read (const std::vector<float>& b, double delay) const;
+    double findSplice (double target, int span, int len) const;
+    std::vector<float> bufL, bufR;
+    int w = 0, mask = 0, xfLen = 0, xfPos = 0;
+    double sr = 44100, d = 64, d2 = 64;
 };
 
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f); // Hz or 0

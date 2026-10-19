@@ -54,6 +54,8 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- AutoPitch rebuilt: Auto-Tune style single read head spliced on whole pitch cycles - full voice, no clicks or phasing, ~0.1-6 ms\n"
+        "- Knobs work like FL: drag up/down or scroll, Shift = fine, double-click to type a value, Alt-click resets\n"
         "- Studio EQ: Pro-Q style band bar (type / freq / gain / Q, type values in), selected band shape, listen (Alt+drag a dot), Shift = fine, display range 6 / 12 / 18 / 30 dB\n"
         "- Trackpad pinch zoom + Ctrl/Cmd+scroll zoom at the mouse in Playlist and Piano Roll\n"
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
@@ -178,10 +180,10 @@ void HHLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, in
 }
 
 Knob::Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix)
-    : juce::Slider (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox)
+    : juce::Slider (juce::Slider::RotaryVerticalDrag, juce::Slider::NoTextBox)
 {
     setName (name);
-    setTooltip (name + " - " + help + "  (double-click resets)");
+    setTooltip (name + " - " + help + "  (drag up/down or scroll, Shift = fine, double-click to type, Alt-click resets)");
     // clean steps (0.01 / 0.1 / 1 / 10 by range) instead of 0.000001 values
     const double span = mx - mn;
     const double step = span <= 2.0 ? 0.01 : span <= 60.0 ? 0.1 : span <= 3000.0 ? 1.0 : 10.0;
@@ -193,6 +195,15 @@ Knob::Knob (const juce::String& name, const juce::String& help, double mn, doubl
     setTextValueSuffix (suffix);
     setPopupDisplayEnabled (true, true, nullptr, 1500);
     setMouseDragSensitivity (180);
+}
+
+void Knob::mouseDoubleClick (const juce::MouseEvent&)
+{
+    juce::Component::SafePointer<Knob> self (this);
+    askText (getName(), juce::String (getValue(), getNumDecimalPlacesToDisplay()), [self] (juce::String t) {
+        if (self != nullptr && t.trim().isNotEmpty())
+            self->setValue (juce::jlimit (self->getMinimum(), self->getMaximum(), self->getValueFromText (t)), juce::sendNotificationSync);
+    });
 }
 
 void setupButton (juce::Button& b, const juce::String& text, const juce::String& tooltip, bool toggle)

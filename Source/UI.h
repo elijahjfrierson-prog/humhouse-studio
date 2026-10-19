@@ -75,6 +75,7 @@ class Knob : public juce::Slider
 {
 public:
     Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix = {});
+    void mouseDoubleClick (const juce::MouseEvent&) override;   // type an exact value (Alt-click resets)
 };
 
 void setupButton (juce::Button&, const juce::String& text, const juce::String& tooltip, bool toggle = false);
