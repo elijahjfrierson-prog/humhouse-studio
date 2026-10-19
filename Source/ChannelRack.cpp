@@ -41,10 +41,11 @@ static Channel poolChannel (const PoolInstrument& e)
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
 }
-static bool isMelodicSample (const juce::File& f)   // 808s / bass get played as notes; drums, loops, FX stay the sample as-is
+static bool isMelodicSample (const juce::File& f)   // notes change the pitch (root key plays the WAV as-is); drum hits stay put
 {
-    const auto n = f.getFileNameWithoutExtension().toLowerCase();
-    return n.contains ("808") || n.contains ("bass") || n.contains ("sub") || n.contains ("reese");
+    const auto n = f.getFileNameWithoutExtension().toLowerCase(), dir = f.getParentDirectory().getFileName().toLowerCase();
+    if (n.contains ("808") || dir.contains ("808") || f.getFullPathName().containsIgnoreCase ("Drocetti Instruments")) return true;
+    return ! isDrumSampleName (n) && ! isDrumSampleName (dir);   // a kit's Hi-Hats / Snares folder keeps every hit at its own pitch
 }
 static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
 
@@ -215,6 +216,7 @@ struct Row : public juce::Component
         m.addItem (6, "Clear notes in this pattern");
         m.addItem (8, "Cut itself (808s never overlap)", c->type == ChannelType::Sampler, c->cutItself);
         m.addItem (9, "One-shot (play whole sample)", c->type == ChannelType::Sampler, c->oneShot);
+        m.addSubMenu ("Color", colourMenu (30));
         m.addSeparator();
         m.addItem (7, "Delete channel");
         m.showMenuAsync ({}, [this] (int r) {
@@ -228,6 +230,7 @@ struct Row : public juce::Component
             else if (r == 8) s.edit ("Cut itself", [&] (Project&) { if (auto* ch = s.channel (id)) ch->cutItself = ! ch->cutItself; });
             else if (r == 9) s.edit ("One-shot", [&] (Project&) { if (auto* ch = s.channel (id)) ch->oneShot = ! ch->oneShot; });
             else if (r == 6) s.edit ("Clear notes", [&] (Project&) { s.notes (id).clear(); });
+            else if (r >= 30 && r <= 42) { const auto c = pickedColour (r - 30); s.edit ("Channel color", [&] (Project&) { if (auto* ch = s.channel (id)) ch->colour = c; }); }
             else if (r == 7) s.edit ("Delete channel", [&] (Project& p) {
                 p.channels.erase (std::remove_if (p.channels.begin(), p.channels.end(), [id] (const Channel& ch) { return ch.id == id; }), p.channels.end());
                 for (auto& pt : p.patterns) pt.notes.erase (id);

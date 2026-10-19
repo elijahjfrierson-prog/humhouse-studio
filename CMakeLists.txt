@@ -30,6 +30,7 @@ set(HHS_CORE_SOURCES
     Source/Engine.cpp
     Source/ProjectIO.cpp
     Source/DrumSynth.cpp
+    Source/AudioEncode.cpp
 )
 
 set(HHS_DEFS
@@ -46,7 +47,22 @@ if(APPLE)
     list(APPEND HHS_DEFS JUCE_PLUGINHOST_AU=1)
 endif()
 
+# MP3 export: shine fixed-point MP3 encoder (LGPL-2.0), built as its own static library
+FetchContent_Declare(shine GIT_REPOSITORY https://github.com/toots/shine.git GIT_TAG 3.1.1)
+FetchContent_MakeAvailable(shine)
+set(SHINE_DIR ${shine_SOURCE_DIR}/src/lib)
+add_library(hhs_shine STATIC
+    ${SHINE_DIR}/bitstream.c ${SHINE_DIR}/huffman.c ${SHINE_DIR}/l3bitstream.c ${SHINE_DIR}/l3loop.c
+    ${SHINE_DIR}/l3mdct.c ${SHINE_DIR}/l3subband.c ${SHINE_DIR}/layer3.c ${SHINE_DIR}/reservoir.c ${SHINE_DIR}/tables.c)
+target_include_directories(hhs_shine PUBLIC ${SHINE_DIR})
+if(MSVC)
+    target_compile_definitions(hhs_shine PRIVATE inline=__inline _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(hhs_shine PRIVATE -w)
+endif()
+
 set(HHS_LIBS
+    hhs_shine
     juce::juce_audio_utils
     juce::juce_audio_processors
     juce::juce_audio_devices
@@ -54,6 +70,9 @@ set(HHS_LIBS
     juce::juce_dsp
     juce::juce_gui_extra
 )
+if(APPLE)
+    list(APPEND HHS_LIBS "-framework AudioToolbox" "-framework CoreFoundation")
+endif()
 
 option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
 if(NOT HHS_TESTS_ONLY)

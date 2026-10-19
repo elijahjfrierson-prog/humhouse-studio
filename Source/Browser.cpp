@@ -295,6 +295,9 @@ private:
         roots.removeEmptyStrings();
         roots.removeString (downloadsFolder().getFullPathName());
         roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
+        const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
+        roots.removeString (lib.getFullPathName());
+        if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());   // Drocetti Drums / Instruments library
         refreshFolders();
     }
     void refreshFolders()

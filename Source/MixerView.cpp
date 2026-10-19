@@ -83,6 +83,10 @@ struct Strip : public juce::Component
         if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
         g.drawText (index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
+        if (index < (int) p.mixer.size() && p.mixer[(size_t) index].colour != juce::Colour (0xff2a2f36))
+        {
+            g.setColour (p.mixer[(size_t) index].colour); g.fillRoundedRectangle (6.0f, 2.0f, (float) getWidth() - 12.0f, 3.0f, 1.5f);
+        }
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].frozen)
         {
             g.setColour (col::accent2); g.drawText ("FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
@@ -184,6 +188,7 @@ struct Strip : public juce::Component
             m.addSeparator();
             m.addItem (4, "Clear all FX");
             m.addSubMenu ("Presets", trackPresetMenu (s, index));
+            m.addSubMenu ("Color", colourMenu (30));
             m.showMenuAsync ({}, [this] (int r) {
                 if (r == 1)
                 {
@@ -192,7 +197,8 @@ struct Strip : public juce::Component
                 }
                 else if (r == 2) name.showEditor();
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
-                else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export selected mixer track.");
+                else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
+                else if (r >= 30 && r <= 42) { const auto c = pickedColour (r - 30); s.edit ("Insert color", [this, c] (Project& p) { p.mixer[(size_t) index].colour = c; }); }
             });
         }
     }

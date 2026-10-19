@@ -325,20 +325,40 @@ enum MenuIds
 
 struct RenderJob : public juce::ThreadWithProgressWindow
 {
-    RenderJob (Engine& e, juce::File f, bool song, int t)
-        : juce::ThreadWithProgressWindow ("Exporting " + f.getFileName() + " ...", true, true), engine (e), file (f), songMode (song), track (t) {}
+    struct Item { juce::File file; int track; };
+    RenderJob (Engine& e, std::vector<Item> it, bool song, bool stemMode)
+        : juce::ThreadWithProgressWindow ("Exporting " + (it.size() == 1 ? it.front().file.getFileName() : juce::String ((int) it.size()) + " stems") + " ...", true, true),
+          engine (e), items (std::move (it)), songMode (song), stems (stemMode) {}
     void run() override
     {
-        ok = engine.renderToWav (file, songMode, [this] (float p) { setProgress (p); return ! threadShouldExit(); }, track, engine.exportBits, engine.exportRate);
+        const float n = (float) items.size();
+        for (size_t i = 0; i < items.size() && ! threadShouldExit(); ++i)
+        {
+            auto& it = items[i];
+            setStatusMessage (it.file.getFileName());
+            const bool ok = engine.renderToWav (it.file, songMode, [this, i, n] (float p) { setProgress (((float) i + p) / n); return ! threadShouldExit(); },
+                                                it.track, engine.exportBits, engine.exportRate, engine.exportFormat);
+            if (! ok) { if (! threadShouldExit()) ++failed; continue; }
+            if (stems && engine.lastRenderPeak < 1.0e-5f) { it.file.deleteFile(); ++skipped; }   // silent insert: no empty stem
+            else { ++saved; last = it.file; }
+        }
     }
     void threadComplete (bool cancelled) override
     {
         if (! cancelled)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export",
-                                                    ok ? "Saved " + file.getFullPathName() : "Export failed.");
+        {
+            juce::String msg;
+            if (saved == 0) msg = engine.exportFormat == 2 ? "Export failed (M4A needs the macOS / Windows AAC encoder)." : "Export failed.";
+            else if (! stems) msg = "Saved " + last.getFullPathName();
+            else msg = "Saved " + juce::String (saved) + " stems (all start at bar 1) to\n" + last.getParentDirectory().getFullPathName()
+                       + (skipped > 0 ? "\n" + juce::String (skipped) + " silent inserts skipped" : juce::String());
+            if (failed > 0 && saved > 0) msg << "\n" << failed << " failed";
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export", msg);
+            if (saved > 0) last.revealToUser();
+        }
         juce::MessageManager::callAsync ([this] { delete this; });
     }
-    Engine& engine; juce::File file; bool songMode; int track; bool ok = false;
+    Engine& engine; std::vector<Item> items; bool songMode, stems; int saved = 0, skipped = 0, failed = 0; juce::File last;
 };
 }
 
@@ -655,7 +675,7 @@ public:
             add (mDefaultTemplate, "Use this project as default template");
             add (mClearDefaultTemplate, "Reset default template", {}, defaultTemplate().existsAsFile());
             m.addSeparator();
-            add (mExport, "Export WAV...", "Ctrl+R"); add (mExportTrack, "Export selected mixer track (stem)...");
+            add (mExport, "Export (WAV / MP3 / M4A / stems)...", "Ctrl+R"); add (mExportTrack, "Export selected track / stems...");
             m.addSeparator(); add (mQuit, "Quit");
         }
         else if (index == 1)
@@ -985,21 +1005,43 @@ private:
         else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save", "Could not save the project.");
     }
 
-    void save (bool as)
+    // FL-style: Save / Don't Save / Cancel before the current project is closed
+    void askToSave (std::function<void()> then)
+    {
+        if (! studio.dirty) { then(); return; }
+        if (savePromptOpen) return;
+        savePromptOpen = true;
+        auto* w = new juce::AlertWindow ("Save changes?", "Save changes to \"" + engine.project().title + "\" first?", juce::MessageBoxIconType::QuestionIcon);
+        w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Don't Save", 2);
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, then] (int r) {
+            savePromptOpen = false;
+            if (r == 2) then();
+            else if (r == 1) save (false, then);
+        }), true);
+    }
+public:
+    void requestQuit() { askToSave ([] { juce::JUCEApplication::getInstance()->quit(); }); }
+private:
+    bool savePromptOpen = false;
+
+    void save (bool as, std::function<void()> after = {})
     {
         auto& p = engine.project();
-        if (! as && p.projectFile.existsAsFile()) { writeProject(); return; }
+        if (! as && p.projectFile.existsAsFile()) { writeProject(); if (after && ! studio.dirty) after(); return; }
         docsDir().createDirectory();
         chooser = std::make_unique<juce::FileChooser> ("Save project", docsDir().getChildFile (p.title + ".hhs"), "*.hhs");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                   | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const juce::FileChooser& fc) {
+                              [this, after] (const juce::FileChooser& fc) {
                                   auto f = fc.getResult();
                                   if (f == juce::File()) return;
                                   f = f.withFileExtension ("hhs");
                                   engine.project().projectFile = f;
                                   engine.project().title = f.getFileNameWithoutExtension();
                                   writeProject();
+                                  if (after && ! studio.dirty) after();
                               });
     }
 
@@ -1022,7 +1064,8 @@ private:
         studio.sendChangeMessage();
     }
 
-    void open (bool backups)
+    void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }
+    void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
         chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project", dir, "*.hhs");
@@ -1054,7 +1097,8 @@ private:
         }), true);
     }
 
-    void newProject (juce::File templ = {})
+    void newProject (juce::File templ = {}) { askToSave ([this, templ] { startNewProject (templ); }); }
+    void startNewProject (juce::File templ)
     {
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
         closeAllEditorWindows();
@@ -1074,40 +1118,77 @@ private:
         studio.sendChangeMessage();
     }
 
+    // File > Export: name, WAV / MP3 / M4A, full mix / one track / every track as a stem, then pick the folder
     void exportWav (int track)
     {
         static const int bitsTab[] { 16, 24, 32, 64 };
         static const double rateTab[] { 0, 44100, 48000, 88200, 96000, 192000 };
-        auto* w = new juce::AlertWindow ("Export WAV", "Bit depth and sample rate", juce::MessageBoxIconType::NoIcon);
-        w->addComboBox ("bits", { "16-bit", "24-bit", "32-bit float", "64-bit float" });
-        w->addComboBox ("rate", { "Project / device rate", "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" });
+        auto& p = engine.project();
+        const bool hasTrack = track > 0 && track < (int) p.mixer.size();
+        auto* w = new juce::AlertWindow ("Export", "Name it, pick the format and what to export - then choose the folder", juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", p.title, "Name");
+        w->addComboBox ("what", { "Full mix",
+                                  hasTrack ? "Selected track only (" + juce::String (track) + " " + p.mixer[(size_t) track].name + ")" : juce::String ("Selected track only (select a mixer insert first)"),
+                                  "All tracks as stems (each starts at bar 1)" }, "Export");
+        w->addComboBox ("fmt", { "WAV", "MP3 (320 kbps)", "M4A / AAC" }, "Format");
+        w->addComboBox ("bits", { "16-bit", "24-bit", "32-bit float", "64-bit float" }, "WAV bit depth");
+        w->addComboBox ("rate", { "Project / device rate", "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, "Sample rate (MP3/M4A: 44.1 or 48)");
         int bi = 1, ri = 0;
         for (int i = 0; i < 4; ++i) if (bitsTab[i] == engine.exportBits) bi = i;
         for (int i = 0; i < 6; ++i) if (rateTab[i] == engine.exportRate) ri = i;
+        w->getComboBoxComponent ("what")->setSelectedItemIndex (hasTrack ? 1 : 0);
+        w->getComboBoxComponent ("fmt")->setSelectedItemIndex (juce::jlimit (0, 2, engine.exportFormat));
         w->getComboBoxComponent ("bits")->setSelectedItemIndex (bi);
         w->getComboBoxComponent ("rate")->setSelectedItemIndex (ri);
-        w->addButton ("Export", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Choose folder...", 1, juce::KeyPress (juce::KeyPress::returnKey));
         w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, track] (int r) {
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, track, hasTrack] (int r) {
             if (r != 1) return;
             engine.exportBits = bitsTab[juce::jlimit (0, 3, w->getComboBoxComponent ("bits")->getSelectedItemIndex())];
             engine.exportRate = rateTab[juce::jlimit (0, 5, w->getComboBoxComponent ("rate")->getSelectedItemIndex())];
-            chooseExportFile (track);
+            engine.exportFormat = juce::jlimit (0, 2, w->getComboBoxComponent ("fmt")->getSelectedItemIndex());
+            int what = juce::jlimit (0, 2, w->getComboBoxComponent ("what")->getSelectedItemIndex());
+            if (what == 1 && ! hasTrack) what = 0;
+            auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
+            if (name.isEmpty()) name = juce::File::createLegalFileName (engine.project().title);
+            chooseExportFolder (name, what, track);
         }), true);
     }
 
-    void chooseExportFile (int track)
+    static bool insertUsed (const Project& p, int t)
     {
-        auto& p = engine.project();
-        auto name = p.title + (track >= 0 && track < (int) p.mixer.size() ? " - " + p.mixer[(size_t) track].name : juce::String());
-        chooser = std::make_unique<juce::FileChooser> ("Export WAV", docsDir().getChildFile (name + ".wav"), "*.wav");
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
-                                  | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this, track] (const juce::FileChooser& fc) {
-                                  auto f = fc.getResult();
-                                  if (f == juce::File()) return;
+        for (auto& c : p.channels) if (c.mixerTrack == t) return true;
+        for (auto& l : p.lanes) if (l.mixerTrack == t) return true;
+        for (size_t i = 0; i < p.mixer.size(); ++i)
+            if ((int) i != t) for (auto& sd : p.mixer[i].sends) if (sd.target == t) return true;
+        return false;
+    }
+
+    void chooseExportFolder (juce::String name, int what, int track)
+    {
+        juce::File start (studio.settings ? studio.settings->getValue ("exportDir") : juce::String());
+        if (! start.isDirectory()) start = docsDir();
+        chooser = std::make_unique<juce::FileChooser> ("Choose the export folder", start);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [this, name, what, track] (const juce::FileChooser& fc) {
+                                  const auto dir = fc.getResult();
+                                  if (! dir.isDirectory()) return;
+                                  if (studio.settings) { studio.settings->setValue ("exportDir", dir.getFullPathName()); studio.settings->saveIfNeeded(); }
+                                  const juce::String ext = engine.exportFormat == 1 ? ".mp3" : engine.exportFormat == 2 ? ".m4a" : ".wav";
+                                  auto& p = engine.project();
+                                  std::vector<RenderJob::Item> items;
+                                  auto trackName = [&p] (int t) { return juce::File::createLegalFileName (p.mixer[(size_t) t].name.isEmpty() ? "Insert " + juce::String (t) : p.mixer[(size_t) t].name); };
+                                  if (what == 2)
+                                  {
+                                      for (int t = 1; t < (int) p.mixer.size(); ++t)
+                                          if (insertUsed (p, t))
+                                              items.push_back ({ dir.getChildFile (name + " - " + juce::String (t).paddedLeft ('0', 2) + " " + trackName (t) + ext), t });
+                                      if (items.empty()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export", "No mixer inserts have anything routed to them."); return; }
+                                  }
+                                  else items.push_back ({ dir.getChildFile (name + (what == 1 ? " - " + trackName (track) : juce::String()) + ext), what == 1 ? track : -1 });
                                   engine.stop();
-                                  (new RenderJob (engine, f.withFileExtension ("wav"), engine.project().songMode, track))->launchThread();
+                                  // stems always render the whole song from bar 1 so they line up in any DAW
+                                  (new RenderJob (engine, std::move (items), what == 2 ? true : p.songMode, what == 2))->launchThread();
                               });
     }
 
@@ -1128,7 +1209,7 @@ private:
     {
         juce::String t;
         t << "GLOBAL\nSpace play/stop | R record | L pattern/song | F5 playlist | F6/F7 rack/piano roll | F8 Plugin House | F9 mixer\n"
-          << "Ctrl+S save + backup | Ctrl+Shift+S save as | Ctrl+O open | Ctrl+N new | Ctrl+R export WAV | Ctrl+M metronome\n"
+          << "Ctrl+S save + backup | Ctrl+Shift+S save as | Ctrl+O open | Ctrl+N new | Ctrl+R export (WAV / MP3 / M4A / stems) | Ctrl+M metronome\n"
           << "Ctrl+Z undo | Ctrl+Shift+Z / Ctrl+Y redo | Ctrl+Alt+Z step back (999 levels)\n\n"
           << "PIANO ROLL\nAlt+A arpeggiator / rolls | Alt+S strum | Alt+U chop | Alt+F flam | Alt+Q quantize | Alt+R randomize\n"
           << "Alt+K limit | Alt+L articulate | Alt+X scale levels | Alt+Y flip | Alt+W claw | Alt+O LFO | Alt+M mute | Alt+V ghost notes\n"
@@ -1145,4 +1226,9 @@ private:
 };
 
 std::unique_ptr<juce::Component> createMainComponent() { return std::make_unique<MainComponent>(); }
+void requestQuit (juce::Component* main)
+{
+    if (auto* m = dynamic_cast<MainComponent*> (main)) m->requestQuit();
+    else juce::JUCEApplication::getInstance()->quit();
+}
 }

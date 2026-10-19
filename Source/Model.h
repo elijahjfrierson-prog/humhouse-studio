@@ -8,6 +8,15 @@
 
 namespace hhs
 {
+// drum one-shots keep their pitch on every key; everything else follows the Piano Roll (root key = the WAV as-is)
+inline bool isDrumSampleName (juce::String n)
+{
+    n = n.toLowerCase();
+    for (auto* d : { "kick", "kik", "kck", "snare", "snr", "clap", "hat", "hihat", "perc", "rim", "crash", "ride", "cymbal", "shaker", "tamb", "cowbell", "snap", "conga", "bongo" })
+        if (n.contains (d)) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------- scales
 struct ScaleDef { const char* name; std::vector<int> steps; };
 const std::vector<ScaleDef>& allScales();
@@ -119,6 +128,7 @@ struct Lane
     bool armed = false, muted = false;
     bool monitor = true;
     float height = 56.0f;
+    juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
 };
 
 // ---------------------------------------------------------------- mixer

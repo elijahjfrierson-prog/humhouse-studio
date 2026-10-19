@@ -119,6 +119,10 @@ struct LaneHeader : public juce::Component
             g.setColour (col::accent.withAlpha (0.16f)); g.fillRect (getLocalBounds());
             g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (3));
         }
+        if (index < (int) s.p().lanes.size() && ! s.p().lanes[(size_t) index].colour.isTransparent())
+        {
+            g.setColour (s.p().lanes[(size_t) index].colour); g.fillRect (getLocalBounds().removeFromRight (5));
+        }
         g.setColour (col::gridBar); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         if (arm.getToggleState() && s.engine.isRecording()) { g.setColour (col::rec.withAlpha (0.25f)); g.fillRect (getLocalBounds().removeFromLeft (4)); }
     }
@@ -170,6 +174,7 @@ struct LaneHeader : public juce::Component
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
         if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
+        m.addSubMenu ("Color", colourMenu (30));
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
         {
             juce::PopupMenu hm;
@@ -183,6 +188,7 @@ struct LaneHeader : public juce::Component
             else if (r == 2) s.edit ("New insert", [i] (Project& p) { p.lanes[(size_t) i].mixerTrack = p.addMixerTrack (p.lanes[(size_t) i].name); });
             else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
             else if (r >= 20 && r <= 22) { if (onAllHeights) onAllHeights (r - 20); }
+            else if (r >= 30 && r <= 42) { const auto t = targets(); const auto c = pickedColour (r - 30); s.edit ("Track color", [t, c] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].colour = c; }); }
             else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
@@ -881,6 +887,7 @@ private:
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
         juce::Colour colour = c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
         if (c.muted) colour = col::dim;
         g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
         g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);

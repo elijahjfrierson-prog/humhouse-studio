@@ -107,6 +107,7 @@ struct Studio : public juce::ChangeBroadcaster
 };
 
 std::unique_ptr<juce::Component> createMainComponent();
+void requestQuit (juce::Component* main);   // asks Save / Don't Save / Cancel when the project has changes
 std::unique_ptr<juce::Component> createChannelRack (Studio&);
 std::unique_ptr<juce::Component> createPianoRoll (Studio&);
 std::unique_ptr<juce::Component> createPlaylist (Studio&);
@@ -123,6 +124,22 @@ void showPluginScanner (Studio&);
 
 void openEffectEditor (Studio&, int track, int slotUid);
 juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Presets on tracks / inserts
+// right-click > Color: ids base..base+11 = palette, base+12 = random
+inline juce::Colour pickedColour (int i)
+{
+    static const juce::uint32 c[] { 0xffff5d5d, 0xffff8a3d, 0xffffc93d, 0xffb8e04a, 0xff4ad991, 0xff3dd6d6,
+                                    0xff3d9bff, 0xff6f6bff, 0xffa86bff, 0xffff6bd6, 0xffc8c8c8, 0xff9a7a5a };
+    if (i < 0 || i >= 12) return juce::Colour::fromHSV (juce::Random::getSystemRandom().nextFloat(), 0.6f, 0.95f, 1.0f);
+    return juce::Colour (c[i]);
+}
+inline juce::PopupMenu colourMenu (int base)
+{
+    static const char* names[] { "Red", "Orange", "Yellow", "Lime", "Green", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Silver", "Brown" };
+    juce::PopupMenu m;
+    for (int i = 0; i < 12; ++i) m.addColouredItem (base + i, names[i], pickedColour (i));
+    m.addSeparator(); m.addItem (base + 12, "Random");
+    return m;
+}
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);

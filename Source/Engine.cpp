@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "DrumSynth.h"
+#include "AudioEncode.h"
 #include <algorithm>
 
 namespace hhs
@@ -1552,7 +1553,7 @@ void Engine::mixTracks (const float* const*, int, int)
 }
 
 // =============================================================== offline
-static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<float>& mem, double sr, double outRate, int bits)
+static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<float>& mem, double sr, double outRate, int bits, int format = 0)
 {
     juce::AudioBuffer<float> res;
     const juce::AudioBuffer<float>* src = &mem;
@@ -1563,6 +1564,8 @@ static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<floa
         for (int ch = 0; ch < 2; ++ch) sincResample (mem.getReadPointer (ch), mem.getNumSamples(), res.getWritePointer (ch), outLen, sr / outRate);
         src = &res;
     }
+    if (format == 1) return encodeMp3 (*src, outRate, file, 320);
+    if (format == 2) return encodeM4a (*src, outRate, file, 256);
     file.deleteFile();
     const int len = src->getNumSamples();
     if (bits == 64)
@@ -1586,8 +1589,9 @@ static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<floa
     return w->writeFromAudioSampleBuffer (*src, 0, len);
 }
 
-bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track, int bits, double rate)
+bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track, int bits, double rate, int format)
 {
+    format = juce::jlimit (0, 2, format);
     bits = bits == 16 || bits == 32 || bits == 64 ? bits : 24;
     const bool wasPlaying = playing.load();
     if (wasPlaying) stop();
@@ -1598,8 +1602,8 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const double lenBeats = song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
     const double tail = 2.0;
     const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
-    const double outRate = rate > 0 ? rate : sr;
-    const bool viaMemory = bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
+    const double outRate = format != 0 ? compressedRate (rate > 0 ? rate : sr) : rate > 0 ? rate : sr;
+    const bool viaMemory = format != 0 || bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
     juce::AudioBuffer<float> mem;
     if (viaMemory) mem.setSize (2, (int) total);
 
@@ -1623,6 +1627,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const bool rec = recording.load(); recording = false;
     juce::AudioBuffer<float> outBuf (2, block);
     bool ok = true;
+    lastRenderPeak = 0;
     for (juce::int64 done = 0; done < total; done += block)
     {
         const int n = (int) std::min<juce::int64> (block, total - done);
@@ -1630,12 +1635,13 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         float* outs[2] { outBuf.getWritePointer (0), outBuf.getWritePointer (1) };
         // offline reads must not miss disk data
         processBlock (nullptr, 0, outs, 2, n);
+        lastRenderPeak = std::max ({ lastRenderPeak, outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n) });
         if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
         else writer->writeFromAudioSampleBuffer (outBuf, 0, n);
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
     }
     writer.reset();
-    if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits);
+    if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits, format);
     offline = false;
     renderTrackOnly = -1;
     recording = rec;

@@ -194,6 +194,21 @@ int main()
             CHECK (f64.getSize() > 44 + 16 * 96000);
             f64.deleteFile();
         }
+        {   // MP3 (320 kbps) has MPEG frames; an insert with nothing on it renders silent (stems skip it)
+            auto mp3 = f.getSiblingFile ("hh_test.mp3");
+            CHECK (e.renderToWav (mp3, false, {}, -1, 24, 0, 1));
+            juce::FileInputStream in (mp3); unsigned char h[2] {}; in.read (h, 2);
+            std::printf ("mp3 export %d bytes, peak %.2f\n", (int) mp3.getSize(), e.lastRenderPeak);
+            CHECK (mp3.getSize() > 20000 && h[0] == 0xff && (h[1] & 0xe0) == 0xe0 && e.lastRenderPeak > 0.01f);
+            mp3.deleteFile();
+            if (p.mixer.size() > 2)
+            {
+                auto stem = f.getSiblingFile ("hh_stem.wav");
+                CHECK (e.renderToWav (stem, false, {}, 2));
+                CHECK (e.lastRenderPeak < 1.0e-5f);
+                stem.deleteFile();
+            }
+        }
         juce::WavAudioFormat wav;
         std::unique_ptr<juce::AudioFormatReader> rd (wav.createReaderFor (f.createInputStream().release(), true));
         CHECK (rd != nullptr);
@@ -442,6 +457,63 @@ int main()
         CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
         CHECK (std::abs (gap - 440.0f) < 4.0f);
     }
+    // AutoPitch Hard Tune: sung vibrato is flattened (Natural Vibrato 0) or kept (100); deep notes tune like high ones
+    {
+        auto run = [] (double hz, double vibCents, float natvib, std::vector<float>& out) {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", 3.0f); ap->setParam ("natvib", natvib);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0, t = 0;
+            for (int k = 0; k < 280; ++k)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const double f = hz * std::pow (2.0, vibCents / 1200.0 * std::sin (juce::MathConstants<double>::twoPi * 5.5 * t));
+                    const float v = 0.25f * (float) std::sin (ph) + 0.1f * (float) std::sin (2 * ph) + 0.05f * (float) std::sin (3 * ph);
+                    ph += juce::MathConstants<double>::twoPi * f / 48000.0; t += 1.0 / 48000.0;
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                ap->process (b, 512, ctx);
+                for (int i = 0; i < 512; ++i) out.push_back (b.getSample (0, i));
+            }
+        };
+        auto maxDev = [] (const std::vector<float>& o, double hz) {
+            double m = 0;
+            for (size_t at = 100 * 512; at + 2048 < o.size(); at += 256)
+            {
+                const float f = detectPitchYin (o.data() + at, 2048, 48000.0, 0.3f, 0.5f, 60.0f, 1100.0f);
+                if (f > 0) m = std::max (m, std::abs (1200.0 * std::log2 (f / hz)));
+            }
+            return m;
+        };
+        std::vector<float> flat, kept, deep;
+        run (220.0, 40.0, 0.0f, flat); run (220.0, 40.0, 100.0f, kept);
+        run (82.41 * std::pow (2.0, 30.0 / 1200.0), 0.0, 0.0f, deep);
+        const double dFlat = maxDev (flat, 220.0), dKept = maxDev (kept, 220.0);
+        const float deepHz = detectPitchYin (deep.data() + deep.size() - 4096, 4096, 48000.0, 0.3f, 0.5f, 60.0f, 1100.0f);
+        std::printf ("autopitch vibrato 40c -> kill %.1fc, keep %.1fc; deep E2 +30c -> %.2f Hz\n", dFlat, dKept, deepHz);
+        CHECK (dFlat < 12.0);
+        CHECK (dKept > 25.0);
+        CHECK (std::abs (deepHz - 82.41f) < 0.6f);
+    }
+    // Maximizer: loud input never passes the ceiling, output stays finite
+    {
+        auto mx = createBuiltinEffect ("stmax"); CHECK (mx != nullptr);
+        mx->setParam ("gain", 18.0f); mx->setParam ("sat", 0.3f);
+        mx->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; double ph = 0; float peak = 0; bool finite = true;
+        for (int k = 0; k < 100; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = (float) (0.9 * std::sin (ph) + 0.3 * std::sin (7.3 * ph)); ph += juce::MathConstants<double>::twoPi * 60.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+            mx->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); finite = finite && std::isfinite (y); peak = std::max (peak, std::abs (y)); }
+        }
+        std::printf ("maximizer peak %.3f (ceiling %.3f)\n", peak, juce::Decibels::decibelsToGain (-0.3f));
+        CHECK (finite && peak <= juce::Decibels::decibelsToGain (-0.3f) + 1.0e-4f && peak > 0.5f);
+    }
+    // imported samples: drum hits keep their pitch, everything else follows the Piano Roll
+    CHECK (isDrumSampleName ("Hi Hat 03") && isDrumSampleName ("KICK_hard") && ! isDrumSampleName ("Piano C") && ! isDrumSampleName ("Vox Chop"));
     // AutoPitch shifter latency stays tiny while correcting up or down
     for (double ratio : { 0.97, 1.03, 2.0 })
     {

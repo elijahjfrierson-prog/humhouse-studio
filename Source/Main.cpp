@@ -30,7 +30,11 @@ public:
         window = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
-    void systemRequestedQuit() override { quit(); }
+    void systemRequestedQuit() override
+    {
+        if (window != nullptr) hhs::requestQuit (window->getContentComponent());
+        else quit();
+    }
 
     struct MainWindow : public juce::DocumentWindow
     {

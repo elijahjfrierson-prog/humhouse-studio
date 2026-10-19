@@ -34,7 +34,7 @@ static NoteList treeNotes (const juce::ValueTree& t)
 juce::ValueTree projectToTree (const Project& p)
 {
     juce::ValueTree root ("HUMHOUSE_PROJECT");
-    root.setProperty ("version", 1, nullptr);
+    root.setProperty ("version", 2, nullptr);
     root.setProperty ("title", p.title, nullptr); root.setProperty ("bpm", p.bpm, nullptr);
     root.setProperty ("bpb", p.beatsPerBar, nullptr); root.setProperty ("key", p.keyRoot, nullptr);
     root.setProperty ("scale", p.scaleIndex, nullptr); root.setProperty ("highlight", p.highlightScale, nullptr);
@@ -86,7 +86,7 @@ juce::ValueTree projectToTree (const Project& p)
     for (auto& l : p.lanes)
     {
         juce::ValueTree t ("LANE");
-        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr);
+        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr); t.setProperty ("colour", (juce::int64) l.colour.getARGB(), nullptr);
         t.setProperty ("armed", l.armed, nullptr); t.setProperty ("mute", l.muted, nullptr); t.setProperty ("mon", l.monitor, nullptr);
         t.setProperty ("h", l.height, nullptr);
         lanes.appendChild (t, nullptr);
@@ -156,6 +156,10 @@ Project projectFromTree (const juce::ValueTree& root)
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
         c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
+        // v1 projects turned KEY off for every non-808 sample, so Piano Roll notes all played the same pitch
+        if ((int) root.getProperty ("version", 1) < 2 && c.type == ChannelType::Sampler && ! c.keyTrack
+            && ! isDrumSampleName (c.sampleFile.getFileNameWithoutExtension()))
+            c.keyTrack = true;
         auto& s = c.synth;
         s.wave = t["wave"]; s.attack = t.getProperty ("a", 0.002f); s.decay = t.getProperty ("d", 0.3f); s.sustain = t.getProperty ("s", 0.7f);
         s.release = t.getProperty ("r", 0.25f); s.cutoff = t.getProperty ("cut", 12000.0f); s.resonance = t.getProperty ("res", 0.2f);
@@ -173,7 +177,7 @@ Project projectFromTree (const juce::ValueTree& root)
     }
     for (auto t : root.getChildWithName ("LANES"))
     {
-        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.armed = t["armed"];
+        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0)); l.armed = t["armed"];
         l.muted = t["mute"]; l.monitor = t.getProperty ("mon", true); l.height = t.getProperty ("h", 56.0f);
         p.lanes.push_back (l);
     }

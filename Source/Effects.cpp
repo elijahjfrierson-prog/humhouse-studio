@@ -884,10 +884,11 @@ public:
             { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
             { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
-                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "voice", "Voice", 0, 2, 1, { "Low Male", "Alto / Tenor", "Soprano" } },
+                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "natvib", "Natural Vibrato %", 0, 200, 0 },
             { "mix", "Mix", 0, 1, 1 },
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
-            { "tuning", "Tuning A4 (Hz)", 400, 500, 440 } };
+            { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
+            { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -897,7 +898,7 @@ public:
         shifter.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -915,6 +916,8 @@ public:
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = style == 3 ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
+        const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
+        const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -926,17 +929,20 @@ public:
                 if (++hopCount >= hop)
                 {
                     hopCount = 0;
-                    // shorter window for Mid/High voices = less tracking lag (Low keeps the long window for deep notes);
-                    // at a word's start use the short window so short ad-libs lock right away
-                    const int vc = (int) p (5);
-                    const int wn = vc >= 2 || (heldNote == 0 && vc == 1) ? 512 : vc == 1 ? 768 : (heldNote == 0 ? 768 : 1024);
-                    std::array<float, 1024> win {};
-                    for (int k = 0; k < wn; ++k) win[(size_t) k] = analysis[(size_t) ((aw - wn + k + (int) analysis.size()) % (int) analysis.size())];
-                    // Antares-style input type: each voice only searches its own range (no wrong-octave guesses)
-                    static const float loHz[] { 55.0f, 80.0f, 150.0f }, hiHz[] { 450.0f, 900.0f, 1300.0f };
-                    const int vi = juce::jlimit (0, 2, vc);
-                    bool rough = false;
-                    const float hz = detectPitchYin (win.data(), wn, dsr, style == 0 ? 0.12f : 0.18f, style == 0 ? 0.3f : 0.45f, loHz[vi], hiHz[vi], &rough);
+                    // one full-range detector for every register: the window follows the voice (~3 cycles of the sung
+                    // note = low lag, so vibrato isn't smeared into a wave); at a word start or on a miss try short, then long
+                    const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
+                    bool rough = false; int wn = 512; float hz = 0;
+                    auto detect = [&] (int len) {
+                        len = juce::jlimit (256, 1024, len);
+                        std::array<float, 1024> win {};
+                        for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
+                        wn = len;
+                        return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough);
+                    };
+                    if (lastMidi > 0) hz = detect ((int) (3.2 * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
+                    if (hz <= 0) hz = detect (512);
+                    if (hz <= 0) hz = detect (1024);
                     float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
@@ -953,24 +959,38 @@ public:
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
+                        const float hopSec = (float) hop / (float) dsr;
+                        // the analysis window lags the voice by half its length: extrapolate the pitch slope so vibrato
+                        // and inflections are corrected where the voice is now (this lag was the leftover "wave")
+                        slope = onset || std::abs (midi - lastMidi) > 1.0f ? 0.0f : 0.6f * slope + 0.4f * (midi - lastMidi);
+                        const float now = midi + juce::jlimit (-0.5f, 0.5f, slope * 0.5f * (float) wn / (float) hop);
                         missHops = 0; lastMidi = midi;
                         period = (float) (sr / hz);
-                        int target = snapToScale ((int) std::round (midi), root, scale);
-                        // note hold: stay on the current note through vibrato/drift until the voice is clearly on another one
-                        if (heldNote > 0 && target != heldNote && std::abs (midi - (float) heldNote) < (style == 3 ? 0.6f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
+                        centre = onset ? now : centre + (now - centre) * (1.0f - std::exp (-hopSec / 0.12f));
+                        int target = snapToScale ((int) std::round (centre), root, scale);
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (style == 3 ? 0.6f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        // a real jump to another note is taken within ~20 ms
+                        const int fast = snapToScale ((int) std::round (now), root, scale);
+                        if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
+                        {
+                            if (++jumpHops * hopSec >= 0.02f) { target = fast; centre = now; jumpHops = 0; }
+                        }
+                        else jumpHops = 0;
                         heldNote = target;
-                        float semis = (float) target - midi;
+                        float semis = (float) target - now + natVib * (now - centre);
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (style == 3 || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) (0.08 * dsr / hop)) { targetRatio = 1.0f; heldNote = 0; lastMidi = 0; octSlip = 0; }
+                    else if (midi == 0.0f && ++missHops > (int) (0.08 * dsr / hop)) { targetRatio = 1.0f; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
-            const float ratio = currentRatio * offset;
+            float ratio = currentRatio * offset;
+            if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
             float wl = l[i], wr = r[i];
             shifter.process (wl, wr, ratio, period);
             l[i] = l[i] * (1 - mix) + wl * mix;
@@ -981,8 +1001,8 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter;
     float currentRatio = 1, targetRatio = 1;
-    int heldNote = 0, missHops = 0, octSlip = 0;
-    float lastMidi = 0;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0;
+    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
@@ -996,7 +1016,7 @@ const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
-        { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
+        { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
         { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },

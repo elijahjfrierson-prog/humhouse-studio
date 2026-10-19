@@ -372,6 +372,93 @@ private:
     double sr = 44100; int la = 64, w = 0; juce::AudioBuffer<float> dl; float g = 1, pl = 0, pr = 0;
 };
 
+// 3-band mastering maximizer: Linkwitz-Riley split, per-band pre/threshold/ratio/attack/release/post,
+// saturation, then a zero-latency master limiter
+class Maximizer : public BuiltinEffect
+{
+public:
+    Maximizer() { initDefaults(); }
+    const char* typeId() const override { return "stmax"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "xlo", "Low / Mid Hz", 40, 1000, 180 }, { "xhi", "Mid / High Hz", 1000, 12000, 4500 },
+            { "lpre", "Low Pre dB", -24, 24, 0 }, { "lthr", "Low Threshold", -40, 0, -12 }, { "lratio", "Low Ratio", 1, 20, 2 },
+            { "latk", "Low Attack ms", 0.1f, 100, 15 }, { "lrel", "Low Release ms", 5, 1000, 150 }, { "lpost", "Low Post dB", -24, 24, 0 },
+            { "mpre", "Mid Pre dB", -24, 24, 0 }, { "mthr", "Mid Threshold", -40, 0, -12 }, { "mratio", "Mid Ratio", 1, 20, 2 },
+            { "matk", "Mid Attack ms", 0.1f, 100, 10 }, { "mrel", "Mid Release ms", 5, 1000, 120 }, { "mpost", "Mid Post dB", -24, 24, 0 },
+            { "hpre", "High Pre dB", -24, 24, 0 }, { "hthr", "High Threshold", -40, 0, -12 }, { "hratio", "High Ratio", 1, 20, 2 },
+            { "hatk", "High Attack ms", 0.1f, 100, 5 }, { "hrel", "High Release ms", 5, 1000, 80 }, { "hpost", "High Post dB", -24, 24, 0 },
+            { "sat", "Saturation", 0, 1, 0 }, { "gain", "Master Gain", 0, 24, 0 }, { "ceiling", "Ceiling", -6, 0, -0.3f },
+            { "release", "Master Release ms", 1, 1000, 60 } };
+        return ps;
+    }
+    void prepare (double s, int mb) override
+    {
+        sr = s;
+        juce::dsp::ProcessSpec spec { s, (juce::uint32) juce::jmax (1, mb), 2 };
+        for (auto* f : { &lp1, &hp1, &lp2, &hp2, &ap }) { f->prepare (spec); f->reset(); }
+        lp1.setType (juce::dsp::LinkwitzRileyFilterType::lowpass); hp1.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+        lp2.setType (juce::dsp::LinkwitzRileyFilterType::lowpass); hp2.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+        ap.setType (juce::dsp::LinkwitzRileyFilterType::allpass);
+        curLo = curHi = -1; g = 1; pl = pr = 0;
+        for (auto& e : env) e = 0;
+    }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const float xlo = juce::jlimit (20.0f, (float) sr * 0.2f, p (0)), xhi = juce::jlimit (xlo * 1.5f, (float) sr * 0.45f, p (1));
+        if (xlo != curLo) { lp1.setCutoffFrequency (xlo); hp1.setCutoffFrequency (xlo); curLo = xlo; }
+        if (xhi != curHi) { lp2.setCutoffFrequency (xhi); hp2.setCutoffFrequency (xhi); ap.setCutoffFrequency (xhi); curHi = xhi; }
+        float pre[3], thr[3], slope[3], atk[3], rel[3], post[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const int o = 2 + 6 * k;
+            pre[k] = dB (p (o)); thr[k] = p (o + 1); slope[k] = 1.0f - 1.0f / juce::jmax (1.0f, p (o + 2));
+            atk[k] = std::exp (-1.0f / (0.001f * juce::jmax (0.1f, p (o + 3)) * (float) sr));
+            rel[k] = std::exp (-1.0f / (0.001f * juce::jmax (1.0f, p (o + 4)) * (float) sr));
+            post[k] = dB (p (o + 5));
+        }
+        const float sat = p (20), in = dB (p (21)), ceil = dB (p (22)), mrel = std::exp (-1.0f / (0.001f * juce::jmax (1.0f, p (23)) * (float) sr));
+        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            float band[3][2];
+            const float x[2] { l[i], r[i] };
+            for (int c = 0; c < 2; ++c)
+            {
+                const float rest = hp1.processSample (c, x[c]);
+                band[0][c] = ap.processSample (c, lp1.processSample (c, x[c]));   // keeps the low band in phase with the mid/high split
+                band[1][c] = lp2.processSample (c, rest);
+                band[2][c] = hp2.processSample (c, rest);
+            }
+            float y[2] { 0, 0 };
+            for (int k = 0; k < 3; ++k)
+            {
+                const float lvl = std::max (std::abs (band[k][0]), std::abs (band[k][1])) * pre[k];
+                env[k] = lvl > env[k] ? atk[k] * env[k] + (1 - atk[k]) * lvl : rel[k] * env[k] + (1 - rel[k]) * lvl;
+                const float over = juce::Decibels::gainToDecibels (env[k], -120.0f) - thr[k];
+                const float gr = over <= -3.0f ? 0.0f : over < 3.0f ? slope[k] * (over + 3.0f) * (over + 3.0f) / 12.0f : slope[k] * over;   // 6 dB soft knee
+                const float gk = pre[k] * post[k] * dB (-gr);
+                y[0] += band[k][0] * gk; y[1] += band[k][1] * gk;
+            }
+            for (auto& v : y)
+            {
+                v *= in;
+                if (sat > 0) v = (1.0f - sat) * v + sat * std::tanh (v);
+            }
+            const float a = std::max ({ std::abs (y[0]), std::abs (y[1]), std::abs (0.5f * (y[0] + pl)) * 1.05f, std::abs (0.5f * (y[1] + pr)) * 1.05f });
+            pl = y[0]; pr = y[1];
+            const float t = a > ceil ? ceil / a : 1.0f;
+            g = t < g ? t : mrel * g + (1 - mrel) * t;
+            l[i] = juce::jlimit (-ceil, ceil, y[0] * g); r[i] = juce::jlimit (-ceil, ceil, y[1] * g);
+        }
+    }
+private:
+    double sr = 44100;
+    juce::dsp::LinkwitzRileyFilter<float> lp1, hp1, lp2, hp2, ap;
+    float curLo = -1, curHi = -1, env[3] {}, g = 1, pl = 0, pr = 0;
+};
+
 class Saturator : public BuiltinEffect
 {
 public:
@@ -553,6 +640,7 @@ std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id)
     if (id == "fet76") return std::make_unique<Fet76>();
     if (id == "stgate") return std::make_unique<StudioGate>();
     if (id == "stlimit") return std::make_unique<StudioLimiter>();
+    if (id == "stmax") return std::make_unique<Maximizer>();
     if (id == "satur") return std::make_unique<Saturator>();
     if (id == "strip") return std::make_unique<ChannelStrip>();
     return {};
