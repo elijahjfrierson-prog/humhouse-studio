@@ -1,4 +1,5 @@
 #include "Effects.h"
+#include "rockglue/RockGlueEngine.h"
 #include "Model.h"
 #include <cmath>
 
@@ -501,16 +502,22 @@ private:
     double sr = 44100; float ic[4] {};
 };
 
-// ------------------------------------------------------------ Glitch Gate (Gross Beat-style 16-step time/volume sequencer)
+// ------------------------------------------------------------ Glitch Gate (Gross Beat + ShaperBox style: one-click time / volume / filter / pan shapes)
 class GlitchGate : public BuiltinEffect
 {
 public:
     enum Mode { Thru = 0, Rep4, Rep8, Rep16, Rep32, Reverse, HalfSpeed, TapeStop, Mute, Stutter3 };
+    enum Fx { Steps = 0, FxTapeStop, FxTapeStart, FxStut8, FxStut16, FxStutTrip, FxRoll, FxScratch, FxBaby, FxReverse, FxRewind, FxHalf,
+              FxGate8, FxGate16, FxTrance, FxPump, FxSweep, FxWobble, FxPan, FxCrush, FxDrop, NumFx };
+    static constexpr int iSmooth = 17, iMix = 18, iFx = 19, iLen = 20, iDepth = 21;
     GlitchGate() { initDefaults(); }
     const char* typeId() const override { return "glitch"; }
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<const char*> modes { "Thru", "Repeat 1/4", "Repeat 1/8", "Repeat 1/16", "Repeat 1/32", "Reverse", "Half Speed", "Tape Stop", "Mute", "Triplet Stutter" };
+        static const std::vector<const char*> fxs { "Steps", "Tape Stop", "Tape Start", "Stutter 1/8", "Stutter 1/16", "Triplet Stutter", "Stutter Roll",
+                                                     "Scratch", "Baby Scratch", "Reverse", "Rewind", "Half Speed", "Gate 1/8", "Gate 1/16", "Trance Gate",
+                                                     "Sidechain Pump", "Filter Sweep", "Wobble", "Pan Swirl", "Lo-Fi Crush", "Drop" };
         static const std::vector<ParamDef> ps = []
         {
             std::vector<ParamDef> v;
@@ -520,33 +527,169 @@ public:
             v.push_back ({ "steplen", "Step", 0, 2, 1, { "1/8", "1/16", "1/32" } });
             v.push_back ({ "smooth", "Smooth ms", 0.5f, 20, 3 });
             v.push_back ({ "mix", "Mix", 0, 1, 1 });
+            v.push_back ({ "fx", "Effect", 0, (float) (NumFx - 1), (float) FxStut8, fxs });
+            v.push_back ({ "length", "Length", 0, 3, 2, { "1 beat", "2 beats", "1 bar", "2 bars" } });
+            v.push_back ({ "depth", "Depth", 0, 1, 1 });
             return v;
         }();
         return ps;
     }
-    void prepare (double s, int) override { sr = s; size = (int) (s * 8.0); ring.setSize (2, size); ring.clear(); w = 0; lastStep = -1; }
+    void prepare (double s, int) override
+    {
+        sr = s; size = (int) (s * 16.0); ring.setSize (2, size); ring.clear(); w = 0; lastStep = -1;
+        prevRb = oldRb = 0; xf = 0; vs = 1; gl = gr = 1; fcS = 20000; ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0; holdN = 0; freeBeat = 0;
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
-        static const double stepBeats[] { 0.5, 0.25, 0.125 };
-        const double sb = stepBeats[(int) p (16)];
-        const double samplesPerBeat = sr * 60.0 / ctx.bpm;
-        const double stepSamples = sb * samplesPerBeat;
-        const float mix = p (18);
-        const float smoothStep = 1.0f / std::max (1.0f, p (17) * 0.001f * (float) sr);
+        const double spb = sr * 60.0 / juce::jmax (20.0, ctx.bpm);
+        const double beat0 = ctx.playing ? ctx.beatPos : freeBeat;   // stopped: keeps running on its own clock so you hear it
+        freeBeat = beat0 + n / spb;
+        const int fx = juce::jlimit (0, NumFx - 1, (int) std::round (p (iFx)));
+        if (fx == Steps) processSteps (b, n, beat0, spb, ctx.playing);
+        else processShape (b, n, beat0, spb, fx);
+    }
+private:
+    float readHead (const float* buf, double rb) const
+    {
+        const double rpos = std::fmod ((double) w - rb + 2.0 * size, (double) size);
+        const int i0 = (int) rpos, i1 = (i0 + 1) % size; const float f = (float) (rpos - i0);
+        return buf[i0] + f * (buf[i1] - buf[i0]);
+    }
+    void processShape (juce::AudioBuffer<float>& b, int n, double beat0, double spb, int fx)
+    {
+        static const double lens[] { 1.0, 2.0, 4.0, 8.0 };
+        static const int trance[16] { 1,0,1,1, 0,1,1,0, 1,0,1,1, 0,1,0,1 };
+        const double cyc = lens[juce::jlimit (0, 3, (int) std::round (p (iLen)))];
+        const float depth = p (iDepth), mix = p (iMix);
+        const float sm = 1.0f / std::max (1.0f, p (iSmooth) * 0.001f * (float) sr);
+        const double xfStep = 1.0 / std::max (16.0, std::max (4.0, (double) p (iSmooth)) * 0.001 * sr);
+        const double maxRb = size - 8.0;
+        const bool timeFx = fx <= FxHalf || fx == FxDrop;
+        const bool useFilter = fx == FxSweep || fx == FxWobble || fx == FxCrush || fx == FxDrop;
+        const float fsm = 1.0f / (0.02f * (float) sr);
+        if (fx != lastFx) { lastFx = fx; lf = std::log (20000.0f); ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0.0f; }
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         auto* rl = ring.getWritePointer (0); auto* rr = ring.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
             rl[w] = l[i]; rr[w] = r[i];
-            const double beat = ctx.beatPos + i / samplesPerBeat;
-            const long stepAbs = ctx.playing ? (long) std::floor (beat / sb + 1.0e-9) : -1;
-            if (stepAbs != lastStep) { lastStep = stepAbs; stepStart = w; posInStep = 0; }
-            const int mode = stepAbs >= 0 ? (int) p ((int) (stepAbs % 16)) : 0;
+            const double beat = beat0 + i / spb;
+            const double cpos = beat - cyc * std::floor (beat / cyc);     // beats into the cycle
+            const double bpos = beat - std::floor (beat);                 // beats into the beat
+            const double half = cyc * 0.5;
+            double rb = 0.0; float vol = 1.0f, fc = 20000.0f, pan = 0.0f; bool crush = false;
+            auto repeat = [&] (double sinceBeats, double sliceBeats) { const double u = sinceBeats * spb, L = std::max (16.0, sliceBeats * spb); return u - std::fmod (u, L); };
+            switch (fx)
+            {
+                case FxTapeStop:
+                    if (cpos >= half) { const double T = half * spb, u = (cpos - half) * spb, x = u / T; rb = u * u / (2.0 * T); vol = (float) (1.0 - x * x * x * x); }
+                    break;
+                case FxTapeStart:
+                {
+                    const double T = cyc * 0.25 * spb, u = cpos * spb;
+                    rb = u < T ? u - u * u / (2.0 * T) : T * 0.5;
+                    if (u < T) vol = (float) std::sqrt (u / T);
+                    break;
+                }
+                case FxStut8:    rb = repeat (bpos, 0.5); break;
+                case FxStut16:   rb = repeat (bpos, 0.25); break;
+                case FxStutTrip: rb = repeat (bpos, 1.0 / 3.0); break;
+                case FxRoll:
+                {
+                    const double q = cpos / cyc * 4.0;
+                    if (q >= 2.0) rb = repeat (cpos - half, q < 3.0 ? 0.5 : q < 3.5 ? 0.25 : 0.125);
+                    break;
+                }
+                case FxScratch:
+                    if (cpos >= half) { const double u = (cpos - half) * spb, wv = juce::MathConstants<double>::twoPi / spb; rb = u - std::sin (wv * u) / wv; }
+                    break;
+                case FxBaby:
+                {
+                    const double u = bpos * spb, wv = juce::MathConstants<double>::twoPi * 2.0 / spb;
+                    rb = 0.9 * (u - std::sin (wv * u) / wv);
+                    break;
+                }
+                case FxReverse: if (cpos >= half) rb = 2.0 * (cpos - half) * spb; break;
+                case FxRewind:  if (cpos >= half) rb = 2.5 * (cpos - half) * spb; break;
+                case FxHalf:    rb = 0.5 * cpos * spb; break;
+                case FxDrop:    if (cpos >= half) { rb = 0.5 * (cpos - half) * spb; fc = 900.0f; } break;
+                case FxGate8:   vol = std::fmod (cpos, 0.5) < 0.3 ? 1.0f : 0.0f; break;
+                case FxGate16:  vol = std::fmod (cpos, 0.25) < 0.15 ? 1.0f : 0.0f; break;
+                case FxTrance:  { const double s16 = cpos / 0.25; vol = trance[(int) s16 % 16] && (s16 - std::floor (s16)) < 0.8 ? 1.0f : 0.0f; break; }
+                case FxPump:    { const double x = 1.0 - bpos; vol = (float) (1.0 - x * x * x); break; }
+                case FxSweep:   { const double t = cpos / cyc; fc = (float) (200.0 * std::pow (100.0, t < 0.75 ? t / 0.75 : (1.0 - t) / 0.25)); break; }
+                case FxWobble:  fc = (float) (250.0 * std::pow (24.0, 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * 2.0 * bpos))); break;
+                case FxPan:     pan = (float) std::sin (juce::MathConstants<double>::twoPi * cpos / 2.0); break;
+                case FxCrush:   crush = true; fc = 7000.0f; break;
+                default: break;
+            }
+            rb = juce::jlimit (0.0, maxRb, rb);
+            // a jump in the read position (new slice, loop restart) crossfades from the old head instead of clicking
+            if (std::abs (rb - prevRb) > 3.0) { oldRb = prevRb; xf = 1.0; }
+            prevRb = rb;
+            float wl = l[i], wr = r[i];
+            if (timeFx)
+            {
+                float hl = readHead (rl, rb), hr = readHead (rr, rb);
+                if (xf > 0.0)
+                {
+                    const float o = (float) xf;
+                    hl = hl * (1.0f - o) + readHead (rl, oldRb) * o;
+                    hr = hr * (1.0f - o) + readHead (rr, oldRb) * o;
+                    xf -= xfStep;
+                }
+                wl += (hl - wl) * depth; wr += (hr - wr) * depth;
+            }
+            vs += ((1.0f - depth * (1.0f - vol)) - vs) * sm * 4.0f;
+            wl *= vs; wr *= vs;
+            if (useFilter)
+            {
+                lf += (std::log (20000.0f * std::pow (fc / 20000.0f, depth)) - lf) * fsm;   // log-smoothed cutoff: sweeps, never jumps
+                fcS = std::exp (lf);
+                if ((i & 15) == 0 || fg <= 0.0f) fg = (float) std::tan (juce::MathConstants<double>::pi * std::min (fcS, 0.45f * (float) sr) / sr);
+                const float k = 1.0f / 1.1f, a1 = 1.0f / (1.0f + fg * (fg + k)), a2 = fg * a1, a3 = fg * a2;
+                float* ch[2] { &wl, &wr };
+                for (int c = 0; c < 2; ++c)
+                {
+                    const float v3 = *ch[c] - ic2[c], v1 = a1 * ic1[c] + a2 * v3, v2 = ic2[c] + a2 * ic1[c] + a3 * v3;
+                    ic1[c] = 2.0f * v1 - ic1[c]; ic2[c] = 2.0f * v2 - ic2[c];
+                    *ch[c] = v2;
+                }
+            }
+            if (crush && depth > 0.0f)
+            {
+                if (holdN-- <= 0) { holdN = 1 + (int) (5.0f * depth); holdL = wl; holdR = wr; }
+                const float q = std::pow (2.0f, 12.0f - 6.0f * depth);
+                wl = std::round (holdL * q) / q; wr = std::round (holdR * q) / q;
+            }
+            const float pn = pan * depth;
+            const float tl = std::sqrt (std::max (0.0f, 1.0f - pn)), tr = std::sqrt (std::max (0.0f, 1.0f + pn));
+            gl += (tl - gl) * sm; gr += (tr - gr) * sm;
+            wl *= gl; wr *= gr;
+            l[i] += (wl - l[i]) * mix; r[i] += (wr - r[i]) * mix;
+            if (++w >= size) w = 0;
+        }
+    }
+    void processSteps (juce::AudioBuffer<float>& b, int n, double beat0, double samplesPerBeat, bool)
+    {
+        static const double stepBeats[] { 0.5, 0.25, 0.125 };
+        const double sb = stepBeats[juce::jlimit (0, 2, (int) p (16))];
+        const double stepSamples = sb * samplesPerBeat;
+        const float mix = p (iMix);
+        const float smoothStep = 1.0f / std::max (1.0f, p (iSmooth) * 0.001f * (float) sr);
+        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        auto* rl = ring.getWritePointer (0); auto* rr = ring.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            rl[w] = l[i]; rr[w] = r[i];
+            const double beat = beat0 + i / samplesPerBeat;
+            const long stepAbs = (long) std::floor (beat / sb + 1.0e-9);
+            if (stepAbs != lastStep) { lastStep = stepAbs; posInStep = 0; }
+            const int mode = (int) p ((int) (((stepAbs % 16) + 16) % 16));
             float target = 1.0f;
-            double readBack = 0.0; // samples behind write head
+            double readBack = 0.0;
             switch (mode)
             {
-                case Thru: break;
                 case Rep4: case Rep8: case Rep16: case Rep32: case Stutter3:
                 {
                     const double rb = mode == Stutter3 ? 1.0 / 3.0 : (mode == Rep4 ? 1.0 : mode == Rep8 ? 0.5 : mode == Rep16 ? 0.25 : 0.125);
@@ -559,7 +702,6 @@ public:
                 case TapeStop:
                 {
                     const double t = std::min (1.0, posInStep / stepSamples);
-                    readBack = posInStep - (posInStep - posInStep * t * 0.5);
                     readBack = posInStep * t * 0.5;
                     target = (float) (1.0 - t * t);
                     break;
@@ -567,23 +709,63 @@ public:
                 case Mute: target = 0.0f; break;
                 default: break;
             }
-            gate += (target - gate) * smoothStep * 4.0f;
-            const double rpos = std::fmod ((double) w - readBack + size, (double) size);
-            const int i0 = (int) rpos; const int i1 = (i0 + 1) % size; const float f = (float) (rpos - i0);
-            const float ol = (rl[i0] + f * (rl[i1] - rl[i0])) * gate;
-            const float orr = (rr[i0] + f * (rr[i1] - rr[i0])) * gate;
-            // de-click on mode jumps
-            const float m = mode == Thru ? 0.0f : 1.0f;
-            wetAmt += (m - wetAmt) * smoothStep;
-            l[i] = l[i] * (1.0f - wetAmt * mix) * (mode == Thru ? gate : 1.0f) + ol * wetAmt * mix;
-            r[i] = r[i] * (1.0f - wetAmt * mix) * (mode == Thru ? gate : 1.0f) + orr * wetAmt * mix;
+            if (std::abs (readBack - prevRb) > 3.0) { oldRb = prevRb; xf = 1.0; }
+            prevRb = readBack;
+            vs += (target - vs) * smoothStep * 4.0f;
+            float ol = readHead (rl, readBack), orr = readHead (rr, readBack);
+            if (xf > 0.0)
+            {
+                const float o = (float) xf;
+                ol = ol * (1.0f - o) + readHead (rl, oldRb) * o; orr = orr * (1.0f - o) + readHead (rr, oldRb) * o;
+                xf -= smoothStep;
+            }
+            l[i] += (ol * vs - l[i]) * mix;
+            r[i] += (orr * vs - r[i]) * mix;
             posInStep += 1.0;
             if (++w >= size) w = 0;
         }
     }
+    double sr = 44100, posInStep = 0, freeBeat = 0, prevRb = 0, oldRb = 0, xf = 0;
+    juce::AudioBuffer<float> ring; int size = 1, w = 0, holdN = 0; long lastStep = -1;
+    int lastFx = -1;
+    float lf = 9.903f, vs = 1, gl = 1, gr = 1, fcS = 20000, fg = 0, ic1[2] {}, ic2[2] {}, holdL = 0, holdR = 0;
+};
+
+// ------------------------------------------------------------ Hum House Master (RockGlue architecture, master-bus mode):
+// Anchor (mono-locked lows, grit) -> M/S Pocket -> parallel FET smash -> VCA glue. Zero latency.
+class HumHouseMaster : public BuiltinEffect
+{
+public:
+    HumHouseMaster() { initDefaults(); }
+    const char* typeId() const override { return "hhmaster"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "drive", "Smash Drive", 0, 30, 8 }, { "smashmix", "Parallel Mix", 0, 100, 50 },
+            { "monolock", "Mono Lock", 0, 1, 1, { "Off", "On" } }, { "grit", "Grit", 0, 100, 25 },
+            { "pocket", "Carve Pocket", 0, 100, 100 }, { "threshold", "Glue Threshold", -20, 10, -10 },
+            { "makeup", "Makeup", 0, 12, 2 }, { "autorel", "Auto Release", 0, 1, 1, { "Off", "On" } } };
+        return ps;
+    }
+    void prepare (double s, int) override { engine.prepare (s); engine.reset(); }
+    void reset() override { engine.reset(); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        engine.setDrumDriveDb (p (0));
+        engine.setDrumParallelMix (p (1) * 0.01f);
+        engine.setMonoLock (p (2) > 0.5f);
+        engine.setGrit (p (3) * 0.01f);
+        engine.setCarvePocket (p (4) * 0.01f);
+        engine.setGlueThresholdDb (p (5));
+        engine.setGlueMakeupDb (p (6));
+        engine.setGlueAutoRelease (p (7) > 0.5f);
+        engine.processMaster ({ b.getWritePointer (0), b.getWritePointer (1) }, n);
+        gr.store (-engine.getMeterFrame().glueGrDb, std::memory_order_relaxed);
+    }
+    float meter (int) const override { return gr.load (std::memory_order_relaxed); }
 private:
-    double sr = 44100, posInStep = 0; juce::AudioBuffer<float> ring; int size = 1, w = 0, stepStart = 0; long lastStep = -1;
-    float gate = 1, wetAmt = 0;
+    rockglue::RockGlueEngine engine;
+    std::atomic<float> gr { 0.0f };
 };
 
 // ------------------------------------------------------------ small utilities
@@ -1104,7 +1286,7 @@ const std::vector<EffectInfo>& builtinEffects()
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
-        { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
+        { "hhmaster", "Hum House Master", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
@@ -1132,6 +1314,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();
     if (id == "glitch") return std::make_unique<GlitchGate>();
+    if (id == "hhmaster") return std::make_unique<HumHouseMaster>();
     if (id == "wide") return std::make_unique<StereoWide>();
     if (id == "clip") return std::make_unique<SoftClip>();
     if (id == "crush") return std::make_unique<BitCrush>();

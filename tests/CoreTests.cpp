@@ -124,6 +124,56 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
+    {   // Glitch Gate pads: each one is audible, works with the transport stopped, and doesn't click
+        auto probe = hhs::createBuiltinEffect ("glitch");
+        const int numFx = (int) probe->params()[(size_t) probe->paramIndex ("fx")].choices.size();
+        for (int k = 1; k < numFx; ++k)
+            for (bool playing : { true, false })
+            {
+                auto e = hhs::createBuiltinEffect ("glitch");
+                e->setParam ("fx", (float) k);
+                e->prepare (44100.0, 512);
+                hhs::PlayContext ctx; ctx.bpm = 140; ctx.playing = playing;
+                juce::AudioBuffer<float> b (2, 512);
+                const int total = 44100 * 4;
+                double diff = 0; float maxStep = 0, prev = 0; bool finite = true;
+                for (int pos = 0; pos < total; pos += 512)
+                {
+                    for (int i = 0; i < 512; ++i) { const float x = 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * (pos + i) / 44100.0); b.setSample (0, i, x); b.setSample (1, i, x); }
+                    ctx.beatPos = pos / 44100.0 * 140.0 / 60.0;
+                    e->process (b, 512, ctx);
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const float x = 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * (pos + i) / 44100.0), y = b.getSample (0, i);
+                        finite &= std::isfinite (y);
+                        if (pos + i > 0) maxStep = std::max (maxStep, std::abs (y - prev));
+                        prev = y; diff += std::abs (y - x);
+                    }
+                }
+                const bool crush = juce::String (probe->params()[(size_t) probe->paramIndex ("fx")].choices[(size_t) k]) == "Lo-Fi Crush";
+                std::printf ("glitch %-16s %s: change %.3f, max step %.3f\n", probe->params()[(size_t) probe->paramIndex ("fx")].choices[(size_t) k], playing ? "playing" : "stopped", diff / total, maxStep);
+                CHECK (finite);
+                CHECK (diff / total > 0.01);
+                CHECK (maxStep < (crush ? 0.2f : 0.08f));
+            }
+    }
+    {   // Hum House Master: glues a loud mix without blowing up, zero latency
+        auto e = hhs::createBuiltinEffect ("hhmaster");
+        CHECK (e != nullptr);
+        e->prepare (44100.0, 512);
+        hhs::PlayContext ctx;
+        juce::AudioBuffer<float> b (2, 512);
+        float peak = 0; bool finite = true;
+        for (int pos = 0; pos < 44100 * 2; pos += 512)
+        {
+            for (int i = 0; i < 512; ++i) { const float x = 0.8f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 110.0 * (pos + i) / 44100.0); b.setSample (0, i, x); b.setSample (1, i, x * 0.7f); }
+            e->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { finite &= std::isfinite (b.getSample (0, i)); peak = std::max (peak, std::abs (b.getSample (0, i))); }
+        }
+        std::printf ("hum house master: peak %.2f, GR %.1f dB\n", peak, e->meter (0));
+        CHECK (finite && peak > 0.1f && peak < 4.0f);
+        CHECK (e->latencySamples() == 0);
+    }
     {   // FL: new channels fill mixer inserts 1, 2, 3 ... in order, past 10 too
         auto pr = hhs::Project::createDefault();
         for (int i = 0; i < 12; ++i) { hhs::Channel c; c.name = "Ch" + juce::String (i + 1); c.mixerTrack = -1; pr.addChannel (c); }

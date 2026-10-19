@@ -84,7 +84,8 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "gain", { { "+6 dB", { { "gain", 6.0f } } }, { "-6 dB", { { "gain", -6.0f } } }, { "Mono", { { "mono", 1.0f } } }, { "Flip Phase", { { "phase", 1.0f } } } } },
         { "grit", { { "Tape", { { "mode", 0.0f }, { "drive", 0.3f } } }, { "Tube", { { "mode", 1.0f }, { "drive", 0.5f } } }, { "Fuzz", { { "mode", 2.0f }, { "drive", 0.8f }, { "mix", 0.6f } } }, { "Fold", { { "mode", 3.0f }, { "drive", 0.6f } } } } },
         { "crush", { { "8-bit", { { "bits", 8.0f }, { "down", 4.0f } } }, { "Lo-fi", { { "bits", 12.0f }, { "down", 2.0f }, { "mix", 0.6f } } }, { "Destroy", { { "bits", 4.0f }, { "down", 16.0f } } } } },
-        { "glitch", { { "Stutter All", { { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
+        { "hhmaster", { { "Master Glue", { { "drive", 8.0f }, { "smashmix", 50.0f }, { "grit", 25.0f }, { "pocket", 100.0f }, { "threshold", -10.0f }, { "makeup", 2.0f } } }, { "Hard Smash", { { "drive", 18.0f }, { "smashmix", 70.0f }, { "grit", 45.0f }, { "threshold", -14.0f }, { "makeup", 4.0f } } }, { "Gentle Polish", { { "drive", 3.0f }, { "smashmix", 25.0f }, { "grit", 10.0f }, { "pocket", 60.0f }, { "threshold", -6.0f }, { "makeup", 1.0f } } } } },
+        { "glitch", { { "Stutter All", { { "fx", 0.0f }, { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
     static const std::vector<FactoryPreset> none;
     auto it = all.find (type);
     return it != all.end() ? it->second : none;
@@ -730,6 +731,79 @@ private:
     juce::String type;
 };
 
+// Glitch Gate: click a labeled pad and hear it (Gross Beat / ShaperBox style); "Steps" opens the 16-step strip
+class GlitchPads : public juce::Component, private juce::Timer
+{
+public:
+    explicit GlitchPads (ParamGrid& g) : grid (g)
+    {
+        auto fx = createBuiltinEffect ("glitch");
+        const auto& defs = fx->params();
+        const int fi = fx->paramIndex ("fx");
+        names = defs[(size_t) fi].choices;
+        for (int k = 1; k <= (int) names.size(); ++k)
+        {
+            const int v = k % (int) names.size();   // pads first, "Steps" last
+            auto* b = pads.add (new juce::TextButton());
+            setupButton (*b, juce::String (names[(size_t) v]).toUpperCase(), v == 0 ? juce::String ("Build your own: 16 steps, click a step to change it")
+                                                                                 : juce::String ("Click to hear ") + names[(size_t) v], true);
+            b->setRadioGroupId (8801);
+            b->getProperties().set ("fx", v);
+            b->onClick = [this, v] { grid.setExternal ("fx", (float) v); grid.commitNow(); sync(); };
+            addAndMakeVisible (b);
+        }
+        sync(); startTimerHz (8);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        drawPanelBg (g, getLocalBounds().toFloat());
+        if (! stepsShown()) return;
+        static const char* shortNames[] { "-", "1/4", "1/8", "1/16", "1/32", "REV", "HALF", "STOP", "MUTE", "TRIP" };
+        auto strip = stripArea();
+        const float w = strip.getWidth() / 16.0f;
+        for (int i = 0; i < 16; ++i)
+        {
+            const int m = juce::jlimit (0, 9, (int) std::round (grid.valueOf ("s" + juce::String (i + 1))));
+            auto c = juce::Rectangle<float> (strip.getX() + i * w, strip.getY(), w, strip.getHeight()).reduced (1.5f);
+            g.setColour (m == 0 ? col::bg : col::accent.withAlpha (0.35f + 0.06f * (float) m)); g.fillRoundedRectangle (c, 3.0f);
+            g.setColour (i % 4 == 0 ? col::text : col::dim); g.drawRoundedRectangle (c, 3.0f, 1.0f);
+            g.setColour (col::text); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawText (shortNames[m], c.toNearestInt(), juce::Justification::centred);
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! stepsShown() || ! stripArea().contains (e.position)) return;
+        const int i = juce::jlimit (0, 15, (int) ((e.position.x - stripArea().getX()) / (stripArea().getWidth() / 16.0f)));
+        const auto id = "s" + juce::String (i + 1);
+        const int m = (int) std::round (grid.valueOf (id));
+        grid.setExternal (id, (float) ((m + (e.mods.isPopupMenu() ? 9 : 1)) % 10));
+        grid.commitNow(); repaint();
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (8);
+        r.removeFromBottom (40);
+        const int cols = 7, rows = (pads.size() + cols - 1) / cols;
+        const int cw = r.getWidth() / cols, rh = juce::jmin (40, r.getHeight() / juce::jmax (1, rows));
+        for (int i = 0; i < pads.size(); ++i)
+            pads[i]->setBounds (juce::Rectangle<int> (r.getX() + (i % cols) * cw, r.getY() + (i / cols) * rh, cw, rh).reduced (3));
+    }
+private:
+    bool stepsShown() const { return (int) std::round (grid.valueOf ("fx")) == 0; }
+    juce::Rectangle<float> stripArea() const { return getLocalBounds().toFloat().reduced (10.0f).removeFromBottom (34.0f); }
+    void sync()
+    {
+        const int cur = (int) std::round (grid.valueOf ("fx"));
+        for (auto* b : pads) b->setToggleState ((int) b->getProperties()["fx"] == cur, juce::dontSendNotification);
+        repaint();
+    }
+    void timerCallback() override { if (isShowing()) sync(); }
+    ParamGrid& grid;
+    std::vector<const char*> names;
+    juce::OwnedArray<juce::TextButton> pads;
+};
+
 class FxEditor : public juce::Component
 {
 public:
@@ -811,6 +885,11 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
+    else if (ty == "glitch")
+    {
+        grid->hideWhere ([] (const juce::String& id) { return id == "fx" || id == "steplen" || (id.startsWithChar ('s') && id != "smooth"); });
+        visual = new GlitchPads (*grid); vh = 260;
+    }
     else visual = createScopeView (tapFn, trackName);
     auto* editor = new FxEditor (grid, visual, vh);
     EditorWindow::windows().add (new EditorWindow (title + " - " + trackName, editor, key,
