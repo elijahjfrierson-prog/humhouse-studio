@@ -322,6 +322,24 @@ static juce::String channelSignature (const Channel& c, double bpm)
 }
 
 // =============================================================== engine
+// Pro Tools-style -2.5 dB pan law (sin/cos curve), scaled so a centred pan stays at unity
+static inline float panGain (float pan, bool right)
+{
+    pan = juce::jlimit (-1.0f, 1.0f, pan);
+    if (pan == 0.0f) return 1.0f;
+    const float th = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    return std::pow (std::max (0.0f, right ? std::sin (th) : std::cos (th)), 2.5f / 3.0103f) * 1.33352f;
+}
+
+// TPDF dither (1 LSB) for 16/24-bit exports; digital silence stays silent
+static void tpdfDither (juce::AudioBuffer<float>& b, int n, int bits, juce::Random& rnd)
+{
+    if ((bits != 16 && bits != 24) || b.getMagnitude (0, n) == 0.0f) return;
+    const float lsb = 1.0f / (float) (1 << (bits - 1));
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        for (auto* x = b.getWritePointer (ch), * e = x + n; x < e; ++x) *x += (rnd.nextFloat() - rnd.nextFloat()) * lsb;
+}
+
 Engine::Engine()
 {
    #if HHS_LICENSED
@@ -1157,9 +1175,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const double ratio = cr.fileRate / sampleRate;
             const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start, proj.bpm);
             const juce::int64 srcStart = (juce::int64) (srcSec * cr.fileRate);
-            const int need = std::min (cr.tmp.getNumSamples(), (int) std::ceil (len * ratio) + 2);
+            const int need = std::min (cr.tmp.getNumSamples() - 2, (int) std::ceil (len * ratio) + 2);
             cr.tmp.clear();
-            cr.reader->read (&cr.tmp, 0, need, srcStart, true, true);
+            cr.reader->read (&cr.tmp, 0, need + 2, srcStart - 1, true, true);   // one sample of history for 4-point Hermite
             const double spbC = spb;
             for (int i = 0; i < len; ++i)
             {
@@ -1174,7 +1192,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);
-                    dest.addSample (ch, o0 + i, (s[i0] + fr * (s[i0 + 1] - s[i0])) * g);
+                    const float xm = s[i0], x0 = s[i0 + 1], x1 = s[i0 + 2], x2 = s[i0 + 3];   // Hermite instead of linear: no dulled highs / grit when the clip rate differs
+                    const float c1 = 0.5f * (x1 - xm), c2 = xm - 2.5f * x0 + 2.0f * x1 - 0.5f * x2, c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
+                    dest.addSample (ch, o0 + i, (((c3 * fr + c2) * fr + c1) * fr + x0) * g);
                 }
             }
         }
@@ -1348,7 +1368,7 @@ void Engine::processTrack (int t)
 
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
-    const float gl = vol * std::min (1.0f, 1.0f - mt.pan), gr = vol * std::min (1.0f, 1.0f + mt.pan);
+    const float gl = vol * panGain (mt.pan, false), gr = vol * panGain (mt.pan, true);
     tr.out.applyGain (0, 0, n, gl);
     tr.out.applyGain (1, 0, n, gr);
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
@@ -1466,7 +1486,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         auto& ch = proj.channels[ci];
         auto* rt = channelOrder[ci];
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
-        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
+        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * panGain (ch.pan, false), gr = v * panGain (ch.pan, true);
         auto& dest = trackRt[(size_t) t]->in;
         dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
         dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
@@ -1646,6 +1666,14 @@ static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<floa
     if (format == 2) return encodeM4a (*src, outRate, file, 256);
     file.deleteFile();
     const int len = src->getNumSamples();
+    juce::AudioBuffer<float> dith;
+    if (bits == 16 || bits == 24)
+    {
+        juce::Random rnd (0x484853);
+        dith.makeCopyOf (*src);
+        for (int at = 0; at < len; at += 4096) { juce::AudioBuffer<float> v (dith.getArrayOfWritePointers(), 2, at, std::min (4096, len - at)); tpdfDither (v, v.getNumSamples(), bits, rnd); }
+        src = &dith;
+    }
     if (bits == 64)
     {
         juce::FileOutputStream os (file);
@@ -1710,6 +1738,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     renderTrackOnly = track;
     const bool rec = recording.load(); recording = false;
     juce::AudioBuffer<float> outBuf (2, block);
+    juce::Random ditherRnd (0x484853);
     bool ok = true;
     lastRenderPeak = 0;
     for (juce::int64 done = 0; done < total; done += block)
@@ -1721,7 +1750,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         processBlock (nullptr, 0, outs, 2, n);
         lastRenderPeak = std::max ({ lastRenderPeak, outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n) });
         if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
-        else writer->writeFromAudioSampleBuffer (outBuf, 0, n);
+        else { tpdfDither (outBuf, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (outBuf, 0, n); }
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
     }
     writer.reset();
