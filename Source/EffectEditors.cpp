@@ -23,6 +23,7 @@ public:
         startTimer (300);
     }
     void closeButtonPressed() override { close (this); }
+    bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
     static void close (EditorWindow* w) { juce::MessageManager::callAsync ([w] { windows().removeObject (w); }); }
     static juce::OwnedArray<EditorWindow>& windows() { static juce::OwnedArray<EditorWindow> w; return w; }
     juce::String key;
@@ -1118,6 +1119,7 @@ void openChannelEditor (Studio& s, int channelId)
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }
+std::function<bool (const juce::KeyPress&)> hostKeyHandler;
 
 void openScopeWindow (Studio&)
 {

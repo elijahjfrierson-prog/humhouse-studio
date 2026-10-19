@@ -222,8 +222,94 @@ static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0
     return r;
 }
 
+// held sung vowel, off-key, through AutoPitch: how clean (harmonic vs. grainy noise) and how true to the
+// voice's tone (formant envelope vs. the dry voice) the tuned note is - "expensive" = high HNR, low envelope error
+struct HeldProbe { double hnrIn = 0, hnrOut = 0, envErrDb = 0, f0Out = 0; };
+static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
+{
+    const double fs = 48000, tau = juce::MathConstants<double>::twoPi;
+    juce::Random rng (11);
+    std::vector<float> in;
+    double f1s[3] = {}, f2s[3] = {}, ph = 0, jit = 0;
+    const double fc[3] = { 650, 1100, 2500 }, bw[3] = { 90, 110, 160 };
+    const double hz0 = 440.0 * std::pow (2.0, (midiIn - 69.0) / 12.0);
+    for (int i = 0; i < (int) (1.6 * fs); ++i)
+    {
+        ph += hz0 * (1 + jit) / fs; if (ph >= 1) { ph -= 1; jit = jitter * (rng.nextDouble() * 2 - 1); }
+        double x = 0; for (int k = 1; k * hz0 < 9000; ++k) x += std::sin (tau * k * ph) / (k * std::sqrt ((double) k));
+        const double env = std::min (1.0, i / (0.01 * fs));
+        double y = 0;
+        for (int f = 0; f < 3; ++f)
+        {
+            const double rr = std::exp (-juce::MathConstants<double>::pi * bw[f] / fs), cw = std::cos (tau * fc[f] / fs);
+            const double o = 0.12 * env * x + 2 * rr * cw * f1s[f] - rr * rr * f2s[f]; f2s[f] = f1s[f]; f1s[f] = o; y += o * (1 - rr) * (f == 0 ? 1.0 : 0.6);
+        }
+        in.push_back ((float) (y * 6.0));
+    }
+    auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("style", (float) style);
+    ap->prepare (fs, 512);
+    PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+    juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
+    for (size_t at = 0; at < in.size(); at += 512)
+    {
+        const int n = (int) std::min<size_t> (512, in.size() - at);
+        for (int i = 0; i < n; ++i) { b.setSample (0, i, in[at + (size_t) i]); b.setSample (1, i, in[at + (size_t) i]); }
+        ap->process (b, n, ctx);
+        for (int i = 0; i < n; ++i) out.push_back (b.getSample (0, i));
+    }
+    const size_t s0 = (size_t) (0.6 * fs), N = (size_t) (0.8 * fs);
+    struct H { double f0, hnr; std::vector<double> amp; };
+    auto analyse = [&] (const std::vector<float>& x, double guess)
+    {
+        std::vector<double> w (N); double sw = 0, tot = 0;
+        for (size_t i = 0; i < N; ++i) { w[i] = 0.5 - 0.5 * std::cos (tau * i / (N - 1)); sw += w[i]; tot += w[i] * x[s0 + i] * x[s0 + i]; }
+        tot /= sw;
+        auto harm = [&] (double f0, std::vector<double>* amps) {
+            double e = 0;
+            for (int k = 1; k * f0 < 8000; ++k)
+            {
+                const double om = tau * k * f0 / fs; double re = 0, im = 0, c = 1, sn = 0; const double cs = std::cos (om), ss = std::sin (om);
+                for (size_t i = 0; i < N; ++i) { const double v = w[i] * x[s0 + i]; re += v * c; im -= v * sn; const double nc = c * cs - sn * ss; sn = sn * cs + c * ss; c = nc; }
+                const double a = 2.0 * std::sqrt (re * re + im * im) / sw; e += a * a / 2; if (amps) amps->push_back (a);
+            }
+            return e;
+        };
+        double bestF = guess, bestE = -1;
+        for (int g = -40; g <= 40; ++g) { const double f = guess * std::pow (2.0, g / 1200.0 * 2.0); const double e = harm (f, nullptr); if (e > bestE) { bestE = e; bestF = f; } }
+        H h; h.f0 = bestF; const double eh = harm (bestF, &h.amp);
+        h.hnr = 10 * std::log10 (eh / std::max (1e-12, tot - eh));
+        return h;
+    };
+    const float yf = detectPitchYin (out.data() + s0, 2048, fs, 0.2f, 0.0f, 60.0f, 1100.0f);
+    const auto hi = analyse (in, hz0), ho = analyse (out, yf > 0 ? yf : hz0);
+    HeldProbe r; r.hnrIn = hi.hnr; r.hnrOut = ho.hnr; r.f0Out = ho.f0;
+    // tone: energy in 400 Hz bands from 200 Hz to 4.2 kHz, tuned vs. dry (level-matched)
+    double bi[10] = {}, bo[10] = {}, ti = 0, to = 0;
+    for (size_t k = 0; k < hi.amp.size(); ++k) { const double f = (k + 1) * hi.f0; if (f >= 200 && f < 4200) { bi[(int) ((f - 200) / 400)] += hi.amp[k] * hi.amp[k]; ti += hi.amp[k] * hi.amp[k]; } }
+    for (size_t k = 0; k < ho.amp.size(); ++k) { const double f = (k + 1) * ho.f0; if (f >= 200 && f < 4200) { bo[(int) ((f - 200) / 400)] += ho.amp[k] * ho.amp[k]; to += ho.amp[k] * ho.amp[k]; } }
+    double err = 0; for (int q = 0; q < 10; ++q) err += std::abs (10 * std::log10 (((bo[q] + 1e-12) / to) / ((bi[q] + 1e-12) / ti)));
+    r.envErrDb = err / 10;
+    return r;
+}
+
 int main()
 {
+    if (std::getenv ("HHS_AP_PROBE2") != nullptr)
+    {
+        for (double m : { 57.6, 56.6, 64.3, 50.5 })
+            for (int st = 0; st < 4; ++st)
+            {
+                for (int ab = 0; ab < 1; ++ab)
+                {
+                    if (st == 1 || st == 2) continue;
+                    const auto r0 = probeHeld (st, m, 0.0), r = probeHeld (st, m);
+                    std::printf ("held %.1f style %d %s: f0 %.1f HNR clean %.1f -> %.1f, jitter %.1f -> %.1f dB, tone error %.2f / %.2f dB\n", m, st, ab ? "NEW" : "old",
+                                 r.f0Out, r0.hnrIn, r0.hnrOut, r.hnrIn, r.hnrOut, r0.envErrDb, r.envErrDb);
+                }
+            }
+        return 0;
+    }
     if (std::getenv ("HHS_AP_PROBE") != nullptr)
     {
         for (double off : { 0.0, 40.0 })

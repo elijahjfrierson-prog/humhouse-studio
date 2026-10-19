@@ -485,6 +485,7 @@ public:
         hintBar.setFont (juce::FontOptions (13.0f));
         addAndMakeVisible (hintBar);
 
+        hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
 #else
@@ -513,6 +514,7 @@ public:
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
+        hostKeyHandler = nullptr;
         closeAllEditorWindows();
         engine.onPluginDiscard = nullptr;
         engine.knownPlugins.removeChangeListener (this);
@@ -902,6 +904,7 @@ private:
         PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { startTimer (300); }
         std::function<void()> onClose;
         void closeButtonPressed() override { if (onClose) onClose(); }
+        bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
         void timerCallback() override   // stays visible over the main window while you work, not over other apps
         {
             const bool front = juce::Process::isForegroundProcess();

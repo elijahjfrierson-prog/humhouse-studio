@@ -145,6 +145,7 @@ inline juce::PopupMenu colourMenu (int base)
 }
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
+extern std::function<bool (const juce::KeyPress&)> hostKeyHandler;   // app shortcuts (Cmd+S, Space, undo...) from pop-out / plug-in windows
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);
 void openScopeWindow (Studio&);
 void openTrackScopeWindow (Studio&, int track);   // master scope, pops out + resizable
