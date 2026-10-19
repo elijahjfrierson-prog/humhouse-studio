@@ -14,6 +14,8 @@ public:
     virtual ~ChannelInstrument() = default;
     virtual void prepare (double sampleRate, int maxBlock) = 0;
     virtual void noteOn (int key, float velocity, bool slide) = 0;
+    // start a note that began secondsIn ago (playback started mid-note); samplers jump into the sample
+    virtual void noteOnAt (int key, float velocity, bool slide, double secondsIn) { juce::ignoreUnused (secondsIn); noteOn (key, velocity, slide); }
     virtual void noteOff (int key) = 0;
     virtual void allNotesOff() = 0;
     virtual void render (juce::AudioBuffer<float>& out, int start, int num) = 0; // adds into out

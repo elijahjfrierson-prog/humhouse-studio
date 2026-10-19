@@ -66,7 +66,7 @@ void WorkerPool::run (int count, Job j, void* c)
 }
 
 // =============================================================== runtimes
-struct Event { int offset; int key; float vel; bool on; bool slide; };
+struct Event { int offset; int key; float vel; bool on; bool slide; double startSec = 0.0; };
 
 struct Engine::ChannelRuntime
 {
@@ -917,7 +917,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     bool anySolo = false;
     for (auto& c : proj.channels) anySolo |= c.solo;
 
-    auto emit = [&] (size_t ci, const Note& note, double absStart)
+    auto emit = [&] (size_t ci, const Note& note, double absStart, double startSec = 0.0)
     {
         auto* rt = channelOrder[ci];
         const int o = toOffset (absStart);
@@ -932,7 +932,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         for (int k = 0; k < rt->numActive;)
             if (rt->active[(size_t) k].key == note.key) { rt->addEvent ({ o, note.key, 0, false, false }); rt->active[(size_t) k] = rt->active[(size_t) --rt->numActive]; }
             else ++k;
-        rt->addEvent ({ o, note.key, note.velocity, true, note.slide });
+        Event on { o, note.key, note.velocity, true, note.slide }; on.startSec = startSec;
+        rt->addEvent (on);
         if (rt->numActive < (int) rt->active.size())
             rt->active[(size_t) rt->numActive++] = { note.key, note.length * spb + (o - off) };
     };
@@ -940,14 +941,15 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     const bool chase = chasePending.exchange (false);
     auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
     {
-        const double end = std::min (absStart + note.length, limit);
-        if (absStart >= b0 || end <= b0 + 1.0 / 32.0) return;
+        if (absStart >= b0) return;
         auto& c = proj.channels[ci];
-        if (c.type == ChannelType::Sampler && c.oneShot) return;
+        const bool shot = c.type == ChannelType::Sampler && c.oneShot;   // one-shots play the whole sample, whatever the note length
+        const double end = std::min (absStart + note.length, limit);
+        if (shot ? b0 - absStart > 64.0 : end <= b0 + 1.0 / 32.0) return;
         auto* rt = channelOrder[ci];
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
-        Note tail = note; tail.length = end - b0; tail.slide = false;
-        emit (ci, tail, b0);
+        Note tail = note; tail.length = std::max (end - b0, 1.0 / 32.0); tail.slide = false;
+        emit (ci, tail, b0, (b0 - absStart) * 60.0 / proj.bpm);   // samplers start from the matching point in the sample
         declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in
     };
 
@@ -1075,7 +1077,7 @@ struct EngineJobs
                 rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
                                          : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
             }
-            if (rt->numEvents == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
+            if (rt->numEvents == 0 && rt->numActive == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
             auto& pl = *rt->plugin;
             const juce::ScopedTryLock cl (pl.getCallbackLock());
@@ -1096,7 +1098,7 @@ struct EngineJobs
                 auto& ev = rt->events[(size_t) k];
                 if (ev.offset > pos) { rt->inst->render (rt->buf, pos, ev.offset - pos); pos = ev.offset; }
                 if (ev.key < 0) rt->inst->choke();
-                else if (ev.on) rt->inst->noteOn (ev.key, ev.vel, ev.slide); else rt->inst->noteOff (ev.key);
+                else if (ev.on) rt->inst->noteOnAt (ev.key, ev.vel, ev.slide, ev.startSec); else rt->inst->noteOff (ev.key);
             }
             if (pos < n) rt->inst->render (rt->buf, pos, n - pos);
         }

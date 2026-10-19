@@ -59,6 +59,8 @@ void showWhatsNewIfUpdated()
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
         "- FL Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
         "- Ctrl/Cmd+C / X / V copy, cut, paste at the playhead; Ctrl/Cmd+B duplicate; Shift+drag clones; Ctrl/Cmd+D deselect\n"
+        "- Start mid-note (e.g. bar 1.4) and 808s / samples play from the matching point in the sample\n"
+        "- Notes no longer cut off in playback: 2x voices, fading voices stolen first, plugins never sleep mid-note\n"
         "- Drag samples from the browser into the Channel Rack or onto the Playlist\n"
         "- Piano Roll MUTE (M): silence note previews while you edit\n"
         "- Play / Stop / Rec buttons, draggable playhead handle in the ruler, 4 ms declick when starting mid-sound\n"

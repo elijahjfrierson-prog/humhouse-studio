@@ -215,6 +215,22 @@ int main()
         CHECK (renderPeak (e, 8) > 0.01f);
         e.stop();
     }
+    // starting mid-note: a sampler jumps into the sample instead of staying silent
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>> (2, 44100);
+        for (int i = 0; i < 44100; ++i) { buf->setSample (0, i, 0.5f * (float) i / 44100.0f); buf->setSample (1, i, 0.5f * (float) i / 44100.0f); }
+        Channel c; c.type = ChannelType::Sampler; c.oneShot = true; c.rootKey = 60;
+        auto at = [&] (double secondsIn) {
+            auto inst = createInstrument (c, buf, 44100.0);
+            inst->prepare (44100.0, 512);
+            inst->noteOnAt (60, 1.0f, false, secondsIn);
+            juce::AudioBuffer<float> out (2, 512); out.clear();
+            inst->render (out, 0, 512);
+            return std::abs (out.getSample (0, 300));
+        };
+        CHECK (at (0.5) > 0.1f);
+        CHECK (at (0.0) < 0.02f);
+    }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
     for (const char* id : { "flanger", "flangus" })
     {
