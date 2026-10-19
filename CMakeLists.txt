@@ -57,6 +57,7 @@ add_library(hhs_shine STATIC
 target_include_directories(hhs_shine PUBLIC ${SHINE_DIR})
 if(MSVC)
     target_compile_definitions(hhs_shine PRIVATE inline=__inline _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(hhs_shine PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/shine_msvc.h")
 else()
     target_compile_options(hhs_shine PRIVATE -w)
 endif()

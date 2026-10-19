@@ -44,6 +44,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 [Files]
 Source: "..\..\build\HumHouseStudio_artefacts\Release\HumHouse Studio.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\Sounds\*"; DestDir: "{app}\Sounds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\HumHouse Studio"; Filename: "{app}\{#MyAppExeName}"

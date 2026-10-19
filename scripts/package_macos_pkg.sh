@@ -15,6 +15,7 @@ STAGE="$(mktemp -d)"
 ROOT="$STAGE/root/Applications"
 mkdir -p "$ROOT" "$STAGE/pkgs" "$STAGE/scripts" "$STAGE/resources"
 cp -R "$APP_SRC" "$ROOT/"
+mkdir -p "$ROOT/$NAME.app/Contents/Resources" && cp -R "$REPO/Sounds" "$ROOT/$NAME.app/Contents/Resources/Sounds"
 codesign --force --deep --sign "${APPLE_DEVELOPER_ID:--}" "$ROOT/$NAME.app" || true
 
 cat > "$STAGE/scripts/preinstall" <<PRE

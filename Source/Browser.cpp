@@ -179,6 +179,14 @@ struct SampleSearchFilter : public juce::FileFilter
     bool isDirectorySuitable (const juce::File&) const override { return true; }
 };
 
+static juce::File bundledSounds()
+{
+   #if JUCE_MAC
+    return juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Sounds");
+   #else
+    return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getSiblingFile ("Sounds");
+   #endif
+}
 static juce::File downloadsFolder() { return juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"); }
 
 class SampleBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ListBoxModel
@@ -297,7 +305,10 @@ private:
         roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
         const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
         roots.removeString (lib.getFullPathName());
-        if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());   // sound library: Classic Trap, Etherea Instruments, Smoke Sonja Signature Hitters
+        if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());
+        const auto kits = bundledSounds();
+        roots.removeString (kits.getFullPathName());
+        if (kits.isDirectory()) roots.insert (1, kits.getFullPathName());   // kits that ship with the app   // sound library: Classic Trap, Etherea Instruments, Smoke Sonja Signature Hitters
         refreshFolders();
     }
     void refreshFolders()
