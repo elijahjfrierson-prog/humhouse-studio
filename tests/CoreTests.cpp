@@ -258,6 +258,21 @@ int main()
         CHECK (err > 0.01f);     // key on: it's pitched
     }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
+    // Flangus worst case (6 voices lined up, max feedback) stays bounded instead of blowing up the bus
+    {
+        auto fx = createBuiltinEffect ("flangus");
+        fx->setParam ("voices", 6.0f); fx->setParam ("depth", 0.0f); fx->setParam ("feedback", 0.9f); fx->setParam ("mix", 1.0f);
+        fx->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; juce::Random rnd (7); float peak = 0;
+        for (int k = 0; k < 400; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.5f * (rnd.nextFloat() * 2 - 1); b.setSample (0, i, v); b.setSample (1, i, v); }
+            fx->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); CHECK (std::isfinite (y)); peak = std::max (peak, std::abs (y)); }
+        }
+        std::printf ("flangus worst-case peak %.2f\n", peak);
+        CHECK (peak < 4.0f);
+    }
     for (const char* id : { "flanger", "flangus" })
     {
         auto fx = createBuiltinEffect (id); CHECK (fx != nullptr);

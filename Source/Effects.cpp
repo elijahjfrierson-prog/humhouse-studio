@@ -379,7 +379,10 @@ public:
                 wl += a * (1.0f - juce::jmax (0.0f, pan)); wr += c * (1.0f + juce::jmin (0.0f, pan));
             }
             const float norm = 1.0f / std::sqrt ((float) nv);
-            wl *= norm; wr *= norm; fb[0] = wl; fb[1] = wr;
+            // feedback uses the voice average (loop gain stays < 1 even when voices line up) and a soft limit, so it can't run away
+            auto soft = [] (float x) { return std::isfinite (x) ? std::tanh (x) : 0.0f; };
+            fb[0] = soft (wl / (float) nv); fb[1] = soft (wr / (float) nv);
+            wl *= norm; wr *= norm;
             L[i] = inL * (1.0f - 0.5f * mix) + wl * mix * 0.7f;
             if (st) R[i] = inR * (1.0f - 0.5f * mix) + wr * mix * 0.7f;
             phase += inc; if (phase >= 1.0f) phase -= 1.0f;

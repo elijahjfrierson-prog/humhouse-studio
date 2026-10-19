@@ -1226,7 +1226,12 @@ void Engine::processTrack (int t)
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
                 ~Blend() { if (on) for (int c = 0; c < 2; ++c) { v.applyGain (c, 0, n, mix); v.addFrom (c, 0, d, c, 0, n, 1.0f - mix); } } }
                 blendOut { view, tr.dry, n, mix, blend };
-            if (f.builtin) f.builtin->process (view, n, ctx);
+            if (f.builtin)
+            {
+                f.builtin->process (view, n, ctx);
+                for (int ch = 0; ch < view.getNumChannels(); ++ch)   // one bad effect must never blow up the whole mix / meters
+                    for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x) || std::abs (*x) > 64.0f) *x = 0.0f;
+            }
             else if (f.plugin)
             {
                 auto& pl = *f.plugin;
