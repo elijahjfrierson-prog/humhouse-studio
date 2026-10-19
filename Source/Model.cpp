@@ -37,7 +37,7 @@ const char* pitchClassName (int pc)
 const char* noteName (int key)
 {
     static thread_local char buf[8];
-    snprintf (buf, sizeof (buf), "%s%d", pitchClassName (key), key / 12 - 1);
+    snprintf (buf, sizeof (buf), "%s%d", pitchClassName (key), key / 12);   // FL naming: middle C (60) = C5
     return buf;
 }
 

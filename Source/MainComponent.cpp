@@ -54,6 +54,8 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Note names match FL: middle C = C5 (C0 to G10)\n"
+        "- One-shots: smoother pitched playback (Hermite), SET (wrench) button on every channel, on/off buttons for Normalize, Reverse, Declick...\n"
         "- One-shots / 808 cut mode: no click at the start or when the next hit cuts the last one\n"
         "- Piano Roll LOCK: notes you draw, drag or stamp snap to your key and scale\n"
         "- Sample previews stop when you click anywhere, press Stop or Space\n"
