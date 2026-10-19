@@ -2,3 +2,5 @@ build/
 .DS_Store
 *.user
 build*/
+humhouse_private_key.json
+*.pem

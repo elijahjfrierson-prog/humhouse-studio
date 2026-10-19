@@ -170,6 +170,7 @@ private:
     std::vector<float> trackCost, chanCost;
     std::vector<int> chanJobOrder;
     juce::TimeSliceThread diskThread { "HHS disk" };
+    bool licensed = true;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
 
     // preview FIFO

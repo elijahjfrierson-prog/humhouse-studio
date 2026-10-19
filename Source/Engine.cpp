@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include "License.h"
 #include <thread>
 #include "DrumSynth.h"
 #include "AudioEncode.h"
@@ -323,6 +324,9 @@ static juce::String channelSignature (const Channel& c, double bpm)
 // =============================================================== engine
 Engine::Engine()
 {
+   #if HHS_LICENSED
+    licensed = license::storedValid();   // the engine checks the signed key itself: no valid key = no sound, no export
+   #endif
     formats.addDefaultFormats();
     knownPlugins.setCustomScanner (std::make_unique<ChildProcessScanner>());
     proj = Project::createDefault();
@@ -1355,6 +1359,9 @@ void Engine::processTrack (int t)
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
     juce::ScopedNoDenormals noDenormals;
+   #if HHS_LICENSED
+    if (! licensed) { for (int c = 0; c < numOut; ++c) if (out[c] != nullptr) juce::FloatVectorOperations::clear (out[c], n); return; }
+   #endif
     // an edit holds the lock for a moment: wait briefly for it instead of dropping a silent block (that was the click / pause)
     bool locked = lock.tryEnter();
     if (! locked && ! offline.load())

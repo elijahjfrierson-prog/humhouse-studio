@@ -1,24 +1,36 @@
 ; Produces HumHouse-Studio-Windows-Setup.exe: shows the EULA (must be accepted), then installs
 ; HumHouse Studio into Program Files with Start-menu and optional desktop shortcuts.
-#define MyAppName "HumHouse Studio"
+#ifdef Master
+  #define MyAppName "HumHouse Studio Master"
+  #define MyTarget "HumHouseStudioMaster"
+  #define MyOut "HumHouse-Studio-Master-Windows-Setup"
+#else
+  #define MyAppName "HumHouse Studio"
+  #define MyTarget "HumHouseStudio"
+  #define MyOut "HumHouse-Studio-Windows-Setup"
+#endif
 #define MyAppVersion "1.2.5"
 #define MyAppPublisher "HumHouse"
 #define MyAppURL "https://github.com/elijahjfrierson-prog/humhouse-studio"
-#define MyAppExeName "HumHouse Studio.exe"
+#define MyAppExeName MyAppName + ".exe"
 
 [Setup]
+#ifdef Master
+AppId={{B3E1C7A2-5F44-4C1D-9E2B-HUMHOUSEMASTER}}
+#else
 AppId={{B3E1C7A2-5F44-4C1D-9E2B-HUMHOUSESTUDIO}}
+#endif
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
-DefaultDirName={autopf}\HumHouse\HumHouse Studio
+DefaultDirName={autopf}\HumHouse\{#MyAppName}
 DefaultGroupName=HumHouse
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE.txt
 OutputDir=..\..\
-OutputBaseFilename=HumHouse-Studio-Windows-Setup
+OutputBaseFilename={#MyOut}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -42,14 +54,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
 [Files]
-Source: "..\..\build\HumHouseStudio_artefacts\Release\HumHouse Studio.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\build\{#MyTarget}_artefacts\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\Sounds\*"; DestDir: "{app}\Sounds"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\HumHouse Studio"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\Uninstall HumHouse Studio"; Filename: "{uninstallexe}"
-Name: "{commondesktop}\HumHouse Studio"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch HumHouse Studio"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

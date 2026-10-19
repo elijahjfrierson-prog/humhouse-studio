@@ -68,6 +68,9 @@ jobs:
           mkdir -p artifacts
           ./scripts/package_macos_pkg.sh
           mv HumHouse-Studio-macOS.pkg artifacts/
+          APP_NAME="HumHouse Studio Master" APP_TARGET=HumHouseStudioMaster PKG_ID=com.humhouse.studio.master.installer \
+            PKG_OUT=HumHouse-Studio-Master-macOS.pkg ./scripts/package_macos_pkg.sh
+          mv HumHouse-Studio-Master-macOS.pkg artifacts/
 
       - name: Verify macOS installer
         if: runner.os == 'macOS'
@@ -94,6 +97,8 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           & $iscc installer/windows/HumHouseStudio.iss
           Copy-Item HumHouse-Studio-Windows-Setup.exe artifacts/
+          & $iscc /DMaster installer/windows/HumHouseStudio.iss
+          Copy-Item HumHouse-Studio-Master-Windows-Setup.exe artifacts/
 
       - name: Verify Windows installer
         if: runner.os == 'Windows'

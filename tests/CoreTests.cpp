@@ -3,6 +3,7 @@
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
+#include "../Source/License.h"
 #include <cstdio>
 #include <iostream>
 
@@ -1277,6 +1278,23 @@ int main()
         UndoHistory h; h.push (p, "a"); p.bpm = 90; h.push (p, "b");
         CHECK (h.undo (p) && p.bpm == 151 && h.redo (p) && p.bpm == 90);
         f.deleteFile();
+    }
+
+    // license keys: signed, locked to up to 2 Machine IDs; forged / edited keys and other computers fail
+    {
+        const juce::String key = "HHS1.eyJsaWNfaWQiOiJISFMtQTIwMzlFNUYxMTQxIiwibmFtZSI6IlRlc3QgQnV5ZXIiLCJ1c2VyX2VtYWlsIjoidGVzdEBleGFtcGxlLmNvbSIsInByb2R1Y3Rfc2t1IjoiaHVtaG91c2Vfc3R1ZGlvIiwiaXNzdWVkX2F0IjoxNzkyNDUwMzEzLCJleHBpcmVzX2F0IjowLCJoYXJkd2FyZV9pZHMiOlsiVEVTVC0wMDAwLTAwMDAtMDAwMSIsIlRFU1QtMDAwMC0wMDAwLTAwMDIiXX0=.8d558a1ac19d617fcc65dde9a510ce053a2b202eaa463b71aecd35ae106260e0a196320924eedb62dba420876a02b952069d1521f7b3d9ea629840d060a6990fa14b442a9c5e89e794f784db0cff1e6e1374e7f6d17636a71889761e10397437d58b2c7b55cf115aa2b9b9ca559d14e4633d0e0c2d77c03943f7c5d59881184d2e929e6e9575dddd8c854262b5b169bfe334775d77ef280186d0757ec2be3e173b73207bd7c7ed178bc3a2864509b0b195ba28a2804eaad4a215fb82b295b24b75f33bb9f92c96e508c91acb45e91c7536998d3137521a3a7782c5139c45d81d87dd2c91e14dda96873be39b75c9f545af8b56ed4d5e4f657b6ed1e739b9abfa";
+        CHECK (hhs::license::verifyFor (key, "TEST-0000-0000-0001").ok);
+        CHECK (hhs::license::verifyFor (key, "test-0000-0000-0002").ok);
+        CHECK (! hhs::license::verifyFor (key, "TEST-0000-0000-0003").ok);
+        auto editPayload = key.substring (0, 12) + (key[12] == 'A' ? "B" : "A") + key.substring (13);
+        CHECK (! hhs::license::verifyFor (editPayload, "TEST-0000-0000-0001").ok);
+        auto editSig = key.dropLastCharacters (1) + (key.getLastCharacter() == '1' ? "2" : "1");
+        CHECK (! hhs::license::verifyFor (editSig, "TEST-0000-0000-0001").ok);
+        CHECK (! hhs::license::verifyFor ("HHS1.abc.def", "TEST-0000-0000-0001").ok);
+        CHECK (! hhs::license::verifyFor ({}, "TEST-0000-0000-0001").ok);
+        const auto id = hhs::license::machineId();
+        CHECK (id.length() == 19 && id == hhs::license::machineId());
+        std::printf ("license: machine id %s, valid key ok, 3rd computer / edited / forged keys rejected\n", id.toRawUTF8());
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
