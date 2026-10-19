@@ -460,6 +460,9 @@ public:
         setupButton (mixPopBtn, "POP MIXER", "Pop the Mixer out into its own window so it stays visible on Beat and Rec (click again to dock it)", true);
         mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
+        setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
+        saveBtn.onClick = [this] { save (false); };
+        addAndMakeVisible (saveBtn);
         for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
@@ -549,6 +552,7 @@ public:
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
+        saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
@@ -878,7 +882,8 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton playBtn, stopBtn, recBtn;
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn, saveBtn;
+    int savedFlash = 0;
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
@@ -979,6 +984,7 @@ private:
 
     void timerCallback() override
     {
+        if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
         const int bar = (int) (pos / bpb) + 1, beat = (int) std::fmod (pos, (double) bpb) + 1, step = (int) (std::fmod (pos, 1.0) * 4) + 1;
@@ -1022,6 +1028,8 @@ private:
             studio.dirty = false;
             syncControls();
             flash ("Saved " + p.projectFile.getFileName() + " + backup");
+            saveBtn.setButtonText ("SAVED"); saveBtn.setToggleState (true, juce::dontSendNotification);   // opposite color = confirmed
+            savedFlash = 45;
         }
         else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save", "Could not save the project.");
     }
