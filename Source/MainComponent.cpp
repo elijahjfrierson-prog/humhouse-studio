@@ -172,6 +172,14 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.drawRoundedRectangle (r, 4.0f, 1.0f);
 }
 
+void HHLookAndFeel::drawFileBrowserRow (juce::Graphics& g, int w, int h, const juce::File& file, const juce::String& filename, juce::Image* icon,
+                                        const juce::String& size, const juce::String& time, bool isDir, bool selected, int index,
+                                        juce::DirectoryContentsDisplayComponent& c)
+{
+    const auto shown = isDir || ! filename.containsChar ('.') ? filename : filename.upToLastOccurrenceOf (".", false, false);
+    LookAndFeel_V4::drawFileBrowserRow (g, w, h, file, shown, icon, size, time, isDir, selected, index, c);
+}
+
 void HHLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                                       juce::Slider::SliderStyle style, juce::Slider& s)
 {

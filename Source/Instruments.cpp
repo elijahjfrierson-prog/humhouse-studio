@@ -345,11 +345,31 @@ static juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, 
     juce::AudioBuffer<float> out (nch, outLen + N); out.clear();
     std::vector<float> win ((size_t) N), norm ((size_t) (outLen + N), 0.0f);
     for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) N);
+    // WSOLA: each grain is taken where its waveform lines up with the one before it (within one hop), so
+    // stretched 808s, keys and vocals stay in phase instead of going hollow/flammy; grain 0 starts exactly
+    // at the top of the file, so the hit lands on time like FL
+    std::vector<float> mono ((size_t) inLen);
+    for (int i = 0; i < inLen; ++i) { float m = 0; for (int ch = 0; ch < nch; ++ch) m += in.getSample (ch, i); mono[(size_t) i] = m; }
+    const int tol = hopOut, cmpLen = N / 2;
+    int prevIp = 0;
     for (int frame = 0;; ++frame)
     {
         const int o = frame * hopOut;
         if (o >= outLen) break;
-        const int ip = (int) (frame * hopIn);
+        int ip = (int) (frame * hopIn);
+        if (frame > 0 && inLen > N)
+        {
+            const int natural = prevIp + hopOut;
+            double best = -1.0e30; int bestIp = ip;
+            for (int c = std::max (0, ip - tol); c <= std::min (inLen - N, ip + tol); c += 2)
+            {
+                double acc = 0;
+                for (int j = 0; j < cmpLen && natural + j < inLen; j += 2) acc += mono[(size_t) (natural + j)] * mono[(size_t) (c + j)];
+                if (acc > best) { best = acc; bestIp = c; }
+            }
+            ip = bestIp;
+        }
+        prevIp = ip;
         for (int i = 0; i < N && ip + i < inLen; ++i)
         {
             for (int ch = 0; ch < nch; ++ch) out.addSample (ch, o + i, in.getSample (ch, ip + i) * win[(size_t) i]);

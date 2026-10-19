@@ -351,7 +351,7 @@ private:
         if (sel) { g.setColour (col::accent.withAlpha (0.35f)); g.fillRoundedRectangle (2, 1, (float) w - 4, (float) h - 2, 4.0f); }
         g.setColour (col::accent); g.fillEllipse (8, h * 0.5f - 3, 6, 6);
         g.setColour (col::text); g.setFont (juce::FontOptions (13.0f));
-        g.drawText (hits[row].getFileName(), 20, 0, w - 24, h, juce::Justification::centredLeft, true);
+        g.drawText (hits[row].getFileNameWithoutExtension(), 20, 0, w - 24, h, juce::Justification::centredLeft, true);
     }
     void selectedRowsChanged (int row) override { if (row >= 0 && row < hits.size()) s.engine.previewFile (hits[row]); }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }

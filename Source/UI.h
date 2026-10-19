@@ -68,6 +68,9 @@ public:
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                            juce::Slider::SliderStyle, juce::Slider&) override;
+    void drawFileBrowserRow (juce::Graphics&, int w, int h, const juce::File&, const juce::String& filename, juce::Image* icon,
+                             const juce::String& size, const juce::String& time, bool isDir, bool selected, int index,
+                             juce::DirectoryContentsDisplayComponent&) override;   // samples show without .wav / .flac / .mp3
 };
 
 // Rotary knob; hovering shows its name, what it does and its value (tooltip + hint bar + popup).

@@ -3,7 +3,13 @@
 namespace hhs
 {
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
-static juce::File strFile (const juce::String& s) { return s.isEmpty() ? juce::File() : juce::File (s); }
+static juce::File strFile (const juce::String& s)
+{
+    if (s.isEmpty()) return {};
+    juce::File f (s);
+    if (! f.existsAsFile() && f.hasFileExtension ("wav") && f.withFileExtension ("flac").existsAsFile()) return f.withFileExtension ("flac");   // built-in kits are FLAC now
+    return f;
+}
 
 static juce::ValueTree notesTree (const NoteList& notes)
 {

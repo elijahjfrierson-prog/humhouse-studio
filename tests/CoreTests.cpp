@@ -706,6 +706,21 @@ int main()
         auto src = std::make_shared<const juce::AudioBuffer<float>> (2, 100);
         CHECK (processSample (src, c, 48000.0) == src);
     }
+    // Stretch: 2x longer, starts on the first sample, same pitch, and a steady tone stays steady (no hollow phasing)
+    {
+        Channel c; c.type = ChannelType::Sampler; c.stretchMode = 1; c.stretchTime = 2.0f;
+        juce::AudioBuffer<float> raw (2, 48000);
+        for (int i = 0; i < 48000; ++i) { const float v = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 110.3 * i / 48000.0); raw.setSample (0, i, v); raw.setSample (1, i, v); }
+        auto out = processSample (std::make_shared<const juce::AudioBuffer<float>> (raw), c, 48000.0);
+        CHECK (std::abs (out->getNumSamples() - 96000) < 100);
+        int zc = 0; float lo = 1, hi = 0;
+        for (int i = 4800; i < 91200; ++i) if (out->getSample (0, i - 1) <= 0 && out->getSample (0, i) > 0) ++zc;
+        for (int w = 4800; w + 2400 < 91200; w += 2400) { const float rms = out->getRMSLevel (0, w, 2400); lo = std::min (lo, rms); hi = std::max (hi, rms); }
+        std::printf ("stretch 2x: %d samples, %.1f Hz, level %.3f..%.3f (steady 0.354)\n", out->getNumSamples(), zc / (86400.0 / 48000.0), lo, hi);
+        CHECK (std::abs (zc / (86400.0 / 48000.0) - 110.3) < 2.0);
+        CHECK (lo > 0.30f && hi < 0.40f);
+        CHECK (std::abs (out->getSample (0, 1) - raw.getSample (0, 1)) < 0.01f);
+    }
 
     // save / load / undo
     {
