@@ -185,6 +185,15 @@ int main()
         e.sync();
         const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_export_test.wav");
         CHECK (e.renderToWav (f, false, {}, -1));
+        {   // 64-bit float at 96 kHz
+            auto f64 = f.getSiblingFile ("hh_test64.wav");
+            CHECK (e.renderToWav (f64, false, {}, -1, 64, 96000));
+            juce::FileInputStream in (f64); char h[44] {}; in.read (h, 44);
+            juce::uint16 fmt, bps; juce::uint32 rate; std::memcpy (&fmt, h + 20, 2); std::memcpy (&bps, h + 34, 2); std::memcpy (&rate, h + 24, 4);
+            CHECK (fmt == 3 && bps == 64 && rate == 96000);
+            CHECK (f64.getSize() > 44 + 16 * 96000);
+            f64.deleteFile();
+        }
         juce::WavAudioFormat wav;
         std::unique_ptr<juce::AudioFormatReader> rd (wav.createReaderFor (f.createInputStream().release(), true));
         CHECK (rd != nullptr);

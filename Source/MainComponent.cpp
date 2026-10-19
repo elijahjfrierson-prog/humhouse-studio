@@ -329,7 +329,7 @@ struct RenderJob : public juce::ThreadWithProgressWindow
         : juce::ThreadWithProgressWindow ("Exporting " + f.getFileName() + " ...", true, true), engine (e), file (f), songMode (song), track (t) {}
     void run() override
     {
-        ok = engine.renderToWav (file, songMode, [this] (float p) { setProgress (p); return ! threadShouldExit(); }, track);
+        ok = engine.renderToWav (file, songMode, [this] (float p) { setProgress (p); return ! threadShouldExit(); }, track, engine.exportBits, engine.exportRate);
     }
     void threadComplete (bool cancelled) override
     {
@@ -1075,6 +1075,28 @@ private:
     }
 
     void exportWav (int track)
+    {
+        static const int bitsTab[] { 16, 24, 32, 64 };
+        static const double rateTab[] { 0, 44100, 48000, 88200, 96000, 192000 };
+        auto* w = new juce::AlertWindow ("Export WAV", "Bit depth and sample rate", juce::MessageBoxIconType::NoIcon);
+        w->addComboBox ("bits", { "16-bit", "24-bit", "32-bit float", "64-bit float" });
+        w->addComboBox ("rate", { "Project / device rate", "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" });
+        int bi = 1, ri = 0;
+        for (int i = 0; i < 4; ++i) if (bitsTab[i] == engine.exportBits) bi = i;
+        for (int i = 0; i < 6; ++i) if (rateTab[i] == engine.exportRate) ri = i;
+        w->getComboBoxComponent ("bits")->setSelectedItemIndex (bi);
+        w->getComboBoxComponent ("rate")->setSelectedItemIndex (ri);
+        w->addButton ("Export", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, track] (int r) {
+            if (r != 1) return;
+            engine.exportBits = bitsTab[juce::jlimit (0, 3, w->getComboBoxComponent ("bits")->getSelectedItemIndex())];
+            engine.exportRate = rateTab[juce::jlimit (0, 5, w->getComboBoxComponent ("rate")->getSelectedItemIndex())];
+            chooseExportFile (track);
+        }), true);
+    }
+
+    void chooseExportFile (int track)
     {
         auto& p = engine.project();
         auto name = p.title + (track >= 0 && track < (int) p.mixer.size() ? " - " + p.mixer[(size_t) track].name : juce::String());

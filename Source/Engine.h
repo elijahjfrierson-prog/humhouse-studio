@@ -90,7 +90,8 @@ public:
     void storePluginStates();
 
     // offline
-    bool renderToWav (const juce::File& out, bool songMode, std::function<bool (float)> progress, int track = -1);
+    bool renderToWav (const juce::File& out, bool songMode, std::function<bool (float)> progress, int track = -1, int bits = 24, double rate = 0);   // bits 16/24/32 float/64 float, rate 0 = engine rate
+    int exportBits = 24; double exportRate = 0;
     bool freezeTrack (int track);
 
     // headless processing (tests / offline)

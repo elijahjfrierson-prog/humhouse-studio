@@ -1552,8 +1552,43 @@ void Engine::mixTracks (const float* const*, int, int)
 }
 
 // =============================================================== offline
-bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track)
+static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<float>& mem, double sr, double outRate, int bits)
 {
+    juce::AudioBuffer<float> res;
+    const juce::AudioBuffer<float>* src = &mem;
+    if (std::abs (outRate - sr) > 0.5)
+    {
+        const int outLen = (int) ((double) mem.getNumSamples() * outRate / sr);
+        res.setSize (2, juce::jmax (1, outLen));
+        for (int ch = 0; ch < 2; ++ch) sincResample (mem.getReadPointer (ch), mem.getNumSamples(), res.getWritePointer (ch), outLen, sr / outRate);
+        src = &res;
+    }
+    file.deleteFile();
+    const int len = src->getNumSamples();
+    if (bits == 64)
+    {
+        juce::FileOutputStream os (file);
+        if (! os.openedOk()) return false;
+        const juce::uint32 dataBytes = (juce::uint32) len * 16u;
+        os.write ("RIFF", 4); os.writeInt ((int) (36 + dataBytes)); os.write ("WAVE", 4);
+        os.write ("fmt ", 4); os.writeInt (16); os.writeShort (3); os.writeShort (2); os.writeInt ((int) outRate);
+        os.writeInt ((int) outRate * 16); os.writeShort (16); os.writeShort (64);
+        os.write ("data", 4); os.writeInt ((int) dataBytes);
+        for (int i = 0; i < len; ++i) { os.writeDouble ((double) src->getSample (0, i)); os.writeDouble ((double) src->getSample (1, i)); }
+        os.flush(); return ! os.getStatus().failed();
+    }
+    juce::WavAudioFormat wav;
+    auto os = file.createOutputStream();
+    if (! os) return false;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), outRate, 2, bits, {}, 0));
+    if (! w) return false;
+    os.release();
+    return w->writeFromAudioSampleBuffer (*src, 0, len);
+}
+
+bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track, int bits, double rate)
+{
+    bits = bits == 16 || bits == 32 || bits == 64 ? bits : 24;
     const bool wasPlaying = playing.load();
     if (wasPlaying) stop();
     deviceManager.removeAudioCallback (this);
@@ -1563,15 +1598,20 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const double lenBeats = song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
     const double tail = 2.0;
     const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
+    const double outRate = rate > 0 ? rate : sr;
+    const bool viaMemory = bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
+    juce::AudioBuffer<float> mem;
+    if (viaMemory) mem.setSize (2, (int) total);
 
     file.deleteFile();
     std::unique_ptr<juce::AudioFormatWriter> writer;
+    if (! viaMemory)
     {
         juce::WavAudioFormat wav;
         if (auto os = file.createOutputStream())
-            if (auto* w = wav.createWriterFor (os.get(), sr, 2, 24, {}, 0)) { os.release(); writer.reset (w); }
+            if (auto* w = wav.createWriterFor (os.get(), sr, 2, bits, {}, 0)) { os.release(); writer.reset (w); }
     }
-    if (! writer) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
+    if (! writer && ! viaMemory) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
 
     {
         const juce::ScopedLock sl (lock);
@@ -1590,10 +1630,12 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         float* outs[2] { outBuf.getWritePointer (0), outBuf.getWritePointer (1) };
         // offline reads must not miss disk data
         processBlock (nullptr, 0, outs, 2, n);
-        writer->writeFromAudioSampleBuffer (outBuf, 0, n);
+        if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
+        else writer->writeFromAudioSampleBuffer (outBuf, 0, n);
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
     }
     writer.reset();
+    if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits);
     offline = false;
     renderTrackOnly = -1;
     recording = rec;
