@@ -82,6 +82,14 @@ inline void updateFloating (juce::Component& c)
     if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
 }
 
+// Zoomed out, ruler bar numbers thin to every 2 / 4 / 8 (then 16...) bars so they never crowd; the grid itself is unchanged
+inline int rulerLabelStep (float barPx)
+{
+    int step = 1;
+    while (step < 64 && step * barPx < 36.0f) step *= 2;
+    return step;
+}
+
 // FL-style tool cursors (white icon, dark outline so it reads on any background)
 enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom };
 inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)

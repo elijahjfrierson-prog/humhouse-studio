@@ -213,12 +213,14 @@ public:
         juce::Rectangle<int> ruler (keyW, barH, getWidth() - keyW, rulerH);
         g.setColour (col::panel2); g.fillRect (ruler);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
+        const int every = rulerLabelStep (beatToX (p.beatsPerBar) - beatToX (0));
         for (int bar = (int) (scrollX / p.beatsPerBar); ; ++bar)
         {
             const float x = beatToX (bar * p.beatsPerBar);
             if (x > getWidth()) break;
-            g.drawText (juce::String (bar + 1), (int) x + 3, barH, 40, rulerH, juce::Justification::centredLeft);
-            g.drawVerticalLine ((int) x, (float) barH, (float) (barH + rulerH));
+            const bool label = bar % every == 0;
+            if (label) g.drawText (juce::String (bar + 1), (int) x + 3, barH, 40, rulerH, juce::Justification::centredLeft);
+            g.drawVerticalLine ((int) x, (float) barH + (label ? 0 : rulerH / 2), (float) (barH + rulerH));
         }
         if (timeSelB > timeSelA)
         {

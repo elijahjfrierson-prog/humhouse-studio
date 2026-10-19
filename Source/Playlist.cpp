@@ -349,14 +349,16 @@ public:
         juce::Rectangle<int> ruler (headerW, toolbarH, getWidth() - headerW, rulerH);
         g.setColour (col::panel2); g.fillRect (ruler);
         g.setFont (juce::FontOptions (11.0f));
+        const int every = rulerLabelStep (beatToX (p.beatsPerBar) - beatToX (0));
         for (int bar = (int) (scrollX / p.beatsPerBar); ; ++bar)
         {
             const float x = beatToX (bar * p.beatsPerBar);
             if (x > getWidth()) break;
             if (x < headerW) continue;
             g.setColour (col::dim);
-            g.drawText (juce::String (bar + 1), (int) x + 3, toolbarH, 40, rulerH, juce::Justification::centredLeft);
-            g.drawVerticalLine ((int) x, (float) toolbarH + 12, (float) (toolbarH + rulerH));
+            const bool label = bar % every == 0;
+            if (label) g.drawText (juce::String (bar + 1), (int) x + 3, toolbarH, 40, rulerH, juce::Justification::centredLeft);
+            g.drawVerticalLine ((int) x, (float) toolbarH + (label ? 12 : 18), (float) (toolbarH + rulerH));
         }
         if (p.hasPunch())
         {
