@@ -151,6 +151,7 @@ private:
     std::atomic<bool> playing { false }, recording { false }, countingIn { false };
     std::atomic<double> position { 0.0 };
     std::atomic<float> declickGain { 1.0f };   // 4 ms fade-in after starting / jumping mid-sound
+    std::atomic<bool> editChase { false };     // chase caused by an edit while playing: keep the mix running, no fade, no re-hit
     std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;

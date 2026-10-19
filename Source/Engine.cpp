@@ -1,4 +1,5 @@
 #include "Engine.h"
+#include <thread>
 #include "DrumSynth.h"
 #include "AudioEncode.h"
 #include <algorithm>
@@ -351,7 +352,7 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 
 void Engine::sync()
 {
-    if (playing.load()) chasePending = true;
+    if (playing.load()) { editChase = true; chasePending = true; }
     // ---- build new objects outside the audio lock (sample loading / plugin creation can be slow)
     std::map<int, std::unique_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
@@ -738,7 +739,7 @@ void Engine::play()
         countInRemaining = countInOn.load() && ! (proj.songMode && proj.hasPunch()) ? proj.beatsPerBar : 0.0;
         countingIn = countInRemaining > 0.0;
     }
-    chasePending = true;
+    editChase = false; chasePending = true;
     if (std::abs (std::fmod (position.load() * 4.0, 1.0)) > 1.0e-6) declickGain = 0.0f;   // off the grid: fade in
     playing = true;
 }
@@ -763,7 +764,7 @@ void Engine::stop()
 
 void Engine::setPositionBeats (double b)
 {
-    position = std::max (0.0, b); startBeat = position; chasePending = true;
+    position = std::max (0.0, b); startBeat = position; editChase = false; chasePending = true;
     if (playing.load()) declickGain = 0.0f;
 }
 
@@ -1009,18 +1010,19 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     };
     // FL-style: when playback starts, jumps, loops or the pattern is edited mid-note, the note still sounds
     const bool chase = chasePending.exchange (false);
+    const bool quietChase = chase && editChase.exchange (false);
     auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
     {
         if (absStart >= b0) return;
         auto& c = proj.channels[ci];
         const bool shot = c.type == ChannelType::Sampler && c.oneShot;   // one-shots play the whole sample, whatever the note length
         const double end = std::min (absStart + note.length, limit);
-        if (shot ? b0 - absStart > 64.0 : end <= b0 + 1.0 / 32.0) return;
+        if (shot ? (quietChase || b0 - absStart > 64.0) : end <= b0 + 1.0 / 32.0) return;   // after an edit a one-shot is still ringing: never re-hit it
         auto* rt = channelOrder[ci];
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
         Note tail = note; tail.length = std::max (end - b0, 1.0 / 32.0); tail.slide = false;
         emit (ci, tail, b0, (b0 - absStart) * 60.0 / proj.bpm);   // samplers start from the matching point in the sample
-        declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in
+        if (! quietChase) declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in (edits: the voice fades itself, the mix keeps going)
     };
 
     for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
@@ -1294,8 +1296,15 @@ void Engine::processTrack (int t)
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
     juce::ScopedNoDenormals noDenormals;
-    const juce::ScopedTryLock sl (lock);
-    if (! sl.isLocked() || trackRt.empty())
+    // an edit holds the lock for a moment: wait briefly for it instead of dropping a silent block (that was the click / pause)
+    bool locked = lock.tryEnter();
+    if (! locked && ! offline.load())
+    {
+        const double until = juce::Time::getMillisecondCounterHiRes() + 0.4 * 1000.0 * n / sampleRate;
+        while (! locked && juce::Time::getMillisecondCounterHiRes() < until) { std::this_thread::yield(); locked = lock.tryEnter(); }
+    }
+    struct Unlock { const juce::CriticalSection* c; ~Unlock() { if (c != nullptr) c->exit(); } } unlock { locked ? &lock : nullptr };
+    if (! locked || trackRt.empty())
     {
         for (int c = 0; c < numOut; ++c) if (out[c]) juce::FloatVectorOperations::clear (out[c], n);
         return;
@@ -1366,7 +1375,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 renderSegment (pos, segEnd, done, len);
                 done += len;
                 pos = wrap ? loopStart : segEnd;
-                if (wrap) chasePending = true;
+                if (wrap) { editChase = false; chasePending = true; }
                 if (wrap)
                 {
                     const juce::SpinLock::ScopedTryLockType tl (takeLock);

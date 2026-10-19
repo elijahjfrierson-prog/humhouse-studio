@@ -19,7 +19,8 @@ public:
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         makeCaptureFriendly (*this);
-        startTimer (400);
+        setAlwaysOnTop (true);
+        startTimer (300);
     }
     void closeButtonPressed() override { close (this); }
     static void close (EditorWindow* w) { juce::MessageManager::callAsync ([w] { windows().removeObject (w); }); }
@@ -29,7 +30,13 @@ public:
 
 private:
     std::function<bool()> valid;
-    void timerCallback() override { if (valid && ! valid()) { stopTimer(); close (this); } }
+    void timerCallback() override
+    {
+        if (valid && ! valid()) { stopTimer(); close (this); return; }
+        // FL-style: plug-in windows float over the app while you click around it, but not over other apps
+        const bool front = juce::Process::isForegroundProcess();
+        if (front != isAlwaysOnTop()) setAlwaysOnTop (front);
+    }
 };
 
 bool focusExisting (const juce::String& key)

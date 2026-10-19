@@ -457,6 +457,9 @@ public:
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
+        setupButton (mixPopBtn, "MIXER " + juce::String::fromUTF8 ("\xe2\xa7\x89"), "Pop the Mixer out into its own window so it stays visible on Beat and Rec (click again to dock it)", true);
+        mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
+        addAndMakeVisible (mixPopBtn);
         for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
@@ -547,6 +550,8 @@ public:
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
+        mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
+        mixPopBtn.setBounds (t.removeFromRight (78)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
@@ -871,7 +876,7 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton playBtn, stopBtn, recBtn;
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn;
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
@@ -892,11 +897,16 @@ private:
     void flash (const juce::String& t) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + 2500; }
 
     // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
-    struct PopOut : public juce::DocumentWindow
+    struct PopOut : public juce::DocumentWindow, private juce::Timer
     {
-        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) {}
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { startTimer (300); }
         std::function<void()> onClose;
         void closeButtonPressed() override { if (onClose) onClose(); }
+        void timerCallback() override   // stays visible over the main window while you work, not over other apps
+        {
+            const bool front = juce::Process::isForegroundProcess();
+            if (front != isAlwaysOnTop()) setAlwaysOnTop (front);
+        }
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
 

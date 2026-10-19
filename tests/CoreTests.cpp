@@ -228,6 +228,38 @@ int main()
         e.stop();
     }
 
+    // an edit while playing (delete clips, etc.) keeps the beat running exactly where it was: no fade, no re-hit, no gap
+    {
+        auto render = [] (bool editMidway, int mode)
+        {
+            Engine e;
+            e.prepare (44100, 512);
+            auto pr = Project::createDemo(); pr.songMode = mode == 1;
+            e.newProject (pr);
+            e.sync();
+            e.play();
+            std::vector<float> outL;
+            juce::AudioBuffer<float> out (2, 512);
+            for (int blk = 0; blk < 400; ++blk)
+            {
+                if (editMidway && blk % 37 == 20) e.sync();
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (nullptr, 0, o, 2, 512);
+                outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+            }
+            return outL;
+        };
+        for (int mode : { 0, 1 })
+        {
+            const auto a0 = render (false, mode), a1 = render (true, mode);
+            double maxDiff = 0; float pk = 0;
+            for (size_t i = 0; i < a0.size(); ++i) { maxDiff = std::max (maxDiff, (double) std::abs (a0[i] - a1[i])); pk = std::max (pk, std::abs (a0[i])); }
+            std::printf ("edit while playing (%s): peak %.2f, max difference %.6f\n", mode ? "song" : "pattern", pk, maxDiff);
+            CHECK (pk > 0.05f);
+            CHECK (maxDiff < 1.0e-4);
+        }
+    }
+
 
     // recording from a MONO mic, plus deleting the lane mid-take, must not crash
     {
