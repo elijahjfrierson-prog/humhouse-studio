@@ -1137,7 +1137,8 @@ public:
             { "mix", "Mix", 0, 1, 1 },
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
-            { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f } };
+            { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
+            { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1147,7 +1148,7 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1155,19 +1156,23 @@ public:
     {
         const int style = (int) p (0);
         float speed = p (1);
-        if (style == 3) speed = 1.0f;                          // hard tune: instant
+        const float snap = juce::jlimit (0.0f, 3.0f, -p (12));   // MetaTune-style negative retune: 0 = instant, -3 = hardest step
+        const bool hard = style == 3 || snap > 0.0f;
+        if (hard) speed = 1.0f;                                // hard tune: instant
         const int root = p (3) < 0 ? ctx.keyRoot : (int) p (3) - 0;
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = 1.0f + 200.0f * (1.0f - speed) * (1.0f - speed);   // retune glide: 0.75 = ~13 ms, so it lands and holds
+        const float timeMs = 1.0f - 0.3f * snap + 200.0f * (1.0f - speed) * (1.0f - speed);   // retune glide: 0.75 = ~13 ms, so it lands and holds
         const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
-        const float humanize = style == 3 ? 0.0f : p (2);
+        const float humanize = hard ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
         const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
         const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
-        const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
+        // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
+        // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
+        const float wetCoef = 1.0f - std::exp (-1.0f / (0.004f * (float) sr));
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -1175,7 +1180,7 @@ public:
             if ((dsCount++ % dsFactor) == 0)
             {
                 analysis[(size_t) aw] = mono; aw = (aw + 1) % (int) analysis.size();
-                const int hop = style == 3 ? 64 : 128;   // Hard Tune (Antares retune 0): track twice as often
+                const int hop = hard ? (snap >= 2.0f ? 32 : snap >= 1.0f ? 48 : 64) : 128;   // Hard Tune (Antares retune 0): track faster
                 if (++hopCount >= hop)
                 {
                     hopCount = 0;
@@ -1190,7 +1195,7 @@ public:
                         wn = len;
                         return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough, &aper);
                     };
-                    if (lastMidi > 0) hz = detect ((int) (3.2 * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
+                    if (lastMidi > 0) hz = detect ((int) ((3.2 - 0.3 * snap) * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
                     if (hz <= 0) hz = detect (512);
                     if (hz <= 0) hz = detect (1024);
                     float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
@@ -1227,6 +1232,9 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     wetTarget = midi > 0 && ! rough && aper < (wetTarget > 0.5f ? 0.3f : 0.2f) ? 1.0f : 0.0f;
+                    // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
+                    // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
+                    if (hard && midi == -1.0f && heldNote > 0) wetTarget = 1.0f;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1240,19 +1248,19 @@ public:
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
                         centre = onset ? now : centre + (now - centre) * (1.0f - std::exp (-hopSec / 0.12f));
                         int target = snapToScale ((int) std::round (centre), root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (style == 3 ? 0.6f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.55f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
                         const int fast = snapToScale ((int) std::round (now), root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
-                            if (++jumpHops * hopSec >= 0.02f) { target = fast; centre = now; jumpHops = 0; }
+                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
                         heldNote = target;
                         float semis = juce::jlimit (-3.0f, 3.0f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
-                        if (onset && (style == 3 || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
+                        if (onset && (hard || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
@@ -1262,7 +1270,8 @@ public:
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
             float ratio = currentRatio * offset;
             if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
-            wetG += (wetTarget - wetG) * wetCoef;
+            wetS1 += (wetTarget - wetS1) * wetCoef;
+            wetG += (wetS1 - wetG) * wetCoef;
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
@@ -1282,7 +1291,7 @@ private:
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false;
-    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0;
+    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };

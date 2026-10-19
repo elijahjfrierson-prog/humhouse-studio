@@ -26,7 +26,7 @@ static float renderPeak (Engine& e, int blocks, int n = 512)
 // realistic sung phrase (glottal buzz through vowel formants, jitter, vibrato, slides, breaths, short ad-libs)
 // run through AutoPitch: on held notes the output must sit on the scale note with no chirps (wrong-pitch blips) or squeaks
 struct VoiceProbe { int chirps = 0; double worstCents = 0, worstSqueak = 0; int squeaks = 0; };
-static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0.75f, float natvib = 0.0f)
+static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0.75f, float natvib = 0.0f, float snap = 0.0f)
 {
     const double fs = 48000; const double tau = juce::MathConstants<double>::twoPi;
     struct Seg { double startMidi, endMidi, dur; bool voiced; double vibCents; };
@@ -77,7 +77,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     float pk = 0; for (auto s : in) pk = std::max (pk, std::abs (s));
     for (auto& s : in) s *= 0.5f / pk;
     auto ap = createBuiltinEffect ("autopitch");
-    ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib);
+    ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
     juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
@@ -906,6 +906,15 @@ int main()
                 CHECK (v.chirps == 0);
                 CHECK (v.squeaks == 0);
             }
+    // Retune -3 (hardest snap) stays just as clean
+    for (int style : { 1, 3 })
+        for (unsigned seed : { 1u, 2u, 3u })
+        {
+            const auto v = probeAutoPitchVoice (style, seed, 0.75f, 0.0f, -3.0f);
+            std::printf ("autopitch voice style %d seed %u snap -3: %d chirps (worst %.0f c), %d squeaks (worst %.1fx)\n", style, seed, v.chirps, v.worstCents, v.squeaks, v.worstSqueak);
+            CHECK (v.chirps == 0);
+            CHECK (v.squeaks == 0);
+        }
     // AutoPitch Hard Tune: sung vibrato is flattened (Natural Vibrato 0) or kept (100); deep notes tune like high ones
     {
         auto run = [] (double hz, double vibCents, float natvib, std::vector<float>& out) {
