@@ -1,3 +1,4 @@
+#include <set>
 #include "../Source/Engine.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
@@ -123,6 +124,17 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
+    {   // FL: new channels fill mixer inserts 1, 2, 3 ... in order, past 10 too
+        auto pr = hhs::Project::createDefault();
+        for (int i = 0; i < 12; ++i) { hhs::Channel c; c.name = "Ch" + juce::String (i + 1); c.mixerTrack = -1; pr.addChannel (c); }
+        bool inOrder = true;
+        for (int i = 0; i < 12; ++i) inOrder &= pr.channels[(size_t) i].mixerTrack == i + 1;
+        std::set<int> laneIns;
+        for (auto& l : pr.lanes) { inOrder &= l.mixerTrack > 12; laneIns.insert (l.mixerTrack); }
+        std::printf ("channel routing: ch1 -> %d, ch12 -> %d, track 1 -> %d\n", pr.channels[0].mixerTrack, pr.channels[11].mixerTrack, pr.lanes[0].mixerTrack);
+        CHECK (inOrder);
+        CHECK (laneIns.size() == pr.lanes.size());
+    }
 
     // scales
     CHECK (inScale (60, 0, 0) && ! inScale (61, 0, 0));

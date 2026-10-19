@@ -163,7 +163,25 @@ const Channel* Project::findChannel (int id) const
 int Project::addChannel (Channel c)
 {
     c.id = nextChannelId++;
-    if (c.mixerTrack < 0) c.mixerTrack = addMixerTrack (c.name);
+    if (c.mixerTrack < 0)
+    {
+        // FL: channels fill inserts 1, 2, 3 ... in order. An empty insert a track owns by default is taken over
+        // (the track moves to a fresh insert); inserts holding effects or recorded audio are skipped.
+        auto usedByChannel = [this] (int i) { for (auto& o : channels) if (o.mixerTrack == i) return true; return false; };
+        auto holdsAudio = [this] (int i) { for (auto& cl : clips) if (cl.isAudio() && clipInsert (cl) == i) return true; return false; };
+        for (int i = 1; i < (int) mixer.size() && c.mixerTrack < 0; ++i)
+        {
+            if (usedByChannel (i) || ! mixer[(size_t) i].fx.empty() || holdsAudio (i)) continue;
+            bool sentTo = false;
+            for (auto& m : mixer) for (auto& snd : m.sends) sentTo |= snd.target == i;
+            if (sentTo) continue;
+            for (auto& l : lanes) if (l.mixerTrack == i) l.mixerTrack = -1;
+            c.mixerTrack = i;
+            mixer[(size_t) i].name = c.name;
+        }
+        if (c.mixerTrack < 0) c.mixerTrack = addMixerTrack (c.name);
+        for (auto& l : lanes) if (l.mixerTrack == -1) l.mixerTrack = addMixerTrack (l.name);
+    }
     channels.push_back (c);
     return c.id;
 }
