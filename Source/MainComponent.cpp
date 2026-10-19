@@ -54,6 +54,7 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- One-shots / 808 cut mode: no click at the start or when the next hit cuts the last one\n"
         "- Piano Roll LOCK: notes you draw, drag or stamp snap to your key and scale\n"
         "- Sample previews stop when you click anywhere, press Stop or Space\n"
         "- Recording: earlier takes and the beat play instantly when you hit record (no dropout while take files are created, punch pre-roll preloaded)\n"
