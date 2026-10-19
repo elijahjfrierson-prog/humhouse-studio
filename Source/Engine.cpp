@@ -719,15 +719,17 @@ void Engine::primeClipReaders (double beat)
 
 void Engine::play()
 {
-    if (! playing.load()) primeClipReaders (position.load());
+    if (playing.load()) return;
+    const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
+    const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : position.load();
+    primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
+    if (rec) startRecordingWriters();     // create take files outside the audio lock, so nothing drops out as recording starts
     const juce::ScopedLock sl (lock);
     if (playing) return;
     startBeat = position.load();
-    if (recording.load())
+    if (rec)
     {
-        if (proj.songMode && proj.hasPunch())
-            position = std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar);
-        startRecordingWriters();
+        if (punch) position = from;
         countInRemaining = countInOn.load() && ! (proj.songMode && proj.hasPunch()) ? proj.beatsPerBar : 0.0;
         countingIn = countInRemaining > 0.0;
     }
@@ -738,6 +740,7 @@ void Engine::play()
 
 void Engine::stop()
 {
+    stopPreview();
     {
         const juce::ScopedLock sl (lock);
         if (! playing && takes.empty()) { position = 0.0; return; }
@@ -905,6 +908,7 @@ void Engine::previewFile (const juce::File& f)
     auto s = loadSampleFile (f, sampleRate);
     const juce::SpinLock::ScopedLockType sl (previewLock);
     previewSample = s; previewPos = s ? 0 : -1;
+    previewStarted = juce::Time::getMillisecondCounter();
 }
 
 // =============================================================== audio

@@ -79,6 +79,8 @@ public:
     // preview (computer keyboard / clicking keys / browser)
     void previewNote (int channelId, int key, float velocity, bool on);
     void previewFile (const juce::File&);
+    void stopPreview (juce::uint32 olderThanMs = 0) { if (juce::Time::getMillisecondCounter() - previewStarted.load() >= olderThanMs) previewPos = -1; }
+    std::atomic<juce::uint32> previewStarted { 0 };
 
     // plugins
     std::unique_ptr<juce::AudioPluginInstance> createPlugin (const juce::String& identifier, juce::String& error);

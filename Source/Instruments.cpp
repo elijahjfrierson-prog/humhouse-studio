@@ -27,7 +27,7 @@ public:
             for (auto& v : voices) if (v.active && ! v.releasing)
             {
                 if (glide > 0.0f) { v.targetSemis = target; v.key = key; v.glideRate = 1.0 / (glide * sampleRate); return; }
-                v.releasing = true;
+                v.releasing = true; v.fadeLen = juce::jmax (v.fadeLen, 0.006f);
             }
         }
         Voice* v = nullptr;
@@ -58,7 +58,7 @@ public:
         for (auto& v : voices) if (v.active && v.key == key && (mono || ! oneShot)) v.releasing = true;
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
-    void choke() override { for (auto& v : voices) if (v.active) { v.releasing = true; v.fadeLen = 0.003f; } }
+    void choke() override { for (auto& v : voices) if (v.active && ! v.releasing) { v.releasing = true; v.fadeLen = 0.006f; } }   // 6 ms: an 808 sub cut any faster clicks
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
     void render (juce::AudioBuffer<float>& out, int start, int num) override
@@ -84,7 +84,10 @@ public:
                 if (i0 + 1 >= len) { v.active = false; break; }
                 const float f = (float) (v.pos - i0);
                 float g = v.gain;
-                if (attack > 0.0f && v.age < attack * sampleRate) g *= (float) (v.age / (attack * sampleRate));
+                const double ramp = std::max ((double) attack, 0.0008) * sampleRate;   // >= 0.8 ms fade-in: no click at the sample start
+                if (v.age < ramp) g *= (float) ((v.age + 1.0) / ramp);
+                const double left = (double) (len - 1) - v.pos, tailN = 0.002 * sampleRate;   // samples that end above zero don't click
+                if (left < tailN) g *= (float) juce::jmax (0.0, left / tailN);
                 if (hold > 0.0f && ! v.releasing && v.age > hold * sampleRate) v.releasing = true;
                 v.age += 1.0;
                 if (v.releasing) { v.rel -= 1.0f / (v.fadeLen * (float) sampleRate); if (v.rel <= 0.0f) { v.active = false; break; } g *= v.rel; }
