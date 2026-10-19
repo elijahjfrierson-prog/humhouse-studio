@@ -1008,7 +1008,7 @@ void PsolaShifter::prepare (double s)
     sr = s;
     int sz = 1; while (sz < (int) (s * 0.5)) sz <<= 1;
     for (auto* v : { &inL, &inR, &outL, &outR, &wsum }) v->assign ((size_t) sz, 0.0f);
-    mask = sz - 1; n = 0; ts = 0; mark = 0; lastP = 1; lat = 0.006 * s; dryL = dryR = 0;
+    mask = sz - 1; n = 0; ts = 0; mark = 0; lastP = 1; lat = latS = 0.006 * s; dryL = dryR = 0;
 }
 
 float PsolaShifter::read (const std::vector<float>& b, double pos) const
@@ -1054,7 +1054,8 @@ void PsolaShifter::process (float& l, float& r, double ratio, double period)
     const float g = 1.0f / std::max (0.5f, wsum[o]);
     l = outL[o] * g; r = outR[o] * g;
     outL[o] = outR[o] = wsum[o] = 0.0f;
-    dryL = read (inL, (double) n - lat); dryR = read (inR, (double) n - lat);
+    latS += juce::jlimit (-0.04, 0.04, lat - latS);   // dry delay glides (lat steps per grain = clicks in the dry path)
+    dryL = read (inL, (double) n - latS); dryR = read (inR, (double) n - latS);
     ++n;
 }
 
@@ -1146,7 +1147,7 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1166,6 +1167,7 @@ public:
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
         const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
         const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
+        const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -1222,6 +1224,9 @@ public:
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
                     else if (midi != -1.0f) pendingMidi = 0;
+                    // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
+                    // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
+                    wetTarget = midi > 0 && ! rough && aper < (wetTarget > 0.5f ? 0.3f : 0.2f) ? 1.0f : 0.0f;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1257,11 +1262,17 @@ public:
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
             float ratio = currentRatio * offset;
             if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
+            wetG += (wetTarget - wetG) * wetCoef;
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
-            if (style == 3) shifter.process (wl, wr, ratio, period);
-            else { psola.process (pl, pr, ratio, period); wl = pl; wr = pr; l[i] = psola.dryL; r[i] = psola.dryR; }
+            if (style == 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            else
+            {
+                psola.process (pl, pr, ratio, period);
+                l[i] = psola.dryL; r[i] = psola.dryR;
+                wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
+            }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -1271,7 +1282,7 @@ private:
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false;
-    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0;
+    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };

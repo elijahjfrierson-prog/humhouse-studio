@@ -121,8 +121,120 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     return res;
 }
 
+// syllables (consonant burst + sharp vowel attack + decay) sung off-key, through AutoPitch: measures whether
+// the tuned voice keeps its punch, body, consonants and the gaps between syllables (vs. thin / mashed)
+struct SyllableProbe { double levelDb = 0, envCorr = 0, gapIn = 0, gapOut = 0, consDb = 0, lowDb = 0, highDb = 0, attackIn = 0, attackOut = 0; };
+static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0.75f)
+{
+    const double fs = 48000, tau = juce::MathConstants<double>::twoPi;
+    juce::Random rng (7);
+    std::vector<float> in; std::vector<char> region;   // 0 gap, 1 consonant, 2 attack, 3 vowel
+    std::vector<size_t> onsets;
+    double f1s[3] = {}, f2s[3] = {}, ph = 0, hp = 0, hpx = 0;
+    const double fc[3] = { 650, 1100, 2500 }, bw[3] = { 90, 110, 160 };
+    const int notes[10] = { 57, 60, 62, 64, 62, 60, 55, 57, 60, 64 };
+    for (int syl = 0; syl < 20; ++syl)
+    {
+        const double midi = notes[syl % 10] + (syl % 2 ? centsOff : -centsOff) / 100.0;
+        const double hz = 440.0 * std::pow (2.0, (midi - 69.0) / 12.0);
+        const int nc = (int) (0.03 * fs), nv = (int) (0.18 * fs), ng = (int) (0.05 * fs);
+        onsets.push_back (in.size() + (size_t) nc);
+        for (int i = 0; i < nc + nv + ng; ++i)
+        {
+            double v = 0, cons = 0; char rg = 0;
+            if (i < nc) { const double nz = rng.nextDouble() * 2 - 1; hp = 0.6 * (hp + nz - hpx); hpx = nz; cons = 0.08 * hp * std::sin (juce::MathConstants<double>::pi * i / nc); rg = 1; }
+            else if (i < nc + nv)
+            {
+                const int k0 = i - nc;
+                const double env = std::min (1.0, k0 / (0.006 * fs)) * (0.35 + 0.65 * std::exp (-k0 / (0.07 * fs))) * std::min (1.0, (nv - k0) / (0.015 * fs));
+                ph += hz / fs; if (ph >= 1) ph -= 1;
+                double x = 0; for (int k = 1; k * hz < 8000; ++k) x += std::sin (tau * k * ph) / (k * std::sqrt ((double) k));
+                v = 0.12 * env * x; rg = k0 < (int) (0.02 * fs) ? 2 : 3;
+            }
+            double y = 0;
+            for (int f = 0; f < 3; ++f)
+            {
+                const double rr = std::exp (-juce::MathConstants<double>::pi * bw[f] / fs), cw = std::cos (tau * fc[f] / fs);
+                const double o = v + 2 * rr * cw * f1s[f] - rr * rr * f2s[f]; f2s[f] = f1s[f]; f1s[f] = o; y += o * (1 - rr) * (f == 0 ? 1.0 : 0.6);
+            }
+            in.push_back ((float) (y * 6.0 + cons + 0.0005 * (rng.nextDouble() * 2 - 1)));
+            region.push_back (rg);
+        }
+    }
+    auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("style", (float) style); ap->setParam ("speed", speed);
+    ap->prepare (fs, 512);
+    PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+    juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
+    for (size_t at = 0; at < in.size(); at += 512)
+    {
+        const int n = (int) std::min<size_t> (512, in.size() - at);
+        for (int i = 0; i < n; ++i) { b.setSample (0, i, in[at + (size_t) i]); b.setSample (1, i, in[at + (size_t) i]); }
+        ap->process (b, n, ctx);
+        for (int i = 0; i < n; ++i) out.push_back (b.getSample (0, i));
+    }
+    const int E = 96;   // 2 ms envelope frames
+    auto envOf = [&] (const std::vector<float>& x) { std::vector<double> e; for (size_t a = 0; a + E <= x.size(); a += E) { double s = 0; for (int k = 0; k < E; ++k) s += x[a + k] * x[a + k]; e.push_back (std::sqrt (s / E)); } return e; };
+    const auto ei = envOf (in), eo = envOf (out);
+    int lagF = 0; double bestC = -2;
+    for (int lf = 0; lf < 12; ++lf)
+    {
+        double sxy = 0, sxx = 0, syy = 0, mx = 0, my = 0; const size_t N = ei.size() - 20;
+        for (size_t k = 5; k < N; ++k) { mx += ei[k]; my += eo[k + lf]; } mx /= (N - 5); my /= (N - 5);
+        for (size_t k = 5; k < N; ++k) { const double a = ei[k] - mx, c = eo[k + lf] - my; sxy += a * c; sxx += a * a; syy += c * c; }
+        const double cc = sxy / std::sqrt (sxx * syy + 1e-20); if (cc > bestC) { bestC = cc; lagF = lf; }
+    }
+    SyllableProbe r; r.envCorr = bestC;
+    const size_t lag = (size_t) lagF * E;
+    double Ei = 0, Eo = 0, Ci = 1e-12, Co = 1e-12, Gi = 0, Go = 0, Vi = 1e-12, Vo = 1e-12, Ai = 0, Ao = 0; int ng = 0, nvw = 0, na = 0;
+    double lpI = 0, lpO = 0, hpI = 0, hpO = 0, LIi = 1e-12, LIo = 1e-12, HIi = 1e-12, HIo = 1e-12, pI = 0, pO = 0;
+    const double aL = 1 - std::exp (-tau * 300 / fs), aH = std::exp (-tau * 3000 / fs);
+    for (size_t k = 9600; k + lag < out.size(); ++k)
+    {
+        const double x = in[k], y = out[k + lag];
+        Ei += x * x; Eo += y * y;
+        lpI += aL * (x - lpI); lpO += aL * (y - lpO); LIi += lpI * lpI; LIo += lpO * lpO;
+        hpI = aH * (hpI + x - pI); hpO = aH * (hpO + y - pO); pI = x; pO = y; HIi += hpI * hpI; HIo += hpO * hpO;
+        if (region[k] == 1) { Ci += x * x; Co += y * y; }
+    }
+    for (size_t f = 100; f + (size_t) lagF < eo.size(); ++f)
+    {
+        const char rg = region[f * E + E / 2];
+        if (rg == 0) { Gi += ei[f]; Go += eo[f + lagF]; ++ng; }
+        if (rg == 3) { Vi += ei[f]; Vo += eo[f + lagF]; ++nvw; }
+        if (rg == 2) { Ai += ei[f]; Ao += eo[f + lagF]; ++na; }
+    }
+    r.levelDb = 10 * std::log10 (Eo / Ei); r.consDb = 10 * std::log10 (Co / Ci);
+    r.lowDb = 10 * std::log10 (LIo / LIi) - r.levelDb; r.highDb = 10 * std::log10 (HIo / HIi) - r.levelDb;
+    r.gapIn = (Gi / ng) / (Vi / nvw); r.gapOut = (Go / ng) / (Vo / nvw);
+    // attack punch per syllable: loudest 2 ms in the first 30 ms of the vowel vs. the vowel's body (no global lag needed)
+    double pin = 0, pout = 0; int ns = 0;
+    for (size_t on : onsets)
+    {
+        const size_t f0 = on / E; if (f0 < 100 || f0 + 90 >= eo.size()) continue;
+        double ai = 0, ao = 0, bi = 0, bo = 0;
+        for (size_t f = f0; f < f0 + 15; ++f) { ai = std::max (ai, ei[f]); }
+        for (size_t f = f0; f < f0 + 15 + 12; ++f) { ao = std::max (ao, eo[f]); }
+        for (size_t f = f0 + 40; f < f0 + 80; ++f) { bi += ei[f]; bo += eo[f]; }
+        pin += ai / bi; pout += ao / bo; ++ns;
+    }
+    r.attackIn = 40 * pin / ns; r.attackOut = 40 * pout / ns; (void) Ai; (void) Ao; (void) na;
+    return r;
+}
+
 int main()
 {
+    if (std::getenv ("HHS_AP_PROBE") != nullptr)
+    {
+        for (double off : { 0.0, 40.0 })
+            for (int st = 0; st < 4; ++st)
+            {
+                const auto r = probeSyllables (st, off);
+                std::printf ("style %d off %2.0fc: level %+.2f dB envCorr %.3f gap %.3f->%.3f attack %.2f->%.2f cons %+.1f dB low %+.2f high %+.2f\n",
+                             st, off, r.levelDb, r.envCorr, r.gapIn, r.gapOut, r.attackIn, r.attackOut, r.consDb, r.lowDb, r.highDb);
+            }
+        return 0;
+    }
     juce::ScopedJuceInitialiser_GUI init;
     {   // Glitch Gate pads: each one is audible, works with the transport stopped, and doesn't click
         auto probe = hhs::createBuiltinEffect ("glitch");
@@ -686,6 +798,17 @@ int main()
         CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
         CHECK (std::abs (gap - 440.0f) < 4.0f);
     }
+    // AutoPitch keeps enunciation and punch: consonants pass through untouched (not smeared by the shifter),
+    // attacks and level stay as sung, in every style
+    for (double off : { 0.0, 40.0 })
+        for (int st = 0; st < 4; ++st)
+        {
+            const auto r = probeSyllables (st, off);
+            std::printf ("autopitch syllables style %d off %2.0fc: level %+.2f dB, consonants %+.1f dB, attack %.2f -> %.2f\n", st, off, r.levelDb, r.consDb, r.attackIn, r.attackOut);
+            CHECK (std::abs (r.consDb) < 1.5);
+            CHECK (std::abs (r.levelDb) < 0.5);
+            CHECK (r.attackOut > 0.93 * r.attackIn);
+        }
     // AutoPitch on a realistic sung phrase: no chirps (wrong-pitch blips) or squeaks in any style
     for (int style : { 0, 1, 2, 3 })
         for (unsigned seed : { 1u, 2u, 3u })

@@ -136,7 +136,7 @@ private:
     std::vector<float> inL, inR, outL, outR, wsum;
     int mask = 0;
     long long n = 0;
-    double sr = 44100, ts = 0, mark = 0, lat = 0, lastP = 1;
+    double sr = 44100, ts = 0, mark = 0, lat = 0, latS = 0, lastP = 1;
 };
 
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr, float* aperiodic = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
