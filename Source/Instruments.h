@@ -26,6 +26,7 @@ public:
 
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel&, SharedSample sample, double sampleRate);
 SharedSample loadSampleFile (const juce::File&, double targetRate);
+void sincResample (const float* in, int inLen, float* out, int outLen, double ratio);   // ratio = input samples per output sample
 // applies the channel's SMP-page edits (trim, reverse, polarity, boost, normalize, stretch, fades, declick)
 SharedSample processSample (SharedSample, const Channel&, double sampleRate);
 }

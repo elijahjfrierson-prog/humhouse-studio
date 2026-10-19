@@ -14,13 +14,13 @@ public:
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
-        rootKey = c.rootKey; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
+        rootKey = c.rootKey; keyTrack = c.keyTrack; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
         oneShot = c.oneShot; cutItself = c.cutItself; attack = c.ampAttack; hold = c.ampHold; release = c.ampRelease;
     }
     void noteOn (int key, float vel, bool slide) override
     {
         if (! sample || sample->getNumSamples() == 0) return;
-        const double target = key - rootKey + pitch;
+        const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
         if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
         if (mono || slide)
         {
@@ -49,6 +49,7 @@ public:
             if (v.active && ! v.releasing && v.key == key && v.pos == 0.0)
             {
                 v.pos = secondsIn * sampleRate * std::pow (2.0, v.semis / 12.0);
+                v.midStart = true;
                 if (sample && v.pos >= sample->getNumSamples() - 2) v.active = false;
                 break;
             }
@@ -87,7 +88,7 @@ public:
                 if (i0 + 1 >= len) { v.active = false; break; }
                 const float f = (float) (v.pos - i0);
                 float g = v.gain;
-                const double ramp = std::max ((double) attack, 0.0008) * sampleRate;   // >= 0.8 ms fade-in: no click at the sample start
+                const double ramp = std::max ((double) attack, v.midStart ? 0.004 : 0.0) * sampleRate;   // hits from the top play exactly like the file; mid-sample starts get 4 ms
                 if (v.age < ramp) g *= (float) ((v.age + 1.0) / ramp);
                 const double left = (double) (len - 1) - v.pos, tailN = 0.002 * sampleRate;   // samples that end above zero don't click
                 if (left < tailN) g *= (float) juce::jmax (0.0, left / tailN);
@@ -107,10 +108,11 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false, releasing = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1, age = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
+    struct Voice { bool active = false, releasing = false, midStart = false; int key = 0; double pos = 0, semis = 0, targetSemis = 0, glideRate = 1, age = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
+    bool keyTrack = true;
     double sampleRate = 44100.0, lastSemis = -999.0;
     float pitch = 0, glide = 0; bool mono = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
@@ -280,6 +282,44 @@ std::unique_ptr<ChannelInstrument> createInstrument (const Channel& c, SharedSam
     return inst;
 }
 
+// Band-limited windowed-sinc sample-rate conversion (64 taps, Blackman). Low-passes below the lower
+// Nyquist so a 96k/48k file played at 44.1k doesn't fold its highs back down as metallic "notes".
+void sincResample (const float* in, int inLen, float* out, int outLen, double ratio)
+{
+    constexpr int half = 32, res = 512;
+    const double fc = juce::jmin (1.0, 1.0 / ratio) * 0.97;
+    static thread_local std::vector<float> tab;
+    static thread_local double tabFc = -1.0;
+    if (tabFc != fc)
+    {
+        tab.assign ((size_t) (half * res + 2), 0.0f);
+        for (int i = 0; i <= half * res; ++i)
+        {
+            const double x = (double) i / res, px = juce::MathConstants<double>::pi * x;
+            const double sinc = i == 0 ? fc : std::sin (px * fc) / px;
+            const double w = 0.42 + 0.5 * std::cos (px / half) + 0.08 * std::cos (2.0 * px / half);
+            tab[(size_t) i] = (float) (sinc * w);
+        }
+        tabFc = fc;
+    }
+    for (int o = 0; o < outLen; ++o)
+    {
+        const double t = o * ratio;
+        const int c = (int) std::floor (t);
+        double acc = 0.0, ws = 0.0;
+        for (int k = c - half + 1; k <= c + half; ++k)
+        {
+            const double p = std::abs (t - k) * res;
+            const int ip = (int) p;
+            if (ip >= half * res) continue;
+            const double w = tab[(size_t) ip] + (p - ip) * (tab[(size_t) ip + 1] - tab[(size_t) ip]);
+            ws += w;
+            if (k >= 0 && k < inLen) acc += w * in[k];
+        }
+        out[o] = ws != 0.0 ? (float) (acc / ws) : 0.0f;
+    }
+}
+
 SharedSample loadSampleFile (const juce::File& f, double targetRate)
 {
     juce::AudioFormatManager fm; fm.registerBasicFormats();
@@ -293,10 +333,7 @@ SharedSample loadSampleFile (const juce::File& f, double targetRate)
     const int outLen = (int) (len / ratio);
     juce::AudioBuffer<float> res (2, outLen);
     for (int ch = 0; ch < 2; ++ch)
-    {
-        juce::LagrangeInterpolator li;
-        li.process (ratio, raw.getReadPointer (ch), res.getWritePointer (ch), outLen);
-    }
+        sincResample (raw.getReadPointer (ch), len, res.getWritePointer (ch), outLen, ratio);
     return std::make_shared<const juce::AudioBuffer<float>> (std::move (res));
 }
 

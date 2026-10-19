@@ -231,6 +231,32 @@ int main()
         CHECK (at (0.5) > 0.1f);
         CHECK (at (0.0) < 0.02f);
     }
+    // a sample plays exactly like the file, and with Key off every note plays it at its own pitch
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>> (2, 4096);
+        juce::Random rnd (7);
+        for (int i = 0; i < 4096; ++i) { const float v = rnd.nextFloat() - 0.5f; buf->setSample (0, i, v); buf->setSample (1, i, v); }
+        auto play = [&] (const Channel& c, int key) {
+            auto inst = createInstrument (c, buf, 44100.0);
+            inst->prepare (44100.0, 512);
+            inst->noteOn (key, 1.0f, false);
+            juce::AudioBuffer<float> out (2, 2048); out.clear();
+            inst->render (out, 0, 2048);
+            return out;
+        };
+        Channel c; c.type = ChannelType::Sampler; c.rootKey = 60;
+        auto o = play (c, 60);
+        float err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (o.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err < 1.0e-6f);   // bit-for-bit the WAV, no fade-in / interpolation
+        c.keyTrack = false;
+        auto k = play (c, 72);
+        err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (k.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err < 1.0e-6f);
+        c.keyTrack = true;
+        auto p = play (c, 72);
+        err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (p.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err > 0.01f);     // key on: it's pitched
+    }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
     for (const char* id : { "flanger", "flangus" })
     {
@@ -458,6 +484,36 @@ int main()
         juce::AudioBuffer<float> b (2, 1024 * 16);
         for (int i = 0; i < b.getNumSamples(); ++i) { const float s = 0.5f * (float) std::sin (2 * juce::MathConstants<double>::pi * 452.0 * i / sr); b.setSample (0, i, s); b.setSample (1, i, s); }
         CHECK (std::abs (detectPitchYin (b.getReadPointer (0), 2048, sr) - 452.0f) < 5.0f);
+    }
+
+    // sample-rate conversion: a 96k file's 30 kHz content must not fold back as a tone at 48k; 1 kHz passes at full level
+    {
+        const int n = 96000;
+        std::vector<float> hi ((size_t) n), lo ((size_t) n), outHi ((size_t) n / 2), outLo ((size_t) n / 2);
+        for (int i = 0; i < n; ++i)
+        {
+            hi[(size_t) i] = 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 30000.0 * i / 96000.0);
+            lo[(size_t) i] = 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / 96000.0);
+        }
+        sincResample (hi.data(), n, outHi.data(), n / 2, 2.0);
+        sincResample (lo.data(), n, outLo.data(), n / 2, 2.0);
+        float pHi = 0, pLo = 0;
+        for (int i = 1000; i < n / 2 - 1000; ++i) { pHi = std::max (pHi, std::abs (outHi[(size_t) i])); pLo = std::max (pLo, std::abs (outLo[(size_t) i])); }
+        CHECK (pHi < 0.005f);                  // alias at 18 kHz is gone (> -40 dB down)
+        CHECK (std::abs (pLo - 0.5f) < 0.01f); // in-band level kept
+        // 44.1k -> 48k: a 5 kHz sine comes out clean
+        std::vector<float> a44 (44100), a48 (48000);
+        for (int i = 0; i < 44100; ++i) a44[(size_t) i] = 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 5000.0 * i / 44100.0);
+        sincResample (a44.data(), 44100, a48.data(), 48000, 44100.0 / 48000.0);
+        double err = 0;
+        for (int i = 1000; i < 47000; ++i) err = std::max (err, std::abs (a48[(size_t) i] - 0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 5000.0 * i / 48000.0)));
+        CHECK (err < 0.005);
+    }
+    // a fresh sampler channel plays the file untouched (no declick / fade baked in)
+    {
+        Channel c; c.type = ChannelType::Sampler;
+        auto src = std::make_shared<const juce::AudioBuffer<float>> (2, 100);
+        CHECK (processSample (src, c, 48000.0) == src);
     }
 
     // save / load / undo
