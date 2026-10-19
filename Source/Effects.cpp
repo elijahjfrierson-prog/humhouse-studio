@@ -903,19 +903,21 @@ public:
             if ((dsCount++ % dsFactor) == 0)
             {
                 analysis[(size_t) aw] = mono; aw = (aw + 1) % (int) analysis.size();
-                if (++hopCount >= 128)
+                if (++hopCount >= (style == 3 ? 64 : 128))   // Hard Tune (Antares retune 0): track twice as often
                 {
                     hopCount = 0;
+                    // shorter window for Mid/High voices = less tracking lag (Low keeps the long window for deep notes)
+                    const int wn = (int) p (5) >= 2 ? 512 : (int) p (5) == 1 ? 768 : 1024;
                     std::array<float, 1024> win {};
-                    for (int k = 0; k < 1024; ++k) win[(size_t) k] = analysis[(size_t) ((aw - 1024 + k + (int) analysis.size()) % (int) analysis.size())];
-                    const float hz = detectPitchYin (win.data(), 1024, dsr, style == 0 ? 0.12f : 0.18f);
+                    for (int k = 0; k < wn; ++k) win[(size_t) k] = analysis[(size_t) ((aw - wn + k + (int) analysis.size()) % (int) analysis.size())];
+                    const float hz = detectPitchYin (win.data(), wn, dsr, style == 0 ? 0.12f : 0.18f);
                     const float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
                     if (midi > 0)
                     {
                         period = (float) (sr / hz);
                         int target = snapToScale ((int) std::round (midi), root, scale);
                         // note hold: stay on the current note through vibrato/drift until the voice is clearly on another one
-                        if (heldNote > 0 && target != heldNote && std::abs (midi - (float) heldNote) < 0.8f && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (midi - (float) heldNote) < (style == 3 ? 0.6f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         heldNote = target;
                         float semis = (float) target - midi;
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
