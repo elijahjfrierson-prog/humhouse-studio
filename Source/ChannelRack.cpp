@@ -153,6 +153,7 @@ struct Row : public juce::Component
         bind (pitch, [] (Channel& c, float v) { c.pitch = v; });
         glide.setSkewFactorFromMidPoint (0.15);
         bind (glide, [] (Channel& c, float v) { c.glide = v; });
+        bind (shift, [] (Channel& c, float v) { c.shift = v; });
         insert.setSliderStyle (juce::Slider::LinearBar);
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");
         insert.onValueChange = [this] { s.edit ("Route channel", [&] (Project&) { if (auto* c = s.channel (channelId)) c->mixerTrack = (int) insert.getValue(); }); };
@@ -161,7 +162,7 @@ struct Row : public juce::Component
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
-                                    (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
+                                    (juce::Component*) &glide, (juce::Component*) &shift, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
         name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
         name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
@@ -191,6 +192,7 @@ struct Row : public juce::Component
         mute.setToggleState (! c->muted, juce::dontSendNotification);
         vol.setValue (c->volume, juce::dontSendNotification); pan.setValue (c->pan, juce::dontSendNotification);
         pitch.setValue (c->pitch, juce::dontSendNotification); glide.setValue (c->glide, juce::dontSendNotification);
+        shift.setValue (c->shift, juce::dontSendNotification);
         insert.setRange (0, juce::jmax (1, (int) s.p().mixer.size() - 1), 1);
         insert.setValue (c->mixerTrack, juce::dontSendNotification);
         name.text = c->name; name.colour = c->colour; name.selected = s.selectedChannel == channelId;
@@ -301,7 +303,7 @@ struct Row : public juce::Component
     {
         auto r = getLocalBounds().reduced (2);
         mute.setBounds (r.removeFromLeft (16).reduced (0, 6)); r.removeFromLeft (4);
-        for (auto* k : { &vol, &pan, &pitch, &glide }) k->setBounds (r.removeFromLeft (30));
+        for (auto* k : { &vol, &pan, &pitch, &glide, &shift }) k->setBounds (r.removeFromLeft (30));
         r.removeFromLeft (4);
         insert.setBounds (r.removeFromRight (34).reduced (0, 4));
         wrench.setBounds (r.removeFromRight (30).reduced (1, 4));
@@ -311,7 +313,8 @@ struct Row : public juce::Component
     juce::TextButton mute, wrench;
     Knob vol { "Volume", "channel level", 0.0, 1.25, 0.8 }, pan { "Pan", "left / right", -1.0, 1.0, 0.0 },
          pitch { "Pitch", "transpose in semitones", -24.0, 24.0, 0.0, " st" },
-         glide { "Glide", "slide time between notes (808s, melodies); 0 = off", 0.0, 1.0, 0.0, " s" };
+         glide { "Glide", "slide time between notes (808s, melodies); 0 = off", 0.0, 1.0, 0.0, " s" },
+         shift { "Shift", "play this channel's hits off the grid: + late (laid back), - early (pushed); 0 = on the grid", -60.0, 60.0, 0.0, " ms" };
     NameTag name;
     juce::Slider insert;
 };

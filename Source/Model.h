@@ -69,6 +69,7 @@ struct Channel
     int   mixerTrack = 0;                  // 0 = master
     float volume = 0.8f, pan = 0.0f, pitch = 0.0f; // pitch in semitones
     float glide = 0.0f;                    // seconds, 0 = off
+    float shift = 0.0f;                    // ms, FL channel Shift: plays every hit this much late (+) or early (-), off the grid
     bool  mono = false;                    // legato/mono mode
     bool  muted = false, solo = false;
     int   rootKey = 60;                    // step-sequencer note

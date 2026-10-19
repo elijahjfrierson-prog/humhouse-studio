@@ -1027,16 +1027,19 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     {
         auto& ch = proj.channels[ci];
         if (ch.muted || (anySolo && ! ch.solo)) continue;
+        const double shiftBeats = (double) ch.shift * 0.001 * proj.bpm / 60.0;   // channel Shift (ms) in beats
         if (! proj.songMode)
         {
             if (proj.currentPattern < 0 || proj.currentPattern >= (int) proj.patterns.size()) continue;
             auto& pat = proj.patterns[(size_t) proj.currentPattern];
             auto it = pat.notes.find (ch.id);
             if (it == pat.notes.end()) continue;
+            const double plen = pat.lengthBeats();
             for (auto& note : it->second)
             {
                 if (note.muted) continue;
-                const double s = swingBeat (note.start);
+                double s = swingBeat (note.start) + shiftBeats;
+                if (s < 0.0) s += plen; else if (s >= plen) s -= plen;   // shifted past the loop edge: wraps like FL
                 if (s >= b0 && s < b1) emit (ci, note, s);
                 else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
             }
@@ -1059,8 +1062,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     for (auto& note : it->second)
                     {
                         if (note.muted) continue;
-                        const double s = clip.start + rep * plen + swingBeat (note.start);
-                        if (s >= b0 && s < b1 && s < clip.start + clip.length && s >= clip.start) emit (ci, note, s);
+                        const double s = clip.start + rep * plen + swingBeat (note.start) + shiftBeats;
+                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, note, s);
                         else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
                     }
             }

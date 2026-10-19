@@ -868,11 +868,13 @@ int main()
     {
         auto p = Project::createDemo();
         p.bpm = 151; p.addFx (1, "comp").params["ratio"] = 6;
+        p.channels[0].shift = -12.0f;
         auto f = juce::File::createTempFile (".hhs");
         CHECK (saveProject (p, f));
         Project q; CHECK (loadProject (q, f));
         CHECK (q.bpm == 151 && q.channels.size() == p.channels.size() && q.mixer[1].fx.size() == 1);
         CHECK (q.patterns[0].notes.size() == p.patterns[0].notes.size());
+        CHECK (std::abs (q.channels[0].shift + 12.0f) < 1.0e-4f);
         {   // reopening a project brings every built-in effect back with its saved knobs, not defaults
             Engine e; e.prepare (44100, 512);
             e.project() = q; e.sync();
