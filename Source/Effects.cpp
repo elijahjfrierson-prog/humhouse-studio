@@ -861,7 +861,8 @@ public:
             { "style", "Style", 0, 3, 1, { "Natural", "Classic", "Modern", "Hard Tune" } },
             { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
-            { "scale", "Scale", -1, 15, -1 }, { "voice", "Voice", 0, 2, 1, { "Low", "Mid", "High" } },
+            { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
+                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "voice", "Voice", 0, 2, 1, { "Low", "Mid", "High" } },
             { "mix", "Mix", 0, 1, 1 },
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 } };
