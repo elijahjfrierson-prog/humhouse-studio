@@ -708,6 +708,7 @@ public:
                 m.addSubMenu ("New from template", tm);
             }
             add (mSaveTemplate, "Save as template...");
+            if (lastTemplate.isNotEmpty()) m.addItem (395, "Update template \"" + lastTemplate + "\" (overwrite)");
             add (mDefaultTemplate, "Use this project as default template");
             add (mClearDefaultTemplate, "Reset default template", {}, defaultTemplate().existsAsFile());
             m.addSeparator();
@@ -787,6 +788,7 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
         if (id >= 300 && id < 390)
         {
             auto ts = templateFiles();
@@ -1152,16 +1154,24 @@ private:
     void saveTemplate()
     {
         auto* aw = new juce::AlertWindow ("Save as template", "Name this template (tracks, mixer, FX and kit are saved)", juce::MessageBoxIconType::NoIcon);
-        aw->addTextEditor ("name", "My template");
+        aw->addTextEditor ("name", lastTemplate.isNotEmpty() ? lastTemplate : juce::String ("My template"));
         aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
         aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int r) {
             const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
             if (r != 1 || name.isEmpty()) return;
-            engine.storePluginStates();
-            templatesDir().createDirectory();
-            saveProject (engine.project(), templatesDir().getChildFile (name + ".hhs"));
+            writeTemplate (name);
         }), true);
+    }
+    juce::String lastTemplate;   // the template this project came from / was last saved as
+    void writeTemplate (const juce::String& name)
+    {
+        engine.storePluginStates();
+        templatesDir().createDirectory();
+        auto f = templatesDir().getChildFile (name + ".hhs");
+        auto tmp = f.getSiblingFile (name + ".hhs.tmp");
+        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) lastTemplate = name;   // same name = replace, never half-written
+        else tmp.deleteFile();
     }
 
     void newProject (juce::File templ = {}) { askToSave ([this, templ] { startNewProject (templ); }); }
@@ -1170,6 +1180,7 @@ private:
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
         closeAllEditorWindows();
         if (templ == juce::File()) templ = defaultTemplate();
+        lastTemplate = templ.existsAsFile() && templ != defaultTemplate() ? templ.getFileNameWithoutExtension() : juce::String();
         Project fresh = Project::createDefault();
         if (templ.existsAsFile())
         {

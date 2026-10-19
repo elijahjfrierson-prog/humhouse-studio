@@ -224,10 +224,12 @@ private:
         return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio")
             .getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (kind));
     }
+    juce::String lastPreset;   // saving again with this name overwrites the old preset
     void showPresetMenu()
     {
         juce::PopupMenu menu;
         menu.addItem (1, "Save preset...");
+        if (lastPreset.isNotEmpty()) menu.addItem (2, "Save (overwrite \"" + lastPreset + "\")");
         const auto& fac = factoryPresets (kind);
         if (! fac.empty()) menu.addSectionHeader ("Factory presets");
         for (size_t i = 0; i < fac.size(); ++i) menu.addItem (5000 + (int) i, fac[i].name);
@@ -237,26 +239,33 @@ private:
         for (int i = 0; i < files.size() && i < 200; ++i) menu.addItem (100 + i, files[i].getFileNameWithoutExtension());
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
+            else if (r == 2) writePreset (lastPreset);
             else if (r >= 5000 && r - 5000 < (int) factoryPresets (kind).size()) loadFactory (factoryPresets (kind)[(size_t) (r - 5000)]);
-            else if (r >= 100 && r - 100 < files.size()) loadPreset (files[r - 100]);
+            else if (r >= 100 && r - 100 < files.size()) { lastPreset = files[r - 100].getFileNameWithoutExtension(); loadPreset (files[r - 100]); }
         });
     }
     void savePreset()
     {
         auto* aw = new juce::AlertWindow ("Save preset", "Preset name", juce::MessageBoxIconType::NoIcon);
-        aw->addTextEditor ("name", "My preset");
+        aw->addTextEditor ("name", lastPreset.isNotEmpty() ? lastPreset : juce::String ("My preset"));
         aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
         aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         juce::Component::SafePointer<ParamGrid> safe (this);
         aw->enterModalState (true, juce::ModalCallbackFunction::create ([safe, aw] (int r) {
             const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
             if (r != 1 || name.isEmpty() || safe == nullptr) return;
-            juce::XmlElement x ("HUMHOUSE_PRESET");
-            x.setAttribute ("kind", safe->kind);
-            for (auto& p : safe->params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
-            safe->presetDir().createDirectory();
-            x.writeTo (safe->presetDir().getChildFile (name + ".hhpreset"));
+            safe->writePreset (name);
         }), true);
+    }
+    void writePreset (const juce::String& name)
+    {
+        juce::XmlElement x ("HUMHOUSE_PRESET");
+        x.setAttribute ("kind", kind);
+        for (auto& p : params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+        presetDir().createDirectory();
+        auto f = presetDir().getChildFile (name + ".hhpreset");
+        f.deleteFile();   // same name = replace the old preset
+        if (x.writeTo (f)) lastPreset = name;
     }
     void loadFactory (const FactoryPreset& fp)
     {
