@@ -308,7 +308,7 @@ private:
         if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());
         const auto kits = bundledSounds();
         roots.removeString (kits.getFullPathName());
-        if (kits.isDirectory()) roots.insert (1, kits.getFullPathName());   // kits that ship with the app   // sound library: Classic Trap, Etherea Instruments, Smoke Sonja Signature Hitters
+        if (kits.isDirectory()) roots.insert (1, kits.getFullPathName());   // kits that ship with the app   // sound library: Classic Trap, Etherea Instruments, Triple S Hitters
         refreshFolders();
     }
     void refreshFolders()
