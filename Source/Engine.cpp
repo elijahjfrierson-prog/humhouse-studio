@@ -658,8 +658,29 @@ double Engine::loopLength() const
 
 static double startBeat = 0.0;
 
+// Audio clips stream from disk with no wait on the audio thread; load the audio at the play position
+// (and each later clip's start) before playback, so the first beat isn't silent.
+void Engine::primeClipReaders (double beat)
+{
+    const auto deadline = juce::Time::getMillisecondCounter() + 800;
+    for (auto& clip : proj.clips)
+    {
+        if (! clip.isAudio() || beat >= clip.start + clip.length) continue;
+        auto it = clipRt.find (clip.uid);
+        if (it == clipRt.end() || ! it->second->reader) continue;
+        auto* br = dynamic_cast<juce::BufferingAudioReader*> (it->second->reader.get());
+        if (br == nullptr || juce::Time::getMillisecondCounter() > deadline) continue;
+        const double srcSec = clip.sourceOffset + beatsToSeconds (std::max (0.0, beat - clip.start), proj.bpm);
+        juce::AudioBuffer<float> tmp ((int) juce::jmax (1u, br->numChannels), 2048);
+        br->setReadTimeout (250);
+        br->read (&tmp, 0, 2048, (juce::int64) (srcSec * it->second->fileRate), true, true);
+        br->setReadTimeout (0);
+    }
+}
+
 void Engine::play()
 {
+    if (! playing.load()) primeClipReaders (position.load());
     const juce::ScopedLock sl (lock);
     if (playing) return;
     startBeat = position.load();

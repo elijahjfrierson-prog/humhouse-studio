@@ -123,6 +123,7 @@ private:
     void renderChannels (int n);
     void mixTracks (const float* const* in, int numIn, int n);
     void startRecordingWriters();
+    void primeClipReaders (double beat);
     void finishRecordingWriters();
     void click (float* l, float* r, int n, double b0, double b1);
     void updateSolo();
