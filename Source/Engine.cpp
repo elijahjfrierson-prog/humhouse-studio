@@ -420,6 +420,7 @@ void Engine::sync()
             else if ((f->builtin = createBuiltinEffect (slot.type)))
             {
                 f->builtin->prepare (sampleRate, maxBlock);
+                for (auto& [id, v] : slot.params) f->builtin->setParam (id, v);   // opening a project restores every knob exactly as saved
                 f->tail = f->builtin->tailSeconds() + 0.5;
             }
             newFx[slot.uid] = std::move (f);
