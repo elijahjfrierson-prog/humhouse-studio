@@ -1072,6 +1072,55 @@ int main()
         CHECK (std::isfinite (out.getSample (0, 0)));
         e.stop();
     }
+    // 0 latency: every built-in effect at its default settings adds no delay
+    for (auto& info : builtinEffects())
+    {
+        auto fx = createBuiltinEffect (info.id);
+        if (! fx) continue;
+        fx->prepare (48000, 128);
+        if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
+        CHECK (fx->latencySamples() == 0);
+    }
+    // 40 plug-ins on one session at a 128-sample buffer: no block may miss the audio deadline (= no crackles)
+    {
+        Engine e;
+        e.prepare (48000, 128);
+        auto& p = e.project();
+        p.songMode = false;
+        const auto& all = builtinEffects();
+        int placed = 0;
+        for (int t = 0; t < 8; ++t)
+        {
+            const int mt = p.addMixerTrack ("T" + juce::String (t));
+            for (int k = 0; k < 5; ++k, ++placed) p.addFx (mt, all[(size_t) (placed % (int) all.size())].id);
+        }
+        for (int c = 0; c < 8; ++c)
+        {
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "S" + juce::String (c); ch.mixerTrack = 1 + c; ch.synth.unison = 3;
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 16; ++k) { Note nt; nt.key = 48 + (c * 3 + k) % 24; nt.start = k * 0.25; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
+        }
+        e.sync();
+        e.play();
+        juce::AudioBuffer<float> out (2, 128);
+        const double deadline = 128.0 / 48000.0;
+        double worst = 0, total = 0; int late = 0; const int blocks = 3000;
+        for (int b = 0; b < blocks + 100; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            e.processBlock (nullptr, 0, o, 2, 128);
+            const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+            if (b < 100) continue;   // warm-up
+            worst = std::max (worst, dt); total += dt; if (dt > deadline) ++late;
+            CHECK (std::isfinite (out.getSample (0, 0)));
+        }
+        std::printf ("40 plug-ins @128: avg load %.1f%%, worst block %.1f%% of deadline, %d late blocks of %d\n",
+                     100.0 * total / (blocks * deadline), 100.0 * worst / deadline, late, blocks);
+        CHECK (total / (blocks * deadline) < 0.5);
+        CHECK (late <= blocks / 200);
+        e.stop();
+    }
     // every built-in effect stays finite and silent-in gives finite out
     for (auto& info : builtinEffects())
     {

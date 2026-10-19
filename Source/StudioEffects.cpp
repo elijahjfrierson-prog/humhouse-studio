@@ -470,40 +470,51 @@ public:
                                                  { "mix", "Mix", 0, 1, 1 }, { "out", "Output", -24, 6, 0 } };
         return ps;
     }
+    // zero latency: anti-derivative anti-aliasing instead of oversampling (no lookahead, no delay)
     void prepare (double s, int mb) override
     {
-        os = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false);
-        os->initProcessing ((size_t) mb); juce::ignoreUnused (s);
+        juce::ignoreUnused (s);
         dry.setSize (2, mb);
+        xPrev[0] = xPrev[1] = 0;
     }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
-        if (! os || n > dry.getNumSamples()) return;
+        if (n > dry.getNumSamples()) return;
         for (int c = 0; c < 2; ++c) dry.copyFrom (c, 0, b, c, 0, n);
-        juce::dsp::AudioBlock<float> blk (b.getArrayOfWritePointers(), 2, (size_t) n);
-        auto up = os->processSamplesUp (blk);
         const float k = dB (p (0)); const int ch = (int) p (1);
-        for (size_t c = 0; c < up.getNumChannels(); ++c)
-        {
-            auto* d = up.getChannelPointer (c);
-            for (size_t i = 0; i < up.getNumSamples(); ++i)
-            {
-                const float x = d[i] * k;
-                d[i] = ch == 0 ? std::tanh (x) : ch == 1 ? (x >= 0 ? std::tanh (x) : std::tanh (0.7f * x) / 0.7f * 0.9f) : x / (1.0f + std::abs (x));
-                d[i] /= std::max (1.0f, std::sqrt (k));
-            }
-        }
-        os->processSamplesDown (blk);
+        const float norm = 1.0f / std::max (1.0f, std::sqrt (k));
         const float mix = p (2), og = dB (p (3));
         for (int c = 0; c < 2; ++c)
         {
             auto* d = b.getWritePointer (c); auto* s = dry.getReadPointer (c);
-            for (int i = 0; i < n; ++i) d[i] = (s[i] * (1 - mix) + d[i] * mix) * og;
+            double x1 = xPrev[c];
+            for (int i = 0; i < n; ++i)
+            {
+                const double x = (double) s[i] * k;
+                const double dx = x - x1;
+                const double y = std::abs (dx) > 1.0e-5 ? (prim (x, ch) - prim (x1, ch)) / dx : shape (0.5 * (x + x1), ch);
+                x1 = x;
+                d[i] = (s[i] * (1 - mix) + (float) y * norm * mix) * og;
+            }
+            xPrev[c] = std::isfinite (x1) ? x1 : 0.0;
         }
     }
-    int latencySamples() const override { return os ? (int) os->getLatencyInSamples() : 0; }
 private:
-    std::unique_ptr<juce::dsp::Oversampling<float>> os; juce::AudioBuffer<float> dry;
+    static double logCosh (double x) { const double a = std::abs (x); return a + std::log1p (std::exp (-2.0 * a)) - 0.69314718055994531; }
+    static double shape (double x, int ch)
+    {
+        if (ch == 0) return std::tanh (x);
+        if (ch == 1) return x >= 0 ? std::tanh (x) : std::tanh (0.7 * x) / 0.7 * 0.9;
+        return x / (1.0 + std::abs (x));
+    }
+    static double prim (double x, int ch)
+    {
+        if (ch == 0) return logCosh (x);
+        if (ch == 1) return x >= 0 ? logCosh (x) : 0.9 / 0.49 * logCosh (0.7 * x);
+        const double a = std::abs (x); return a - std::log1p (a);
+    }
+    double xPrev[2] {};
+    juce::AudioBuffer<float> dry;
 };
 
 class ChannelStrip : public BuiltinEffect

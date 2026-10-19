@@ -19,16 +19,26 @@ public:
     ~WorkerPool();
     void run (int count, Job job, void* ctx);   // blocks until all indices are done
     int size() const { return (int) threads.size(); }
+    // macOS: workers join the audio device's workgroup so the OS schedules them like the audio thread
+    // (other apps such as OBS can't starve them mid-block)
+    void setWorkgroup (const juce::AudioWorkgroup& wg);
     std::atomic<long> workerJobs { 0 }, runs { 0 };
 private:
+    struct Worker : juce::Thread
+    {
+        explicit Worker (WorkerPool& p) : juce::Thread ("HHS audio worker"), pool (p) {}
+        void run() override { pool.workerLoop(); }
+        WorkerPool& pool;
+    };
     void workerLoop();
-    std::vector<std::thread> threads;
+    std::vector<std::unique_ptr<Worker>> threads;
     std::atomic<bool> quit { false };
-    std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 };
+    std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 }, wgGeneration { 0 };
     std::atomic<Job> job { nullptr };
     std::atomic<void*> ctx { nullptr };
-    std::mutex m;
+    std::mutex m, wgMutex;
     std::condition_variable cv;
+    juce::AudioWorkgroup workgroup;
 };
 
 class Engine : public juce::AudioIODeviceCallback,
@@ -155,6 +165,7 @@ private:
     std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;
+    juce::AudioWorkgroup deviceWorkgroup;
     std::atomic<bool> mtOn { true }, smartOn { true };
     std::vector<float> trackCost, chanCost;
     std::vector<int> chanJobOrder;

@@ -9,22 +9,43 @@ namespace hhs
 // =============================================================== worker pool
 WorkerPool::WorkerPool (int n)
 {
-    for (int i = 0; i < n; ++i) threads.emplace_back ([this] { workerLoop(); });
+    for (int i = 0; i < n; ++i)
+    {
+        auto& t = threads.emplace_back (std::make_unique<Worker> (*this));
+        // real-time priority so a busy machine (OBS, browsers, screen capture) can't preempt a worker mid-block
+        if (! t->startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (10)))
+            t->startThread (juce::Thread::Priority::highest);
+    }
+}
+void WorkerPool::setWorkgroup (const juce::AudioWorkgroup& wg)
+{
+    { const std::lock_guard<std::mutex> lk (wgMutex); workgroup = wg; }
+    wgGeneration.fetch_add (1);
 }
 WorkerPool::~WorkerPool()
 {
     quit = true;
     generation.fetch_add (1);
     cv.notify_all();
-    for (auto& t : threads) t.join();
+    for (auto& t : threads) t->stopThread (4000);
 }
 void WorkerPool::workerLoop()
 {
     juce::FloatVectorOperations::disableDenormalisedNumberSupport();   // denormals in reverb tails cause CPU spikes
     int seen = generation.load();
+    int wgSeen = -1;
+    juce::WorkgroupToken token;
     auto lastWork = std::chrono::steady_clock::now();
     while (! quit.load())
     {
+        if (const int g = wgGeneration.load(); g != wgSeen)
+        {
+            wgSeen = g;
+            token.reset();
+            juce::AudioWorkgroup wg;
+            { const std::lock_guard<std::mutex> lk (wgMutex); wg = workgroup; }
+            if (wg) wg.join (token);
+        }
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
@@ -613,6 +634,11 @@ void Engine::prepareRuntimes()
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
+    {
+        const juce::ScopedLock sl (lock);
+        deviceWorkgroup = d->getWorkgroup();
+        if (pool) pool->setWorkgroup (deviceWorkgroup);
+    }
     juce::MessageManager::callAsync ([this, a = alive] { if (a->load()) sync(); });
 }
 void Engine::audioDeviceStopped() {}
@@ -627,7 +653,7 @@ void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
     if (! pool || pool->size() != workers) fresh = std::make_unique<WorkerPool> (workers);
     {
         const juce::ScopedLock sl (lock);
-        if (fresh) std::swap (pool, fresh);
+        if (fresh) { fresh->setWorkgroup (deviceWorkgroup); std::swap (pool, fresh); }
         mtOn = multithreaded; smartOn = smartDisable;
     }
 }
