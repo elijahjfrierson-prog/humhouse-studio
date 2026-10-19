@@ -22,6 +22,104 @@ static float renderPeak (Engine& e, int blocks, int n = 512)
     return peak;
 }
 
+// realistic sung phrase (glottal buzz through vowel formants, jitter, vibrato, slides, breaths, short ad-libs)
+// run through AutoPitch: on held notes the output must sit on the scale note with no chirps (wrong-pitch blips) or squeaks
+struct VoiceProbe { int chirps = 0; double worstCents = 0, worstSqueak = 0; int squeaks = 0; };
+static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0.75f, float natvib = 0.0f)
+{
+    const double fs = 48000; const double tau = juce::MathConstants<double>::twoPi;
+    struct Seg { double startMidi, endMidi, dur; bool voiced; double vibCents; };
+    // C major; sung slightly off the notes; "yeah" ad-libs fall a few semitones; breath gaps between phrases
+    const std::vector<Seg> segs {
+        { 57.3, 57.3, 0.45, true, 35 }, { 57.3, 60.2, 0.06, true, 0 }, { 60.2, 60.2, 0.40, true, 30 }, { 0, 0, 0.12, false, 0 },
+        { 64.4, 64.4, 0.35, true, 25 }, { 64.4, 61.8, 0.08, true, 0 }, { 61.8, 61.8, 0.30, true, 40 }, { 0, 0, 0.09, false, 0 },
+        { 67.3, 64.2, 0.14, true, 0 }, { 0, 0, 0.07, false, 0 }, { 52.2, 52.2, 0.50, true, 30 }, { 52.2, 55.3, 0.05, true, 0 },
+        { 55.3, 55.3, 0.35, true, 20 }, { 0, 0, 0.15, false, 0 }, { 71.2, 71.2, 0.40, true, 45 }, { 71.2, 69.1, 0.04, true, 0 },
+        { 69.1, 69.1, 0.45, true, 30 }, { 69.1, 64.0, 0.12, true, 0 }, { 0, 0, 0.1, false, 0 }, { 48.3, 48.3, 0.5, true, 25 } };
+    juce::Random rng ((juce::int64) seed);
+    std::vector<float> in, tgtHz; std::vector<char> steady;
+    double ph = 0, t = 0, jit = 0;
+    double f1s[3] = { 0, 0, 0 }, f2s[3] = { 0, 0, 0 };
+    const double fc[3] = { 700, 1150, 2600 }, bw[3] = { 90, 110, 160 };
+    double env = 0;
+    auto snapC = [] (double m) { static const int sc[7] = { 0, 2, 4, 5, 7, 9, 11 }; int best = 0; double bd = 99;
+        for (int o = 2; o < 9; ++o) for (int s : sc) { const double d = std::abs (o * 12 + s - m); if (d < bd) { bd = d; best = o * 12 + s; } } return best; };
+    for (auto& sg : segs)
+    {
+        const int len = (int) (sg.dur * fs);
+        for (int i = 0; i < len; ++i, t += 1 / fs)
+        {
+            const double a = (double) i / len;
+            double m = sg.startMidi + (sg.endMidi - sg.startMidi) * a + sg.vibCents / 100.0 * std::sin (tau * 5.6 * t);
+            const double hz = 440.0 * std::pow (2.0, (m - 69.0) / 12.0) * (1.0 + jit);
+            double x = 0;
+            if (sg.voiced)
+            {
+                ph += hz / fs; if (ph >= 1) { ph -= 1; jit = 0.004 * (rng.nextDouble() * 2 - 1); }
+                for (int k = 1; k * hz < 7000; ++k) x += std::sin (tau * k * ph) / (k * std::sqrt ((double) k));
+                env += (1.0 - env) * 0.004;
+            }
+            else env *= 0.996;
+            double v = 0.12 * env * x + 0.015 * (rng.nextDouble() * 2 - 1);   // + breath / room noise
+            double y = 0;
+            for (int f = 0; f < 3; ++f)
+            {
+                const double rr = std::exp (-juce::MathConstants<double>::pi * bw[f] / fs), cw = std::cos (tau * fc[f] / fs);
+                const double o = v + 2 * rr * cw * f1s[f] - rr * rr * f2s[f]; f2s[f] = f1s[f]; f1s[f] = o; y += o * (1 - rr) * (f == 0 ? 1.0 : 0.6);
+            }
+            in.push_back ((float) y);
+            const bool st = sg.voiced && sg.startMidi == sg.endMidi && i > 0.06 * fs && i < len - 0.03 * fs;
+            steady.push_back (st ? 1 : 0);
+            tgtHz.push_back (st ? (float) (440.0 * std::pow (2.0, (snapC (sg.startMidi) - 69.0) / 12.0)) : 0.0f);
+        }
+    }
+    float pk = 0; for (auto s : in) pk = std::max (pk, std::abs (s));
+    for (auto& s : in) s *= 0.5f / pk;
+    auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib);
+    ap->prepare (fs, 512);
+    PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+    juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
+    for (size_t at = 0; at < in.size(); at += 512)
+    {
+        const int n = (int) std::min<size_t> (512, in.size() - at);
+        for (int i = 0; i < n; ++i) { b.setSample (0, i, in[at + (size_t) i]); b.setSample (1, i, in[at + (size_t) i]); }
+        ap->process (b, n, ctx);
+        for (int i = 0; i < n; ++i) out.push_back (b.getSample (0, i));
+    }
+    VoiceProbe res;
+    const int lag = ap->latencySamples() + (style == 3 ? 72 : 300);   // shifter delay (approx)
+    for (size_t at = 4096; at + 2048 < out.size(); at += 240)
+    {
+        const size_t c = at + 512 - (size_t) lag;   // input time at window centre
+        bool ok = true; for (size_t k = c - 600; k < c + 600; k += 60) ok = ok && steady[k];
+        if (! ok) continue;
+        const float f = detectPitchYin (out.data() + at, 1024, fs, 0.2f, 0.0f, 60.0f, 1100.0f);
+        if (f <= 0) continue;
+        const double cents = std::abs (1200.0 * std::log2 (f / tgtHz[c]));
+        res.worstCents = std::max (res.worstCents, cents);
+        if (cents > (natvib > 0 ? 80.0 : 40.0)) { ++res.chirps; }
+    }
+    // squeaks: sudden bursts of high-frequency energy in the output that the input doesn't have (2 ms blocks)
+    for (size_t at = 4096; at + 1200 < out.size(); at += 96)
+    {
+        const size_t ci = at - (size_t) lag;
+        // the shifter's delay follows the voice's cycle length, so compare against the busiest input block nearby
+        double eo = 0, ei = 1e-9;
+        for (size_t k = 2; k < 96; ++k) { const double d = out[at + k] - 2 * out[at + k - 1] + out[at + k - 2]; eo += d * d; }
+        for (size_t b = ci - 960; b <= ci + 960; b += 48)
+        {
+            double e = 0;
+            for (size_t k = 2; k < 96; ++k) { const double d = in[b + k] - 2 * in[b + k - 1] + in[b + k - 2]; e += d * d; }
+            ei = std::max (ei, e);
+        }
+        const double ratio = eo / ei;
+        res.worstSqueak = std::max (res.worstSqueak, ratio);
+        if (ratio > 6.0) { ++res.squeaks; }
+    }
+    return res;
+}
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI init;
@@ -494,6 +592,17 @@ int main()
         CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
         CHECK (std::abs (gap - 440.0f) < 4.0f);
     }
+    // AutoPitch on a realistic sung phrase: no chirps (wrong-pitch blips) or squeaks in any style
+    for (int style : { 0, 1, 2, 3 })
+        for (unsigned seed : { 1u, 2u, 3u })
+            for (float natvib : { 0.0f, 1.0f })
+            {
+                const auto v = probeAutoPitchVoice (style, seed, 0.75f, natvib);
+                std::printf ("autopitch voice style %d seed %u vib %.0f: %d chirps (worst %.0f c), %d squeaks (worst %.1fx)\n",
+                             style, seed, natvib, v.chirps, v.worstCents, v.squeaks, v.worstSqueak);
+                CHECK (v.chirps == 0);
+                CHECK (v.squeaks == 0);
+            }
     // AutoPitch Hard Tune: sung vibrato is flattened (Natural Vibrato 0) or kept (100); deep notes tune like high ones
     {
         auto run = [] (double hz, double vibCents, float natvib, std::vector<float>& out) {
@@ -720,6 +829,39 @@ int main()
         CHECK (std::abs (zc / (86400.0 / 48000.0) - 110.3) < 2.0);
         CHECK (lo > 0.30f && hi < 0.40f);
         CHECK (std::abs (out->getSample (0, 1) - raw.getSample (0, 1)) < 0.01f);
+    }
+    // portamento: a legato slide keeps the same voice going (no retrigger, no gap); the glide takes the Glide time;
+    // in Stretch the slid note still plays the sample's full length instead of running out early
+    for (int mode : { 0, 1 })
+    {
+        Channel c; c.type = ChannelType::Sampler; c.stretchMode = mode; c.glide = 0.1f; c.mono = true; c.rootKey = 60;
+        auto raw = std::make_shared<juce::AudioBuffer<float>> (2, 24000);   // 0.5 s, 110 Hz, fading 0.6 -> 0.2
+        for (int i = 0; i < 24000; ++i) { const float v = (0.6f - 0.4f * i / 24000.0f) * (float) std::sin (juce::MathConstants<double>::twoPi * 110.0 * i / 48000.0); raw->setSample (0, i, v); raw->setSample (1, i, v); }
+        auto inst = createInstrument (c, raw, 48000.0);
+        inst->prepare (48000.0, 512); inst->update (c);
+        juce::AudioBuffer<float> o (2, 30000); o.clear();
+        inst->noteOn (60, 1.0f, false);
+        inst->render (o, 0, 4800);
+        inst->noteOff (60); inst->noteOn (67, 1.0f, true);   // the next note starts where this one ends
+        inst->render (o, 4800, 25200);
+        auto zcHz = [&] (int a, int b) {   // interpolated upward zero crossings: exact to a fraction of a Hz
+            double first = -1, last = -1; int z = 0;
+            for (int i = a + 1; i < b; ++i)
+            {
+                const float y0 = o.getSample (0, i - 1), y1 = o.getSample (0, i);
+                if (y0 <= 0 && y1 > 0) { const double t = i - 1 + y0 / (y0 - y1); if (first < 0) first = t; last = t; ++z; }
+            }
+            return z > 1 ? (z - 1) * 48000.0 / (last - first) : 0.0; };
+        const float atSlide = o.getRMSLevel (0, 6720, 960), late = o.getRMSLevel (0, 20160, 960), end = o.getRMSLevel (0, 21600, 960);
+        float gapMin = 1; for (int w = 480; w + 480 < 16000; w += 240) gapMin = std::min (gapMin, o.getRMSLevel (0, w, 480));
+        const double hzAfter = zcHz (10560, 16800), hzMid = zcHz (6600, 7800);
+        std::printf ("glide %s: level at slide %.3f (held 0.34), min %.3f, at 0.44 s %.3f, after %.1f Hz (164.8), mid-glide %.1f Hz\n",
+                     mode ? "stretch" : "resample", atSlide, gapMin, end, hzAfter, hzMid);
+        CHECK (atSlide > 0.29f && atSlide < 0.39f);   // the held note continued (a retrigger would be back at 0.42)
+        CHECK (gapMin > 0.12f);
+        CHECK (std::abs (hzAfter - 164.8) < 4.0);
+        CHECK (hzMid > 122.0 && hzMid < 150.0);   // half way through the 0.1 s glide: about 135 Hz
+        if (mode == 1) CHECK (late > 0.12f && end > 0.1f);   // Stretch: still playing to the sample's end
     }
 
     // save / load / undo

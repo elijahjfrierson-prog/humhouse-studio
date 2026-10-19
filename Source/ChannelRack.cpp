@@ -151,6 +151,7 @@ struct Row : public juce::Component
         bind (vol, [] (Channel& c, float v) { c.volume = v; });
         bind (pan, [] (Channel& c, float v) { c.pan = v; });
         bind (pitch, [] (Channel& c, float v) { c.pitch = v; });
+        glide.setSkewFactorFromMidPoint (0.15);
         bind (glide, [] (Channel& c, float v) { c.glide = v; });
         insert.setSliderStyle (juce::Slider::LinearBar);
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");

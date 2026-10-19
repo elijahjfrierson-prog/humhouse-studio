@@ -826,7 +826,7 @@ void PsolaShifter::prepare (double s)
     sr = s;
     int sz = 1; while (sz < (int) (s * 0.5)) sz <<= 1;
     for (auto* v : { &inL, &inR, &outL, &outR, &wsum }) v->assign ((size_t) sz, 0.0f);
-    mask = sz - 1; n = 0; ts = 0; mark = 0; lat = 0.006 * s; dryL = dryR = 0;
+    mask = sz - 1; n = 0; ts = 0; mark = 0; lastP = 1; lat = 0.006 * s; dryL = dryR = 0;
 }
 
 float PsolaShifter::read (const std::vector<float>& b, double pos) const
@@ -844,12 +844,18 @@ void PsolaShifter::process (float& l, float& r, double ratio, double period)
     const double P = juce::jlimit (0.0015 * sr, 0.02 * sr, period > 8.0 ? period : 0.006 * sr);
     ratio = juce::jlimit (0.25, 4.0, ratio);
     if (ts < (double) n) ts = (double) n;
+    // the cycle got longer (a lower note): the next grain would start in the past and fade in at half
+    // weight = a step in the output (the squeak on low note starts). Start it now from zero weight instead.
+    if (ts - P < (double) n - 1.0) ts = (double) n + P;
     while (ts - P <= (double) n)   // next grain starts now: lay it out centred on ts
     {
         lat += juce::jlimit (-0.05 * P, 0.05 * P, 2.3 * P - lat);              // latency follows the voice slowly (no skips)
         const double want = ts - lat;
         double c = mark + P * std::round ((want - mark) / P);                   // stay on the voice's cycle grid
-        if (std::abs (c - want) > P) c = want;                                  // first grain / after a long jump
+        // a new note with a different cycle length (or the first grain): restart the grid right where the voice
+        // is, so the new grains line up with the last ones (a snapped grid here was the squeak on low note starts)
+        if (std::abs (c - want) > P || std::abs (P - lastP) > 0.15 * lastP) c = want;
+        lastP = P;
         while (c + P > (double) n - 1.0) c -= P;                                // only use input we already have
         mark = c;
         for (long long j = (long long) std::ceil (ts - P); j <= (long long) std::floor (ts + P); ++j)
@@ -870,9 +876,10 @@ void PsolaShifter::process (float& l, float& r, double ratio, double period)
     ++n;
 }
 
-float detectPitchYin (const float* x, int n, double sr, float thresh, float fallback, float loHz, float hiHz, bool* rough)
+float detectPitchYin (const float* x, int n, double sr, float thresh, float fallback, float loHz, float hiHz, bool* rough, float* aperiodic)
 {
     if (rough != nullptr) *rough = false;
+    if (aperiodic != nullptr) *aperiodic = 1.0f;
     const int maxTau = std::min (n / 2, (int) (sr / loHz));
     const int minTau = std::max (2, (int) (sr / hiHz));
     if (maxTau <= minTau + 2) return 0.0f;
@@ -905,6 +912,7 @@ float detectPitchYin (const float* x, int n, double sr, float thresh, float fall
             const float pa = d[(size_t) c - 1], pb = d[(size_t) c], pc = d[(size_t) tau];
             const float den = pa + pc - 2 * pb;
             const float t = (float) c + (std::abs (den) > 1e-9f ? 0.5f * (pa - pc) / den : 0.0f);
+            if (aperiodic != nullptr) *aperiodic = pb;
             return (float) sr / t;
         }
     }
@@ -923,6 +931,7 @@ float detectPitchYin (const float* x, int n, double sr, float thresh, float fall
                     const float den = a + c - 2 * b;
                     const float t = (float) tau + (std::abs (den) > 1e-9f ? 0.5f * (a - c) / den : 0.0f);
                     if (rough != nullptr) *rough = true;
+                    if (aperiodic != nullptr) *aperiodic = b;
                     return (float) sr / t;
                 }
     }
@@ -955,7 +964,7 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -989,22 +998,31 @@ public:
                     // one full-range detector for every register: the window follows the voice (~3 cycles of the sung
                     // note = low lag, so vibrato isn't smeared into a wave); at a word start or on a miss try short, then long
                     const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
-                    bool rough = false; int wn = 512; float hz = 0;
+                    bool rough = false; int wn = 512; float hz = 0, aper = 1;
                     auto detect = [&] (int len) {
                         len = juce::jlimit (256, 1024, len);
                         std::array<float, 1024> win {};
                         for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
                         wn = len;
-                        return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough);
+                        return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough, &aper);
                     };
                     if (lastMidi > 0) hz = detect ((int) (3.2 * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
                     if (hz <= 0) hz = detect (512);
                     if (hz <= 0) hz = detect (1024);
                     float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    float lvl = 0;
+                    for (int k = 0; k < wn; ++k) { const float a = analysis[(size_t) ((aw - wn + k + (int) analysis.size()) % (int) analysis.size())]; lvl += a * a; }
+                    lvl = std::sqrt (lvl / (float) wn);
+                    // breaths, room noise and hiss: too quiet next to the voice, or not clearly pitched - leave them untuned
+                    const float hopSec = (float) hop / (float) dsr;
+                    voiceLvl *= std::exp (-hopSec / 0.5f);
+                    if (lvl < 0.1f * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
                     if (rough && midi > 0 && heldNote > 0) { missHops = 0; midi = -1.0f; }
+                    // the voice coming back after a gap on another note is a fresh start, not a slip of the old note
+                    if (midi > 0 && lastMidi > 0 && missHops >= 2 && std::abs (midi - lastMidi) > 1.0f) { heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                     if (midi > 0 && lastMidi > 0)
                     {
                         // octave error guard: a sudden exact octave jump inside a note is a detector slip - fold it back
@@ -1013,10 +1031,19 @@ public:
                         else if (std::abs (dj + 12.0f) < 0.7f && octSlip < 8) { midi += 12.0f; ++octSlip; }
                         else octSlip = 0;
                     }
+                    // a new note (word start or a leap) must read the same twice in a row before it's tuned to: one-off
+                    // misreads from noise or consonants were the chirps / squeaks (a wrong ratio for a few ms)
+                    if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
+                    {
+                        const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < (rough || pendingRough ? 0.35f : 0.6f);
+                        if (same) pendingMidi = 0;
+                        else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
+                    }
+                    else if (midi != -1.0f) pendingMidi = 0;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
-                        const float hopSec = (float) hop / (float) dsr;
+                        voiceLvl = std::max (voiceLvl, lvl);
                         // the analysis window lags the voice by half its length: extrapolate the pitch slope so vibrato
                         // and inflections are corrected where the voice is now (this lag was the leftover "wave")
                         slope = onset || std::abs (midi - lastMidi) > 1.0f ? 0.0f : 0.6f * slope + 0.4f * (midi - lastMidi);
@@ -1035,7 +1062,7 @@ public:
                         }
                         else jumpHops = 0;
                         heldNote = target;
-                        float semis = (float) target - now + natVib * (now - centre);
+                        float semis = juce::jlimit (-3.0f, 3.0f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (style == 3 || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
@@ -1061,7 +1088,7 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
-    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };

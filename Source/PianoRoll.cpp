@@ -56,6 +56,7 @@ public:
         setupButton (lockBtn, "LOCK", "Scale lock: notes you draw, drag or stamp snap to the chosen key and scale", true);
         lockBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prScaleLock", false), juce::dontSendNotification);
         lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
+        glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
             if (! glide.isMouseButtonDown()) s.commit ("Glide");
@@ -186,6 +187,11 @@ public:
                 }
             }
             if (drag == Drag::Select) { g.setColour (col::accent2.withAlpha (0.15f)); g.fillRect (selRect); g.setColour (col::accent2); g.drawRect (selRect); }
+            if (timeSelB > timeSelA)
+            {
+                const float x0 = juce::jmax ((float) keyW, (float) beatToX (timeSelA)), x1 = (float) beatToX (timeSelB);
+                if (x1 > x0) { g.setColour (col::accent.withAlpha (0.08f)); g.fillRect (x0, (float) ga.getY(), x1 - x0, (float) ga.getHeight()); }
+            }
             drawPlayhead (g, ga);
         }
         // keyboard
@@ -213,6 +219,11 @@ public:
             if (x > getWidth()) break;
             g.drawText (juce::String (bar + 1), (int) x + 3, barH, 40, rulerH, juce::Justification::centredLeft);
             g.drawVerticalLine ((int) x, (float) barH, (float) (barH + rulerH));
+        }
+        if (timeSelB > timeSelA)
+        {
+            const float x0 = juce::jmax ((float) keyW, (float) beatToX (timeSelA)), x1 = (float) beatToX (timeSelB);
+            if (x1 > x0) { g.setColour (col::accent.withAlpha (0.45f)); g.fillRect (x0, (float) barH, x1 - x0, (float) rulerH); }
         }
         if (const double ph = playheadLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
         {
@@ -251,9 +262,15 @@ public:
         dragStart = e.position; changed = false;
         if (s.channel (channelId) == nullptr) return;
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
-        if (e.y > barH && e.y < ga.getY()) { drag = Drag::Scrub; scrubTo (e); return; }   // click or drag anywhere on the bar numbers moves the playhead
+        if (e.y > barH && e.y < ga.getY())   // bar numbers: drag = select bars (FL), click or the handle = playhead
+        {
+            const double ph = playheadLocal();
+            if (ph >= 0.0 && std::abs (beatToX (ph) - e.position.x) <= 8.0f) { drag = Drag::Scrub; scrubTo (e); return; }
+            drag = Drag::TimeSel; timeMoved = false; return;
+        }
         if (e.y >= ga.getBottom()) { drag = Drag::Velocity; setVelocityAt (e.position); return; }
         if (! ga.contains (e.getPosition())) return;
+        if (timeSelB > timeSelA) { timeSelA = timeSelB = -1; repaint(); }
 
         auto& notes = s.notes (channelId);
         int hit; bool edge;
@@ -331,6 +348,18 @@ public:
         auto& p = s.p();
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
         if (drag == Drag::Scrub) { scrubTo (e); return; }
+        if (drag == Drag::TimeSel)
+        {
+            if (! timeMoved && std::abs (e.position.x - dragStart.x) < 4) return;
+            timeMoved = true;
+            auto at = [&] (float x) { const double b = juce::jmax (0.0, xToBeat (juce::jmax ((float) keyW, x)));
+                                      const double sn = s.p().snap > 0 ? s.p().snap : 0.25;
+                                      return e.mods.isAltDown() ? b : std::round (b / sn) * sn; };
+            const double a = at (dragStart.x), b = at (e.position.x);
+            timeSelA = juce::jmin (a, b); timeSelB = juce::jmax (a, b);
+            selectTimeRange();
+            repaint(); return;
+        }
         if (drag == Drag::Velocity) { setVelocityAt (e.position); return; }
         if (drag == Drag::Delete) { deleteAt (e.position); return; }
         if (drag == Drag::Paint)
@@ -382,8 +411,9 @@ public:
         repaint();
     }
 
-    void mouseUp (const juce::MouseEvent&) override
+    void mouseUp (const juce::MouseEvent& e) override
     {
+        if (drag == Drag::TimeSel && ! timeMoved) { timeSelA = timeSelB = -1; scrubTo (e); }
         if (previewKey >= 0) { s.engine.previewNote (channelId, previewKey, 0, false); previewKey = -1; }
         if (changed || drag == Drag::Velocity || drag == Drag::Delete)
             s.edit (drag == Drag::Velocity ? "Velocity" : drag == Drag::Delete ? "Delete notes" : "Edit notes", [this] (Project&) { tools::sortNotes (s.notes (channelId)); });
@@ -441,6 +471,17 @@ public:
         if (is ('m', alt | shift)) return op ("Unmute notes", [] (NoteList& n) { tools::muteSelected (n, false); });
         if (is ('m', 0)) { muteBtn.setToggleState (! muteBtn.getToggleState(), juce::dontSendNotification); muteBtn.onClick(); return true; }
         if (is ('v', alt)) { ghostBtn.setToggleState (! ghostBtn.getToggleState(), juce::dontSendNotification); repaint(); return true; }
+        if (is ('b', cmd) && timeSelB > timeSelA)   // duplicate the selected bars right after themselves
+        {
+            const double a = timeSelA, b = timeSelB;
+            timeSelA = b; timeSelB = b + (b - a);
+            return op ("Duplicate bars", [a, b] (NoteList& n) {
+                NoteList add;
+                for (auto& x : n) if (x.start >= a - 1e-9 && x.start < b - 1e-9) { Note c = x; c.start += b - a; c.selected = true; add.push_back (c); }
+                tools::selectAll (n, false);
+                n.insert (n.end(), add.begin(), add.end());
+            });
+        }
         if (is ('b', cmd)) return op ("Duplicate", [] (NoteList& n) { tools::duplicateRight (n); });
         if (is ('g', cmd)) return op ("Glue", [] (NoteList& n) { tools::glue (n); });
         if (is ('l', cmd)) return op ("Legato", [] (NoteList& n) { tools::legato (n); });
@@ -463,13 +504,21 @@ public:
         {
             clipboard().clear();
             for (auto& n : s.notes (channelId)) if (n.selected) clipboard().push_back (n);
+            clipFrom() = timeSelB > timeSelA ? timeSelA : -1.0;   // bars copied by number keep their spot in the bar
+            clipLen() = timeSelB > timeSelA ? timeSelB - timeSelA : 0.0;
             return true;
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double at = floorSnap (s.engine.isPlaying() ? 0.0 : std::fmod (s.engine.positionBeats(), s.p().patterns[(size_t) s.p().currentPattern].lengthBeats()));
+            double at = floorSnap (s.engine.isPlaying() ? 0.0 : std::fmod (s.engine.positionBeats(), s.p().patterns[(size_t) s.p().currentPattern].lengthBeats()));
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
+            if (clipFrom() >= 0.0)
+            {
+                first = clipFrom();
+                if (timeSelB > timeSelA) at = timeSelB;   // highlighted bars: paste right after them
+                timeSelA = at; timeSelB = at + clipLen();
+            }
             return op ("Paste", [this, at, first] (NoteList& n) {
                 tools::selectAll (n, false);
                 for (auto c : clipboard()) { c.start = c.start - first + at; c.selected = true; n.push_back (c); }
@@ -479,7 +528,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel };
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -505,6 +554,13 @@ private:
     juce::Label chLabel;
 
     static NoteList& clipboard() { static NoteList c; return c; }
+    static double& clipFrom() { static double f = -1.0; return f; }
+    static double& clipLen() { static double l = 0.0; return l; }
+    double timeSelA = -1, timeSelB = -1; bool timeMoved = false;
+    void selectTimeRange()
+    {
+        s.live ([this] (Project&) { for (auto& n : s.notes (channelId)) n.selected = n.start >= timeSelA - 1e-9 && n.start < timeSelB - 1e-9; });
+    }
 
     juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedBottom (velH); }
     float beatToX (double b) const { return (float) gridArea().getX() + (float) ((b - scrollX) * pxPerBeat); }
