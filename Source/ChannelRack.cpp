@@ -44,7 +44,7 @@ static Channel poolChannel (const PoolInstrument& e)
 static bool isMelodicSample (const juce::File& f)   // notes change the pitch (root key plays the WAV as-is); drum hits stay put
 {
     const auto n = f.getFileNameWithoutExtension().toLowerCase(), dir = f.getParentDirectory().getFileName().toLowerCase();
-    if (n.contains ("808") || dir.contains ("808") || f.getFullPathName().containsIgnoreCase ("Drocetti Instruments")) return true;
+    if (n.contains ("808") || dir.contains ("808") || f.getFullPathName().containsIgnoreCase ("Instruments")) return true;
     return ! isDrumSampleName (n) && ! isDrumSampleName (dir);   // a kit's Hi-Hats / Snares folder keeps every hit at its own pitch
 }
 static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }

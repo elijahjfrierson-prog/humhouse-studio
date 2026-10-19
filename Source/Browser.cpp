@@ -297,7 +297,7 @@ private:
         roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
         const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
         roots.removeString (lib.getFullPathName());
-        if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());   // Drocetti Drums / Instruments library
+        if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());   // sound library: Classic Trap, Etherea Instruments, Smoke Sonja Signature Hitters
         refreshFolders();
     }
     void refreshFolders()
