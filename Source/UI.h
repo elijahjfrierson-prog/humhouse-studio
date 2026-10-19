@@ -84,15 +84,13 @@ inline void updateFloating (juce::Component& c)
 
 // FL-style tool cursors (white icon, dark outline so it reads on any background)
 enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom };
-inline juce::MouseCursor toolCursor (CursorIcon k)
+inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
 {
-    static std::map<int, juce::MouseCursor> cache;
-    if (auto it = cache.find ((int) k); it != cache.end()) return it->second;
     constexpr int S = 32;
     juce::Image img (juce::Image::ARGB, S, S, true);
     juce::Graphics g (img);
     juce::Path p;
-    int hx = 2, hy = 2;
+    hx = 2; hy = 2;
     using juce::AffineTransform;
     switch (k)
     {
@@ -134,6 +132,14 @@ inline juce::MouseCursor toolCursor (CursorIcon k)
         if (k == CursorIcon::Scissors) { g.fillEllipse (5.5f, 20.5f, 3.0f, 3.0f); g.fillEllipse (19.5f, 20.5f, 3.0f, 3.0f); }
         else g.fillEllipse (6.0f, 6.0f, 9.0f, 9.0f);
     }
+    return img;
+}
+inline juce::MouseCursor toolCursor (CursorIcon k)
+{
+    static std::map<int, juce::MouseCursor> cache;
+    if (auto it = cache.find ((int) k); it != cache.end()) return it->second;
+    int hx, hy;
+    const auto img = toolCursorImage (k, hx, hy);
     return cache.emplace ((int) k, juce::MouseCursor (img, hx, hy)).first->second;
 }
 
