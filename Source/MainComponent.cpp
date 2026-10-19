@@ -54,6 +54,8 @@ void showWhatsNewIfUpdated()
     f.getParentDirectory().createDirectory();
     f.replaceWithText (v);
     juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio " + v + " - What's new",
+        "- Sample previews stop when you click anywhere, press Stop or Space\n"
+        "- Recording: earlier takes and the beat play instantly when you hit record (no dropout while take files are created, punch pre-roll preloaded)\n"
         "- Studio Vocal (Studio FX): 0-latency vocal smoother - Smooth, De-Ess, Silk air, Warmth + 7 presets\n"
         "- No more phasing on buses: automatic plugin delay compensation like FL, the Mix knob lines dry up with latent FX, mono plugins get the mono sum instead of just the left side\n"
         "- AutoPitch rebuilt: Auto-Tune style single read head spliced on whole pitch cycles - full voice, no clicks or phasing, ~0.1-6 ms\n"
@@ -336,6 +338,7 @@ class MainComponent : public juce::Component, public juce::DragAndDropContainer,
 public:
     MainComponent()
     {
+        juce::Desktop::getInstance().addGlobalMouseListener (&previewStopper);
         juce::PropertiesFile::Options o;
         o.applicationName = "HumHouse Studio";
         o.filenameSuffix = ".settings";
@@ -463,6 +466,7 @@ public:
 
     ~MainComponent() override
     {
+        juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         stopTimer();
         engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
         popouts.clear();
@@ -819,6 +823,13 @@ private:
     Engine engine;
     Studio studio { engine };
     juce::TooltipWindow tooltips { this, 450 };
+    // a click anywhere stops a sample preview that is already playing (a click that starts a new one keeps it)
+    struct PreviewStopper : juce::MouseListener
+    {
+        explicit PreviewStopper (Engine& en) : e (en) {}
+        void mouseDown (const juce::MouseEvent&) override { e.stopPreview (150); }
+        Engine& e;
+    } previewStopper { engine };
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
