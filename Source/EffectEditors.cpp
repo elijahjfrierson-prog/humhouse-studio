@@ -881,6 +881,24 @@ struct SampleWaveView : juce::Component, private juce::Timer
     std::vector<std::pair<float, float>> peaks; double seconds = 0; float fadeIn = 0, fadeOut = 0;
 };
 
+// stacks pages top to bottom in one scrollable page (sampler MAIN: wave, sample, amp / INS)
+struct StackPage : juce::Component
+{
+    juce::Viewport vp; juce::Component body; juce::OwnedArray<juce::Component> parts;
+    explicit StackPage (std::initializer_list<juce::Component*> ps)
+    {
+        int w = 0, h = 0;
+        for (auto* p : ps) { parts.add (p); body.addAndMakeVisible (p); w = juce::jmax (w, p->getWidth()); h += p->getHeight(); }
+        int y = 0;
+        for (auto* p : parts) { p->setBounds (0, y, w, p->getHeight()); y += p->getHeight(); }
+        body.setSize (w, h);
+        vp.setViewedComponent (&body, false); vp.setScrollBarsShown (true, false);
+        addAndMakeVisible (vp);
+        setSize (w + vp.getScrollBarThickness(), juce::jmin (h, 720));
+    }
+    void resized() override { vp.setBounds (getLocalBounds()); body.setSize (juce::jmax (body.getWidth(), getWidth() - vp.getScrollBarThickness()), body.getHeight()); for (auto* p : parts) p->setSize (body.getWidth(), p->getHeight()); }
+};
+
 struct ChannelTabs : juce::Component
 {
     juce::TabbedComponent tabs { juce::TabbedButtonBar::TabsAtTop };
@@ -932,6 +950,7 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "stretchTime", "Time mul", 0.25f, 4, 1, ch->stretchTime, {} });
         smp.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
         smp.push_back ({ "root", "Root / step note", 24, 96, 60, (float) ch->rootKey, {} });
+        smp.push_back ({ "keyTrack", "Key", 0, 1, 0, ch->keyTrack ? 1.0f : 0.0f, { "Off", "On" } });   // off = every note plays the sample as-is
     }
     ins.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
     ins.push_back ({ "pan", "Pan", -1, 1, 0, ch->pan, {} });
@@ -975,7 +994,7 @@ void openChannelEditor (Studio& s, int channelId)
                 if (c == nullptr) return;
                 auto& sp = c->synth;
                 if (id == "volume") c->volume = v; else if (id == "pan") c->pan = v; else if (id == "pitch") c->pitch = v;
-                else if (id == "glide") c->glide = v; else if (id == "mono") c->mono = v > 0.5f; else if (id == "root") c->rootKey = (int) v;
+                else if (id == "glide") c->glide = v; else if (id == "mono") c->mono = v > 0.5f; else if (id == "root") c->rootKey = (int) v; else if (id == "keyTrack") c->keyTrack = v > 0.5f;
                 else if (id == "wave") sp.wave = (int) v; else if (id == "attack") sp.attack = v; else if (id == "decay") sp.decay = v;
                 else if (id == "sustain") sp.sustain = v; else if (id == "release") sp.release = v; else if (id == "cutoff") sp.cutoff = v;
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
@@ -995,10 +1014,14 @@ void openChannelEditor (Studio& s, int channelId)
     auto commit = [&s] { s.commit ("Channel settings"); };
     const juce::String kind = sampler ? "Sampler" : "Synth";
     auto* tabs = new ChannelTabs();
-    if (sampler) tabs->add ("SMP", new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP"));
-    tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
+    if (sampler)   // FL-style: wave, amp / INS and sample settings together on one page
+    {
+        auto* wave = new SampleWaveView (s, channelId); wave->setSize (560, 180);
+        tabs->add ("MAIN", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
+                                            new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP") }));
+    }
+    else tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
     tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
-    if (sampler) tabs->add ("WAVE", new SampleWaveView (s, channelId));
     tabs->add ("SCOPE", createScopeView ([&s, channelId]() -> ScopeTap* {
         auto* c = s.channel (channelId);
         const int t = c != nullptr ? c->mixerTrack : 0;

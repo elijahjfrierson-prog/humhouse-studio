@@ -14,13 +14,13 @@ public:
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
-        rootKey = c.rootKey; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
+        rootKey = c.rootKey; keyTrack = c.keyTrack; pitch = c.stretchMode == 0 ? c.pitch : 0.0f; glide = c.glide; mono = c.mono;
         oneShot = c.oneShot; cutItself = c.cutItself; attack = c.ampAttack; hold = c.ampHold; release = c.ampRelease;
     }
     void noteOn (int key, float vel, bool slide) override
     {
         if (! sample || sample->getNumSamples() == 0) return;
-        const double target = key - rootKey + pitch;
+        const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
         if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
         if (mono || slide)
         {
@@ -112,6 +112,7 @@ private:
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
+    bool keyTrack = true;
     double sampleRate = 44100.0, lastSemis = -999.0;
     float pitch = 0, glide = 0; bool mono = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;

@@ -231,6 +231,32 @@ int main()
         CHECK (at (0.5) > 0.1f);
         CHECK (at (0.0) < 0.02f);
     }
+    // a sample plays exactly like the file, and with Key off every note plays it at its own pitch
+    {
+        auto buf = std::make_shared<juce::AudioBuffer<float>> (2, 4096);
+        juce::Random rnd (7);
+        for (int i = 0; i < 4096; ++i) { const float v = rnd.nextFloat() - 0.5f; buf->setSample (0, i, v); buf->setSample (1, i, v); }
+        auto play = [&] (const Channel& c, int key) {
+            auto inst = createInstrument (c, buf, 44100.0);
+            inst->prepare (44100.0, 512);
+            inst->noteOn (key, 1.0f, false);
+            juce::AudioBuffer<float> out (2, 2048); out.clear();
+            inst->render (out, 0, 2048);
+            return out;
+        };
+        Channel c; c.type = ChannelType::Sampler; c.rootKey = 60;
+        auto o = play (c, 60);
+        float err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (o.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err < 1.0e-6f);   // bit-for-bit the WAV, no fade-in / interpolation
+        c.keyTrack = false;
+        auto k = play (c, 72);
+        err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (k.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err < 1.0e-6f);
+        c.keyTrack = true;
+        auto p = play (c, 72);
+        err = 0; for (int i = 0; i < 2048; ++i) err = std::max (err, std::abs (p.getSample (0, i) - buf->getSample (0, i)));
+        CHECK (err > 0.01f);     // key on: it's pitched
+    }
     // Flanger / Flangus: 0 latency, finite, audibly changes the sound
     for (const char* id : { "flanger", "flangus" })
     {

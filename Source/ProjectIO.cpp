@@ -58,7 +58,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("oneShot", c.oneShot, nullptr); t.setProperty ("cutSelf", c.cutItself, nullptr); t.setProperty ("cutGroup", c.cutGroup, nullptr);
         t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
         t.setProperty ("smpNorm", c.smpNormalize, nullptr); t.setProperty ("smpRev", c.smpReverse, nullptr); t.setProperty ("smpInv", c.smpInvert, nullptr);
-        t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
+        t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("keyTrack", c.keyTrack, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
         t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
         t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
         auto& s = c.synth;
@@ -153,7 +153,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xffff8a3d));
         c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
-        c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true);
+        c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
         c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
         auto& s = c.synth;

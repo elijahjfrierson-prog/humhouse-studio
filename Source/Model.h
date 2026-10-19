@@ -63,6 +63,7 @@ struct Channel
     bool  mono = false;                    // legato/mono mode
     bool  muted = false, solo = false;
     int   rootKey = 60;                    // step-sequencer note
+    bool  keyTrack = true;                 // sampler: notes change pitch; off = every note plays the sample as-is (drums, FX)
     // sampler playback (FL style): one-shot ignores note length; cut itself chokes the previous hit (808s never overlap);
     // channels sharing a cut group choke each other (closed hat cuts open hat)
     bool  oneShot = true, cutItself = false;

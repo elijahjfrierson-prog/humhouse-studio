@@ -41,6 +41,11 @@ static Channel poolChannel (const PoolInstrument& e)
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
 }
+static bool isMelodicSample (const juce::File& f)   // 808s / bass get played as notes; drums, loops, FX stay the sample as-is
+{
+    const auto n = f.getFileNameWithoutExtension().toLowerCase();
+    return n.contains ("808") || n.contains ("bass") || n.contains ("sub") || n.contains ("reese");
+}
 static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
 
 void addSampleChannels (Studio& s, const juce::Array<juce::File>& files, const juce::String& insertName)
@@ -58,6 +63,7 @@ void addSampleChannels (Studio& s, const juce::Array<juce::File>& files, const j
             c.name = f.getFileNameWithoutExtension();
             c.type = ChannelType::Sampler;
             c.sampleFile = f;
+            c.keyTrack = isMelodicSample (f);
             c.mixerTrack = insert;
             c.colour = juce::Colour::fromHSV (juce::Random::getSystemRandom().nextFloat(), 0.55f, 0.95f, 1.0f);
             s.selectedChannel = p.addChannel (c);
@@ -155,8 +161,8 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.onDouble = [this] { changeSoundMenu(); };
-        name.setTooltip ("Click: open in Piano Roll. Double-click: change the sound (keeps notes, steps, routing). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
+        name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
             auto* c = s.channel (channelId);
@@ -269,7 +275,7 @@ struct Row : public juce::Component
                 chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
                     const auto f = fc.getResult();
                     if (! f.existsAsFile()) return;
-                    replaceSound ([&] (Channel& n) { n.type = ChannelType::Sampler; n.sampleFile = f; n.name = f.getFileNameWithoutExtension(); });
+                    replaceSound ([&] (Channel& n) { n.type = ChannelType::Sampler; n.sampleFile = f; n.keyTrack = isMelodicSample (f); n.name = f.getFileNameWithoutExtension(); });
                     if (! s.engine.isPlaying()) s.engine.previewFile (f);
                 });
             }
