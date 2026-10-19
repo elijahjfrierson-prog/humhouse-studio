@@ -722,11 +722,14 @@ void Engine::play()
 {
     if (playing.load()) return;
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
-    const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : position.load();
+    const double here = position.load();
+    const bool loopSel = ! rec && proj.songMode && proj.hasPunch() && (here < proj.punchIn || here >= proj.punchOut);   // FL: Space plays the selected range
+    const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : loopSel ? proj.punchIn : here;
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     if (rec) startRecordingWriters();     // create take files outside the audio lock, so nothing drops out as recording starts
     const juce::ScopedLock sl (lock);
     if (playing) return;
+    if (loopSel) position = from;
     startBeat = position.load();
     if (rec)
     {
