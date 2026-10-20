@@ -129,7 +129,25 @@ public:
             bright.setValue (col::accent.getBrightness(), juce::dontSendNotification);
         };
         addAndMakeVisible (reset);
-        setSize (340, 530);
+        // track colors: pick a Playlist track, click a swatch (its audio clips follow)
+        trackLabel.setFont (juce::FontOptions (12.0f)); addAndMakeVisible (trackLabel);
+        auto& lanes = s.p().lanes;
+        for (size_t i = 0; i < lanes.size(); ++i) trackBox.addItem (juce::String ((int) i + 1) + "  " + lanes[i].name, (int) i + 1);
+        trackBox.setSelectedId (juce::jlimit (1, juce::jmax (1, (int) lanes.size()), s.laneAnchor + 1), juce::dontSendNotification);
+        addAndMakeVisible (trackBox);
+        for (int i = 0; i <= 12; ++i)
+        {
+            auto* b = trackSwatches.add (new juce::TextButton (i == 12 ? "x" : ""));
+            if (i < 12) b->setColour (juce::TextButton::buttonColourId, pickedColour (i));
+            b->setTooltip (i == 12 ? "Clear the track color" : "Color this track and its clips");
+            b->onClick = [this, i] {
+                const int li = trackBox.getSelectedId() - 1;
+                const auto c = i == 12 ? juce::Colour() : pickedColour (i);
+                s.edit ("Track color", [li, c] (Project& p) { if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].colour = c; });
+            };
+            addAndMakeVisible (b);
+        }
+        setSize (340, 610);
     }
     void paint (juce::Graphics& g) override
     {
@@ -153,6 +171,12 @@ public:
         auto grow = r.removeFromTop (28);
         const int gw = grow.getWidth() / gradButtons.size();
         for (auto* b : gradButtons) b->setBounds (grow.removeFromLeft (gw).reduced (3));
+        r.removeFromTop (10);
+        trackLabel.setBounds (r.removeFromTop (18));
+        trackBox.setBounds (r.removeFromTop (24));
+        auto trow = r.removeFromTop (28);
+        const int tw = trow.getWidth() / trackSwatches.size();
+        for (auto* b : trackSwatches) b->setBounds (trow.removeFromLeft (tw).reduced (2));
         r.removeFromTop (10);
         reset.setBounds (r.removeFromTop (28).removeFromRight (90));
     }
@@ -180,6 +204,9 @@ private:
     juce::OwnedArray<GradSwatch> gradButtons;
     juce::Label gradLabel { {}, "Meters + scopes gradient" };
     juce::TextButton reset;
+    juce::Label trackLabel { {}, "Track color (Playlist)" };
+    juce::ComboBox trackBox;
+    juce::OwnedArray<juce::TextButton> trackSwatches;
 
     void apply()
     {

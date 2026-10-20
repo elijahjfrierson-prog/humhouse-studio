@@ -91,7 +91,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
         for (int i = 0; i < n; ++i) out.push_back (b.getSample (0, i));
     }
     VoiceProbe res;
-    const int lag = ap->latencySamples() + (style == 3 ? 72 : 300);   // shifter delay (approx)
+    const int lag = ap->latencySamples() + (style >= 3 ? 72 : 300);   // shifter delay (approx)
     for (size_t at = 4096; at + 2048 < out.size(); at += 240)
     {
         const size_t c = at + 512 - (size_t) lag;   // input time at window centre
@@ -917,7 +917,7 @@ int main()
             CHECK (r.attackOut > 0.93 * r.attackIn);
         }
     // AutoPitch on a realistic sung phrase: no chirps (wrong-pitch blips) or squeaks in any style
-    for (int style : { 0, 1, 2, 3 })
+    for (int style : { 0, 1, 2, 3, 4 })
         for (unsigned seed : { 1u, 2u, 3u })
             for (float natvib : { 0.0f, 1.0f })
             {
@@ -1459,6 +1459,76 @@ int main()
         std::printf ("audio roll: before %.3f, weakest hit %.3f, after %.3f\n", rms (0, 1), worst, rms (2, 4));
         CHECK (rms (0, 1) > 0.1f && worst > 0.1f && rms (2, 4) > 0.1f);
         wav.deleteFile();
+    }
+
+    // Classic Hard holds the note: E sung drifting up to E+0.7 (nearer F) stays on E; Hard Tune lets it go to F
+    {
+        auto run = [] (int style) {
+            const double fs = 48000; std::vector<float> in; double ph = 0;
+            const int len = (int) (fs * 1.6);
+            for (int i = 0; i < len; ++i)
+            {
+                const double t = i / fs, m = 64.25 + 0.45 * juce::jlimit (0.0, 1.0, (t - 0.4) / 0.6);
+                const double hz = 440.0 * std::pow (2.0, (m - 69.0) / 12.0);
+                ph += hz / fs; if (ph >= 1) ph -= 1;
+                double x = 0; for (int k = 1; k * hz < 6000; ++k) x += std::sin (juce::MathConstants<double>::twoPi * k * ph) / k;
+                in.push_back ((float) (0.15 * x));
+            }
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style); ap->prepare (fs, 512);
+            PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
+            for (size_t at = 0; at < in.size(); at += 512)
+            {
+                const int n = (int) std::min<size_t> (512, in.size() - at);
+                for (int i = 0; i < n; ++i) { b.setSample (0, i, in[at + (size_t) i]); b.setSample (1, i, in[at + (size_t) i]); }
+                ap->process (b, n, ctx);
+                for (int i = 0; i < n; ++i) { CHECK (std::isfinite (b.getSample (0, i))); out.push_back (b.getSample (0, i)); }
+            }
+            const float f = detectPitchYin (out.data() + out.size() - 3000, 1024, fs, 0.2f, 0.0f, 60.0f, 1100.0f);
+            return f > 0 ? 69.0 + 12.0 * std::log2 (f / 440.0) : 0.0;
+        };
+        const double ch = run (4), hd = run (3);
+        std::printf ("hold test (E drifting +0.7): Classic Hard ends on %.2f, Hard Tune on %.2f\n", ch, hd);
+        CHECK (std::abs (ch - 64.0) < 0.15);
+    }
+    // Key Finder: A minor progression detuned +18 cents with a 142 BPM kick
+    {
+        const double fs = 44100; const int len = (int) (fs * 16);
+        std::vector<float> x ((size_t) len, 0.0f);
+        const double detune = 18.0 / 100.0, beat = 60.0 / 142.0;
+        const int chords[4][3] { { 57, 60, 64 }, { 50, 53, 57 }, { 52, 55, 59 }, { 57, 60, 64 } };   // Am Dm Em Am
+        for (int i = 0; i < len; ++i)
+        {
+            const double t = i / fs;
+            const int c = ((int) (t / (beat * 4))) % 4;
+            double v = 0;
+            for (int k = 0; k < 3; ++k)
+            {
+                const double hz = 440.0 * std::pow (2.0, (chords[c][k] + 12 - 69 + detune) / 12.0);
+                for (int h = 1; h <= 4; ++h) v += std::sin (juce::MathConstants<double>::twoPi * hz * h * t) / (h * 3.0);
+            }
+            const double bass = 440.0 * std::pow (2.0, (chords[c][0] - 12 - 69 + detune) / 12.0);
+            v += 0.5 * std::sin (juce::MathConstants<double>::twoPi * bass * t);
+            const double tb = std::fmod (t, beat);
+            v += 0.9 * std::exp (-tb * 30.0) * std::sin (juce::MathConstants<double>::twoPi * 55.0 * tb);
+            x[(size_t) i] = (float) (0.15 * v);
+        }
+        const auto g = findKey (x.data(), len, fs);
+        std::printf ("key finder: %s (expected A minor 142 BPM +18 cents)\n", g.describe().toRawUTF8());
+        CHECK (g.root == 9 && g.scaleIndex == 1);
+        CHECK (std::abs (g.bpm - 142.0) <= 1.0);
+        CHECK (std::abs (g.cents - 18.0f) < 6.0f);
+    }
+    // clip colour survives save / load
+    {
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-colour-test.hhs");
+        Project p = Project::createDefault();
+        Clip c; c.uid = p.newUid(); c.patternIndex = 0; c.colour = juce::Colour (0xffff5d5d); p.clips.push_back (c);
+        CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        CHECK (! q.clips.empty() && q.clips.back().colour == juce::Colour (0xffff5d5d));
+        f.deleteFile();
     }
 
     // a project folder moved somewhere else (Desktop -> USB, other computer) still finds its recorded vocals

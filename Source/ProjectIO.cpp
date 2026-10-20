@@ -152,6 +152,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
         t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         t.setProperty ("hidden", c.hidden, nullptr);
+        if (! c.colour.isTransparent()) t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
         clips.appendChild (t, nullptr);
     }
     root.appendChild (clips, nullptr);
@@ -240,6 +241,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.audioFile = readFile (t, "file"); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
         c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
+        c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0));
         p.clips.push_back (c);
     }
     for (auto t : root.getChildWithName ("POOL")) p.audioPool.push_back (readFile (t, "file"));

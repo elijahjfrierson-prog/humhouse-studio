@@ -139,5 +139,13 @@ private:
     double sr = 44100, ts = 0, mark = 0, lat = 0, latS = 0, lastP = 1;
 };
 
+// Key Finder: key / scale (0 = Major, 1 = Natural Minor), tempo and tuning offset of a piece of audio
+struct KeyGuess
+{
+    int root = 0, scaleIndex = 0; double bpm = 0; float cents = 0, confidence = 0;
+    juce::String describe() const;
+};
+KeyGuess findKey (const float* mono, int n, double sr);
+
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr, float* aperiodic = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
 }

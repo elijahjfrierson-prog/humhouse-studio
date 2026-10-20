@@ -1,4 +1,5 @@
 #include "UI.h"
+#include <set>
 
 namespace hhs
 {
@@ -929,6 +930,7 @@ private:
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
         juce::Colour colour = c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
+        if (! c.colour.isTransparent()) colour = c.colour;
         if (c.muted) colour = col::dim;
         g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
         g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);
@@ -1023,6 +1025,44 @@ private:
         const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
         s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
     }
+    // Key Finder: key, scale, BPM and tuning offset of an audio clip (analysed off the audio thread)
+    void findKeyForClip (const Clip& c)
+    {
+        juce::Component::SafePointer<Playlist> safe (this);
+        const auto file = c.audioFile; const double off = c.sourceOffset, secs = juce::jmin (120.0, beatsToSeconds (c.length, s.p().bpm));
+        juce::Thread::launch ([safe, file, off, secs] {
+            KeyGuess g; bool ok = false;
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> rd { fm.createReaderFor (file) })
+            {
+                const double sr = rd->sampleRate;
+                const auto a = (juce::int64) (off * sr);
+                const int len = (int) juce::jmin ((juce::int64) (secs * sr), rd->lengthInSamples - a);
+                if (len > (int) sr)
+                {
+                    juce::AudioBuffer<float> b (2, len);
+                    rd->read (&b, 0, len, a, true, true);
+                    b.addFrom (0, 0, b, 1, 0, len); b.applyGain (0, 0, len, 0.5f);
+                    g = findKey (b.getReadPointer (0), len, sr); ok = true;
+                }
+            }
+            juce::MessageManager::callAsync ([safe, g, ok] { if (auto* pl = safe.getComponent()) pl->showKeyResult (g, ok); });
+        });
+    }
+    void showKeyResult (const KeyGuess& g, bool ok)
+    {
+        if (! ok) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Key Finder", "Couldn't read this clip (it needs at least 1 second of audio)."); return; }
+        const float a4 = 440.0f * std::pow (2.0f, g.cents / 1200.0f);
+        const juce::String msg = g.describe() + "\n\nAutoPitch: set Tuning A4 to " + juce::String (a4, 1) + " Hz to tune to this audio.";
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Key Finder").withMessage (msg)
+                                        .withButton ("Set project key + BPM").withButton ("Set key only").withButton ("Close"),
+            [safe, g] (int r) {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr || r == 0) return;
+                pl->s.edit ("Key Finder", [g, r] (Project& p) { p.keyRoot = g.root; p.scaleIndex = g.scaleIndex; if (r == 1 && g.bpm > 0) p.bpm = g.bpm; });
+            });
+    }
     void clipMenu (int index)
     {
         auto& p = s.p();
@@ -1051,6 +1091,15 @@ private:
         m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
         m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
+        {
+            auto cm = colourMenu (30);
+            cm.addItem (43, "Use track color", ! clip.colour.isTransparent());
+            m.addSubMenu ("Color (selected clips)", cm);
+        }
+        if (clip.lane >= 0 && clip.lane < (int) p.lanes.size()) m.addSubMenu ("Track color", colourMenu (50));
+       #if ! HHS_LICENSED
+        m.addItem (9, "Find key / BPM / tune", clip.isAudio());
+       #endif
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
             if (r >= 300 && r <= 305)
@@ -1058,6 +1107,21 @@ private:
                 std::vector<int> u;
                 for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio()) u.push_back (o.uid);
                 applyRoll (u, r);
+                return;
+            }
+            if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
+            if (r >= 30 && r <= 43)
+            {
+                const auto c = r == 43 ? juce::Colour() : pickedColour (r - 30);
+                s.edit ("Clip color", [uid, c] (Project& pr) { for (auto& o : pr.clips) if (o.selected || o.uid == uid) o.colour = c; });
+                return;
+            }
+            if (r >= 50 && r <= 62)
+            {
+                const auto c = pickedColour (r - 50);
+                s.edit ("Track color", [uid, c] (Project& pr) {
+                    std::set<int> ls; for (auto& o : pr.clips) if (o.selected || o.uid == uid) ls.insert (o.lane);
+                    for (int li : ls) if (li >= 0 && li < (int) pr.lanes.size()) pr.lanes[(size_t) li].colour = c; });
                 return;
             }
             s.edit ("Clip edit", [&] (Project& pr) {

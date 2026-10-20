@@ -117,6 +117,7 @@ struct Clip
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
     int    group = 0;               // FL-style clip group: grouped clips select / move together
+    juce::Colour colour {};         // own clip colour (transparent = track colour)
     bool isAudio() const { return patternIndex < 0; }
 };
 
