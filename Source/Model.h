@@ -219,4 +219,7 @@ struct Project
 
 double beatsToSeconds (double beats, double bpm);
 double secondsToBeats (double secs, double bpm);
+// hi-hat style roll on audio clips: inside [rangeA, rangeB) (whole clip if no range) the hit at the
+// range start repeats every `div` beats; audio outside the range is kept. Returns clips rolled.
+int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA = -1, double rangeB = -1);
 }

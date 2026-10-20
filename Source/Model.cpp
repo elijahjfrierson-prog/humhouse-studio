@@ -311,3 +311,50 @@ void Project::removePatterns (const std::function<bool (int)>& drop)
     currentPattern = juce::jlimit (0, (int) patterns.size() - 1, cur < 0 ? 0 : cur);
 }
 }
+
+namespace hhs
+{
+int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA, double rangeB)
+{
+    if (div <= 0) return 0;
+    const double fade = secondsToBeats (0.002, p.bpm);
+    int g = 0; for (auto& o : p.clips) g = juce::jmax (g, o.group);
+    std::vector<Clip> made; int rolled = 0;
+    for (int uid : uids)
+    {
+        auto it = std::find_if (p.clips.begin(), p.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+        if (it == p.clips.end() || ! it->isAudio()) continue;
+        const Clip src = *it;
+        const double end = src.start + src.length;
+        const bool ranged = rangeB > rangeA;
+        const double a = ranged ? juce::jmax (src.start, rangeA) : src.start;
+        const double b = ranged ? juce::jmin (end, rangeB) : end;
+        if (b - a < div * 1.5 - 1e-9) continue;
+        p.clips.erase (it); ++g; ++rolled;
+        auto piece = [&] (double s0, double len, double srcBeat)
+        {
+            Clip c = src; c.uid = p.newUid(); c.start = s0; c.length = len;
+            c.sourceOffset = src.sourceOffset + beatsToSeconds (srcBeat - src.start, p.bpm);
+            c.group = g; c.takeGroup = 0; c.selected = true;
+            return c;
+        };
+        if (a > src.start + 1e-9)   // audio before the roll stays
+        {
+            Clip c = piece (src.start, a - src.start, src.start); c.fadeOut = fade; made.push_back (c);
+        }
+        for (double s0 = a; s0 < b - 1e-9; s0 += div)
+        {
+            Clip c = piece (s0, juce::jmin (div, b - s0), a);   // every hit replays the audio at the roll start
+            c.fadeIn = (s0 == src.start) ? src.fadeIn : fade;
+            c.fadeOut = juce::jmin (fade, c.length * 0.5);
+            made.push_back (c);
+        }
+        if (b < end - 1e-9)        // audio after the roll stays
+        {
+            Clip c = piece (b, end - b, b); c.fadeIn = fade; made.push_back (c);
+        }
+    }
+    p.clips.insert (p.clips.end(), made.begin(), made.end());
+    return rolled;
+}
+}

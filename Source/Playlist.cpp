@@ -1015,31 +1015,13 @@ private:
         juce::PopupMenu m; addRollItems (m);
         m.showMenuAsync ({}, [this, uids] (int r) { applyRoll (uids, r); });
     }
-    // repeats the start of each clip every `div` beats across its length (grouped, click-free edges)
+    // ruler range set: only that part rolls; otherwise the whole clip. Audio outside the range is kept.
     void applyRoll (const std::vector<int>& uids, int r)
     {
         static const double divs[] { 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
         if (r < 300 || r > 305) return;
-        const double div = divs[r - 300];
-        s.edit ("Roll clip", [&] (Project& p) {
-            const double fade = secondsToBeats (0.002, p.bpm);
-            int g = 0; for (auto& o : p.clips) g = juce::jmax (g, o.group);
-            std::vector<Clip> made;
-            for (int uid : uids)
-            {
-                auto it = std::find_if (p.clips.begin(), p.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
-                if (it == p.clips.end() || ! it->isAudio() || it->length < div * 1.5) continue;
-                const Clip src = *it; p.clips.erase (it); ++g;
-                const int n = (int) std::floor (src.length / div + 1e-6);
-                for (int k = 0; k < n; ++k)
-                {
-                    Clip c = src; c.uid = p.newUid(); c.start = src.start + k * div; c.length = div;
-                    c.fadeIn = k == 0 ? src.fadeIn : fade; c.fadeOut = fade; c.group = g; c.takeGroup = 0; c.selected = true;
-                    made.push_back (c);
-                }
-            }
-            p.clips.insert (p.clips.end(), made.begin(), made.end());
-        });
+        const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
+        s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
     }
     void clipMenu (int index)
     {

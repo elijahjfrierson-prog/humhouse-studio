@@ -284,8 +284,15 @@ struct MemoryClipReader : juce::AudioFormatReader
     {
         sampleRate = src.sampleRate; numChannels = juce::jmax (1u, src.numChannels); lengthInSamples = src.lengthInSamples;
         bitsPerSample = 32; usesFloatingPointData = true;
-        data.setSize ((int) numChannels, (int) lengthInSamples);
-        src.read (&data, 0, (int) lengthInSamples, 0, true, true);
+        auto d = std::make_shared<juce::AudioBuffer<float>> ((int) numChannels, (int) lengthInSamples);
+        src.read (d.get(), 0, (int) lengthInSamples, 0, true, true);
+        data = std::move (d);
+    }
+    // clips cut from the same file (rolls, splits, chops) share one decoded copy
+    explicit MemoryClipReader (const MemoryClipReader& o) : juce::AudioFormatReader (nullptr, "HHS memory"), data (o.data)
+    {
+        sampleRate = o.sampleRate; numChannels = o.numChannels; lengthInSamples = o.lengthInSamples;
+        bitsPerSample = 32; usesFloatingPointData = true;
     }
     bool readSamples (int* const* dest, int numDest, int startOffsetInDest, juce::int64 start, int num) override
     {
@@ -293,12 +300,12 @@ struct MemoryClipReader : juce::AudioFormatReader
         {
             if (dest[ch] == nullptr) continue;
             auto* d = reinterpret_cast<float*> (dest[ch]) + startOffsetInDest;
-            const auto* src = data.getReadPointer (juce::jmin (ch, data.getNumChannels() - 1));
+            const auto* src = data->getReadPointer (juce::jmin (ch, data->getNumChannels() - 1));
             for (int i = 0; i < num; ++i) { const auto p = start + i; d[i] = p >= 0 && p < lengthInSamples ? src[p] : 0.0f; }
         }
         return true;
     }
-    juce::AudioBuffer<float> data;
+    std::shared_ptr<const juce::AudioBuffer<float>> data;
 };
 
 struct Engine::ClipRuntime
@@ -494,6 +501,9 @@ void Engine::sync()
 
     std::map<int, std::unique_ptr<ClipRuntime>> newClips;
     juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::map<juce::String, const MemoryClipReader*> decoded;
+    for (auto& [id, rt] : clipRt)
+        if (rt) if (auto* m = dynamic_cast<const MemoryClipReader*> (rt->reader.get())) decoded[rt->file.getFullPathName()] = m;
     for (auto& c : proj.clips)
     {
         if (! c.isAudio()) continue;
@@ -501,12 +511,19 @@ void Engine::sync()
         if (it != clipRt.end() && it->second->file == c.audioFile) continue;
         auto rt = std::make_unique<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
-        if (auto* r = fm.createReaderFor (c.audioFile))
+        if (auto d = decoded.find (c.audioFile.getFullPathName()); d != decoded.end())
+        {
+            rt->fileRate = d->second->sampleRate; rt->length = d->second->lengthInSamples;
+            rt->reader = std::make_unique<MemoryClipReader> (*d->second);
+        }
+        else if (auto* r = fm.createReaderFor (c.audioFile))
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
             if (r->lengthInSamples > 0 && r->lengthInSamples < (juce::int64) (r->sampleRate * 360))
             {
-                rt->reader = std::make_unique<MemoryClipReader> (*r);
+                auto m = std::make_unique<MemoryClipReader> (*r);
+                decoded[c.audioFile.getFullPathName()] = m.get();
+                rt->reader = std::move (m);
                 delete r;
             }
             else

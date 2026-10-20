@@ -1426,6 +1426,41 @@ int main()
         e.stop();
     }
 
+    // audio-clip hi-hat roll: every hit sounds, audio outside the ruler range stays
+    {
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-roll-test.wav");
+        {
+            juce::AudioBuffer<float> b (1, 44100 * 2);
+            for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.3f * std::sin (i * 0.05f));
+            wav.deleteFile();
+            std::unique_ptr<juce::OutputStream> os (wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), 44100, 1, 24, {}, 0));
+            if (w) { os.release(); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+        }
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = true; p.bpm = 120;
+        Clip c; c.uid = p.newUid(); c.audioFile = wav; c.start = 0; c.length = 4; c.lane = 0; p.clips.push_back (c);
+        const int n0 = (int) p.clips.size();
+        CHECK (rollAudioClips (p, { c.uid }, 0.25, 1.0, 2.0) == 1);
+        CHECK ((int) p.clips.size() == n0 - 1 + 6);   // before + 4 hits + after
+        e.sync();
+        e.setPositionBeats (0.0); e.play();
+        const int total = 44100 * 2; juce::AudioBuffer<float> rec (1, total + 512), out (2, 512);
+        for (int pos = 0; pos < total; pos += 512)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            rec.copyFrom (0, pos, out, 0, 0, 512);
+        }
+        e.stop();
+        auto rms = [&] (double b0, double b1) { const int a = (int) (b0 * 22050) + 300, z = (int) (b1 * 22050) - 300; return rec.getRMSLevel (0, a, z - a); };
+        float worst = 1.0f;
+        for (int k = 0; k < 4; ++k) worst = std::min (worst, rms (1.0 + k * 0.25, 1.25 + k * 0.25));
+        std::printf ("audio roll: before %.3f, weakest hit %.3f, after %.3f\n", rms (0, 1), worst, rms (2, 4));
+        CHECK (rms (0, 1) > 0.1f && worst > 0.1f && rms (2, 4) > 0.1f);
+        wav.deleteFile();
+    }
+
     // a project folder moved somewhere else (Desktop -> USB, other computer) still finds its recorded vocals
     {
         auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-move-test");
