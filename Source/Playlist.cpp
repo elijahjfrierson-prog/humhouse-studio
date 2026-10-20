@@ -76,10 +76,10 @@ struct LaneHeader : public juce::Component
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
-        setupButton (norm, "NORM", "Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
+        setupButton (norm, "N", "N = Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
         norm.setColour (juce::TextButton::buttonOnColourId, col::good);
         norm.onClick = [this] { const bool on = norm.getToggleState(); s.edit ("Auto normalize", [&] (Project& p) { p.lanes[(size_t) index].autoNorm = on; }); };
-        setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
+        setupButton (mon, "L", "L = Listen (input monitoring): hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
         mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
         mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
         input.setTooltip ("Recording input: MONO puts one mic in the centre (both ears), STEREO records an input pair");
@@ -107,13 +107,17 @@ struct LaneHeader : public juce::Component
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
         input.addSectionHeading ("Mono (both ears)");
-        for (int i = 0; i < juce::jmax (1, ins); ++i) input.addItem ("In " + juce::String (i + 1) + " Mono", i + 1);
+        for (int i = 0; i < juce::jmax (1, ins); ++i) input.addItem (juce::String (i + 1), i + 1);
         input.addSectionHeading ("Stereo");
-        for (int i = 0; i < juce::jmax (1, ins / 2); ++i) input.addItem ("In " + juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2) + " Stereo", 1000 + i);
+        for (int i = 0; i < juce::jmax (1, ins / 2); ++i) input.addItem (juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2), 1000 + i);
         input.setSelectedId (l.stereoIn ? 1000 + l.inputPair : 1 + l.inputCh, juce::dontSendNotification);
         insert.clear (juce::dontSendNotification);
-        for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name), (int) i + 1);
+        for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("M") : juce::String ((int) i)), (int) i + 1);
         insert.setSelectedItemIndex (juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack), juce::dontSendNotification);
+        input.setTooltip ("Input: " + (l.stereoIn ? "stereo pair " + juce::String (l.inputPair * 2 + 1) + "/" + juce::String (l.inputPair * 2 + 2) : "mono input " + juce::String (l.inputCh + 1) + ", centred in both ears")
+                          + ". 1, 2... = one mic (mono), 1/2 = stereo pair");
+        const int mt = juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack);
+        insert.setTooltip ("Mixer insert: " + (mt == 0 ? juce::String ("Master") : juce::String (mt) + " " + p.mixer[(size_t) mt].name) + ". This track plays and records through it");
     }
     void paint (juce::Graphics& g) override
     {

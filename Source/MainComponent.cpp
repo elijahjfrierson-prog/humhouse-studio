@@ -603,6 +603,7 @@ public:
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
+        if (is ('u', cmd)) { showShortcuts(); return true; }   // Cmd/Ctrl+U: Shortcuts window on / off
         if (isTypingNoteKey (k))
         {
             const int key = 48 + typingKeyOffset (k.getKeyCode());
@@ -785,6 +786,8 @@ public:
                #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
+            m.addSeparator();
+            add (mShortcuts, "Shortcuts", "Cmd/Ctrl+U", true, shortcutsWin != nullptr && shortcutsWin->isVisible());
         }
         else
         {
@@ -899,7 +902,7 @@ private:
     juce::ApplicationProperties props;
     Engine engine;
     Studio studio { engine };
-    juce::TooltipWindow tooltips { this, 450 };
+    juce::TooltipWindow tooltips { this, 1000 };   // hover anything for 1 second = help
     // a click anywhere stops a sample preview that is already playing (a click that starts a new one keeps it)
     struct PreviewStopper : juce::MouseListener
     {
@@ -1381,21 +1384,47 @@ private:
         o.launchAsync();
     }
 
+    struct ShortcutsWindow : juce::DocumentWindow
+    {
+        ShortcutsWindow (const juce::String& text, std::function<void()> close)
+            : juce::DocumentWindow ("Shortcuts  (Cmd/Ctrl+U to close)", col::panel, juce::DocumentWindow::closeButton), onClose (std::move (close))
+        {
+            auto* ed = new juce::TextEditor();
+            ed->setMultiLine (true); ed->setReadOnly (true); ed->setCaretVisible (false); ed->setScrollbarsShown (true);
+            ed->setFont (juce::FontOptions (14.0f)); ed->setText (text, false);
+            ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
+            ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
+            setContentOwned (ed, false);
+            setUsingNativeTitleBar (true); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
+        }
+        void closeButtonPressed() override { if (onClose) onClose(); }
+        bool keyPressed (const juce::KeyPress& k) override
+        {
+            if (k == juce::KeyPress ('u', juce::ModifierKeys::commandModifier, 0) || k == juce::KeyPress::escapeKey) { if (onClose) onClose(); return true; }
+            return false;
+        }
+        std::function<void()> onClose;
+    };
+    std::unique_ptr<ShortcutsWindow> shortcutsWin;
     void showShortcuts()
     {
+        if (shortcutsWin != nullptr) { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); return; }   // toggle off
         juce::String t;
         t << "GLOBAL\nSpace play/stop | R record | L pattern/song | F5 playlist | F6/F7 rack/piano roll | F8 Plugin House | F9 mixer\n"
           << "Ctrl+S save + backup | Ctrl+Shift+S save as | Ctrl+O open | Ctrl+N new | Ctrl+R export (WAV / MP3 / M4A / stems) | Ctrl+M metronome\n"
           << "Ctrl+Z undo | Ctrl+Shift+Z / Ctrl+Y redo | Ctrl+Alt+Z step back (999 levels)\n\n"
           << "PIANO ROLL\nAlt+A arpeggiator / rolls | Alt+S strum | Alt+U chop | Alt+F flam | Alt+Q quantize | Alt+R randomize\n"
           << "Alt+K limit | Alt+L articulate | Alt+X scale levels | Alt+Y flip | Alt+W claw | Alt+O LFO | Alt+M mute | Alt+V ghost notes\n"
-          << "Ctrl+B duplicate | Ctrl+G glue | Ctrl+L legato | Ctrl+U quick chop | Ctrl+Q quick quantize | Shift+Q quantize starts\n"
+          << "Ctrl+B duplicate | Ctrl+G glue | Ctrl+L legato | Ctrl+Shift+U quick chop | Ctrl+Q quick quantize | Shift+Q quantize starts\n"
           << "Shift+Up/Down semitone | Ctrl+Up/Down octave | Shift+Left/Right move | Alt+Left/Right nudge | Ctrl+A select all | Del delete\n"
           << "Ctrl+C / Ctrl+V copy / paste | Shift+D reset lengths | double-click note = slide/glide\n\n"
           << "PLAYLIST\nDrag ruler = punch range (double-click clears) | double-click empty = place pattern | drag clip corners = fades\n"
           << "Alt-drag fade = curve | right-click clip = takes, route to insert, split, fades | Ctrl+B duplicate | Del delete\n\n"
+          << "PLAYLIST TRACKS\nRight-click a track = color, HumHouse Drummer, routing, delete | side bar = all track heights | mini box (track corner) = this track's height, double-click = small / large\n"
+          << "Alt+A roll audio clips | E select | P/B paint | D delete | T mute | C slice | Alt+wheel = track heights\n\n"
+          << "HELP\nHover anything for 1 second to see what it does | Cmd/Ctrl+U = this Shortcuts window\n\n"
           << "Ctrl = Cmd and Alt = Option on macOS.";
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "Keyboard shortcuts", t);
+        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); });
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

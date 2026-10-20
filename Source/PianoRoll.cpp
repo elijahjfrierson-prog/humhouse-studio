@@ -495,7 +495,7 @@ public:
         if (is ('b', cmd)) return op ("Duplicate", [] (NoteList& n) { tools::duplicateRight (n); });
         if (is ('g', cmd)) return op ("Glue", [] (NoteList& n) { tools::glue (n); });
         if (is ('l', cmd)) return op ("Legato", [] (NoteList& n) { tools::legato (n); });
-        if (is ('u', cmd)) return op ("Quick chop", [snap] (NoteList& n) { tools::quickChop (n, snap); });
+        if (is ('u', cmd | juce::ModifierKeys::shiftModifier)) return op ("Quick chop", [snap] (NoteList& n) { tools::quickChop (n, snap); });
         if (is ('q', cmd)) return op ("Quick quantize", [snap] (NoteList& n) { tools::QuantizeSettings q; q.grid = snap; tools::quantize (n, q); });
         if (is ('q', shift)) return op ("Quantize starts", [snap] (NoteList& n) { tools::QuantizeSettings q; q.grid = snap; q.ends = false; tools::quantize (n, q); });
         if (is ('a', cmd)) return op ("Select all", [] (NoteList& n) { tools::selectAll (n, true); });
@@ -733,7 +733,7 @@ private:
             juce::PopupMenu::Item it (parts[0]); it.itemID = (int) t + 1; it.shortcutKeyDescription = parts[1]; m.addItem (it);
         }
         m.addSeparator();
-        m.addItem (100, "Glue (Ctrl+G)"); m.addItem (101, "Legato (Ctrl+L)"); m.addItem (102, "Quick chop (Ctrl+U)"); m.addItem (103, "Duplicate (Ctrl+B)");
+        m.addItem (100, "Glue (Ctrl+G)"); m.addItem (101, "Legato (Ctrl+L)"); m.addItem (102, "Quick chop (Ctrl+Shift+U)"); m.addItem (103, "Duplicate (Ctrl+B)");
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&toolsBtn), [this] (int r) {
             if (r >= 1 && r <= 12) showToolDialog (s, (Tool) (r - 1), channelId);
             else if (r == 100) op ("Glue", [] (NoteList& n) { tools::glue (n); });
