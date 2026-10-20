@@ -31,6 +31,7 @@ set(HHS_CORE_SOURCES
     Source/ProjectIO.cpp
     Source/DrumSynth.cpp
     Source/AudioEncode.cpp
+    Source/StemSplit.cpp
     Source/License.cpp
     Source/Drummer/DrummerCore.cpp
     Source/Drummer/GrooveCorpus.cpp

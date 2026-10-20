@@ -1,6 +1,7 @@
 #include "UI.h"
 #include <set>
 #include "Drummer/DrummerCore.h"
+#include "StemSplit.h"
 
 namespace hhs
 {
@@ -659,6 +660,17 @@ public:
         Part part; const int i = hitClip (e.position, part);
         if (i >= 0)
         {
+            if (p.clips[(size_t) i].isDrummer()) { openChannelEditor (s, p.clips[(size_t) i].drummer); return; }
+           #if ! HHS_LICENSED
+            if (p.clips[(size_t) i].isAudio())
+            {
+                const int uid = p.clips[(size_t) i].uid;
+                juce::PopupMenu m;
+                m.addItem (1, "Split stems (Drums, Bass, Vocals, Melodies)");
+                m.showMenuAsync ({}, [this, uid] (int r) { if (r == 1) splitClipStems (uid); });
+                return;
+            }
+           #endif
             if (! p.clips[(size_t) i].isAudio())
             {
                 const int pat = p.clips[(size_t) i].patternIndex;
@@ -1086,6 +1098,40 @@ private:
         const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
         s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
     }
+    // HumHouse Stem Splitter: runs in the background; the stems land on 4 new tracks under the clip, the original is muted (kept)
+    void splitClipStems (int uid)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio() || ! cp->audioFile.existsAsFile()) return;
+        const Clip c = *cp;
+        auto& pr = s.p();
+        const auto dir = (pr.projectFile.existsAsFile() ? pr.projectFile.getParentDirectory() : pr.recordingsFolder().getParentDirectory()).getChildFile ("Stems");
+        const double secs = beatsToSeconds (c.length, pr.bpm);
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem Splitter",
+            "Splitting \"" + c.audioFile.getFileNameWithoutExtension() + "\" into Drums, Bass, Vocals and Melodies.\nKeep working - the 4 tracks appear under the clip when it's done.");
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::Thread::launch ([safe, c, dir, secs] {
+            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir);
+            juce::MessageManager::callAsync ([safe, c, files] {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr) return;
+                if (files[0] == juce::File()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Stem Splitter", "Couldn't split this clip. The original clip is unchanged."); return; }
+                pl->s.edit ("Split stems", [c, files] (Project& p) {
+                    const juce::uint32 cols[] { 0xffff5d5d, 0xff3d9bff, 0xffffc93d, 0xff4ad991 };
+                    for (int k = 0; k < NumStems; ++k)
+                    {
+                        const int at = juce::jmin ((int) p.lanes.size(), c.lane + 1 + k);
+                        insertLane (p, at);
+                        auto& l = p.lanes[(size_t) at]; l.name = stemName (k); l.colour = juce::Colour (cols[k]);
+                        Clip n = c; n.uid = p.newUid(); n.lane = at; n.audioFile = files[(size_t) k]; n.sourceOffset = 0;
+                        n.selected = false; n.group = 0; n.takeGroup = 0; n.colour = {}; n.mixerTrack = -1; n.muted = false;
+                        p.clips.push_back (n);
+                    }
+                    for (auto& o : p.clips) if (o.uid == c.uid) o.muted = true;   // the original stays, muted
+                });
+            });
+        });
+    }
     // Key Finder: key, scale, BPM and tuning offset of an audio clip (analysed off the audio thread)
     void findKeyForClip (const Clip& c)
     {
@@ -1161,6 +1207,9 @@ private:
        #if ! HHS_LICENSED
         m.addItem (9, "Find key / BPM / tune", clip.isAudio());
         if (clip.isDrummer()) m.addItem (10, "Drummer settings (kit, style, mix)...");
+       #if ! HHS_LICENSED
+        m.addItem (11, "Split stems (Drums, Bass, Vocals, Melodies)", clip.isAudio());
+       #endif
        #endif
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
@@ -1171,6 +1220,7 @@ private:
                 applyRoll (u, r);
                 return;
             }
+            if (r == 11) { splitClipStems (uid); return; }
             if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
             if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
             if (r >= 30 && r <= 43)

@@ -4,6 +4,7 @@
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
+#include "../Source/StemSplit.h"
 #include "../Source/License.h"
 #include <cstdio>
 #include <iostream>
@@ -1638,6 +1639,38 @@ int main()
         CHECK (snr > (fileRate == 48000 ? 60.0 : 25.0));
         CHECK (glitches == 0);
         wav.deleteFile();
+    }
+
+    // Stem Splitter: 4 stems add back to the mix exactly, kick lands in Drums, sub bass in Bass, centred tone in Vocals, wide pad in Melodies
+    {
+        const double sr = 44100; const int n = (int) sr * 4;
+        juce::AudioBuffer<float> mix (2, n), kick (2, n), bass (2, n), voc (2, n), pad (2, n);
+        for (auto* b : { &mix, &kick, &bass, &voc, &pad }) b->clear();
+        for (int i = 0; i < n; ++i)
+        {
+            const double t = i / sr, tb = std::fmod (t, 0.5);
+            const float k = (float) (0.6 * std::exp (-tb * 40.0) * std::sin (juce::MathConstants<double>::twoPi * 60.0 * tb * (1.0 + 2.0 * std::exp (-tb * 30))) );
+            const float bs = (float) (0.3 * std::sin (juce::MathConstants<double>::twoPi * 55.0 * t));
+            double v = 0; for (int h = 1; h <= 8; ++h) v += std::sin (juce::MathConstants<double>::twoPi * 440.0 * h * t) / h;
+            const float vc = (float) (0.12 * v);
+            const float pl = (float) (0.1 * std::sin (juce::MathConstants<double>::twoPi * 660.0 * t)), pr = (float) (0.1 * std::sin (juce::MathConstants<double>::twoPi * 990.0 * t));
+            kick.setSample (0, i, k); kick.setSample (1, i, k); bass.setSample (0, i, bs); bass.setSample (1, i, bs);
+            voc.setSample (0, i, vc); voc.setSample (1, i, vc); pad.setSample (0, i, pl); pad.setSample (1, i, pr);
+            for (int ch = 0; ch < 2; ++ch) mix.setSample (ch, i, kick.getSample (ch, i) + bass.getSample (ch, i) + voc.getSample (ch, i) + pad.getSample (ch, i));
+        }
+        std::array<juce::AudioBuffer<float>, NumStems> st;
+        CHECK (splitStems (mix, sr, st));
+        double err = 0, sig = 0;
+        for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < n; ++i)
+        { double sum = 0; for (auto& b : st) sum += b.getSample (ch, i); const double d = sum - mix.getSample (ch, i); err += d * d; sig += (double) mix.getSample (ch, i) * mix.getSample (ch, i); }
+        const double recon = 10.0 * std::log10 (sig / juce::jmax (1e-30, err));
+        auto share = [&] (const juce::AudioBuffer<float>& part, int stem) {   // how much of a known part's energy ended up in a stem (projection)
+            double num = 0, den = 0; for (int ch = 0; ch < 2; ++ch) for (int i = 4410; i < n - 4410; ++i) { num += (double) part.getSample (ch, i) * st[(size_t) stem].getSample (ch, i); den += (double) part.getSample (ch, i) * part.getSample (ch, i); }
+            return den > 0 ? num / den : 0.0; };
+        std::printf ("stem split: rebuild %.1f dB | kick->Drums %.2f  bass->Bass %.2f  vocal->Vocals %.2f  pad->Melodies %.2f\n", recon,
+                     share (kick, StemDrums), share (bass, StemBass), share (voc, StemVocals), share (pad, StemMelodies));
+        CHECK (recon > 60.0);
+        CHECK (share (kick, StemDrums) > 0.4 && share (bass, StemBass) > 0.7 && share (voc, StemVocals) > 0.5 && share (pad, StemMelodies) > 0.5);
     }
 
     // audio is glued to the song: a backup opened after the song folder moved still finds its vocal, and a same-named take of another size is never picked up
