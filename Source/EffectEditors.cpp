@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Drummer/DrummerCore.h"
 #include <complex>
 #include <map>
 
@@ -1028,6 +1029,61 @@ void openChannelEditor (Studio& s, int channelId)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
+        return;
+    }
+    if (ch->type == ChannelType::Drummer)
+    {
+        static std::vector<std::string> kitNames; static juce::Array<juce::File> kits;
+        kits = drumKits(); kitNames.clear();
+        int cur = 0;
+        for (int i = 0; i < kits.size(); ++i) { kitNames.push_back (kits[i].getFileName().toStdString()); if (kits[i] == ch->sampleFile) cur = i; }
+        std::vector<const char*> kitChoices; for (auto& n : kitNames) kitChoices.push_back (n.c_str());
+        auto& d = ch->drum;
+        std::vector<ParamGrid::P> perf, mix;
+        if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
+        perf.push_back ({ "complexity", "Complexity (simple - complex)", 0, 1, 0.45f, d.complexity, {} });
+        perf.push_back ({ "loudness", "Loudness (soft - loud)", 0, 1, 0.55f, d.loudness, {} });
+        perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
+        perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
+        perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
+        perf.push_back ({ "humanize", "Feel (human timing)", 0, 1, 0.5f, d.humanize, {} });
+        perf.push_back ({ "ghost", "Ghost notes", 0, 1, 0.5f, d.ghost, {} });
+        perf.push_back ({ "hatOpen", "Hi-hat open", 0, 1, 0, d.hatOpen, {} });
+        perf.push_back ({ "ride", "Cymbal", 0, 1, 0, d.ride ? 1.0f : 0.0f, { "Hi-hat", "Ride" } });
+        perf.push_back ({ "halfTime", "Half time", 0, 1, 0, d.halfTime ? 1.0f : 0.0f, { "Off", "On" } });
+        perf.push_back ({ "seed", "Take (variation)", 1, 32, 1, (float) d.seed, {} });
+        mix.push_back ({ "voicing", "Mix style", 0, 4, 1, (float) d.voicing, { "Raw", "Modern", "Punch", "Room", "Vintage" } });
+        mix.push_back ({ "punch", "Punch (attack)", 0, 1, 0.55f, d.punch, {} });
+        mix.push_back ({ "glue", "Glue (bus comp)", 0, 1, 0.45f, d.glue, {} });
+        mix.push_back ({ "drive", "Drive (saturation)", 0, 1, 0.2f, d.drive, {} });
+        mix.push_back ({ "micBlend", "Close - Room mics", 0, 1, 0.45f, d.micBlend, {} });
+        mix.push_back ({ "space", "Room", 0, 4, 1, (float) d.space, { "Dry", "Studio", "Room", "Hall", "Plate" } });
+        mix.push_back ({ "roomMix", "Room amount", 0, 1, 0.22f, d.roomMix, {} });
+        mix.push_back ({ "squeeze", "Squeeze", 0, 1, 0, d.squeeze, {} });
+        mix.push_back ({ "glow", "Squeeze glow", 0, 4, 0, (float) d.glow, { "Off", "Clean", "Tube", "Tape", "Transformer" } });
+        mix.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+        auto setter = [&s, channelId] (const juce::String& id, float v) {
+            s.live ([&] (Project&) {
+                auto* c = s.channel (channelId);
+                if (c == nullptr) return;
+                auto& d = c->drum;
+                if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
+                else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
+                else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "ghost") d.ghost = v; else if (id == "hatOpen") d.hatOpen = v; else if (id == "ride") d.ride = v > 0.5f;
+                else if (id == "halfTime") d.halfTime = v > 0.5f; else if (id == "seed") d.seed = juce::roundToInt (v);
+                else if (id == "voicing") d.voicing = (int) v; else if (id == "punch") d.punch = v; else if (id == "glue") d.glue = v;
+                else if (id == "drive") d.drive = v; else if (id == "micBlend") d.micBlend = v; else if (id == "space") d.space = (int) v;
+                else if (id == "roomMix") d.roomMix = v; else if (id == "squeeze") d.squeeze = v; else if (id == "glow") d.glow = (int) v;
+                else if (id == "volume") c->volume = v;
+            });
+        };
+        auto commit = [&s] { s.commit ("Drummer settings"); };
+        auto* tabs = new ChannelTabs();
+        tabs->add ("DRUMMER", new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer"));
+        tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
+        tabs->finish();
+        EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
         return;
     }
     const bool sampler = ch->type == ChannelType::Sampler;

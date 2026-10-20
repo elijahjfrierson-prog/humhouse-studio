@@ -1,4 +1,5 @@
 #include "Instruments.h"
+#include "Drummer/DrummerCore.h"
 #include "DrumSynth.h"
 #include <cmath>
 
@@ -356,6 +357,7 @@ private:
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel& c, SharedSample sample, double sr)
 {
     std::unique_ptr<ChannelInstrument> inst;
+    if (c.type == ChannelType::Drummer) return createDrummerInstrument (c, sr);
     if (c.type == ChannelType::Synth) inst = std::make_unique<SynthInstrument>();
     else if (c.type == ChannelType::Sampler)
     {

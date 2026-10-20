@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
+#include "Drummer/DrummerCore.h"
 #include "Instruments.h"
 #include "Effects.h"
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -153,6 +154,7 @@ private:
     std::vector<ChannelRuntime*> channelOrder;
     std::vector<std::unique_ptr<TrackRuntime>> trackRt;
     std::map<int, std::unique_ptr<ClipRuntime>> clipRt;
+    std::map<int, std::shared_ptr<const std::vector<DrumHit>>> drumHits;   // Drummer region uid -> what it plays
     std::map<juce::String, SharedSample> sampleCache;
     std::vector<std::vector<int>> levels;
     std::vector<std::vector<std::pair<int, float>>> sources; // per track: (source track, gain)

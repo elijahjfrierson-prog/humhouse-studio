@@ -1,5 +1,6 @@
 #include <set>
 #include "../Source/Engine.h"
+#include "../Source/Drummer/DrummerCore.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
@@ -1528,6 +1529,44 @@ int main()
         CHECK (saveProject (p, f));
         Project q; CHECK (loadProject (q, f));
         CHECK (! q.clips.empty() && q.clips.back().colour == juce::Colour (0xffff5d5d));
+        f.deleteFile();
+    }
+
+    // Session Drummer: a region plays a real groove, resizing re-writes it with the fill at the new end, the kit sounds
+    {
+        DrummerParams d;
+        auto h8 = drummerHits (d, 120, 32), h6 = drummerHits (d, 120, 24), h5 = drummerHits (d, 120, 20);
+        auto count = [] (const std::vector<DrumHit>& v, int lane, double a, double b) { int n = 0; for (auto& h : v) if ((lane < 0 || h.lane == lane) && h.beat >= a && h.beat < b) ++n; return n; };
+        auto toms = [] (const std::vector<DrumHit>& v, double a, double b) { int n = 0; for (auto& h : v) if (h.beat >= a && h.beat < b && ((h.lane >= 25 && h.lane <= 28) || (h.lane >= 1 && h.lane <= 6))) ++n; return n; };
+        std::printf ("drummer: 8 bars %d hits (kick %d, snare %d), last-bar snare/toms 8-bar %d / 6-bar %d / 5-bar %d\n", (int) h8->size(), count (*h8, 0, 0, 32), count (*h8, 1, 0, 32),
+                     toms (*h8, 28, 32), toms (*h6, 20, 24), toms (*h5, 16, 20));
+        CHECK (h8->size() > 60 && count (*h8, 0, 0, 32) > 8 && count (*h8, 1, 0, 32) > 6);
+        CHECK (count (*h8, -1, 32, 1e9) == 0 && count (*h6, -1, 24, 1e9) == 0);
+        CHECK (toms (*h6, 20, 24) > toms (*h8, 20, 24) || toms (*h6, 20, 24) >= 4);   // the fill moved to the new end
+        const auto kits = drumKits();
+        std::printf ("drummer kits: %d\n", kits.size());
+        CHECK (kits.size() >= 3);
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.bpm = 120;
+        const int id = addDrummerTrack (p, 0.0, 2);
+        CHECK (p.songMode && ! p.clips.empty() && p.clips.back().drummer == id);
+        e.sync();
+        for (int i = 0; i < 600; ++i) juce::Thread::sleep (50);   // kit loads in the background
+        e.setPositionBeats (0.0); e.play();
+        juce::AudioBuffer<float> out (2, 512); double sum = 0; float peak = 0;
+        for (int pos = 0; pos < 44100 * 3; pos += 512)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            for (int i = 0; i < 512; ++i) { const float x = out.getSample (0, i); sum += x * x; peak = std::max (peak, std::abs (x)); CHECK (std::isfinite (x)); }
+        }
+        e.stop();
+        std::printf ("drummer audio: rms %.3f peak %.3f\n", std::sqrt (sum / (44100 * 3)), peak);
+        CHECK (peak > 0.05f && peak <= 1.2f);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-drummer-test.hhs");
+        p.channels.back().drum.fills = 0.9f; CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        CHECK (q.clips.back().drummer == id && q.channels.back().type == ChannelType::Drummer && std::abs (q.channels.back().drum.fills - 0.9f) < 1e-4f && q.channels.back().sampleFile.isDirectory());
         f.deleteFile();
     }
 

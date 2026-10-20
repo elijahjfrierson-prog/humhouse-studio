@@ -2,7 +2,7 @@
 # Builds HumHouse-Studio-Linux.deb and HumHouse-Studio-Master-Linux.deb (Debian / Ubuntu / Chromebook Linux)
 set -euo pipefail
 BUILD="${1:-build}"; OUT="${2:-artifacts}"
-VERSION="1.2.7"
+VERSION="1.2.8"
 mkdir -p "$OUT"
 make_deb () {
   local app="$1" pkg="$2" file="$3"
@@ -11,6 +11,7 @@ make_deb () {
   mkdir -p "$root/DEBIAN" "$root/opt/$pkg" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/doc/$pkg"
   cp "$bin" "$root/opt/$pkg/$app"
   chmod 755 "$root/opt/$pkg/$app"
+  cp -R Sounds "$root/opt/$pkg/Sounds"   # bundled kits (the app looks next to itself)
   ln -s "/opt/$pkg/$app" "$root/usr/bin/$pkg"
   cp installer/LICENSE.txt "$root/usr/share/doc/$pkg/copyright"
   cat > "$root/usr/share/applications/$pkg.desktop" <<EOF2

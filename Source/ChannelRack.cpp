@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Drummer/DrummerCore.h"
 
 namespace hhs
 {
@@ -564,6 +565,9 @@ private:
         m.addItem (1, "Sampler (pick a sample)...");
         m.addItem (2, "Synth (keys / lead)");
         m.addItem (3, "808 (glide bass)");
+       #if ! HHS_LICENSED
+        m.addItem (4, "Drummer (rock drums, Logic-style)");
+       #endif
         juce::PopupMenu pool;
         pool.addSectionHeader ("Psychedelic synths");
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
@@ -594,6 +598,8 @@ private:
                     c.colour = r == 3 ? juce::Colour (0xffff5d8a) : juce::Colour (0xff8a7dff);
                     s.selectedChannel = p.addChannel (c);
                 });
+            else if (r == 4)
+                s.edit ("Add Drummer", [&] (Project& p) { s.selectedChannel = addDrummerTrack (p, 0.0, 8); });
             else if (r >= 2000 && r < 2000 + (int) instrumentPool().size())
                 s.edit ("Add instrument", [&] (Project& p) { s.selectedChannel = p.addChannel (poolChannel (instrumentPool()[(size_t) (r - 2000)])); });
             else if (r >= 1000) addPluginChannel (s, types.getReference (r - 1000));

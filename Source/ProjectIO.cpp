@@ -1,4 +1,5 @@
 #include "ProjectIO.h"
+#include "Drummer/DrummerCore.h"
 
 namespace hhs
 {
@@ -98,6 +99,16 @@ juce::ValueTree projectToTree (const Project& p)
         juce::ValueTree t ("CH");
         t.setProperty ("id", c.id, nullptr); t.setProperty ("name", c.name, nullptr); t.setProperty ("type", (int) c.type, nullptr);
         setFile (t, "file", c.sampleFile); t.setProperty ("drum", c.builtinDrum, nullptr);
+        if (c.type == ChannelType::Drummer)
+        {
+            auto& d = c.drum;
+            const std::pair<const char*, float> fs[] { { "drC", d.complexity }, { "drL", d.loudness }, { "drI", d.intensity }, { "drF", d.fills }, { "drSw", d.swing },
+                { "drHu", d.humanize }, { "drGh", d.ghost }, { "drHo", d.hatOpen }, { "drPu", d.punch }, { "drGu", d.glue }, { "drDr", d.drive },
+                { "drMb", d.micBlend }, { "drRm", d.roomMix }, { "drSq", d.squeeze } };
+            for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
+            t.setProperty ("drHt", d.halfTime, nullptr); t.setProperty ("drRi", d.ride, nullptr); t.setProperty ("drCh", d.character, nullptr);
+            t.setProperty ("drSe", d.seed, nullptr); t.setProperty ("drVo", d.voicing, nullptr); t.setProperty ("drSp", d.space, nullptr); t.setProperty ("drGw", d.glow, nullptr);
+        }
         t.setProperty ("plugin", c.pluginId, nullptr); t.setProperty ("state", c.pluginState.toBase64Encoding(), nullptr);
         t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("vol", c.volume, nullptr); t.setProperty ("pan", c.pan, nullptr);
         t.setProperty ("pitch", c.pitch, nullptr); t.setProperty ("glide", c.glide, nullptr); t.setProperty ("shift", c.shift, nullptr); t.setProperty ("mono", c.mono, nullptr);
@@ -151,6 +162,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
         t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
+        if (c.drummer >= 0) t.setProperty ("drummer", c.drummer, nullptr);
         t.setProperty ("hidden", c.hidden, nullptr);
         if (! c.colour.isTransparent()) t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
         clips.appendChild (t, nullptr);
@@ -200,6 +212,18 @@ Project projectFromTree (const juce::ValueTree& root)
         Channel c;
         c.id = t["id"]; c.name = t["name"].toString(); c.type = (ChannelType) (int) t["type"];
         c.sampleFile = readFile (t, "file"); c.builtinDrum = t.getProperty ("drum", -1);
+        if (c.type == ChannelType::Drummer)
+        {
+            auto& d = c.drum;
+            const std::pair<const char*, float*> fs[] { { "drC", &d.complexity }, { "drL", &d.loudness }, { "drI", &d.intensity }, { "drF", &d.fills }, { "drSw", &d.swing },
+                { "drHu", &d.humanize }, { "drGh", &d.ghost }, { "drHo", &d.hatOpen }, { "drPu", &d.punch }, { "drGu", &d.glue }, { "drDr", &d.drive },
+                { "drMb", &d.micBlend }, { "drRm", &d.roomMix }, { "drSq", &d.squeeze } };
+            for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
+            d.halfTime = t.getProperty ("drHt", d.halfTime); d.ride = t.getProperty ("drRi", d.ride); d.character = t.getProperty ("drCh", d.character);
+            d.seed = t.getProperty ("drSe", d.seed); d.voicing = t.getProperty ("drVo", d.voicing); d.space = t.getProperty ("drSp", d.space); d.glow = t.getProperty ("drGw", d.glow);
+            if (! c.sampleFile.isDirectory()) { const auto kit = drumKits(); for (auto& k : kit) if (k.getFileName() == c.sampleFile.getFileName()) c.sampleFile = k; }
+            if (! c.sampleFile.isDirectory()) c.sampleFile = defaultDrumKit();   // an older install path: use this install's kit
+        }
         c.pluginId = t["plugin"].toString(); c.pluginState.fromBase64Encoding (t["state"].toString());
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.shift = (float) t.getProperty ("shift", 0.0); c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
@@ -240,7 +264,7 @@ Project projectFromTree (const juce::ValueTree& root)
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"];
         c.audioFile = readFile (t, "file"); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
-        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
+        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0));
         p.clips.push_back (c);
     }

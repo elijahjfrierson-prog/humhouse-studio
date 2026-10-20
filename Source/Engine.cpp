@@ -424,6 +424,15 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 void Engine::sync()
 {
     if (playing.load()) { editChase = true; chasePending = true; }
+    {   // Drummer regions: resizing one re-writes its part right away (the fill moves to the new end)
+        std::map<int, std::shared_ptr<const std::vector<DrumHit>>> hits;
+        for (auto& c : proj.clips)
+            if (c.isDrummer())
+                for (auto& ch : proj.channels)
+                    if (ch.id == c.drummer && ch.type == ChannelType::Drummer) hits[c.uid] = drummerHits (ch.drum, proj.bpm, c.length);
+        const juce::ScopedLock sl (lock);
+        drumHits.swap (hits);
+    }
     // ---- build new objects outside the audio lock (sample loading / plugin creation can be slow)
     std::map<int, std::unique_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
@@ -1140,11 +1149,30 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
             }
         }
+        else if (ch.type == ChannelType::Drummer)
+        {
+            for (auto& clip : proj.clips)
+            {
+                if (clip.drummer != ch.id || clip.muted || clip.hidden) continue;
+                if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
+                if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
+                auto it = drumHits.find (clip.uid);
+                if (it == drumHits.end() || ! it->second) continue;
+                for (auto& h : *it->second)
+                {
+                    if (h.beat >= clip.length) break;
+                    const double s = clip.start + h.beat + shiftBeats;
+                    if (s < b0 || s >= b1) continue;
+                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = h.vel;
+                    emit (ci, nt, s);
+                }
+            }
+        }
         else
         {
             for (auto& clip : proj.clips)
             {
-                if (clip.isAudio() || clip.muted || clip.hidden) continue;
+                if (clip.isAudio() || clip.isDrummer() || clip.patternIndex < 0 || clip.muted || clip.hidden) continue;
                 if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 if (clip.patternIndex >= (int) proj.patterns.size()) continue;

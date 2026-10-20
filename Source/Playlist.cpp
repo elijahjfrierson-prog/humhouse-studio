@@ -1,5 +1,6 @@
 #include "UI.h"
 #include <set>
+#include "Drummer/DrummerCore.h"
 
 namespace hhs
 {
@@ -177,6 +178,9 @@ struct LaneHeader : public juce::Component
         if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
         m.addSubMenu ("Color", colourMenu (30));
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
+       #if ! HHS_LICENSED
+        m.addItem (7, "Make Session Drummer (rock drums, Logic-style)");
+       #endif
         {
             juce::PopupMenu hm;
             hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
@@ -193,6 +197,13 @@ struct LaneHeader : public juce::Component
             else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
+            else if (r == 7)
+            {
+                auto id = std::make_shared<int> (-1);
+                const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
+                s.edit ("Session Drummer", [i, id, at] (Project& p) { *id = makeLaneDrummer (p, i, at, 8); });
+                if (*id >= 0) openChannelEditor (s, *id);
+            }
         });
     }
     Studio& s; int index;
@@ -928,7 +939,7 @@ private:
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
-        juce::Colour colour = c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        juce::Colour colour = c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
         if (! c.colour.isTransparent()) colour = c.colour;
         if (c.muted) colour = col::dim;
@@ -970,6 +981,24 @@ private:
             g.fillRect (r.getX() + fi - 3, r.getY(), 6.0f, 6.0f);
             g.fillRect (r.getRight() - fo - 3, r.getY(), 6.0f, 6.0f);
         }
+        else if (c.isDrummer())
+        {   // Logic-style drummer region: cymbals on top, snare in the middle, kick at the bottom
+            const Channel* dc = nullptr; for (auto& ch : p.channels) if (ch.id == c.drummer) dc = &ch;
+            if (dc != nullptr)
+                if (auto hits = drummerHits (dc->drum, p.bpm, c.length))
+                {
+                    const float rowH = (body.getHeight() - 6) / 3.0f;
+                    for (auto& h : *hits)
+                    {
+                        if (h.beat >= c.length) break;
+                        const int row = h.lane == 0 ? 2 : (h.lane <= 6 || (h.lane >= 25 && h.lane <= 28)) ? 1 : 0;
+                        g.setColour (colour.brighter (0.6f).withAlpha (0.35f + 0.65f * h.vel));
+                        g.fillRect (body.getX() + (float) (h.beat * pxPerBeat), body.getY() + 3 + row * rowH + rowH * 0.2f, 2.0f, rowH * 0.6f);
+                    }
+                }
+            g.setColour (colour.brighter (0.4f).withAlpha (0.5f));
+            for (double bar = 4; bar < c.length; bar += 4) g.fillRect (body.getX() + (float) (bar * pxPerBeat), body.getY(), 1.0f, body.getHeight());
+        }
         else if (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size())
         {
             auto& pat = p.patterns[(size_t) c.patternIndex];
@@ -990,7 +1019,7 @@ private:
             }
         }
         juce::String label = c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
-                                         : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
+                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
         if (c.isAudio())
         {
             const int ins = p.clipInsert (c);
@@ -1099,6 +1128,7 @@ private:
         if (clip.lane >= 0 && clip.lane < (int) p.lanes.size()) m.addSubMenu ("Track color", colourMenu (50));
        #if ! HHS_LICENSED
         m.addItem (9, "Find key / BPM / tune", clip.isAudio());
+        if (clip.isDrummer()) m.addItem (10, "Drummer settings (kit, style, mix)...");
        #endif
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
@@ -1109,6 +1139,7 @@ private:
                 applyRoll (u, r);
                 return;
             }
+            if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
             if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
             if (r >= 30 && r <= 43)
             {

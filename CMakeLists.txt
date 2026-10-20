@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.2.7 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.2.8 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,6 +32,10 @@ set(HHS_CORE_SOURCES
     Source/DrumSynth.cpp
     Source/AudioEncode.cpp
     Source/License.cpp
+    Source/Drummer/DrummerCore.cpp
+    Source/Drummer/GrooveCorpus.cpp
+    Source/Drummer/PerformanceEngine.cpp
+    Source/Drummer/KitEngine.cpp
 )
 
 set(HHS_DEFS
@@ -72,6 +76,9 @@ set(HHS_LIBS
     juce::juce_gui_extra
     juce::juce_cryptography
 )
+# Session Drummer groove corpus (Groove MIDI Dataset, CC-BY 4.0), from HumHouse Drums X
+juce_add_binary_data(HHSDrummerData HEADER_NAME DrummerData.h NAMESPACE DrummerData SOURCES Resources/Drummer/rock_corpus.hhc)
+list(APPEND HHS_LIBS HHSDrummerData)
 if(APPLE)
     list(APPEND HHS_LIBS "-framework AudioToolbox" "-framework CoreFoundation")
 endif()

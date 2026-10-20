@@ -40,7 +40,7 @@ struct Note
 };
 using NoteList = std::vector<Note>;
 
-enum class ChannelType { Sampler, Synth, Plugin };
+enum class ChannelType { Sampler, Synth, Plugin, Drummer };
 
 struct SynthParams
 {
@@ -56,6 +56,18 @@ struct SynthParams
     float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
 };
 
+// Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
+struct DrummerParams
+{
+    float complexity = 0.45f, loudness = 0.55f, intensity = 0.6f, fills = 0.4f;
+    float swing = 0.0f, humanize = 0.5f, ghost = 0.5f, hatOpen = 0.0f;
+    bool  halfTime = false, ride = false;
+    int   character = 1, seed = 1;
+    int   voicing = 1, space = 1, glow = 0;   // mix voicing (Raw, Modern, Punch, Room, Vintage), room space, squeeze glow
+    float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
+    juce::String performanceKey() const;      // only what changes the notes played
+};
+
 struct Channel
 {
     int id = 0;
@@ -64,6 +76,7 @@ struct Channel
     juce::File sampleFile;                 // sampler
     int builtinDrum = -1;                  // synthesized fallback kit voice
     SynthParams synth;                     // synth
+    DrummerParams drum;                    // drummer (sampleFile = the kit folder)
     juce::String pluginId;                 // plugin: PluginDescription::createIdentifierString
     juce::MemoryBlock pluginState;
     int   mixerTrack = 0;                  // 0 = master
@@ -118,7 +131,9 @@ struct Clip
     bool   hidden = false;
     int    group = 0;               // FL-style clip group: grouped clips select / move together
     juce::Colour colour {};         // own clip colour (transparent = track colour)
-    bool isAudio() const { return patternIndex < 0; }
+    int    drummer = -1;            // Drummer region: the drummer channel id it plays
+    bool isAudio() const { return patternIndex < 0 && drummer < 0; }
+    bool isDrummer() const { return drummer >= 0; }
 };
 
 struct Lane
