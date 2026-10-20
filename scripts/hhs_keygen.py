@@ -18,16 +18,24 @@ def sign(payload, n, d):
 
 def main():
     ap = argparse.ArgumentParser(description="Make a HumHouse Studio license key")
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--email", required=True)
-    ap.add_argument("--machine", action="append", required=True, help="Machine ID from the activation window (use twice for 2 computers)")
+    ap.add_argument("--batch", type=int, default=0, help="make N ready-to-sell keys (no Machine ID needed), one per line")
+    ap.add_argument("--name", default="")
+    ap.add_argument("--email", default="")
+    ap.add_argument("--machine", action="append", default=[], help="Machine ID from the activation window (use twice for 2 computers)")
     ap.add_argument("--expires-days", type=int, default=0, help="0 = never expires")
     ap.add_argument("--key", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "humhouse_private_key.json"))
     a = ap.parse_args()
-    machines = [m.strip().upper() for m in a.machine if m.strip()]
-    if not 1 <= len(machines) <= 2: sys.exit("a key holds 1 or 2 Machine IDs")
     k = json.load(open(a.key))
     now = int(time.time())
+    if a.batch > 0:
+        for _ in range(a.batch):
+            payload = json.dumps({"lic_id": "HHS-" + uuid.uuid4().hex[:12].upper(), "product_sku": "humhouse_studio",
+                                  "issued_at": now, "expires_at": 0, "any_machine": True}, separators=(",", ":")).encode()
+            print("HHS1." + base64.b64encode(payload).decode() + "." + sign(payload, int(k["n"], 16), int(k["d"], 16)))
+        return
+    machines = [m.strip().upper() for m in a.machine if m.strip()]
+    if not a.name or not a.email: sys.exit("--name and --email are needed (or use --batch N)")
+    if not 1 <= len(machines) <= 2: sys.exit("a key holds 1 or 2 Machine IDs")
     payload = json.dumps({
         "lic_id": "HHS-" + uuid.uuid4().hex[:12].upper(),
         "name": a.name, "user_email": a.email, "product_sku": "humhouse_studio",

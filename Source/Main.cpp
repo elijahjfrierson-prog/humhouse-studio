@@ -12,11 +12,11 @@ struct LicensePanel : public juce::Component
     {
         title.setText ("Activate HumHouse Studio", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
-        info.setText ("Send this Machine ID with your purchase email to get your license key (one key covers up to 2 computers), then paste the key below.",
+        info.setText ("Paste the license key you got with your purchase and click Activate.",
                       juce::dontSendNotification);
         machine.setText (hhs::license::machineId()); machine.setReadOnly (true); machine.setJustification (juce::Justification::centred);
         key.setMultiLine (true, true); key.setReturnKeyStartsNewLine (false);
-        key.setTextToShowWhenEmpty ("Paste your license key (HHS1....)", juce::Colours::grey);
+        key.setTextToShowWhenEmpty ("Paste your license key", juce::Colours::grey);
         copyBtn.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (machine.getText()); status.setText ("Machine ID copied.", juce::dontSendNotification); };
         activateBtn.onClick = [this] { activate(); };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };

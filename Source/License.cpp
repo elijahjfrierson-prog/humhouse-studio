@@ -56,6 +56,7 @@ Info verifyFor (const juce::String& keyIn, const juce::String& machine)
     info.name = v["name"].toString(); info.email = v["user_email"].toString(); info.licId = v["lic_id"].toString();
     const auto expires = (juce::int64) v["expires_at"];
     if (expires > 0 && juce::Time::currentTimeMillis() / 1000 > expires) { info.error = "This license key has expired."; return info; }
+    if ((bool) v["any_machine"]) { info.ok = true; info.error = {}; return info; }   // retail key: works by itself, no Machine ID
     const auto* ids = v["hardware_ids"].getArray();
     if (ids == nullptr || ids->isEmpty() || ids->size() > 2) return info;
     for (auto& id : *ids)

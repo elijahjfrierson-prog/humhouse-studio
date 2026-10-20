@@ -1306,6 +1306,10 @@ int main()
         CHECK (! hhs::license::verifyFor (editSig, "TEST-0000-0000-0001").ok);
         CHECK (! hhs::license::verifyFor ("HHS1.abc.def", "TEST-0000-0000-0001").ok);
         CHECK (! hhs::license::verifyFor ({}, "TEST-0000-0000-0001").ok);
+        // retail batch key (no Machine ID): signature still checked. Test key is expired on purpose so it can't unlock anything.
+        const juce::String retail = "HHS1.eyJsaWNfaWQiOiJISFMtVEVTVC1FWFBJUkVEIiwicHJvZHVjdF9za3UiOiJodW1ob3VzZV9zdHVkaW8iLCJpc3N1ZWRfYXQiOjEsImV4cGlyZXNfYXQiOjIsImFueV9tYWNoaW5lIjp0cnVlfQ==.91bd3e7cbd0a37676c9b6a934e851c70fb10393bb59e2399b2f0a83a74290e0c88c03ac1167a2337c8fb8650a4be9e50b5ad97da5b3d6060b12afc709cb33b4a6941b5e291be3433e71a2eb742d9118bf2c8950dde59817e28e3c6c0fc455f947ad0e7db16f6793dc531fa3c9c102cb1196046df2d98686c6ead2159e01373dfeeb939fed5d27984164eed868b25e381cd5ffcde623c3e3843ccc66c84c5f1d3601f1b6276d5858dc628a46e73a879c23bfd04da60e54a8ea9cf07587607c81aab19996fdac9484d28b967dbb3471edade4045cc23724f9319542226aac008b1e587fdc4c17c16e8b5ca6b48190edbc5c1ffa0a4e99b6e38177fa2f72e0d5517";
+        CHECK (hhs::license::verifyFor (retail, "ANY-MACHINE").error == "This license key has expired.");
+        CHECK (hhs::license::verifyFor (retail.dropLastCharacters (1) + (retail.getLastCharacter() == '1' ? "2" : "1"), "ANY-MACHINE").error == "Invalid license key.");
         const auto id = hhs::license::machineId();
         CHECK (id.length() == 19 && id == hhs::license::machineId());
         std::printf ("license: machine id %s, valid key ok, 3rd computer / edited / forged keys rejected\n", id.toRawUTF8());
