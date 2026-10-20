@@ -6,7 +6,16 @@ namespace hhs
 // the folder of the .hhs being saved / opened: audio inside it is also stored relative, so a moved,
 // copied or synced project folder (Desktop, USB drive, other computer) still finds its vocals
 static thread_local juce::File ioBase;
-struct IOBaseScope { explicit IOBaseScope (const juce::File& projectFile) { ioBase = projectFile.getParentDirectory(); } ~IOBaseScope() { ioBase = juce::File(); } };
+// paths are stored relative to the song folder; a backup (song/Backup/x.hhs) points at the same song folder, so it keeps its audio
+struct IOBaseScope
+{
+    explicit IOBaseScope (const juce::File& projectFile)
+    {
+        ioBase = projectFile.getParentDirectory();
+        if (ioBase.getFileName() == "Backup") ioBase = ioBase.getParentDirectory();
+    }
+    ~IOBaseScope() { ioBase = juce::File(); }
+};
 
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
 static juce::String relStr (const juce::File& f)
@@ -19,14 +28,19 @@ static void setFile (juce::ValueTree& t, const char* key, const juce::File& f)
     t.setProperty (key, fileStr (f), nullptr);
     const auto rel = relStr (f);
     if (rel.isNotEmpty()) t.setProperty (juce::String (key) + "Rel", rel, nullptr);
+    if (f.existsAsFile()) t.setProperty (juce::String (key) + "Size", (juce::int64) f.getSize(), nullptr);
 }
-static juce::File findAudio (const juce::String& s, const juce::String& rel)
+// size = the file's size when saved (0 = unknown, older projects): a file found only by its name must match it,
+// so a song never relinks to another song's take that happens to share the name
+static juce::File findAudio (const juce::String& s, const juce::String& rel, juce::int64 size = 0)
 {
     if (s.isEmpty()) return {};
     juce::File f (s);
     if (f.existsAsFile()) return f;
-    auto alt = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
-    if (auto c = alt (f); c != juce::File()) return c;   // built-in kits are FLAC now
+    auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
+    if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
+    if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
+    auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
     const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
     juce::Array<juce::File> tries;
     if (ioBase != juce::File())
@@ -47,12 +61,12 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel)
         for (const auto& e : juce::RangedDirectoryIterator (ioBase, true, "*", juce::File::findFiles))
         {
             if (++seen > 20000) break;
-            if (e.getFile().getFileName().equalsIgnoreCase (name)) return e.getFile();
+            if (e.getFile().getFileName().equalsIgnoreCase (name) && (size <= 0 || e.getFile().getSize() == size)) return e.getFile();
         }
     }
     return f;   // still missing: keep the original path so it can be located later
 }
-static juce::File readFile (const juce::ValueTree& t, const char* key) { return findAudio (t[key].toString(), t[juce::Identifier (juce::String (key) + "Rel")].toString()); }
+static juce::File readFile (const juce::ValueTree& t, const char* key) { return findAudio (t[key].toString(), t[juce::Identifier (juce::String (key) + "Rel")].toString(), (juce::int64) t.getProperty (juce::Identifier (juce::String (key) + "Size"), (juce::int64) 0)); }
 
 static juce::ValueTree notesTree (const NoteList& notes)
 {

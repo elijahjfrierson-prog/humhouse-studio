@@ -217,9 +217,10 @@ double Project::songLengthBeats() const
 
 juce::File Project::recordingsFolder() const
 {
-    auto base = projectFile.existsAsFile() ? projectFile.getParentDirectory()
-                                           : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio");
-    return base.getChildFile ("Recordings");
+    if (projectFile.existsAsFile()) return projectFile.getParentDirectory().getChildFile ("Recordings");
+    // not saved yet: the song still gets its own session folder (never a shared one); the first save copies it into the song folder
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sessions")
+               .getChildFile (juce::File::createLegalFileName (title.isEmpty() ? juce::String ("Untitled") : title)).getChildFile ("Recordings");
 }
 
 std::vector<int> Project::outputsOf (int track) const

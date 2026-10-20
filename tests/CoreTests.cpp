@@ -1609,6 +1609,69 @@ int main()
         f.deleteFile();
     }
 
+    // audio clips play back exactly like the file (no garbling): compare the master against the WAV
+    for (int fileRate : { 48000, 44100 })
+    {
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-exact-" + juce::String (fileRate) + ".wav");
+        const int n = fileRate * 3;
+        juce::AudioBuffer<float> src (2, n); juce::Random rnd (7);
+        for (int i = 0; i < n; ++i) { const float v = (float) (0.25 * std::sin (i * 2.0 * juce::MathConstants<double>::pi * 441.0 / fileRate) + 0.05 * (rnd.nextFloat() - 0.5f)); src.setSample (0, i, v); src.setSample (1, i, -v * 0.5f); }
+        { wav.deleteFile(); std::unique_ptr<juce::OutputStream> os (wav.createOutputStream());
+          std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), fileRate, 2, 24, {}, 0));
+          if (w) { os.release(); w->writeFromAudioSampleBuffer (src, 0, n); } }
+        Engine e; e.prepare (48000, 512);
+        auto& p = e.project(); p.songMode = true; p.bpm = 120;
+        Clip c; c.uid = p.newUid(); c.audioFile = wav; c.start = 0; c.length = 4; c.lane = 0; p.clips.push_back (c);
+        Clip c2 = c; c2.uid = p.newUid(); c2.start = 8; p.clips.push_back (c2);
+        e.sync(); e.setPositionBeats (0.0); e.play();
+        const int total = 48000 * 2; juce::AudioBuffer<float> rec (2, total + 512), out (2, 512);
+        for (int pos = 0; pos < total; pos += 512) { float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (nullptr, 0, o, 2, 512); rec.copyFrom (0, pos, out, 0, 0, 512); rec.copyFrom (1, pos, out, 1, 0, 512); }
+        e.stop();
+        auto ref = [&] (int i) { const double ps = i * (double) fileRate / 48000.0; const int i0 = (int) ps; const double fr = ps - i0; return src.getSample (0, i0) * (1 - fr) + src.getSample (0, juce::jmin (n - 1, i0 + 1)) * fr; };
+        double num = 0, den = 0, err = 0, sig = 0; int glitches = 0;
+        for (int i = 24000; i < 72000; ++i) { num += ref (i) * rec.getSample (0, i); den += ref (i) * ref (i); }
+        const double g = den > 0 ? num / den : 0;
+        for (int i = 24000; i < 72000; ++i) { const double d = rec.getSample (0, i) - g * ref (i); err += d * d; sig += g * g * ref (i) * ref (i); if (std::abs (d) > 0.05) ++glitches; }
+        const double snr = 10.0 * std::log10 (sig / juce::jmax (1e-20, err));
+        std::printf ("clip playback %d Hz file in 48k session: gain %.3f, match %.1f dB, %d glitch samples\n", fileRate, g, snr, glitches);
+        CHECK (g > 0.5 && g < 1.5);
+        CHECK (snr > (fileRate == 48000 ? 60.0 : 25.0));
+        CHECK (glitches == 0);
+        wav.deleteFile();
+    }
+
+    // audio is glued to the song: a backup opened after the song folder moved still finds its vocal, and a same-named take of another size is never picked up
+    {
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-glue-test");
+        root.deleteRecursively();
+        auto songA = root.getChildFile ("The Low"); songA.getChildFile ("Recordings").createDirectory();
+        auto wav = songA.getChildFile ("Recordings").getChildFile ("Vocals_take.wav");
+        auto writeWav = [] (const juce::File& f, int n) {
+            juce::AudioBuffer<float> b (1, n); for (int i = 0; i < n; ++i) b.setSample (0, i, 0.3f * std::sin (i * 0.05f));
+            f.deleteFile(); std::unique_ptr<juce::OutputStream> os (f.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), 44100, 1, 24, {}, 0));
+            if (w) { os.release(); w->writeFromAudioSampleBuffer (b, 0, n); } };
+        writeWav (wav, 44100);
+        Project p = Project::createDefault(); p.projectFile = songA.getChildFile ("The Low.hhs");
+        Clip c; c.uid = p.newUid(); c.audioFile = wav; c.lane = 0; c.length = 4; p.clips.push_back (c);
+        CHECK (saveProject (p, p.projectFile));
+        const auto bk = writeBackup (p);
+        CHECK (bk.existsAsFile());
+        auto songB = root.getChildFile ("Moved").getChildFile ("The Low");
+        songB.getParentDirectory().createDirectory();
+        CHECK (songA.moveFileTo (songB));
+        Project q; CHECK (loadProject (q, songB.getChildFile ("Backup").getChildFile (bk.getFileName())));
+        CHECK (! q.clips.empty() && q.clips.back().audioFile == songB.getChildFile ("Recordings").getChildFile ("Vocals_take.wav"));
+        // another song's take with the same name but different audio must not be linked
+        songB.getChildFile ("Recordings").getChildFile ("Vocals_take.wav").deleteFile();
+        songB.getChildFile ("Audio Files").createDirectory();
+        writeWav (songB.getChildFile ("Audio Files").getChildFile ("Vocals_take.wav"), 22050);
+        Project r; CHECK (loadProject (r, songB.getChildFile ("The Low.hhs")));
+        CHECK (! r.clips.empty() && ! r.clips.back().audioFile.existsAsFile());
+        std::printf ("glue: backup after move finds the vocal, wrong same-named take ignored\n");
+        root.deleteRecursively();
+    }
+
     // a project folder moved somewhere else (Desktop -> USB, other computer) still finds its recorded vocals
     {
         auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-move-test");

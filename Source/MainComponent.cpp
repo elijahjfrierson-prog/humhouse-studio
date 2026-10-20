@@ -1166,7 +1166,7 @@ private:
         w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         w->enterModalState (true, juce::ModalCallbackFunction::create ([this, then] (int r) {
             savePromptOpen = false;
-            if (r == 2) then();
+            if (r == 2) { engine.storePluginStates(); writeBackup (engine.project()); then(); }   // "Don't Save" still keeps a backup
             else if (r == 1) save (false, then);
         }), true);
     }

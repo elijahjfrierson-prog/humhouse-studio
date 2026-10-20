@@ -890,7 +890,10 @@ void Engine::startRecordingWriters()
         if (! proj.lanes[(size_t) l].armed) continue;
         auto t = std::make_unique<Take>();
         t->lane = l;
-        t->file = recordingFolder.getNonexistentChildFile (proj.lanes[(size_t) l].name.replaceCharacters (" /\\", "___") + "_take", ".wav");
+        recordingFolder.createDirectory();
+        const auto song = juce::File::createLegalFileName (proj.projectFile.existsAsFile() ? proj.projectFile.getFileNameWithoutExtension() : proj.title).replaceCharacter (' ', '_');
+        t->file = recordingFolder.getNonexistentChildFile (proj.lanes[(size_t) l].name.replaceCharacters (" /\\", "___") + "_" + song + "_"
+                                                           + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + "_take", ".wav");
         juce::WavAudioFormat wav;
         if (auto* os = t->file.createOutputStream().release())
         {
@@ -918,7 +921,8 @@ void Engine::finishRecordingWriters()
     {
         const juce::int64 written = t->samplesWritten;
         t->writer.reset();       // flushes
-        if (! t->started || written <= 0) { t->file.deleteFile(); continue; }
+        if (written <= 0) { t->file.deleteFile(); continue; }   // nothing was recorded at all
+        if (! t->started) continue;                             // never delete a take that holds audio
         if (t->lane < 0 || t->lane >= (int) proj.lanes.size()) continue;   // lane deleted while recording: keep the WAV
         auto& lane = proj.lanes[(size_t) t->lane];
         const int insert = lane.mixerTrack;
@@ -1215,14 +1219,17 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
             const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start, proj.bpm);
-            const juce::int64 srcStart = (juce::int64) (srcSec * cr.fileRate);
-            const int need = std::min (cr.tmp.getNumSamples() - 2, (int) std::ceil (len * ratio) + 2);
+            // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
+            const double srcPos = srcSec * cr.fileRate;
+            const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
+            const double frac0 = juce::jlimit (0.0, 0.999999, srcPos - (double) srcStart);
+            const int need = std::min (cr.tmp.getNumSamples() - 2, (int) std::ceil (len * ratio + frac0) + 2);
             cr.tmp.clear();
             cr.reader->read (&cr.tmp, 0, need + 2, srcStart - 1, true, true);   // one sample of history for 4-point Hermite
             const double spbC = spb;
             for (int i = 0; i < len; ++i)
             {
-                const double sp = i * ratio;
+                const double sp = frac0 + i * ratio;
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;

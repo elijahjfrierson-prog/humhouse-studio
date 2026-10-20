@@ -229,6 +229,17 @@ public:
     explicit Playlist (Studio& st) : s (st)
     {
         s.addChangeListener (this);
+        setupButton (addDrummer, "+ Drummer", "HumHouse Drummer: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
+        addDrummer.onClick = [this] {
+            auto id = std::make_shared<int> (-1);
+            const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
+            s.selectedLanes.clear();
+            s.edit ("HumHouse Drummer", [id, at] (Project& p) { *id = addDrummerTrack (p, at, 8); });
+            if (*id >= 0) openChannelEditor (s, *id);
+        };
+       #if ! HHS_LICENSED
+        addAndMakeVisible (addDrummer);
+       #endif
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
@@ -292,7 +303,8 @@ public:
     {
         laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
-        addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
+        addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
+        if (addDrummer.isVisible()) { addDrummer.setBounds (t.removeFromLeft (92)); t.removeFromLeft (12); }
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
         t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
@@ -861,7 +873,7 @@ private:
     }
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
-    juce::TextButton addTrack, loopRec, rts, preroll, clearPunch;
+    juce::TextButton addTrack, addDrummer, loopRec, rts, preroll, clearPunch;
     juce::ComboBox snapBox;
     double plSnap = 1.0;
     float lastPx = -1.0f;
