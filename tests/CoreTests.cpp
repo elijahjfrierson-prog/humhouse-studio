@@ -78,6 +78,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     float pk = 0; for (auto s : in) pk = std::max (pk, std::abs (s));
     for (auto& s : in) s *= 0.5f / pk;
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -163,6 +164,7 @@ static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0
         }
     }
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style); ap->setParam ("speed", speed);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -248,6 +250,7 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
         in.push_back ((float) (y * 6.0));
     }
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -837,6 +840,7 @@ int main()
     // AutoPitch: a 452 Hz tone snaps to A 440, stays at full level
     {
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
         ap->setParam ("style", 3.0f);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -851,6 +855,22 @@ int main()
         std::printf ("autopitch 452 Hz -> %.1f Hz, level %.2f dB\n", hz, 10.0 * std::log10 (outE / inE));
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
+    }
+    // AutoPitch Body + Character (defaults) add weight without jumping the level
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 1.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0, inE = 0, outE = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.4 * std::sin (2 * ph)); ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); CHECK (std::isfinite (y)); outE += y * y; }
+        }
+        std::printf ("autopitch body/character level %+.2f dB\n", 10.0 * std::log10 (outE / inE));
+        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 3.0);
     }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {

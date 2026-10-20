@@ -28,12 +28,12 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
-int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
+int& fontStyle() { static int st = appDataFile ("font-v2.txt").existsAsFile() ? appDataFile ("font-v2.txt").loadFileAsString().getIntValue() : 3; return st; }
 void setFontStyle (int st)
 {
     fontStyle() = st;
-    appDataFile ("font.txt").getParentDirectory().createDirectory();
-    appDataFile ("font.txt").replaceWithText (juce::String (st));
+    appDataFile ("font-v2.txt").getParentDirectory().createDirectory();
+    appDataFile ("font-v2.txt").replaceWithText (juce::String (st));
     juce::Typeface::clearTypefaceCache();
     for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
@@ -42,6 +42,9 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
     static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
     static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
+    static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
+    static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
+    if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
     if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
     if (fontStyle() == 1 && flash != nullptr) return flash;
     return juce::LookAndFeel_V4::getTypefaceForFont (f);
@@ -387,7 +390,7 @@ public:
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         if (studio.settings->containsKey ("themeColour"))
-            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
+            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
@@ -704,8 +707,12 @@ public:
             {
                 juce::PopupMenu tm;
                 auto ts = templateFiles();
-                for (int i = 0; i < ts.size() && i < 90; ++i) tm.addItem (300 + i, ts[i].getFileNameWithoutExtension());
+                for (int i = 0; i < ts.size() && i < 90; ++i)
+                    tm.addItem (300 + i, ts[i].getFileNameWithoutExtension() + (ts[i].isAChildOf (templatesDir()) ? juce::String() : "   (" + ts[i].getParentDirectory().getFileName() + ")"));
                 if (ts.isEmpty()) tm.addItem (-1, "(no templates yet)", false);
+                tm.addSeparator();
+                tm.addItem (396, "Add a templates folder (e.g. Desktop)...");
+                tm.addItem (397, "Show templates folder");
                 m.addSubMenu ("New from template", tm);
             }
             add (mSaveTemplate, "Save as template...");
@@ -758,8 +765,8 @@ public:
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
                 juce::PopupMenu fm;
-                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "Clean" };
-                for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "System", "Pro (sleek, default)" };
+                for (int i = 0; i < 4; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
                 m.addSubMenu ("Font", fm);
             }
             {
@@ -790,13 +797,15 @@ public:
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
         if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
+        if (id == 396) { addTemplateFolder(); return; }
+        if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
         if (id >= 300 && id < 390)
         {
             auto ts = templateFiles();
             if (id - 300 < ts.size()) newProject (ts[id - 300]);
             return;
         }
-        if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id >= 250 && id < 254) { setFontStyle (id - 250); return; }
         if (id == 480)
         {
             captureFriendlyDrawing() = ! captureFriendlyDrawing();
@@ -1213,12 +1222,32 @@ private:
 
     static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
-    static juce::Array<juce::File> templateFiles()
+    juce::StringArray templateFolders() const
     {
-        auto fs = templatesDir().findChildFiles (juce::File::findFiles, false, "*.hhs");
-        fs.removeIf ([] (const juce::File& f) { return f.getFileName() == "_default.hhs"; });
-        fs.sort();
+        juce::StringArray dirs { templatesDir().getFullPathName() };
+        if (studio.settings) for (auto& d : juce::StringArray::fromLines (studio.settings->getValue ("templateFolders"))) if (d.isNotEmpty()) dirs.addIfNotAlreadyThere (d);
+        return dirs;
+    }
+    juce::Array<juce::File> templateFiles() const
+    {
+        juce::Array<juce::File> fs;
+        for (auto& d : templateFolders())
+            for (auto& f : juce::File (d).findChildFiles (juce::File::findFiles, true, "*.hhs"))
+                if (f.getFileName() != "_default.hhs" && ! f.getFullPathName().contains ("Backup") && ! fs.contains (f)) fs.add (f);
+        std::sort (fs.begin(), fs.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileNameWithoutExtension().compareNatural (b.getFileNameWithoutExtension()) < 0; });
         return fs;
+    }
+    void addTemplateFolder()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Folder with templates", juce::File::getSpecialLocation (juce::File::userDesktopDirectory));
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+            const auto d = fc.getResult();
+            if (! d.isDirectory() || ! studio.settings) return;
+            auto dirs = juce::StringArray::fromLines (studio.settings->getValue ("templateFolders"));
+            dirs.addIfNotAlreadyThere (d.getFullPathName()); dirs.removeEmptyStrings();
+            studio.settings->setValue ("templateFolders", dirs.joinIntoString ("\n")); studio.settings->saveIfNeeded();
+            flash (juce::String (templateFiles().size()) + " templates");
+        });
     }
     void saveTemplate()
     {

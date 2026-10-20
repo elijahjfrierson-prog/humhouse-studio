@@ -260,7 +260,7 @@ void openScopeWindow (Studio&);
 void openTrackScopeWindow (Studio&, int track);   // master scope, pops out + resizable
 void closeEditorsForPlugin (juce::AudioProcessor*);
 
-void applyTheme (juce::Colour accent, float tint);   // tint 0..1 = how much the accent colors the background
+void applyTheme (juce::Colour accent, float tint, bool black = false);   // tint 0..1 = how much the accent colors the background
 void resetTheme();
 void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
 void showThemeDialog (Studio&);

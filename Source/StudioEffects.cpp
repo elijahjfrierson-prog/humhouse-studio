@@ -643,8 +643,92 @@ private:
     double sr = 44100;
 };
 
+// HumHouse Vocal Room: a finished-vocal chain on six knobs - Body, Air, Compress, Room, Echo, Double.
+// Zero latency; any stage with its knob at 0 is skipped, so a light setting costs almost no CPU.
+class VocalRoom : public BuiltinEffect
+{
+public:
+    VocalRoom() { initDefaults(); }
+    const char* typeId() const override { return "vroom"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "body", "Body", 0, 1, 0.4f }, { "air", "Air", 0, 1, 0.4f }, { "compress", "Compress", 0, 1, 0.5f },
+            { "room", "Room", 0, 1, 0.2f }, { "roomType", "Room Type", 0, 2, 1, { "Booth", "Plate", "Hall" } },
+            { "echo", "Echo", 0, 1, 0.15f }, { "echoTime", "Echo Time", 0, 3, 1, { "1/16", "1/8", "1/8 dot", "1/4" } },
+            { "double", "Double", 0, 1, 0 }, { "out", "Output", -12, 12, 0 } };
+        return ps;
+    }
+    double tailSeconds() const override { return 4.0; }
+    int latencySamples() const override { return 0; }
+    void prepare (double s, int maxBlock) override
+    {
+        sr = s; core.prepare (s);
+        for (auto& f : eq) f.clear();
+        wet.setSize (2, juce::jmax (64, maxBlock));
+        verb = createBuiltinEffect ("verb"); echo = createBuiltinEffect ("delay"); dbl = createBuiltinEffect ("chorus");
+        verb->prepare (s, maxBlock); echo->prepare (s, maxBlock); dbl->prepare (s, maxBlock);
+        verb->setParam ("mix", 1.0f); verb->setParam ("lowcut", 280.0f); verb->setParam ("width", 1.0f);
+        echo->setParam ("mix", 1.0f); echo->setParam ("feedback", 0.32f); echo->setParam ("tone", 4500.0f); echo->setParam ("pingpong", 1.0f);
+        dbl->setParam ("mix", 1.0f); dbl->setParam ("depth", 0.2f); dbl->setParam ("rate", 0.35f); dbl->setParam ("delay", 14.0f); dbl->setParam ("feedback", 0.0f);
+        lastType = lastTime = -1;
+    }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
+    {
+        if (n > wet.getNumSamples()) wet.setSize (2, n, false, false, true);
+        const float body = p (0), air = p (1), cmp = p (2), room = p (3), ech = p (5), dub = p (7);
+        eq[0].set (Biquad::HighPass, sr, 85, 0.707, 0);
+        eq[1].set (Biquad::Peak, sr, 230, 0.8, 4.0 * body);
+        eq[2].set (Biquad::Peak, sr, 3200, 1.0, 1.5 * air);
+        eq[3].set (Biquad::HighShelf, sr, 9500, 0.707, 6.0 * air);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* d = b.getWritePointer (ch);
+            for (int i = 0; i < n; ++i)
+            {
+                float x = eq[0].tick (d[i], ch);
+                if (body > 0.0f) x = eq[1].tick (x, ch);
+                if (air > 0.0f) { x = eq[2].tick (x, ch); x = eq[3].tick (x, ch); }
+                d[i] = x;
+            }
+        }
+        if (cmp > 0.0f) core.run (b, n, -12.0f - 18.0f * cmp, 2.0f + 4.0f * cmp, 8.0f, 6.0f, 110.0f, true, 120.0f, 9.0f * cmp, 1.0f);
+        const int type = (int) p (4), et = (int) p (6);
+        if (type != lastType)
+        {
+            static const float size[] { 0.3f, 0.55f, 0.82f }, damp[] { 0.6f, 0.35f, 0.45f };
+            verb->setParam ("size", size[juce::jlimit (0, 2, type)]); verb->setParam ("damp", damp[juce::jlimit (0, 2, type)]); lastType = type;
+        }
+        if (et != lastTime) { static const float idx[] { 1, 2, 3, 4 }; echo->setParam ("time", idx[juce::jlimit (0, 3, et)]); lastTime = et; }
+        // sends read the dry chain in parallel (copied first) so they don't feed each other
+        if (room > 0.0f || ech > 0.0f || dub > 0.0f)
+        {
+            if (dry.getNumSamples() < n) dry.setSize (2, n, false, false, true);
+            for (int c = 0; c < 2; ++c) dry.copyFrom (c, 0, b, c, 0, n);
+            juce::AudioBuffer<float> src (dry.getArrayOfWritePointers(), 2, n);
+            auto sendFrom = [&] (BuiltinEffect& fx, float amt) {
+                if (amt <= 0.0f) return;
+                for (int c = 0; c < 2; ++c) wet.copyFrom (c, 0, src, c, 0, n);
+                juce::AudioBuffer<float> v (wet.getArrayOfWritePointers(), 2, n);
+                fx.process (v, n, ctx);
+                for (int c = 0; c < 2; ++c) b.addFrom (c, 0, v, c, 0, n, amt);
+            };
+            sendFrom (*dbl, 0.5f * dub);
+            sendFrom (*verb, 0.55f * room);
+            sendFrom (*echo, 0.45f * ech);
+        }
+        b.applyGain (0, n, dB (p (8)));
+    }
+private:
+    double sr = 44100; CompCore core; Biquad eq[4];
+    std::unique_ptr<BuiltinEffect> verb, echo, dbl;
+    juce::AudioBuffer<float> wet, dry;
+    int lastType = -1, lastTime = -1;
+};
+
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id)
 {
+    if (id == "vroom") return std::make_unique<VocalRoom>();
     if (id == "stvocal") return std::make_unique<StudioVocal>();
     if (id == "steq7") return std::make_unique<StudioEQ7>();
     if (id == "stdyn") return std::make_unique<StudioDyn>();

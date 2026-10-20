@@ -264,8 +264,7 @@ private:
         for (auto& p : params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
         presetDir().createDirectory();
         auto f = presetDir().getChildFile (name + ".hhpreset");
-        f.deleteFile();   // same name = replace the old preset
-        if (x.writeTo (f)) lastPreset = name;
+        if (x.writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
     }
     void loadFactory (const FactoryPreset& fp)
     {

@@ -93,14 +93,15 @@ public:
         tint.setRange (0.0, 1.0); tint.setValue (s.settings ? s.settings->getDoubleValue ("themeTint", 0.5) : 0.5, juce::dontSendNotification);
         tint.setTooltip ("How much the color tints the whole DAW background (0 = neutral black)");
         for (auto* l : { &brightLabel, &tintLabel }) { l->setFont (juce::FontOptions (12.0f)); addAndMakeVisible (l); }
-        const juce::uint32 presets[] { 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d };
+        const juce::uint32 presets[] { 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffe6e8eb, 0xff8c929b, 0xff000000 };
         for (auto p : presets)
         {
             auto* b = swatches.add (new juce::TextButton());
             b->setColour (juce::TextButton::buttonColourId, juce::Colour (p));
-            b->setTooltip ("Preset color");
+            b->setTooltip (p == 0xffe6e8eb ? "White" : p == 0xff8c929b ? "Grey" : p == 0xff000000 ? "Black (true-black background, silver highlights)" : "Preset color");
             b->onClick = [this, p] {
-                const juce::Colour c (p);
+                black = p == 0xff000000;
+                const juce::Colour c (black ? 0xffc9ced6 : p);
                 wheel.hue = c.getHue(); wheel.sat = c.getSaturation(); wheel.repaint();
                 bright.setValue (c.getBrightness(), juce::dontSendNotification);
                 apply();
@@ -122,8 +123,8 @@ public:
         setupButton (reset, "Reset", "Back to the original HumHouse orange");
         reset.onClick = [this] {
             resetTheme();
-            applyGradient ({});
-            if (s.settings) { s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->removeValue ("gradColours"); s.settings->saveIfNeeded(); }
+            applyGradient ({}); black = false;
+            if (s.settings) { s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->removeValue ("gradColours"); s.settings->removeValue ("themeBlack"); s.settings->saveIfNeeded(); }
             wheel.hue = col::accent.getHue(); wheel.sat = col::accent.getSaturation(); wheel.repaint();
             bright.setValue (col::accent.getBrightness(), juce::dontSendNotification);
         };
@@ -162,6 +163,7 @@ private:
     juce::Slider bright, tint;
     juce::Label brightLabel { {}, "Brightness" }, tintLabel { {}, "Background tint" };
     juce::OwnedArray<juce::TextButton> swatches;
+    bool black = s.settings != nullptr && s.settings->getBoolValue ("themeBlack", false);
     struct GradSwatch : public juce::Button
     {
         GradSwatch (juce::Colour a, juce::Colour b, juce::Colour c) : juce::Button ("gradient"), lo (a), mid (b), hi (c) { setTooltip ("Meter + scope gradient"); }
@@ -182,9 +184,10 @@ private:
     void apply()
     {
         const auto c = juce::Colour::fromHSV (wheel.hue, wheel.sat, (float) bright.getValue(), 1.0f);
-        applyTheme (c, (float) tint.getValue());
+        applyTheme (c, (float) tint.getValue(), black);
         if (s.settings)
         {
+            s.settings->setValue ("themeBlack", black);
             s.settings->setValue ("themeColour", c.toString());
             s.settings->setValue ("themeTint", tint.getValue());
         }
@@ -192,8 +195,17 @@ private:
 };
 }
 
-void applyTheme (juce::Colour accent, float tint)
+void applyTheme (juce::Colour accent, float tint, bool black)
 {
+    if (black)
+    {
+        col::accent = accent;
+        col::bg = juce::Colour (0xff050506); col::panel = juce::Colour (0xff0c0d0f); col::panel2 = juce::Colour (0xff131417);
+        col::grid = juce::Colour (0xff18191c); col::gridBeat = juce::Colour (0xff212327); col::gridBar = juce::Colour (0xff2e3136);
+        col::scale = juce::Colour (0xff15171a); col::root = juce::Colour (0xff1e2126);
+        refreshAll();
+        return;
+    }
     const float h = accent.getHue(), sat = juce::jlimit (0.0f, 0.4f, accent.getSaturation() * 0.4f * juce::jlimit (0.0f, 1.0f, tint));
     auto shade = [h, sat] (float b) { return juce::Colour::fromHSV (h, sat, b, 1.0f); };
     col::accent = accent;
