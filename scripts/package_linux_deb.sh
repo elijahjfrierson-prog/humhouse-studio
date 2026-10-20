@@ -2,7 +2,7 @@
 # Builds HumHouse-Studio-Linux.deb and HumHouse-Studio-Master-Linux.deb (Debian / Ubuntu / Chromebook Linux)
 set -euo pipefail
 BUILD="${1:-build}"; OUT="${2:-artifacts}"
-VERSION="1.2.8"
+VERSION="1.2.9"
 mkdir -p "$OUT"
 make_deb () {
   local app="$1" pkg="$2" file="$3"

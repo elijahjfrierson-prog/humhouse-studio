@@ -66,7 +66,9 @@ struct LaneHeader : public juce::Component
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
         name.setEditable (false, true);
-        name.setTooltip ("Track name (double-click to rename). Right-click the header for routing / delete");
+        rightClick.f = [this] (const juce::MouseEvent& e) { mouseDown (e.getEventRelativeTo (this)); };
+        name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
+        name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
         arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
@@ -127,7 +129,11 @@ struct LaneHeader : public juce::Component
         }
         g.setColour (col::gridBar); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         if (arm.getToggleState() && s.engine.isRecording()) { g.setColour (col::rec.withAlpha (0.25f)); g.fillRect (getLocalBounds().removeFromLeft (4)); }
+        const auto gr = grip().toFloat();   // FL-style mini box: drag = this track's height, double-click = minimize / large
+        g.setColour (col::dim.withAlpha (0.55f)); g.drawRoundedRectangle (gr, 1.5f, 1.0f);
+        g.fillRect (gr.reduced (2.5f, 3.0f));
     }
+    juce::Rectangle<int> grip() const { return { getWidth() - 19, getHeight() - 10, 11, 8 }; }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 3);
@@ -144,7 +150,8 @@ struct LaneHeader : public juce::Component
     std::function<void (int lane, int height)> onHeight;
     std::function<void (int size)> onAllHeights;
     bool edgeDrag = false; int dragStartH = 0;
-    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5; }
+    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
         setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
@@ -179,7 +186,7 @@ struct LaneHeader : public juce::Component
         m.addSubMenu ("Color", colourMenu (30));
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
        #if ! HHS_LICENSED
-        m.addItem (7, "Make Session Drummer (rock drums, Logic-style)");
+        m.addItem (7, "HumHouse Drummer (turn this track into drums)");
        #endif
         {
             juce::PopupMenu hm;
@@ -207,6 +214,7 @@ struct LaneHeader : public juce::Component
         });
     }
     Studio& s; int index;
+    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, mon, norm; juce::ComboBox input, insert;
 };
 
@@ -245,6 +253,11 @@ public:
             snapBox.setTooltip ("Playlist snap: (none) = free placement; 1/2, 1/3, 1/6 step or beat for meticulous edits (hold Alt while dragging to bypass)");
             snapBox.onChange = [this] { plSnap = kSnapValues[juce::jmax (0, snapBox.getSelectedItemIndex())]; repaint(); };
             addAndMakeVisible (snapBox);
+            vZoom.setRange (0.35, 4.0); vZoom.setSkewFactorFromMidPoint (1.0); vZoom.setValue (zoomH, juce::dontSendNotification);
+            vZoom.setTooltip ("Track height: slide to squeeze all tracks skinny or stretch them large");
+            vZoom.setColour (juce::Slider::thumbColourId, col::accent); vZoom.setColour (juce::Slider::trackColourId, col::panel2);
+            vZoom.onValueChange = [this] { zoomH = (float) vZoom.getValue(); layoutHeaders(); repaint(); };
+            addAndMakeVisible (vZoom);
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
@@ -282,6 +295,7 @@ public:
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
+        vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
         layoutHeaders();
     }
 
@@ -660,6 +674,7 @@ public:
         if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
         {
             zoomH = juce::jlimit (0.4f, 4.0f, zoomH * (w.deltaY > 0 ? 1.1f : 1.0f / 1.1f));
+            vZoom.setValue (zoomH, juce::dontSendNotification);
             layoutHeaders(); repaint();
             return;
         }
@@ -862,7 +877,8 @@ private:
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
     std::map<int, float> laneMul;   // per-track height (drag a header's bottom edge)
-    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks)
+    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks, side bar)
+    juce::Slider vZoom { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
     int numLanes() const { return (int) const_cast<Studio&> (s).p().lanes.size(); }
     int laneHOf (int lane) const
     {
@@ -1267,6 +1283,7 @@ private:
                 {
                     laneMul.clear();
                     zoomH = size == 0 ? 0.6f : size == 1 ? 1.0f : 1.8f;
+                    vZoom.setValue (zoomH, juce::dontSendNotification);
                     layoutHeaders(); repaint();
                 };
                 addAndMakeVisible (*headers.back());

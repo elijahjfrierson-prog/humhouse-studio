@@ -1010,6 +1010,50 @@ struct ChannelTabs : juce::Component
     void resized() override { tabs.setBounds (getLocalBounds()); }
 };
 
+// Logic-style drummer pad: across = simple -> complex, up = soft -> loud; dragging rewrites the region live
+struct DrummerPad : juce::Component, juce::Timer
+{
+    DrummerPad (Studio& st, int id) : s (st), channelId (id) { setSize (560, 250); startTimerHz (10); }
+    juce::Rectangle<float> pad() const { return getLocalBounds().reduced (14, 10).toFloat(); }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = pad();
+        g.setColour (col::bg); g.fillRoundedRectangle (r, 6.0f);
+        g.setColour (col::grid);
+        for (int i = 1; i < 8; ++i)
+        {
+            g.drawVerticalLine ((int) (r.getX() + r.getWidth() * (float) i / 8.0f), r.getY(), r.getBottom());
+            g.drawHorizontalLine ((int) (r.getY() + r.getHeight() * (float) i / 8.0f), r.getX(), r.getRight());
+        }
+        g.setColour (col::gridBar); g.drawRoundedRectangle (r, 6.0f, 1.0f);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f));
+        auto t = r.reduced (8, 6);
+        g.drawText ("Loud", t, juce::Justification::topLeft); g.drawText ("Soft", t, juce::Justification::bottomLeft);
+        g.drawText ("Complex", t, juce::Justification::bottomRight); g.drawText ("Simple", t.withTrimmedLeft (40), juce::Justification::bottomLeft);
+        if (auto* c = s.channel (channelId))
+        {
+            const float x = r.getX() + r.getWidth() * c->drum.complexity, y = r.getBottom() - r.getHeight() * c->drum.loudness;
+            const auto glow = juce::Colour (0xffffc93d);
+            g.setColour (glow.withAlpha (0.18f)); g.fillEllipse (x - 22, y - 22, 44, 44);
+            g.setColour (glow.withAlpha (0.35f)); g.fillEllipse (x - 13, y - 13, 26, 26);
+            g.setColour (glow); g.fillEllipse (x - 7, y - 7, 14, 14);
+        }
+    }
+    void set (const juce::MouseEvent& e)
+    {
+        auto r = pad();
+        const float cx = juce::jlimit (0.0f, 1.0f, (e.position.x - r.getX()) / r.getWidth());
+        const float cy = juce::jlimit (0.0f, 1.0f, (r.getBottom() - e.position.y) / r.getHeight());
+        s.live ([&] (Project&) { if (auto* c = s.channel (channelId)) { c->drum.complexity = cx; c->drum.loudness = cy; } });
+        dirty = true; repaint();
+    }
+    void timerCallback() override { if (dirty) { dirty = false; s.engine.sync(); s.sendChangeMessage(); } }   // rewrite the region ~10x / s while dragging
+    void mouseDown (const juce::MouseEvent& e) override { set (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { set (e); }
+    void mouseUp (const juce::MouseEvent&) override { dirty = false; s.commit ("Drummer pad"); }
+    Studio& s; int channelId; bool dirty = false;
+};
+
 void openChannelEditor (Studio& s, int channelId)
 {
     auto* ch = s.channel (channelId);
@@ -1041,8 +1085,6 @@ void openChannelEditor (Studio& s, int channelId)
         auto& d = ch->drum;
         std::vector<ParamGrid::P> perf, mix;
         if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
-        perf.push_back ({ "complexity", "Complexity (simple - complex)", 0, 1, 0.45f, d.complexity, {} });
-        perf.push_back ({ "loudness", "Loudness (soft - loud)", 0, 1, 0.55f, d.loudness, {} });
         perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
         perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
         perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
@@ -1080,7 +1122,7 @@ void openChannelEditor (Studio& s, int channelId)
         };
         auto commit = [&s] { s.commit ("Drummer settings"); };
         auto* tabs = new ChannelTabs();
-        tabs->add ("DRUMMER", new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer"));
+        tabs->add ("DRUMMER", new StackPage ({ new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
         tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
         tabs->finish();
         EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));

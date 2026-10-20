@@ -566,7 +566,7 @@ private:
         m.addItem (2, "Synth (keys / lead)");
         m.addItem (3, "808 (glide bass)");
        #if ! HHS_LICENSED
-        m.addItem (4, "Drummer (rock drums, Logic-style)");
+        m.addItem (4, "HumHouse Drummer (rock drums)");
        #endif
         juce::PopupMenu pool;
         pool.addSectionHeader ("Psychedelic synths");

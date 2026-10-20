@@ -1390,6 +1390,45 @@ int main()
         wav.deleteFile();
     }
 
+    // rock session: HumHouse Drummer + 64 tracks with 3 inserts each + 24 instruments, song mode
+    {
+        Engine e; e.prepare (48000, 256);
+        auto& p = e.project(); p.bpm = 140;
+        const auto& all = builtinEffects();
+        const int did = addDrummerTrack (p, 0.0, 16);
+        for (auto& ch : p.channels) if (ch.id == did) for (int k = 0; k < 3; ++k) p.addFx (ch.mixerTrack, all[(size_t) (k * 5 % (int) all.size())].id);
+        std::vector<int> mts;
+        for (int t = 0; t < 64; ++t) { const int mt = p.addMixerTrack ("R" + juce::String (t)); mts.push_back (mt); for (int k = 0; k < 3; ++k) p.addFx (mt, all[(size_t) ((t * 3 + k) % (int) all.size())].id); }
+        for (int c = 0; c < 24; ++c)
+        {
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "G" + juce::String (c); ch.mixerTrack = mts[(size_t) c];
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 16; ++k) { Note nt; nt.key = 40 + (c + k) % 24; nt.start = k * 0.25; nt.length = 0.5; nt.velocity = 0.6f; p.patterns[0].notes[id].push_back (nt); }
+        }
+        Clip pc; pc.uid = p.newUid(); pc.lane = 0; pc.patternIndex = 0; pc.start = 0; pc.length = 64; p.clips.push_back (pc);
+        e.sync();
+        juce::Thread::sleep (15000);   // the multi-mic kit loads in the background
+        e.setPositionBeats (0.0); e.play();
+        juce::AudioBuffer<float> out (2, 256);
+        const double deadline = 256.0 / 48000.0;
+        double total = 0, worst = 0; int late = 0; float peak = 0; const int blocks = 1500;
+        for (int b = 0; b < blocks + 100; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            e.processBlock (nullptr, 0, o, 2, 256);
+            const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+            if (b >= 100) { total += dt; worst = std::max (worst, dt); if (dt > deadline) ++late; }
+            peak = std::max (peak, out.getMagnitude (0, 256));
+            CHECK (std::isfinite (out.getSample (0, 0)));
+        }
+        e.stop();
+        std::printf ("rock session (drummer + 64 tracks x 3 inserts + 24 instruments) @256: avg load %.1f%%, worst block %.1f%%, %d late of %d, peak %.2f\n",
+                     100.0 * total / (blocks * deadline), 100.0 * worst / deadline, late, blocks, peak);
+        CHECK (total / (blocks * deadline) < 0.6);
+        CHECK (peak > 0.05f);
+    }
+
     // 600-track session: sounding tracks + hundreds of quiet ones with inserts must run well inside real time
     {
         Engine e;
@@ -1551,7 +1590,7 @@ int main()
         const int id = addDrummerTrack (p, 0.0, 2);
         CHECK (p.songMode && ! p.clips.empty() && p.clips.back().drummer == id);
         e.sync();
-        for (int i = 0; i < 600; ++i) juce::Thread::sleep (50);   // kit loads in the background
+        juce::Thread::sleep (15000);   // kit loads in the background
         e.setPositionBeats (0.0); e.play();
         juce::AudioBuffer<float> out (2, 512); double sum = 0; float peak = 0;
         for (int pos = 0; pos < 44100 * 3; pos += 512)
