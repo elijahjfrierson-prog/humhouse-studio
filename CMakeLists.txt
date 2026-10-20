@@ -81,8 +81,8 @@ if(NOT HHS_TESTS_ONLY)
 # classic tattoo lettering (SIL Open Font License, see Resources/Fonts/OFL-*.txt)
 juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf)
 
-# "HumHouse Studio" = the retail app (needs a signed license key, checked in the audio engine);
-# "HumHouse Studio Master" = the owner's build with no key
+# "HumHouse Studio" = the stable app (HHS_LICENSED=1: Welcome screen, no new features);
+# "HumHouse Studio Master" = gets every new feature first
 function(hhs_add_app target product bundle licensed)
     juce_add_gui_app(${target}
         PRODUCT_NAME "${product}"

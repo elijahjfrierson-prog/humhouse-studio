@@ -10,7 +10,7 @@ static inline double keyToHz (double key) { return 440.0 * std::pow (2.0, (key -
 class SamplerInstrument : public ChannelInstrument
 {
 public:
-    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) {}
+    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) { sustainPos = findSustain(); }
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
@@ -135,7 +135,7 @@ public:
                 oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * g;
                 // a slid note keeps sounding for as long as it's held (an 808 slide never "gives up" half way):
                 // past the middle of the sample the time stops and the heads keep cycling the body of the sound
-                if (! (v.slid && ! v.releasing && v.pos >= 0.5 * len)) v.pos += 1.0;
+                if (! (v.slid && ! v.releasing && v.pos >= sustainPos)) v.pos += 1.0;
                 v.headA += rate; v.headB += rate;
                 if (++v.phase >= G) { v.phase = 0; v.headA = alignHead (l, len, v.pos, v.headB, rate); }
                 else if (v.phase == G / 2) v.headB = alignHead (l, len, v.pos, v.headA, rate);
@@ -143,6 +143,26 @@ public:
         }
     }
 private:
+    // where a held slide parks: the first point after the peak where the sound has dropped to half (-6 dB),
+    // at most half way in - so a long decaying 808 slide keeps its body instead of fading out by the 3rd note
+    double findSustain() const
+    {
+        if (! sample || sample->getNumSamples() < 64) return 0.0;
+        const int len = sample->getNumSamples(), win = 480;
+        const float* x = sample->getReadPointer (0);
+        std::vector<float> rms;
+        for (int a = 0; a + win <= len; a += win)
+        {
+            double sum = 0; for (int i = a; i < a + win; ++i) sum += (double) x[i] * x[i];
+            rms.push_back ((float) std::sqrt (sum / win));
+        }
+        if (rms.empty()) return 0.5 * len;
+        const auto peakIt = std::max_element (rms.begin(), rms.end());
+        const size_t peak = (size_t) std::distance (rms.begin(), peakIt);
+        for (size_t w = peak + 1; w < rms.size(); ++w)
+            if (rms[w] < 0.5f * *peakIt) return juce::jmin (0.5 * len, (double) (w * win));
+        return 0.5 * len;
+    }
     static float readAt (const float* x, int len, double pos)
     {
         if (pos < 0.0 || pos >= (double) (len - 1)) return 0.0f;
@@ -174,7 +194,7 @@ private:
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
     bool keyTrack = true;
-    double sampleRate = 44100.0, lastSemis = -999.0;
+    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0;
     float pitch = 0, glide = 0; bool mono = false, keepTime = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };

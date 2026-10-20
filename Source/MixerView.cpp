@@ -97,7 +97,7 @@ struct Strip : public juce::Component
         g.setColour (col::bg); g.fillRect (m);
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
-        g.setGradientFill (juce::ColourGradient (col::rec, (float) m.getX(), (float) m.getY(), col::good, (float) m.getX(), (float) m.getBottom(), false));
+        g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].fx.size() > 0)
         {
@@ -121,8 +121,8 @@ struct Strip : public juce::Component
             const float x = a.getX() + a.getWidth() * (float) i / 511.0f, y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
             if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
         }
-        g.setColour (col::accent.withAlpha (0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
-        g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh, 0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh)); g.strokePath (p, juce::PathStrokeType (1.0f));
     }
     void scMenu()
     {

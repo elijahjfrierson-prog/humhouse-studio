@@ -118,17 +118,18 @@ private:
             if (x == 0) line.startNewSubPath (px, py); else line.lineTo (px, py);
         }
         fill.lineTo (a.getRight(), mid); fill.closeSubPath();
-        g.setColour (col::accent.withAlpha (0.22f)); g.fillPath (fill);
-        g.setColour (col::accent.withAlpha (0.25f));
+        const float top = mid - hh, bot = mid + hh;
+        g.setGradientFill (col::mirrorGradient (0, top, bot, 0.22f)); g.fillPath (fill);
+        g.setGradientFill (col::mirrorGradient (0, top, bot, 0.25f));
         g.strokePath (line, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (col::accent.brighter (0.4f));
+        g.setGradientFill (col::mirrorGradient (0, top, bot));
         g.strokePath (line, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
     void drawHist (juce::Graphics& g, juce::Rectangle<float> a)
     {
         const int cols = juce::jmin (histMax, (int) a.getWidth());
         const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
-        g.setColour (col::accent.withAlpha (0.85f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh, 0.9f));
         for (int x = 0; x < cols; ++x)
         {
             const auto [lo, hi] = hist[(size_t) ((histPos - cols + x + histMax) % histMax)];
@@ -160,9 +161,9 @@ private:
             p.lineTo (a.getX() + (float) x, yFor (spec[(size_t) bin]));
         }
         p.lineTo (a.getRight(), a.getBottom()); p.closeSubPath();
-        g.setGradientFill (juce::ColourGradient (col::accent.withAlpha (0.6f), 0, a.getY(), col::accent.withAlpha (0.05f), 0, a.getBottom(), false));
+        g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom(), 0.45f));
         g.fillPath (p);
-        g.setColour (col::accent.brighter (0.3f)); g.strokePath (p, juce::PathStrokeType (1.4f));
+        g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom())); g.strokePath (p, juce::PathStrokeType (1.4f));
     }
 };
 }

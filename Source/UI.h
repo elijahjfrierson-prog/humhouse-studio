@@ -14,6 +14,22 @@ namespace col
     inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
         gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xffff8a3d), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+    // meters + scopes gradient (quiet -> loud), set in Theme
+    inline juce::Colour gradLo (0xff3ddc84), gradMid (0xffffd23d), gradHi (0xffff3b57);
+    // bottom (quiet) to top (loud), like the mixer volume meters
+    inline juce::ColourGradient levelGradient (float x, float yTop, float yBottom, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (gradHi.withMultipliedAlpha (alpha), x, yTop, gradLo.withMultipliedAlpha (alpha), x, yBottom, false);
+        gr.addColour (0.45, gradMid.withMultipliedAlpha (alpha));
+        return gr;
+    }
+    // mirrored around the centre line for waveforms: quiet near the middle, hot at the peaks
+    inline juce::ColourGradient mirrorGradient (float x, float yTop, float yBottom, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (gradHi.withMultipliedAlpha (alpha), x, yTop, gradHi.withMultipliedAlpha (alpha), x, yBottom, false);
+        gr.addColour (0.22, gradMid.withMultipliedAlpha (alpha)); gr.addColour (0.5, gradLo.withMultipliedAlpha (alpha)); gr.addColour (0.78, gradMid.withMultipliedAlpha (alpha));
+        return gr;
+    }
 }
 
 // FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
@@ -246,6 +262,7 @@ void closeEditorsForPlugin (juce::AudioProcessor*);
 
 void applyTheme (juce::Colour accent, float tint);   // tint 0..1 = how much the accent colors the background
 void resetTheme();
+void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
 void showThemeDialog (Studio&);
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 

@@ -2,14 +2,56 @@
 
 namespace hhs
 {
+// the folder of the .hhs being saved / opened: audio inside it is also stored relative, so a moved,
+// copied or synced project folder (Desktop, USB drive, other computer) still finds its vocals
+static thread_local juce::File ioBase;
+struct IOBaseScope { explicit IOBaseScope (const juce::File& projectFile) { ioBase = projectFile.getParentDirectory(); } ~IOBaseScope() { ioBase = juce::File(); } };
+
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
-static juce::File strFile (const juce::String& s)
+static juce::String relStr (const juce::File& f)
+{
+    if (f == juce::File() || ioBase == juce::File() || ! f.isAChildOf (ioBase)) return {};
+    return f.getRelativePathFrom (ioBase).replaceCharacter ('\\', '/');
+}
+static void setFile (juce::ValueTree& t, const char* key, const juce::File& f)
+{
+    t.setProperty (key, fileStr (f), nullptr);
+    const auto rel = relStr (f);
+    if (rel.isNotEmpty()) t.setProperty (juce::String (key) + "Rel", rel, nullptr);
+}
+static juce::File findAudio (const juce::String& s, const juce::String& rel)
 {
     if (s.isEmpty()) return {};
     juce::File f (s);
-    if (! f.existsAsFile() && f.hasFileExtension ("wav") && f.withFileExtension ("flac").existsAsFile()) return f.withFileExtension ("flac");   // built-in kits are FLAC now
-    return f;
+    if (f.existsAsFile()) return f;
+    auto alt = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
+    if (auto c = alt (f); c != juce::File()) return c;   // built-in kits are FLAC now
+    const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
+    juce::Array<juce::File> tries;
+    if (ioBase != juce::File())
+    {
+        if (rel.isNotEmpty()) tries.add (ioBase.getChildFile (rel));
+        tries.add (ioBase.getChildFile ("Recordings").getChildFile (name));
+        tries.add (ioBase.getChildFile (name));
+        tries.add (ioBase.getChildFile ("Audio Files").getChildFile (name));
+        tries.add (ioBase.getChildFile ("Samples").getChildFile (name));
+        tries.add (ioBase.getChildFile ("Audio").getChildFile (name));
+        tries.add (ioBase.getParentDirectory().getChildFile ("Recordings").getChildFile (name));
+    }
+    tries.add (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Recordings").getChildFile (name));
+    for (auto& c : tries) if (auto a = alt (c); a != juce::File()) return a;
+    if (ioBase.isDirectory())   // last try: anywhere inside the project folder (bounded so a Desktop full of files can't stall opening)
+    {
+        int seen = 0;
+        for (const auto& e : juce::RangedDirectoryIterator (ioBase, true, "*", juce::File::findFiles))
+        {
+            if (++seen > 20000) break;
+            if (e.getFile().getFileName().equalsIgnoreCase (name)) return e.getFile();
+        }
+    }
+    return f;   // still missing: keep the original path so it can be located later
 }
+static juce::File readFile (const juce::ValueTree& t, const char* key) { return findAudio (t[key].toString(), t[juce::Identifier (juce::String (key) + "Rel")].toString()); }
 
 static juce::ValueTree notesTree (const NoteList& notes)
 {
@@ -55,7 +97,7 @@ juce::ValueTree projectToTree (const Project& p)
     {
         juce::ValueTree t ("CH");
         t.setProperty ("id", c.id, nullptr); t.setProperty ("name", c.name, nullptr); t.setProperty ("type", (int) c.type, nullptr);
-        t.setProperty ("file", fileStr (c.sampleFile), nullptr); t.setProperty ("drum", c.builtinDrum, nullptr);
+        setFile (t, "file", c.sampleFile); t.setProperty ("drum", c.builtinDrum, nullptr);
         t.setProperty ("plugin", c.pluginId, nullptr); t.setProperty ("state", c.pluginState.toBase64Encoding(), nullptr);
         t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("vol", c.volume, nullptr); t.setProperty ("pan", c.pan, nullptr);
         t.setProperty ("pitch", c.pitch, nullptr); t.setProperty ("glide", c.glide, nullptr); t.setProperty ("shift", c.shift, nullptr); t.setProperty ("mono", c.mono, nullptr);
@@ -105,7 +147,7 @@ juce::ValueTree projectToTree (const Project& p)
     {
         juce::ValueTree t ("CLIP");
         t.setProperty ("uid", c.uid, nullptr); t.setProperty ("lane", c.lane, nullptr); t.setProperty ("start", c.start, nullptr);
-        t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); t.setProperty ("file", fileStr (c.audioFile), nullptr);
+        t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); setFile (t, "file", c.audioFile);
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
         t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
@@ -114,7 +156,7 @@ juce::ValueTree projectToTree (const Project& p)
     }
     root.appendChild (clips, nullptr);
     juce::ValueTree pool ("POOL");
-    for (auto& f : p.audioPool) { juce::ValueTree t ("F"); t.setProperty ("file", fileStr (f), nullptr); pool.appendChild (t, nullptr); }
+    for (auto& f : p.audioPool) { juce::ValueTree t ("F"); setFile (t, "file", f); pool.appendChild (t, nullptr); }
     root.appendChild (pool, nullptr);
 
     juce::ValueTree mix ("MIXER");
@@ -123,7 +165,7 @@ juce::ValueTree projectToTree (const Project& p)
         juce::ValueTree t ("TRACK");
         t.setProperty ("name", m.name, nullptr); t.setProperty ("vol", m.volume, nullptr); t.setProperty ("pan", m.pan, nullptr);
         t.setProperty ("mute", m.muted, nullptr); t.setProperty ("solo", m.solo, nullptr); t.setProperty ("frozen", m.frozen, nullptr);
-        t.setProperty ("frozenFile", fileStr (m.frozenFile), nullptr); t.setProperty ("master", m.routesToMaster, nullptr);
+        setFile (t, "frozenFile", m.frozenFile); t.setProperty ("master", m.routesToMaster, nullptr);
         t.setProperty ("duck", m.duck, nullptr); t.setProperty ("duckSrc", m.duckSource, nullptr); t.setProperty ("duckTh", m.duckThreshold, nullptr);
         t.setProperty ("duckRatio", m.duckRatio, nullptr); t.setProperty ("duckAtt", m.duckAttack, nullptr); t.setProperty ("duckRel", m.duckRelease, nullptr);
         t.setProperty ("colour", (juce::int64) m.colour.getARGB(), nullptr);
@@ -156,7 +198,7 @@ Project projectFromTree (const juce::ValueTree& root)
     {
         Channel c;
         c.id = t["id"]; c.name = t["name"].toString(); c.type = (ChannelType) (int) t["type"];
-        c.sampleFile = strFile (t["file"].toString()); c.builtinDrum = t.getProperty ("drum", -1);
+        c.sampleFile = readFile (t, "file"); c.builtinDrum = t.getProperty ("drum", -1);
         c.pluginId = t["plugin"].toString(); c.pluginState.fromBase64Encoding (t["state"].toString());
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.shift = (float) t.getProperty ("shift", 0.0); c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
@@ -195,16 +237,16 @@ Project projectFromTree (const juce::ValueTree& root)
     for (auto t : root.getChildWithName ("CLIPS"))
     {
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"];
-        c.audioFile = strFile (t["file"].toString()); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
+        c.audioFile = readFile (t, "file"); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
         c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"];
         p.clips.push_back (c);
     }
-    for (auto t : root.getChildWithName ("POOL")) p.audioPool.push_back (strFile (t["file"].toString()));
+    for (auto t : root.getChildWithName ("POOL")) p.audioPool.push_back (readFile (t, "file"));
     for (auto t : root.getChildWithName ("MIXER"))
     {
         MixerTrack m; m.name = t["name"].toString(); m.volume = t.getProperty ("vol", 0.8f); m.pan = t["pan"];
-        m.muted = t["mute"]; m.solo = t["solo"]; m.frozen = t["frozen"]; m.frozenFile = strFile (t["frozenFile"].toString());
+        m.muted = t["mute"]; m.solo = t["solo"]; m.frozen = t["frozen"]; m.frozenFile = readFile (t, "frozenFile");
         m.routesToMaster = t.getProperty ("master", true);
         m.duck = t.getProperty ("duck", 0.0f); m.duckSource = t.getProperty ("duckSrc", -1); m.duckThreshold = t.getProperty ("duckTh", -40.0f);
         m.duckRatio = t.getProperty ("duckRatio", 4.0f); m.duckAttack = t.getProperty ("duckAtt", 5.0f); m.duckRelease = t.getProperty ("duckRel", 150.0f);
@@ -232,6 +274,7 @@ Project projectFromTree (const juce::ValueTree& root)
 
 bool saveProject (const Project& p, const juce::File& f)
 {
+    IOBaseScope base (f);
     auto xml = projectToTree (p).createXml();
     return xml && xml->writeTo (f);
 }
@@ -240,6 +283,7 @@ bool loadProject (Project& p, const juce::File& f)
 {
     auto xml = juce::XmlDocument::parse (f);
     if (! xml || ! xml->hasTagName ("HUMHOUSE_PROJECT")) return false;
+    IOBaseScope base (f);
     p = projectFromTree (juce::ValueTree::fromXml (*xml));
     p.projectFile = f;
     return true;

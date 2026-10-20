@@ -107,15 +107,28 @@ public:
             };
             addAndMakeVisible (b);
         }
+        // meters + scopes gradient presets (quiet, middle, loud)
+        const juce::uint32 grads[][3] { { 0xff3ddc84, 0xffffd23d, 0xffff3b57 }, { 0xff38d1ff, 0xff4d7cff, 0xffb15cff },
+                                        { 0xffffc93d, 0xffff8a3d, 0xffff3b57 }, { 0xff3ddc84, 0xff38d1ff, 0xffffffff },
+                                        { 0xffff5db1, 0xffb15cff, 0xff38d1ff }, { 0xff7f8896, 0xffc9ced6, 0xffffffff } };
+        for (auto& gc : grads)
+        {
+            const juce::String v = juce::Colour (gc[0]).toString() + " " + juce::Colour (gc[1]).toString() + " " + juce::Colour (gc[2]).toString();
+            auto* b = gradButtons.add (new GradSwatch (juce::Colour (gc[0]), juce::Colour (gc[1]), juce::Colour (gc[2])));
+            b->onClick = [this, v] { applyGradient (v); if (s.settings) { s.settings->setValue ("gradColours", v); s.settings->saveIfNeeded(); } };
+            addAndMakeVisible (b);
+        }
+        gradLabel.setFont (juce::FontOptions (12.0f)); addAndMakeVisible (gradLabel);
         setupButton (reset, "Reset", "Back to the original HumHouse orange");
         reset.onClick = [this] {
             resetTheme();
-            if (s.settings) { s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->saveIfNeeded(); }
+            applyGradient ({});
+            if (s.settings) { s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->removeValue ("gradColours"); s.settings->saveIfNeeded(); }
             wheel.hue = col::accent.getHue(); wheel.sat = col::accent.getSaturation(); wheel.repaint();
             bright.setValue (col::accent.getBrightness(), juce::dontSendNotification);
         };
         addAndMakeVisible (reset);
-        setSize (340, 470);
+        setSize (340, 530);
     }
     void paint (juce::Graphics& g) override
     {
@@ -134,6 +147,11 @@ public:
         auto row = r.removeFromTop (30);
         const int w = row.getWidth() / swatches.size();
         for (auto* b : swatches) b->setBounds (row.removeFromLeft (w).reduced (3));
+        r.removeFromTop (8);
+        gradLabel.setBounds (r.removeFromTop (18));
+        auto grow = r.removeFromTop (28);
+        const int gw = grow.getWidth() / gradButtons.size();
+        for (auto* b : gradButtons) b->setBounds (grow.removeFromLeft (gw).reduced (3));
         r.removeFromTop (10);
         reset.setBounds (r.removeFromTop (28).removeFromRight (90));
     }
@@ -144,6 +162,21 @@ private:
     juce::Slider bright, tint;
     juce::Label brightLabel { {}, "Brightness" }, tintLabel { {}, "Background tint" };
     juce::OwnedArray<juce::TextButton> swatches;
+    struct GradSwatch : public juce::Button
+    {
+        GradSwatch (juce::Colour a, juce::Colour b, juce::Colour c) : juce::Button ("gradient"), lo (a), mid (b), hi (c) { setTooltip ("Meter + scope gradient"); }
+        juce::Colour lo, mid, hi;
+        void paintButton (juce::Graphics& g, bool over, bool) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1);
+            juce::ColourGradient gr (lo, r.getX(), 0, hi, r.getRight(), 0, false); gr.addColour (0.5, mid);
+            g.setGradientFill (gr); g.fillRoundedRectangle (r, 3);
+            const bool on = col::gradLo == lo && col::gradMid == mid && col::gradHi == hi;
+            g.setColour (on ? col::text : over ? col::dim : col::grid); g.drawRoundedRectangle (r, 3, on ? 2.0f : 1.0f);
+        }
+    };
+    juce::OwnedArray<GradSwatch> gradButtons;
+    juce::Label gradLabel { {}, "Meters + scopes gradient" };
     juce::TextButton reset;
 
     void apply()
@@ -168,6 +201,14 @@ void applyTheme (juce::Colour accent, float tint)
     col::grid = shade (0.176f); col::gridBeat = shade (0.224f); col::gridBar = shade (0.306f);
     col::scale = juce::Colour::fromHSV (h, 0.3f, 0.16f, 1.0f);
     col::root = juce::Colour::fromHSV (h, 0.4f, 0.23f, 1.0f);
+    refreshAll();
+}
+
+void applyGradient (const juce::String& colours)
+{
+    auto t = juce::StringArray::fromTokens (colours, " ", "");
+    if (t.size() == 3) { col::gradLo = juce::Colour::fromString (t[0]); col::gradMid = juce::Colour::fromString (t[1]); col::gradHi = juce::Colour::fromString (t[2]); }
+    else { col::gradLo = juce::Colour (0xff3ddc84); col::gradMid = juce::Colour (0xffffd23d); col::gradHi = juce::Colour (0xffff3b57); }
     refreshAll();
 }
 

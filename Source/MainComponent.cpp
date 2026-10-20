@@ -388,6 +388,7 @@ public:
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
+        if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);
@@ -1058,9 +1059,76 @@ private:
         }
     }
 
+    // Pro Tools-style session folder: every save copies the audio the song uses (takes, imported vocals, your own
+    // samples) into the project's folder, so the folder alone opens, plays and exports stems anywhere, years later
+    void collectAudio()
+    {
+        auto& p = engine.project();
+        if (p.projectFile == juce::File()) return;
+        const auto base = p.projectFile.getParentDirectory();
+        const auto app = juce::File::getSpecialLocation (juce::File::currentApplicationFile), exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+        std::map<juce::String, juce::File> moved;
+        auto take = [&] (const juce::File& f, const juce::File& dest) {
+            if (! f.existsAsFile() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || moved.count (f.getFullPathName())) return;
+            dest.createDirectory();
+            auto t = dest.getChildFile (f.getFileName());
+            if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
+            if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+        };
+        const auto shared = docsDir().getChildFile ("Recordings");
+        for (auto& c : p.clips) take (c.audioFile, base.getChildFile (c.audioFile.isAChildOf (shared) ? "Recordings" : "Audio Files"));
+        for (auto& f : p.audioPool) take (f, base.getChildFile ("Audio Files"));
+        for (auto& c : p.channels) take (c.sampleFile, base.getChildFile ("Samples"));
+        for (auto& m : p.mixer) take (m.frozenFile, base.getChildFile ("Recordings").getChildFile ("Freeze"));
+        if (moved.empty()) return;
+        studio.live ([&moved] (Project& pr) {
+            auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
+            for (auto& c : pr.clips) re (c.audioFile);
+            for (auto& f : pr.audioPool) re (f);
+            for (auto& c : pr.channels) re (c.sampleFile);
+            for (auto& m : pr.mixer) re (m.frozenFile);
+        });
+        engine.sync();
+    }
+
+    void locateMissingAudio()
+    {
+        juce::StringArray missing;
+        for (auto& c : engine.project().clips)
+            if (c.isAudio() && c.audioFile != juce::File() && ! c.audioFile.existsAsFile()) missing.addIfNotAlreadyThere (c.audioFile.getFileName());
+        if (missing.isEmpty()) return;
+        auto* w = new juce::AlertWindow ("Audio not found", juce::String (missing.size()) + " audio file(s) in this project weren't found where they were saved:\n"
+                                         + missing.joinIntoString ("\n").substring (0, 600) + "\n\nPick the folder they're in (sub-folders are searched too).",
+                                         juce::MessageBoxIconType::WarningIcon);
+        w->addButton ("Locate folder...", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Skip", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int r) {
+            if (r != 1) return;
+            chooser = std::make_unique<juce::FileChooser> ("Folder with the missing audio", engine.project().projectFile.getParentDirectory());
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+                const auto dir = fc.getResult();
+                if (! dir.isDirectory()) return;
+                std::map<juce::String, juce::File> byName;
+                for (const auto& e : juce::RangedDirectoryIterator (dir, true, "*", juce::File::findFiles))
+                    byName.emplace (e.getFile().getFileName().toLowerCase(), e.getFile());
+                int found = 0;
+                studio.edit ("Locate audio", [&] (Project& pr) {
+                    for (auto& c : pr.clips)
+                        if (c.isAudio() && ! c.audioFile.existsAsFile())
+                            if (auto it = byName.find (c.audioFile.getFileName().toLowerCase()); it != byName.end()) { c.audioFile = it->second; ++found; }
+                    for (auto& f : pr.audioPool)
+                        if (! f.existsAsFile()) if (auto it = byName.find (f.getFileName().toLowerCase()); it != byName.end()) f = it->second;
+                });
+                engine.sync();
+                flash ("Found " + juce::String (found) + " audio clip(s)");
+            });
+        }), true);
+    }
+
     void writeProject()
     {
         engine.storePluginStates();
+        collectAudio();
         auto& p = engine.project();
         if (saveProject (p, p.projectFile))
         {
@@ -1131,6 +1199,7 @@ private:
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
         studio.dirty = false;
         studio.sendChangeMessage();
+        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) sp->locateMissingAudio(); });
     }
 
     void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }

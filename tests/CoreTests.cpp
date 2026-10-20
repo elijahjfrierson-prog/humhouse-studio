@@ -1315,6 +1315,116 @@ int main()
         std::printf ("license: machine id %s, valid key ok, 3rd computer / edited / forged keys rejected\n", id.toRawUTF8());
     }
 
+    // 808 slide chains: every slid note keeps sounding (the 3rd, 4th... note never dies), through the real engine
+    for (int cfg = 0; cfg < 28; ++cfg)
+    {
+        const int mono = cfg & 1, mode = (cfg >> 1) & 1, shape = cfg >> 2;   // 0 legato, 1 one-shot + cut itself, 2 gaps, 3 143 BPM @ 44.1k, 4 overlaps, 5 back to the same key, 6 long fast-decaying 808
+        const double sr = shape == 3 ? 44100.0 : 48000.0, bpm = shape == 3 ? 143.0 : 120.0;
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-glide-808.wav");
+        {
+            const int len = shape == 6 ? 96000 : 28800;   // 0.6 s decaying 55 Hz sub, or 2 s that fades out fast
+            juce::AudioBuffer<float> b (2, len);
+            for (int i = 0; i < len; ++i) { const float v = 0.7f * std::exp ((shape == 6 ? -10.0f : -2.0f) * i / (float) len) * (float) std::sin (juce::MathConstants<double>::twoPi * 55.0 * i / 48000.0); b.setSample (0, i, v); b.setSample (1, i, v); }
+            wav.deleteFile();
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (wav.createOutputStream().release(), 48000.0, 2, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        auto pr = Project::createDefault();
+        Channel c; c.id = 1; c.name = "808"; c.type = ChannelType::Sampler; c.sampleFile = wav; c.glide = 0.08f; c.mono = mono == 1; c.stretchMode = mode;
+        if (shape == 1) { c.oneShot = true; c.cutItself = true; }
+        pr.channels = { c };
+        NoteList nl;
+        const int keys[] { 60, 63, 65, 67, 70, 67, 65, 63 }, same[] { 60, 67, 60, 67, 60, 67, 60, 67 };
+        for (int k = 0; k < 8; ++k)
+        {
+            Note n; n.key = shape == 5 ? same[k] : keys[k]; n.start = k * 0.5; n.slide = k > 0;
+            n.length = shape == 2 ? 0.3 : shape == 4 ? 0.7 : 0.5;
+            nl.push_back (n);
+        }
+        pr.patterns[0].notes[1] = nl;
+        pr.bpm = bpm;
+        Engine e; e.prepare (sr, 512); e.newProject (pr); e.sync(); e.play();
+        std::vector<float> outL;
+        juce::AudioBuffer<float> out (2, 512);
+        const int noteLen = (int) (0.5 * 60.0 / bpm * sr);
+        for (int blk = 0; blk * 512 < noteLen * 8 + 1024; ++blk)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+        }
+        e.stop();
+        float lo = 1;
+        juce::String lv;
+        for (int k = 0; k < 8; ++k)   // the middle half of each note
+        {
+            double sum = 0; const int a0 = k * noteLen + noteLen / 4, b0 = a0 + noteLen / 2;
+            for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
+            const float rms = (float) std::sqrt (sum / (b0 - a0));
+            lo = std::min (lo, rms); lv << juce::String (rms, 3) << " ";
+        }
+        std::printf ("808 slide chain (%s, %s, shape %d): note levels %s\n", mono ? "mono" : "poly", mode ? "stretch" : "resample", shape, lv.toRawUTF8());
+        CHECK (lo > 0.03f);
+        wav.deleteFile();
+    }
+
+    // 600-track session: sounding tracks + hundreds of quiet ones with inserts must run well inside real time
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        auto& p = e.project();
+        p.songMode = false;
+        const auto& all = builtinEffects();
+        for (int t = 0; t < 600; ++t)
+        {
+            const int mt = p.addMixerTrack ("T" + juce::String (t));
+            p.addFx (mt, all[(size_t) (t % (int) all.size())].id);
+            p.addFx (mt, all[(size_t) ((t + 3) % (int) all.size())].id);
+        }
+        for (int c = 0; c < 32; ++c)
+        {
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "S" + juce::String (c); ch.mixerTrack = 1 + c * 18;
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 16; ++k) { Note nt; nt.key = 48 + (c + k) % 24; nt.start = k * 0.25; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
+        }
+        e.sync();
+        e.play();
+        juce::AudioBuffer<float> out (2, 256);
+        const double deadline = 256.0 / 48000.0;
+        double total = 0; const int blocks = 1500;
+        for (int b = 0; b < blocks + 200; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            const auto t0 = juce::Time::getHighResolutionTicks();
+            e.processBlock (nullptr, 0, o, 2, 256);
+            if (b >= 200) total += juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+            CHECK (std::isfinite (out.getSample (0, 0)));
+        }
+        std::printf ("600 tracks (1200 inserts, 32 sounding) @256: avg load %.1f%% of real time\n", 100.0 * total / (blocks * deadline));
+        CHECK (total / (blocks * deadline) < 0.9);
+        e.stop();
+    }
+
+    // a project folder moved somewhere else (Desktop -> USB, other computer) still finds its recorded vocals
+    {
+        auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-move-test");
+        root.deleteRecursively();
+        auto a = root.getChildFile ("A"), b = root.getChildFile ("B");
+        a.getChildFile ("Recordings").createDirectory();
+        auto take = a.getChildFile ("Recordings").getChildFile ("Vocal_take.wav");
+        take.replaceWithText ("RIFF");
+        Project p = Project::createDefault();
+        Clip c; c.uid = p.newUid(); c.audioFile = take; c.length = 4; p.clips.push_back (c);
+        CHECK (saveProject (p, a.getChildFile ("Song.hhs")));
+        CHECK (a.moveFileTo (b));
+        Project q; CHECK (loadProject (q, b.getChildFile ("Song.hhs")));
+        const auto& got = q.clips.back().audioFile;
+        std::printf ("moved project: vocal found at %s\n", got.getFullPathName().toRawUTF8());
+        CHECK (got.existsAsFile() && got == b.getChildFile ("Recordings").getChildFile ("Vocal_take.wav"));
+        root.deleteRecursively();
+    }
+
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;
 }
