@@ -1446,6 +1446,7 @@ KeyGuess findKey (const float* x, int n, double sr)
 
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
+std::unique_ptr<BuiltinEffect> createPurify();
 
 ScopeTap& masterScope() { static ScopeTap t; return t; }
 
@@ -1454,7 +1455,7 @@ const std::vector<EffectInfo>& builtinEffects()
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
-        { "hhmaster", "Hum House Master", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
+        { "hhmaster", "Hum House Master", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" },
        #if ! HHS_LICENSED
         { "vroom", "HumHouse Vocal Room", "Vocal" },
@@ -1473,6 +1474,7 @@ const std::vector<EffectInfo>& builtinEffects()
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
     if (auto s = createStudioEffect (id)) return s;
+    if (id == "purify") { auto f = createPurify(); f->initDefaults(); return f; }
     if (id == "scope") return std::make_unique<ScopeFx>();
     if (id == "eq") return std::make_unique<ParaEQ>();
     if (id == "comp") return std::make_unique<Compressor>();
