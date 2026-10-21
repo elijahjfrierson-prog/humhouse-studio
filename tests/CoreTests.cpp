@@ -790,7 +790,7 @@ int main()
         CHECK (ms < 3000.0);
     }
     // AutoPitch CPU: 10 s of a sung note must take a small fraction of real time in every style
-    for (int style : { 0, 1, 3 })
+    for (int style : { 0, 1, 3, 5 })
     {
         auto ap = createBuiltinEffect ("autopitch");
         ap->setParam ("style", (float) style);
@@ -920,7 +920,7 @@ int main()
             CHECK (r.attackOut > 0.93 * r.attackIn);
         }
     // AutoPitch on a realistic sung phrase: no chirps (wrong-pitch blips) or squeaks in any style
-    for (int style : { 0, 1, 2, 3, 4 })
+    for (int style : { 0, 1, 2, 3, 4, 5 })
         for (unsigned seed : { 1u, 2u, 3u })
             for (float natvib : { 0.0f, 1.0f })
             {
@@ -978,6 +978,69 @@ int main()
         CHECK (dFlat < 12.0);
         CHECK (dKept > 25.0);
         CHECK (std::abs (deepHz - 82.41f) < 0.6f);
+    }
+    // AutoPitch Gloss Hold: a sung E4 drifting sharp (+5 -> +40 cents) with +-25 cent vibrato (peaks nearer F) must hold
+    // exactly on E, never flip to the neighbour, stay under 0 dBFS, match the input level, at 0 latency and low CPU
+    {
+        auto run = [] (int style, double& worstCents, int& flips, float& peak, double& levelDb, double& ms, int& latency) {
+            const double fs = 48000, tau = juce::MathConstants<double>::twoPi, e4 = 329.63;
+            const int total = (int) (10.0 * fs);
+            std::vector<float> in ((size_t) total);
+            double ph = 0, pk = 0;
+            for (int i = 0; i < total; ++i)
+            {
+                const double t = i / fs, cents = 5.0 + 35.0 * t / 10.0 + 25.0 * std::sin (tau * 5.5 * t);
+                ph += e4 * std::pow (2.0, cents / 1200.0) / fs; ph -= std::floor (ph);
+                double x = 0; for (int k = 1; k * e4 < 7000; ++k) x += std::sin (tau * k * ph) / (k * std::sqrt ((double) k));
+                in[(size_t) i] = (float) x; pk = std::max (pk, std::abs (x));
+            }
+            for (auto& v : in) v *= (float) (0.9 / pk);   // -0.9 dBFS peaks
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style); ap->setParam ("natvib", 0.0f);
+            ap->prepare (fs, 512);
+            latency = ap->latencySamples();
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            std::vector<float> out ((size_t) total);
+            double inE = 0, outE = 0; peak = 0; ms = 0;
+            for (int at = 0; at < total; at += 512)
+            {
+                const int n = std::min (512, total - at);
+                for (int i = 0; i < n; ++i) { b.setSample (0, i, in[(size_t) (at + i)]); b.setSample (1, i, in[(size_t) (at + i)]); }
+                const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                ap->process (b, n, ctx);
+                ms += juce::Time::getMillisecondCounterHiRes() - t0;
+                for (int i = 0; i < n; ++i)
+                {
+                    const float yl = b.getSample (0, i), yr = b.getSample (1, i), x = in[(size_t) (at + i)];
+                    out[(size_t) (at + i)] = 0.5f * (yl + yr);
+                    peak = std::max (peak, std::max (std::abs (yl), std::abs (yr)));
+                    if (at + i > (int) (0.5 * fs)) { inE += 2.0 * x * x; outE += yl * yl + yr * yr; }
+                }
+            }
+            levelDb = 10.0 * std::log10 (outE / inE);
+            worstCents = 0; flips = 0;
+            for (size_t at = (size_t) (0.5 * fs); at + 2048 < out.size(); at += 256)
+            {
+                const float f = detectPitchYin (out.data() + at, 2048, fs, 0.3f, 0.5f, 60.0f, 1100.0f);
+                if (f <= 0) continue;
+                const double c = 1200.0 * std::log2 (f / e4);
+                worstCents = std::max (worstCents, std::abs (c));
+                if (c > 50.0) ++flips;
+            }
+        };
+        double worst = 0, lvl = 0, ms = 0; int flips = 0, lat = -1; float peak = 0;
+        run (5, worst, flips, peak, lvl, ms, lat);
+        std::printf ("autopitch gloss hold: E4 +5..+40c drift, 25c vibrato -> worst %.1f c off E, %d flips to F, peak %.2f dBFS, level %+.2f dB, latency %d, cpu %.1f ms per 10 s (%.2f%%)\n",
+                     worst, flips, juce::Decibels::gainToDecibels (peak), lvl, lat, ms, ms / 100.0);
+        CHECK (worst < 12.0);
+        CHECK (flips == 0);
+        CHECK (peak <= 1.0f);
+        CHECK (std::abs (lvl) < 1.5);
+        CHECK (lat == 0);
+        CHECK (ms < 2000.0);
+        double hWorst = 0, hLvl = 0, hMs = 0; int hFlips = 0, hLat = -1; float hPeak = 0;
+        run (3, hWorst, hFlips, hPeak, hLvl, hMs, hLat);
+        std::printf ("  (same take on Hard Tune: worst %.1f c, %d flips to F)\n", hWorst, hFlips);
     }
     // Maximizer: loud input never passes the ceiling, output stays finite
     {
