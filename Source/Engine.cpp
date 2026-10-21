@@ -363,6 +363,12 @@ Engine::~Engine()
     alive->store (false);
     deviceManager.removeAudioCallback (this);
     finishRecordingWriters();
+    {
+        // disk readers unregister from diskThread, which is declared after them and would be destroyed first
+        const juce::ScopedLock sl (lock);
+        clipRt.clear();
+        for (auto& t : trackRt) if (t) t->frozen.reset();
+    }
     diskThread.stopThread (2000);
 }
 

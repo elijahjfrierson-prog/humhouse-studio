@@ -302,6 +302,7 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main()
 {
+    std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
     if (std::getenv ("HHS_AP_PROBE2") != nullptr)
     {
         for (double m : { 57.6, 56.6, 64.3, 50.5 })
