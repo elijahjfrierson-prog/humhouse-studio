@@ -1190,11 +1190,10 @@ public:
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = hard ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
-        // a whole-semitone Pitch move resampled = chipmunk up / muffled down: every style keeps the voice's tone then (PSOLA).
-        // note correction alone stays on the instant zero-latency splice (under a semitone, the tone barely moves)
         const float formantSt = p (15);
         const double formantR = std::exp2 (formantSt / 12.0);
-        const bool keepTone = style < 3 || std::abs (std::round (p (7))) >= 1.0f || std::abs (formantSt) > 0.05f;
+        // Classic Hard and Gloss keep the singer's vowel tone (only pitch moves, never the formants); Hard Tune keeps its instant splice
+        const bool keepTone = style != 3 || std::abs (std::round (p (7))) >= 1.0f || std::abs (formantSt) > 0.05f;
         const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
         const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
@@ -1371,8 +1370,8 @@ private:
         dblW = (dblW + 1) & dblMask;
         // doubles only above ~1.6 kHz: full-band copies 11-17 ms late comb-filter the vowel (notches every ~70 Hz
         // through F1/F2 = hollow, phasey formants); up top they just add width and shine, the vowel stays the singer's
-        cl += 0.20f * dblHP.tick (0.65f * tap[0][0] + 0.35f * tap[1][0], 0);
-        cr += 0.20f * dblHP.tick (0.35f * tap[0][1] + 0.65f * tap[1][1], 1);
+        cl += 0.32f * (0.65f * tap[0][0] + 0.35f * tap[1][0]);
+        cr += 0.32f * (0.35f * tap[0][1] + 0.65f * tap[1][1]);
         // gloss: air shelf + soft exciter, pulled back on sibilance so s / t / sh stay clean
         const float el = excHP.tick (cl, 0), er = excHP.tick (cr, 1);
         const float al = airHP.tick (cl, 0), ar = airHP.tick (cr, 1);
