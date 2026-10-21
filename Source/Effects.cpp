@@ -20,7 +20,7 @@ int BuiltinEffect::paramIndex (const juce::String& id) const
 void BuiltinEffect::setParam (const juce::String& id, float v)
 {
     const int i = paramIndex (id);
-    if (i >= 0) { auto& d = params()[(size_t) i]; values[(size_t) i].store (juce::jlimit (d.min, d.max, v)); }
+    if (i >= 0) { auto& d = params()[(size_t) i]; values[(size_t) i].store (juce::jlimit (d.min, d.max, v)); paramChanged (i); }
 }
 float BuiltinEffect::getParam (const juce::String& id) const
 {
@@ -189,12 +189,21 @@ public:
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<ParamDef> ps { { "size", "Size", 0, 1, 0.6f }, { "damp", "Damping", 0, 1, 0.45f }, { "width", "Width", 0, 1, 1 },
-                                                 { "mix", "Mix", 0, 1, 0.25f }, { "lowcut", "Low Cut", 20, 1000, 200 } };
+                                                 { "mix", "Mix", 0, 1, 0.25f }, { "lowcut", "Low Cut", 20, 1000, 200 },
+                                                 { "reverse", "Reverse", 0, 1, 0, { "Off", "On" } },
+                                                 { "revlen", "Rev Length", 0, 3, 1, { "1/4", "1/2", "1 Bar", "2 Bars" } } };
         return ps;
     }
-    double tailSeconds() const override { return 6.0; }
-    void prepare (double s, int maxBlock) override { sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear(); }
-    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    double tailSeconds() const override { return p (5) > 0.5f ? 14.0 : 6.0; }
+    void prepare (double s, int maxBlock) override
+    {
+        sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear();
+        revReady.store (false); prepared = true;
+        if (p (5) > 0.5f) allocRev();
+    }
+    // Reverse memory is only made when Reverse is on, and never on the audio thread
+    void paramChanged (int i) override { if (i == 5 && prepared && p (5) > 0.5f) allocRev(); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         juce::Reverb::Parameters rp; rp.roomSize = p (0); rp.damping = p (1); rp.width = p (2); rp.wetLevel = 1; rp.dryLevel = 0;
         verb.setParameters (rp);
@@ -206,6 +215,7 @@ public:
             for (int i = 0; i < n; ++i) w[i] = hp.tick (s[i], ch);
         }
         verb.processStereo (wet.getWritePointer (0), wet.getWritePointer (1), n);
+        if (p (5) > 0.5f && revReady.load (std::memory_order_acquire)) reverse (n, ctx);
         const float m = p (3);
         for (int ch = 0; ch < 2; ++ch)
         {
@@ -214,7 +224,47 @@ public:
         }
     }
 private:
+    void allocRev()
+    {
+        if (revReady.load()) return;
+        revCap = (int) (sr * 8.0);
+        rev.setSize (2, 2 * revCap); rev.clear();
+        segLen = 0;
+        revReady.store (true, std::memory_order_release);
+    }
+    // tempo-synced reverse: each beat-locked chunk of reverb plays backwards in the next one, so it swells into the beat
+    void reverse (int n, const PlayContext& ctx)
+    {
+        static constexpr double beatsOf[] { 1.0, 2.0, 4.0, 8.0 };
+        const double beats = beatsOf[juce::jlimit (0, 3, (int) p (6))];
+        const int L = juce::jlimit (256, revCap, (int) (beats * 60.0 / juce::jmax (20.0, ctx.bpm) * sr));
+        if (L != segLen) { segLen = L; segPos = 0; half = 0; silent = 1; }   // the other half holds a different length: skip one chunk
+        if (ctx.playing)
+        {
+            const int pos = juce::jlimit (0, L - 1, (int) (std::fmod (juce::jmax (0.0, ctx.beatPos), beats) / beats * L));
+            const int d = std::abs (pos - segPos);
+            if (juce::jmin (d, L - d) > 64) silent = 2;            // jumped (seek / loop): skip the stale chunk
+            if (segPos > L / 2 && pos < L / 2) half ^= 1;           // crossed a chunk edge the grid already crossed
+            else if (segPos < L / 2 && pos > L / 2 && d > L / 2) half ^= 1;
+            segPos = pos;
+        }
+        const int fade = juce::jmax (1, juce::jmin (L / 4, (int) (0.005 * sr)));
+        auto* w0 = wet.getWritePointer (0); auto* w1 = wet.getWritePointer (1);
+        auto* r0 = rev.getWritePointer (0); auto* r1 = rev.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            const int wi = half * revCap + segPos, ri = (1 - half) * revCap + (L - 1 - segPos);
+            const float g = silent > 0 ? 0.0f
+                          : segPos < fade ? (float) segPos / (float) fade
+                          : L - segPos < fade ? (float) (L - segPos) / (float) fade : 1.0f;
+            r0[wi] = w0[i]; r1[wi] = w1[i];
+            w0[i] = r0[ri] * g; w1[i] = r1[ri] * g;
+            if (++segPos >= L) { segPos = 0; half ^= 1; if (silent > 0) --silent; }
+        }
+    }
     double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp;
+    juce::AudioBuffer<float> rev; std::atomic<bool> revReady { false }; bool prepared = false;
+    int revCap = 0, segLen = 0, segPos = 0, half = 0, silent = 0;
 };
 
 // ------------------------------------------------------------ Echo Tape (tempo-synced delay)

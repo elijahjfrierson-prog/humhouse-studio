@@ -38,6 +38,7 @@ public:
     virtual float meter (int) const { return 0.0f; }          // GR / dynamic band offset in dB, for editor visuals
     virtual bool  hasResponse() const { return false; }
     virtual float responseDb (double) { return 0.0f; }        // EQ curve at hz (after prepare + params)
+    virtual void  paramChanged (int) {}                       // message thread, after setParam
 
     int   paramIndex (const juce::String& id) const;
     void  setParam (const juce::String& id, float v);

@@ -1593,6 +1593,29 @@ int main()
             CHECK (st[0] != 0 && st[1] != 0);
             for (int g = 0; g < NumDrumGroups; ++g) CHECK (drumGroupOf (drumGroupLane (g)) == g);
         }
+        {
+            // Room Verb Reverse: the reversed tail swells up into the next beat, clean and finite
+            auto rv = createBuiltinEffect ("verb");
+            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f);
+            rv->prepare (48000, 512);
+            rv->setParam ("reverse", 1.0f);
+            PlayContext pc; pc.bpm = 120.0;
+            std::vector<float> out;
+            juce::AudioBuffer<float> blk (2, 512);
+            for (int k = 0; k < 150; ++k)
+            {
+                blk.clear();
+                if (k == 0) { blk.setSample (0, 0, 1.0f); blk.setSample (1, 0, 1.0f); }
+                rv->process (blk, 512, pc);
+                for (int i = 0; i < 512; ++i) out.push_back (blk.getSample (0, i));
+            }
+            bool fin = true; float pk = 0.0f;
+            for (auto v : out) { fin = fin && std::isfinite (v); pk = std::max (pk, std::abs (v)); }
+            const auto en = [&out] (int a0, int a1) { double e = 0; for (int i = a0; i < a1; ++i) e += out[(size_t) i] * out[(size_t) i]; return e; };
+            const double early = en (24000 + 500, 24000 + 6000), late = en (48000 - 6000, 48000 - 500);
+            std::printf ("reverse verb: early %.3g late %.3g peak %.3f\n", early, late, pk);
+            CHECK (fin && pk < 4.0f && late > early * 3.0 && late > 1.0e-6);
+        }
         DrummerParams dv; dv.sectionVel = { 40, 100 };
             CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);
         }
