@@ -435,6 +435,46 @@ int main()
         e.stop();
     }
 
+    // slice tool on pattern clips (FL): cutting a pattern clip anywhere plays exactly like the uncut clip
+    {
+        auto render = [] (bool cut)
+        {
+            Engine e;
+            e.prepare (44100, 512);
+            auto pr = Project::createDemo(); pr.songMode = true;
+            if (cut)
+            {
+                std::vector<Clip> add;
+                for (auto& c : pr.clips)
+                    if (c.patternIndex >= 0 && ! c.isDrummer() && c.length > 2.0)
+                    {
+                        const double at = c.start + 1.5;
+                        Clip b = c; b.uid = pr.newUid(); b.start = at; b.length = c.start + c.length - at; b.patOffset += at - c.start;
+                        c.length = at - c.start; add.push_back (b);
+                    }
+                CHECK (! add.empty());
+                for (auto& b : add) pr.clips.push_back (b);
+            }
+            e.newProject (pr);
+            e.sync();
+            e.play();
+            std::vector<float> outL;
+            juce::AudioBuffer<float> out (2, 512);
+            for (int blk = 0; blk < 300; ++blk)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (nullptr, 0, o, 2, 512);
+                outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+            }
+            return outL;
+        };
+        const auto a0 = render (false), a1 = render (true);
+        double maxDiff = 0, pk = 0;
+        for (size_t i = 0; i < a0.size(); ++i) { maxDiff = std::max (maxDiff, (double) std::abs (a0[i] - a1[i])); pk = std::max (pk, (double) std::abs (a0[i])); }
+        std::printf ("pattern slice: max diff %.6f (peak %.3f)\n", maxDiff, pk);
+        CHECK (pk > 0.01 && maxDiff < 1.0e-4);
+    }
+
     // an edit while playing (delete clips, etc.) keeps the beat running exactly where it was: no fade, no re-hit, no gap
     {
         auto render = [] (bool editMidway, int mode)
@@ -1592,6 +1632,29 @@ int main()
             DrummerParams sp; const auto st = drummerSeedSteps (sp, 120, 0);
             CHECK (st[0] != 0 && st[1] != 0);
             for (int g = 0; g < NumDrumGroups; ++g) CHECK (drumGroupOf (drumGroupLane (g)) == g);
+        }
+        {
+            // Room Verb Reverse: the reversed tail swells up into the next beat, clean and finite
+            auto rv = createBuiltinEffect ("verb");
+            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f);
+            rv->prepare (48000, 512);
+            rv->setParam ("reverse", 1.0f);
+            PlayContext pc; pc.bpm = 120.0;
+            std::vector<float> out;
+            juce::AudioBuffer<float> blk (2, 512);
+            for (int k = 0; k < 150; ++k)
+            {
+                blk.clear();
+                if (k == 0) { blk.setSample (0, 0, 1.0f); blk.setSample (1, 0, 1.0f); }
+                rv->process (blk, 512, pc);
+                for (int i = 0; i < 512; ++i) out.push_back (blk.getSample (0, i));
+            }
+            bool fin = true; float pk = 0.0f;
+            for (auto v : out) { fin = fin && std::isfinite (v); pk = std::max (pk, std::abs (v)); }
+            const auto en = [&out] (int a0, int a1) { double e = 0; for (int i = a0; i < a1; ++i) e += out[(size_t) i] * out[(size_t) i]; return e; };
+            const double early = en (24000 + 500, 24000 + 6000), late = en (48000 - 6000, 48000 - 500);
+            std::printf ("reverse verb: early %.3g late %.3g peak %.3f\n", early, late, pk);
+            CHECK (fin && pk < 4.0f && late > early * 3.0 && late > 1.0e-6);
         }
         DrummerParams dv; dv.sectionVel = { 40, 100 };
             CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);

@@ -335,7 +335,7 @@ public:
             const char* labels[] { "SEL", "PAINT", "DEL", "MUTE", "SLICE" };
             const char* tips[] { "Select / move (E) - click a clip to select, drag to move", "Paint (B) - click empty space to paint copies of the last clip",
                                  "Delete (D) - click clips to delete them", "Mute (T) - click a clip to mute / unmute it",
-                                 "Slice (C) - click an audio clip to cut it at the snap line" };
+                                 "Slice (C) - click a clip (audio, pattern or drummer) to cut it at the snap line" };
             for (int i = 0; i < 5; ++i)
             {
                 auto* b = toolBtns.add (new juce::TextButton());
@@ -592,10 +592,10 @@ public:
             const double at = snap (xToBeat (e.position.x));
             s.edit ("Slice clip", [&] (Project& pr) {
                 auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
-                if (it == pr.clips.end() || ! it->isAudio() || at <= it->start || at >= it->start + it->length) return;
+                if (it == pr.clips.end() || at <= it->start || at >= it->start + it->length) return;
                 Clip b = *it; b.uid = pr.newUid();
                 const double shortFade = secondsToBeats (0.005, pr.bpm);
-                b.start = at; b.length = it->start + it->length - at; b.sourceOffset += beatsToSeconds (at - it->start, pr.bpm);
+                b.start = at; b.length = it->start + it->length - at; b.sourceOffset += beatsToSeconds (at - it->start, pr.bpm); b.patOffset += at - it->start;
                 b.fadeIn = shortFade; b.selected = false;
                 it->length = at - it->start; it->fadeOut = shortFade;
                 pr.clips.push_back (b);
@@ -697,6 +697,11 @@ public:
                 {
                     const double dd = juce::jlimit (-beatsFromSeconds (o.sourceOffset), o.length - 0.0625, d);
                     o.start += dd; o.length -= dd; o.sourceOffset += beatsToSeconds (dd, p.bpm);
+                }
+                else if (drag == Drag::Trim && o.patternIndex >= 0)
+                {
+                    const double dd = juce::jlimit (-o.patOffset, o.length - 0.0625, d);
+                    o.start += dd; o.length -= dd; o.patOffset += dd;
                 }
                 p.clips[i] = o;
             }
@@ -1151,11 +1156,11 @@ private:
             if (hi >= lo)
             {
                 g.setColour (colour.brighter (0.5f));
-                for (double off = 0; off < c.length; off += len)
+                for (double off = -std::fmod (juce::jmax (0.0, c.patOffset), len); off < c.length; off += len)
                     for (auto& [id, list] : pat.notes)
                         for (auto& n : list)
                         {
-                            if (off + n.start >= c.length) continue;
+                            if (off + n.start >= c.length || off + n.start < 0.0) continue;
                             const float y = body.getBottom() - 3 - (body.getHeight() - 6) * (float) (n.key - lo) / (float) juce::jmax (1, hi - lo);
                             g.fillRect (body.getX() + (float) ((off + n.start) * pxPerBeat), y, juce::jmax (1.5f, (float) (n.length * pxPerBeat)), 2.0f);
                         }
@@ -1414,7 +1419,7 @@ private:
                     if (at > c.start && at < c.start + c.length)
                     {
                         Clip b = c; b.uid = pr.newUid();
-                        b.start = at; b.length = c.start + c.length - at; b.sourceOffset += beatsToSeconds (at - c.start, pr.bpm);
+                        b.start = at; b.length = c.start + c.length - at; b.sourceOffset += beatsToSeconds (at - c.start, pr.bpm); b.patOffset += at - c.start;
                         b.fadeIn = shortFade; c.length = at - c.start; c.fadeOut = shortFade; b.selected = false;
                         pr.clips.push_back (b);
                     }

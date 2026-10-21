@@ -1199,13 +1199,14 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 auto it = pat.notes.find (ch.id);
                 if (it == pat.notes.end()) continue;
                 const double plen = pat.lengthBeats();
-                const int r0 = std::max (0, (int) std::floor ((b0 - clip.start) / plen) - 1);
-                const int r1 = (int) std::floor ((b1 - clip.start) / plen) + 1;
+                const double base = clip.start - std::fmod (juce::jmax (0.0, clip.patOffset), plen);   // a sliced clip starts mid-pattern
+                const int r0 = std::max (0, (int) std::floor ((b0 - base) / plen) - 1);
+                const int r1 = (int) std::floor ((b1 - base) / plen) + 1;
                 for (int rep = r0; rep <= r1; ++rep)
                     for (auto& note : it->second)
                     {
                         if (note.muted) continue;
-                        const double s = clip.start + rep * plen + swingBeat (note.start) + shiftBeats;
+                        const double s = base + rep * plen + swingBeat (note.start) + shiftBeats;
                         if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, note, s);
                         else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
                     }
