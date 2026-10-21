@@ -9,7 +9,7 @@
   #define MyTarget "HumHouseStudio"
   #define MyOut "HumHouse-Studio-Windows-Setup"
 #endif
-#define MyAppVersion "1.3.2"
+#define MyAppVersion "1.3.3"
 #define MyAppPublisher "HumHouse"
 #define MyAppURL "https://github.com/elijahjfrierson-prog/humhouse-studio"
 #define MyAppExeName MyAppName + ".exe"
