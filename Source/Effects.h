@@ -128,7 +128,7 @@ class PsolaShifter
 {
 public:
     void prepare (double sr);
-    void process (float& l, float& r, double ratio, double period, double formant = 1.0);   // l/r become the shifted signal; formant > 1 = brighter tone
+    void process (float& l, float& r, double ratio, double period);   // l/r become the shifted signal
     float dryL = 0, dryR = 0;                                         // input delayed to line up with the output
     double delaySamples() const { return lat; }
 private:
