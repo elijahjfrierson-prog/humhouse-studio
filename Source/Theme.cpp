@@ -98,10 +98,10 @@ public:
         {
             auto* b = swatches.add (new juce::TextButton());
             b->setColour (juce::TextButton::buttonColourId, juce::Colour (p));
-            b->setTooltip (p == 0xffe6e8eb ? "White" : p == 0xff8c929b ? "Grey" : p == 0xff000000 ? "Black (true-black background, silver highlights)" : "Preset color");
+            b->setTooltip (p == 0xffe6e8eb ? "White (light theme: white backgrounds, dark text)" : p == 0xff8c929b ? "Grey" : p == 0xff000000 ? "Black (true-black background, silver highlights)" : "Preset color");
             b->onClick = [this, p] {
-                black = p == 0xff000000;
-                const juce::Colour c (black ? 0xffc9ced6 : p);
+                black = p == 0xff000000; light = p == 0xffe6e8eb;
+                const juce::Colour c (black ? 0xffc9ced6 : light ? 0xff30343b : p);
                 wheel.hue = c.getHue(); wheel.sat = c.getSaturation(); wheel.repaint();
                 bright.setValue (c.getBrightness(), juce::dontSendNotification);
                 apply();
@@ -120,6 +120,16 @@ public:
             addAndMakeVisible (b);
         }
         gradLabel.setFont (juce::FontOptions (12.0f)); addAndMakeVisible (gradLabel);
+        fontLabel.setFont (juce::FontOptions (12.0f)); addAndMakeVisible (fontLabel);
+        const juce::uint32 fonts[] { 0x00000000, 0xffffffff, 0xffc9ced6, 0xff8c929b, 0xff15171a, 0xffff8a3d, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffb15cff };
+        for (auto fc : fonts)
+        {
+            auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : ""));
+            b->setColour (juce::TextButton::buttonColourId, fc == 0 ? col::panel2 : juce::Colour (fc));
+            b->setTooltip (fc == 0 ? "Automatic text color for the theme" : "Text color across the whole app");
+            b->onClick = [this, fc] { col::fontColour = juce::Colour (fc); if (s.settings) s.settings->setValue ("fontColour", juce::Colour (fc).toString()); apply(); };
+            addAndMakeVisible (b);
+        }
         setupButton (reset, "Reset", "Back to the original HumHouse orange");
         reset.onClick = [this] {
             resetTheme();
@@ -147,7 +157,7 @@ public:
             };
             addAndMakeVisible (b);
         }
-        setSize (340, 610);
+        setSize (340, 670);
     }
     void paint (juce::Graphics& g) override
     {
@@ -171,6 +181,10 @@ public:
         auto grow = r.removeFromTop (28);
         const int gw = grow.getWidth() / gradButtons.size();
         for (auto* b : gradButtons) b->setBounds (grow.removeFromLeft (gw).reduced (3));
+        fontLabel.setBounds (r.removeFromTop (18));
+        auto frow = r.removeFromTop (30);
+        const int fw = frow.getWidth() / fontSw.size();
+        for (auto* b : fontSw) b->setBounds (frow.removeFromLeft (fw).reduced (3));
         r.removeFromTop (10);
         trackLabel.setBounds (r.removeFromTop (18));
         trackBox.setBounds (r.removeFromTop (24));
@@ -188,6 +202,9 @@ private:
     juce::Label brightLabel { {}, "Brightness" }, tintLabel { {}, "Background tint" };
     juce::OwnedArray<juce::TextButton> swatches;
     bool black = s.settings != nullptr && s.settings->getBoolValue ("themeBlack", false);
+    bool light = s.settings != nullptr && s.settings->getBoolValue ("themeLight", false);
+    juce::OwnedArray<juce::TextButton> fontSw;
+    juce::Label fontLabel { {}, "Font color" };
     struct GradSwatch : public juce::Button
     {
         GradSwatch (juce::Colour a, juce::Colour b, juce::Colour c) : juce::Button ("gradient"), lo (a), mid (b), hi (c) { setTooltip ("Meter + scope gradient"); }
@@ -211,9 +228,11 @@ private:
     void apply()
     {
         const auto c = juce::Colour::fromHSV (wheel.hue, wheel.sat, (float) bright.getValue(), 1.0f);
+        col::lightMode = light;
         applyTheme (c, (float) tint.getValue(), black);
         if (s.settings)
         {
+            s.settings->setValue ("themeLight", light);
             s.settings->setValue ("themeBlack", black);
             s.settings->setValue ("themeColour", c.toString());
             s.settings->setValue ("themeTint", tint.getValue());
@@ -222,8 +241,26 @@ private:
 };
 }
 
+static void applyTextColours()
+{
+    col::text = col::fontColour.getAlpha() > 0 ? col::fontColour : (col::lightMode ? juce::Colour (0xff15171a) : juce::Colour (0xffdfe4ec));
+    col::dim = col::lightMode ? juce::Colour (0xff5d6573) : juce::Colour (0xff7f8896);
+}
+
 void applyTheme (juce::Colour accent, float tint, bool black)
 {
+    applyTextColours();
+    if (col::lightMode)   // the opposite of Black: white backgrounds, dark text, the chosen color tints it
+    {
+        const float h = accent.getHue(), sat = juce::jlimit (0.0f, 0.12f, accent.getSaturation() * 0.15f * juce::jlimit (0.0f, 1.0f, tint));
+        auto shade = [h, sat] (float b) { return juce::Colour::fromHSV (h, sat, b, 1.0f); };
+        col::accent = accent;
+        col::bg = shade (0.97f); col::panel = shade (0.93f); col::panel2 = shade (0.89f);
+        col::grid = shade (0.86f); col::gridBeat = shade (0.80f); col::gridBar = shade (0.68f);
+        col::scale = juce::Colour::fromHSV (h, 0.12f, 0.90f, 1.0f); col::root = juce::Colour::fromHSV (h, 0.2f, 0.84f, 1.0f);
+        refreshAll();
+        return;
+    }
     if (black)
     {
         col::accent = accent;
@@ -253,6 +290,7 @@ void applyGradient (const juce::String& colours)
 
 void resetTheme()
 {
+    col::lightMode = false; col::fontColour = juce::Colour (0x00000000); applyTextColours();
     col::bg = defaults.bg; col::panel = defaults.panel; col::panel2 = defaults.panel2; col::grid = defaults.grid;
     col::gridBeat = defaults.gridBeat; col::gridBar = defaults.gridBar; col::accent = defaults.accent;
     col::scale = defaults.scale; col::root = defaults.root;

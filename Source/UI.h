@@ -14,6 +14,8 @@ namespace col
     inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
         gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xffff8a3d), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+    inline bool lightMode = false;                          // White theme: light backgrounds, dark text
+    inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
     // meters + scopes gradient (quiet -> loud), set in Theme
     inline juce::Colour gradLo (0xff3ddc84), gradMid (0xffffd23d), gradHi (0xffff3b57);
     // bottom (quiet) to top (loud), like the mixer volume meters
