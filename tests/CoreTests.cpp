@@ -550,6 +550,41 @@ int main()
         for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { onLane1 += c.lane == 1; onLane2 += c.lane == 2; }
         CHECK (onLane1 == 1 && onLane2 == 1);
     }
+    // recording latency: a take moves earlier by the device's in+out latency, so its first sound lands on the beat
+    {
+        Engine e;
+        e.prepare (44100, 512);
+        e.sync();
+        auto& p = e.project();
+        for (auto& l : p.lanes) l.armed = false;
+        p.lanes[0].armed = true;
+        e.countInOn = false;
+        e.recordLatency = 441;   // 10 ms
+        juce::AudioBuffer<float> mic (1, 512), out (2, 512);
+        mic.clear();
+        int blk = 0;
+        e.setPositionBeats (0.0); e.setRecording (true); e.play();
+        for (int b = 0; b < 100; ++b)
+        {
+            mic.clear();
+            if (b == 0) mic.setSample (0, 441, 0.8f);   // the "first word", heard by the device 10 ms late
+            const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (ins, 1, o, 2, 512); ++blk;
+        }
+        e.stop(); e.setRecording (false);
+        const Clip* take = nullptr;
+        for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) take = &c;
+        CHECK (take != nullptr);
+        if (take != nullptr)
+        {
+            std::printf ("record latency: take start %.4f beats, source offset %.2f ms, length %.3f beats\n",
+                         take->start, take->sourceOffset * 1000.0, take->length);
+            CHECK (std::abs (take->sourceOffset - 0.01) < 1.0e-6);   // first 10 ms (latency) skipped: the impulse plays at the take start
+            CHECK (std::abs (take->start) < 1.0e-9);
+            CHECK (std::abs (take->length - (100 * 512 - 441) / (44100.0 * 60.0 / p.bpm)) < 1.0e-6);
+        }
+        juce::ignoreUnused (blk);
+    }
     // NORM: a quiet mic comes up strong, a loud one never clips
     for (float amp : { 0.02f, 0.9f })
     {

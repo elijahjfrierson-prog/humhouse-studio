@@ -710,6 +710,7 @@ void Engine::prepareRuntimes()
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
+    recordLatency = juce::jmax (0, d->getInputLatencyInSamples() + d->getOutputLatencyInSamples());
     {
         const juce::ScopedLock sl (lock);
         deviceWorkgroup = d->getWorkgroup();
@@ -935,7 +936,9 @@ void Engine::finishRecordingWriters()
         std::vector<Clip> newClips;
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
-            const juce::int64 s0 = passes[i].first, s1 = passes[i + 1].first;
+            // latency compensation: what you sang at beat b reaches the file `lat` samples later
+            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) recordLatency.load());
+            const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
             double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
             if (proj.songMode && proj.hasPunch())
