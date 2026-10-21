@@ -77,6 +77,13 @@ struct LaneHeader : public juce::Component
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
+        soft.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); soft.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        soft.setRange (-80.0, 80.0, 1.0); soft.setDoubleClickReturnValue (true, 0.0); soft.setTextValueSuffix (" ms");
+        soft.setTooltip ("Soft: slide this whole track earlier (left) or later (right) in ms to line the vocal up with the beat. Double-click = 0");
+        soft.setPopupDisplayEnabled (true, true, nullptr);
+        soft.onValueChange = [this] { const float v = (float) soft.getValue(); s.live ([&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].shiftMs = v; }); s.engine.sync(); };
+        soft.onDragEnd = [this] { s.sendChangeMessage(); };
+        addAndMakeVisible (soft);
         setupButton (norm, "N", "N = Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
         norm.setColour (juce::TextButton::buttonOnColourId, col::good);
         norm.onClick = [this] { const bool on = norm.getToggleState(); s.edit ("Auto normalize", [&] (Project& p) { p.lanes[(size_t) index].autoNorm = on; }); };
@@ -104,6 +111,7 @@ struct LaneHeader : public juce::Component
         mute.setToggleState (l.muted, juce::dontSendNotification);
         mon.setToggleState (l.monitor, juce::dontSendNotification);
         norm.setToggleState (l.autoNorm, juce::dontSendNotification);
+        soft.setValue (l.shiftMs, juce::dontSendNotification);
         input.clear (juce::dontSendNotification);
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
@@ -149,6 +157,7 @@ struct LaneHeader : public juce::Component
         r.removeFromTop (2);
         mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
         norm.setBounds (r.removeFromLeft (44)); r.removeFromLeft (3);
+        soft.setBounds (r.removeFromLeft (24)); r.removeFromLeft (3);
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
     }
@@ -156,6 +165,7 @@ struct LaneHeader : public juce::Component
     std::function<void (int size)> onAllHeights;
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
+    juce::Slider soft;
     void mouseDoubleClick (const juce::MouseEvent& e) override { if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {

@@ -28,7 +28,7 @@ public:
         {
             // legato: the previous note's note-off lands on the same sample as this note-on, so a voice released
             // right now is still the held note - keep it playing and glide it instead of cutting it off
-            for (auto& v : voices) if (v.active && v.releasing && v.rel >= 1.0f && v.relAge == v.age && glide > 0.0f) v.releasing = false;
+            for (auto& v : voices) if (v.active && v.releasing && v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate && glide > 0.0f) { v.releasing = false; v.rel = 1.0f; }   // FL: a slide/legato note keeps the voice even with a small gap
             for (auto& v : voices) if (v.active && ! v.releasing)
             {
                 if (glide > 0.0f)
@@ -212,7 +212,7 @@ public:
         const double k = key + pitch;
         if ((mono || slide) && glide > 0.0f)
         {
-            for (auto& v : voices) if (v.active && v.stage == 3 && v.relAge == v.age) v.stage = v.prevStage;   // legato (see sampler)
+            for (auto& v : voices) if (v.active && v.stage == 3 && v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate) v.stage = v.prevStage;   // legato (see sampler)
             for (auto& v : voices) if (v.active && v.stage < 3)
             { v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); lastKey = k; return; }
         }

@@ -1205,7 +1205,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         {
             if (! clip.isAudio() || clip.muted || clip.hidden) continue;
             if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
-            const double c0 = std::max (b0, clip.start), c1 = std::min (b1, clip.start + clip.length);
+            const double shB = (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? proj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * proj.bpm / 60.0;   // Soft
+            const double c0 = std::max (b0, clip.start + shB), c1 = std::min (b1, clip.start + clip.length + shB);
             if (c1 <= c0) continue;
             auto it = clipRt.find (clip.uid);
             if (it == clipRt.end() || ! it->second->reader) continue;
@@ -1218,7 +1219,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const int len = o1 - o0;
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
-            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start, proj.bpm);
+            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, proj.bpm);
             // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
             const double srcPos = srcSec * cr.fileRate;
             const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
