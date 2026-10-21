@@ -527,12 +527,37 @@ void Engine::sync()
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
             rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
-            static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
+            auto* br = static_cast<juce::BufferingAudioReader*> (rt->reader.get());
+            // a clip under (or just ahead of) the playhead - e.g. the take you just stopped - is buffered before it
+            // goes live, so it sounds at once instead of a second of silence while the disk thread catches up
+            const double pb = positionBeats();
+            if (! c.reversed && pb < c.start + c.length && pb > c.start - 2.0)
+            {
+                const auto at = (juce::int64) ((c.sourceOffset + std::max (0.0, pb - c.start) * 60.0 / proj.bpm) * r->sampleRate);
+                if (at >= 0 && at < r->lengthInSamples)
+                {
+                    juce::AudioBuffer<float> prime ((int) r->numChannels, 2048);
+                    br->setReadTimeout (300);
+                    br->read (&prime, 0, 2048, at, true, r->numChannels > 1);
+                }
+            }
+            br->setReadTimeout (0);
         }
         rt->tmp.setSize (2, maxBlock * 4 + 8);
         newClips[c.uid] = std::move (rt);
     }
 
+    {
+        // the one-knob duck keeps following the vocal after you stop recording / disarm, so the mix you heard
+        // while tracking is the mix you hear back (it used to only duck while a lane was armed)
+        int dsrc = -1;
+        for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { dsrc = ln.mixerTrack; break; }
+        if (dsrc < 0)
+            for (auto& c : proj.clips)
+                if (c.isAudio() && ! c.muted && c.lane >= 0 && c.lane < (int) proj.lanes.size() && proj.lanes[(size_t) c.lane].mixerTrack > 0)
+                { dsrc = proj.lanes[(size_t) c.lane].mixerTrack; break; }
+        duckAutoSrc = dsrc;
+    }
     std::vector<std::unique_ptr<juce::AudioFormatReader>> newFrozen (proj.mixer.size());
     for (size_t t = 0; t < proj.mixer.size(); ++t)
     {
@@ -1412,6 +1437,7 @@ void Engine::processTrack (int t)
     {
         int src = mt.duckSource;
         if (src < 0) for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { src = ln.mixerTrack; break; }
+        if (src < 0) src = duckAutoSrc.load();
         float target = 1.0f;
         if (src > 0 && src != t && src < (int) trackRt.size())
         {

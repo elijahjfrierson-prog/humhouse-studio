@@ -936,6 +936,38 @@ int main()
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
     }
+    // AutoPitch follows the note being sung: a fast drop from A4 to E4 (clean and breathy/deep) lands on E4 at once,
+    // never held up on the old note (that big hold-over shift was the transposed / formanted sound)
+    for (float noise : { 0.0f, 0.03f })
+        for (int style : { 0, 3 })
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (7);
+            double ph = 0; int zc = 0, counted = 0; float prev = 0, lp = 0;
+            for (int k = 0; k < 260; ++k)
+            {
+                const double f = k < 120 ? 440.0 : 329.63;
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = 0.3f * (float) std::sin (ph) + 0.1f * (float) std::sin (2.0 * ph) + noise * (rnd.nextFloat() * 2.0f - 1.0f);
+                    ph += juce::MathConstants<double>::twoPi * f / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                ap->process (b, 512, ctx);
+                if (k >= 130)
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        // zero crossings of a low-passed copy (the added noise would add false crossings)
+                        lp += 0.08f * (b.getSample (0, i) - lp);
+                        if (prev <= 0 && lp > 0) ++zc; prev = lp; ++counted;
+                    }
+            }
+            const double hz = zc * 48000.0 / counted;
+            std::printf ("autopitch drop A4->E4 style %d noise %.2f -> %.1f Hz\n", style, noise, hz);
+            CHECK (std::abs (hz - 329.63) < 4.0);
+        }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {
         auto run = [] (int scenario) {

@@ -135,7 +135,7 @@ juce::ValueTree projectToTree (const Project& p)
                 for (int m : d.sectionMute) sm.add (juce::String (m));
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
-                t.setProperty ("drGM", d.groupMask, nullptr); t.setProperty ("drLk", c.drumLink, nullptr);
+                t.setProperty ("drGM", d.groupMask, nullptr); t.setProperty ("drLk", c.drumLink, nullptr); t.setProperty ("mLk", c.midiLink, nullptr);
                 juce::StringArray ms;
                 for (auto& [k, a] : d.steps) ms.add (juce::String (k) + ":" + juce::String (a[0]) + "." + juce::String (a[1]) + "." + juce::String (a[2]) + "." + juce::String (a[3]) + "." + juce::String (a[4]));
                 t.setProperty ("drMS", ms.joinIntoString (";"), nullptr);
@@ -262,7 +262,7 @@ Project projectFromTree (const juce::ValueTree& root)
                 for (auto& v : juce::StringArray::fromTokens (t["drSM"].toString(), ",", "")) if (v.isNotEmpty()) d.sectionMute.push_back (v.getIntValue());
                 d.sectionVel.clear();
                 for (auto& v : juce::StringArray::fromTokens (t["drSV"].toString(), ",", "")) if (v.isNotEmpty()) d.sectionVel.push_back (v.getIntValue());
-                d.groupMask = (int) t.getProperty ("drGM", 31); c.drumLink = (int) t.getProperty ("drLk", 0);
+                d.groupMask = (int) t.getProperty ("drGM", 31); c.drumLink = (int) t.getProperty ("drLk", 0); c.midiLink = (bool) t.getProperty ("mLk", false);
                 d.steps.clear();
                 for (auto& e : juce::StringArray::fromTokens (t["drMS"].toString(), ";", ""))
                 {

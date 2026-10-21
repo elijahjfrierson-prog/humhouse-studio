@@ -83,6 +83,7 @@ struct Channel
     int builtinDrum = -1;                  // synthesized fallback kit voice
     SynthParams synth;                     // synth
     DrummerParams drum;                    // drummer (sampleFile = the kit folder)
+    bool midiLink = false;                 // Link MIDI: the keyboard plays this channel (none linked = the selected one)
     int drumLink = 0;                      // Split by drum: plays that Drummer channel's regions (0 = its own)
     juce::String pluginId;                 // plugin: PluginDescription::createIdentifierString
     juce::MemoryBlock pluginState;

@@ -73,6 +73,7 @@ public:
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time
+    std::atomic<int> duckAutoSrc { -1 };   // vocal insert the one-knob duck follows when no SC source is set
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     float trackPeak (int track) const;
     ScopeTap* trackScope (int t) { return t >= 0 && t < maxScopeTracks ? &(*trackScopes)[(size_t) t] : nullptr; }

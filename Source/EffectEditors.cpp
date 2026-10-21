@@ -334,6 +334,14 @@ public:
                                    grid.setExternal (pid (sel, "F"), juce::jlimit (20.0f, 20000.0f, v)); grid.commitNow(); repaint(); };
         gL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "G"), juce::jlimit (-18.0f, 18.0f, gL.getText().getFloatValue())); grid.commitNow(); repaint(); };
         qL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "Q"), juce::jlimit (0.1f, 18.0f, qL.getText().getFloatValue())); grid.commitNow(); repaint(); };
+        qS.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        qS.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        qS.setRange (0.1, 18.0); qS.setSkewFactorFromMidPoint (1.0); qS.setDoubleClickReturnValue (true, 1.0);
+        qS.setTooltip ("Q knob: turn up = skinny (narrow) band, down = wide band. Double-click = 1.0");
+        qS.onValueChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "Q"), (float) qS.getValue());
+                                    if (! qL.isBeingEdited()) qL.setText ("Q " + juce::String (qS.getValue(), 2), juce::dontSendNotification); repaint(); };
+        qS.onDragEnd = [this] { grid.commitNow(); };
+        addAndMakeVisible (qS);
         dynB.setClickingTogglesState (true); listenB.setClickingTogglesState (true);
         dynB.setTooltip ("Dynamic EQ for this band"); listenB.setTooltip ("Listen: hear only this band (or Alt+drag a dot)"); delB.setTooltip ("Delete band");
         dynB.onClick = [this] { if (sel >= 0) { grid.setExternal (pid (sel, "Dyn"), dynB.getToggleState() ? 1.0f : 0.0f); grid.commitNow(); repaint(); } };
@@ -453,6 +461,7 @@ public:
         auto b = getLocalBounds().removeFromBottom (barH + 4).reduced (6, 4).withTrimmedLeft (110);
         typeBox.setBounds (b.removeFromLeft (110)); b.removeFromLeft (6);
         for (auto* l : { &fL, &gL, &qL }) { l->setBounds (b.removeFromLeft (84)); b.removeFromLeft (6); }
+        qS.setBounds (b.removeFromLeft (34).withSizeKeepingCentre (34, juce::jmin (34, b.getHeight() + 6))); b.removeFromLeft (6);
         dynB.setBounds (b.removeFromLeft (50)); b.removeFromLeft (4);
         listenB.setBounds (b.removeFromLeft (64)); b.removeFromLeft (4);
         delB.setBounds (b.removeFromLeft (28));
@@ -529,13 +538,14 @@ private:
     void syncBar()
     {
         const bool on = sel >= 0 && isOn (sel);
-        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &fL, (juce::Component*) &gL, (juce::Component*) &qL,
+        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &fL, (juce::Component*) &gL, (juce::Component*) &qL, (juce::Component*) &qS,
                                     (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) c->setVisible (on);
         if (! on) return;
         typeBox.setSelectedItemIndex (typeOf (sel), juce::dontSendNotification);
         if (! fL.isBeingEdited()) fL.setText (hzText (grid.valueOf (pid (sel, "F"))), juce::dontSendNotification);
         if (! gL.isBeingEdited()) gL.setText (hasGain (sel) ? juce::String (grid.valueOf (pid (sel, "G")), 1) + " dB" : "--", juce::dontSendNotification);
         if (! qL.isBeingEdited()) qL.setText ("Q " + juce::String (grid.valueOf (pid (sel, "Q")), 2), juce::dontSendNotification);
+        if (! qS.isMouseButtonDown()) qS.setValue (grid.valueOf (pid (sel, "Q")), juce::dontSendNotification);
         gL.setEnabled (hasGain (sel)); dynB.setEnabled (hasGain (sel));
         dynB.setToggleState (grid.valueOf (pid (sel, "Dyn")) > 0.5f, juce::dontSendNotification);
         listenB.setToggleState ((int) std::round (grid.valueOf ("solo")) == sel + 1, juce::dontSendNotification);
@@ -629,6 +639,7 @@ private:
     juce::Point<float> hover { -1, -1 }, drag0;
     juce::ComboBox typeBox;
     juce::Label fL, gL, qL;
+    juce::Slider qS;
     juce::TextButton dynB { "DYN" }, listenB { "LISTEN" }, delB { "X" };
 };
 

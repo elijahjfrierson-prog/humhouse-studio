@@ -714,10 +714,16 @@ public:
 
     void liveNote (int key, float vel, bool on)
     {
-        int ch = studio.selectedChannel;
-        if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
-        if (studio.channel (ch) == nullptr) return;
-        engine.previewNote (ch, key, vel, on);
+        std::vector<int> chans;
+        for (auto& c : studio.p().channels) if (c.midiLink) chans.push_back (c.id);
+        if (chans.empty())
+        {
+            int ch = studio.selectedChannel;
+            if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
+            if (studio.channel (ch) == nullptr) return;
+            chans.push_back (ch);
+        }
+        for (int ch : chans) engine.previewNote (ch, key, vel, on);
         if (on)
         {
             heldNotes[key] = { engine.isPlaying() && engine.isRecording() ? engine.positionBeats() : -1.0, vel };
@@ -737,7 +743,7 @@ public:
             Note n; n.key = key; n.velocity = velocity;
             n.start = std::round (s0 * 16.0) / 16.0;
             n.length = juce::jmax (1.0 / 16.0, e0 - n.start);
-            pat.notes[ch].push_back (n);
+            for (int ch : chans) pat.notes[ch].push_back (n);
         });
     }
 

@@ -1323,8 +1323,11 @@ public:
                             if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
+                        // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or
+                        // leap the hold hasn't caught yet) is never forced on it - that big shift was the transposed / formanted tone
+                        if (std::abs ((float) target - centre) > 1.0f) { target = snapToScale ((int) std::round (centre), root, scale); jumpHops = 0; }
                         heldNote = target;
-                        float semis = juce::jlimit (-3.0f, 3.0f, (float) target - now + natVib * (now - centre));
+                        float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (hard || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
