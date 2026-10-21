@@ -1055,17 +1055,113 @@ struct DrummerPad : juce::Component, juce::Timer
     Studio& s; int channelId; bool dirty = false;
 };
 
-// SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song
+// STEPS: the mini manual sequencer for one 8-bar section: a 16-step bar per drum, repeated over the 8 bars, dead on the grid
+struct DrumSteps : juce::Component
+{
+    DrumSteps (Studio& st, int id, int sec) : s (st), channelId (id), section (sec)
+    {
+        addAndMakeVisible (autoBtn);
+        autoBtn.setButtonText ("Back to auto");
+        autoBtn.onClick = [this]
+        {
+            const int i = channelId, k = section;
+            s.edit ("Drummer steps", [i, k] (Project& p) { for (auto& c : p.channels) if (c.id == i) c.drum.steps.erase (k); });
+            repaint();
+        };
+        setSize (600, 210);
+    }
+    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (10).withTrimmedLeft (64).withTrimmedTop (24).withTrimmedBottom (32).toFloat(); }
+    void resized() override { autoBtn.setBounds (getWidth() - 130, getHeight() - 34, 120, 26); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const auto it = c->drum.steps.find (section);
+        const bool man = it != c->drum.steps.end();
+        g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
+        g.drawText ("Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8) + (man ? "  |  STEPS: this bar repeats for 8 bars" : "  |  AUTO: click a step to edit"),
+                    10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
+        const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+        {
+            g.setColour (col::text);
+            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 62, r.getY() + gi * rh, 58, rh), juce::Justification::centredRight);
+            for (int k = 0; k < 16; ++k)
+            {
+                const bool on = man && (it->second[(size_t) gi] >> k & 1) != 0;
+                auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
+                g.setColour (on ? juce::Colour (0xffffc93d) : k / 4 % 2 == 0 ? col::bg.brighter (0.08f) : col::bg); g.fillRoundedRectangle (cell, 3.0f);
+                g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+            }
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const auto r = grid(); if (! r.contains (e.position)) return;
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const int gi = juce::jlimit (0, (int) NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
+        const int st = juce::jlimit (0, 15, (int) ((e.position.x - r.getX()) / (r.getWidth() / 16.0f)));
+        const int i = channelId, k = section;
+        const auto seed = c->drum.steps.count (k) > 0 ? std::array<int, 5> {} : drummerSeedSteps (c->drum, s.p().bpm, k);
+        s.edit ("Drummer steps", [i, k, gi, st, seed] (Project& p) {
+            for (auto& ch : p.channels)
+                if (ch.id == i)
+                {
+                    auto f = ch.drum.steps.find (k);
+                    if (f == ch.drum.steps.end()) f = ch.drum.steps.emplace (k, seed).first;
+                    f->second[(size_t) gi] ^= 1 << st;
+                }
+        });
+        repaint();
+    }
+    Studio& s; int channelId, section; juce::TextButton autoBtn;
+};
+
+// SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song; double-click = STEPS editor
 struct DrumSections : juce::Component
 {
-    DrumSections (Studio& st, int id) : s (st), channelId (id) { setSize (620, 268); }
+    DrumSections (Studio& st, int id) : s (st), channelId (id)
+    {
+        addAndMakeVisible (splitBtn);
+        splitBtn.setButtonText ("Split by drum (own mixer inserts)");
+        splitBtn.onClick = [this] { split(); };
+        setSize (620, 300);
+    }
+    void resized() override { splitBtn.setBounds (getWidth() - 252, getHeight() - 32, 240, 24); }
+    // Kick stays here; Snare, Hats, Toms and Cymbals get their own channels playing the same part, each on its own insert
+    void split()
+    {
+        const int id = channelId;
+        s.edit ("Split drummer by drum", [id] (Project& p) {
+            for (auto& c : p.channels) if (c.drumLink == id) return;
+            Channel* src = nullptr;
+            for (auto& c : p.channels) if (c.id == id && c.type == ChannelType::Drummer && c.drumLink == 0) src = &c;
+            if (src == nullptr) return;
+            const Channel base = *src;
+            src->drum.groupMask = 1 << GroupKick;
+            src->name = base.name + " " + drumGroupName (GroupKick);
+            src->mixerTrack = p.addMixerTrack (src->name);
+            for (int g = GroupSnare; g < NumDrumGroups; ++g)
+            {
+                Channel c = base;
+                c.id = p.nextChannelId++; c.drumLink = id; c.drum.groupMask = 1 << g;
+                c.name = base.name + " " + drumGroupName (g);
+                c.mixerTrack = p.addMixerTrack (c.name);
+                p.channels.push_back (c);
+            }
+        });
+        s.engine.sync();
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Split by drum",
+            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert. Edit the groove (style, sections, steps) on the Kick channel.");
+    }
+    juce::TextButton splitBtn;
     int sections() const
     {
         double end = 0;
         for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
         return juce::jlimit (4, 32, (int) std::ceil (end / 32.0 - 1e-6) + 1);
     }
-    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (12, 10).withTrimmedLeft (70).withTrimmedTop (22).toFloat(); }
+    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (12, 10).withTrimmedLeft (70).withTrimmedTop (22).withTrimmedBottom (32).toFloat(); }
     void paint (juce::Graphics& g) override
     {
         const auto* c = s.channel (channelId); if (c == nullptr) return;
@@ -1087,7 +1183,7 @@ struct DrumSections : juce::Component
                 auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
                 g.setColour (off ? col::bg : juce::Colour (0xffffc93d).withAlpha (0.85f)); g.fillRoundedRectangle (cell, 3.0f);
                 g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
-                g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : "ON", cell, juce::Justification::centred);
+                g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : c->drum.steps.count (k) > 0 ? "STEPS" : "ON", cell, juce::Justification::centred);
             }
         }
         // DYNAMICS: how hard each section is played (drag up / down, double-click = 100%); it ramps into the next section
@@ -1123,7 +1219,8 @@ struct DrumSections : juce::Component
     {
         if (! grid().contains (e.position)) return;
         int row = 0; const int k = cellAt (e, row);
-        if (row == NumDrumGroups) { setDyn (k, 100); s.commit ("Drummer dynamics"); }
+        if (row == NumDrumGroups) { setDyn (k, 100); s.commit ("Drummer dynamics"); return; }
+        juce::CallOutBox::launchAsynchronously (std::make_unique<DrumSteps> (s, channelId, k), juce::Rectangle<int> (e.getScreenX(), e.getScreenY(), 1, 1), nullptr);
     }
     void mouseDown (const juce::MouseEvent& e) override
     {

@@ -1588,7 +1588,12 @@ int main()
                 std::printf ("drummer humanize 0 style %d: %d of %d hits off the grid\n", st, off, (int) hz->size());
                 CHECK (off == 0 && hz->size() > 40);
             }
-            DrummerParams dv; dv.sectionVel = { 40, 100 };
+            {
+            DrummerParams sp; const auto st = drummerSeedSteps (sp, 120, 0);
+            CHECK (st[0] != 0 && st[1] != 0);
+            for (int g = 0; g < NumDrumGroups; ++g) CHECK (drumGroupOf (drumGroupLane (g)) == g);
+        }
+        DrummerParams dv; dv.sectionVel = { 40, 100 };
             CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);
         }
         const auto kits = drumKits();

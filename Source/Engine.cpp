@@ -1146,9 +1146,13 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         }
         else if (ch.type == ChannelType::Drummer)
         {
+            const int srcId = ch.drumLink != 0 ? ch.drumLink : ch.id, mask = ch.drum.groupMask;
+            const DrummerParams* src = &ch.drum;
+            for (auto& o : proj.channels) if (o.id == srcId && o.type == ChannelType::Drummer) src = &o.drum;
+            const auto silent = [src] (int sec, int g) { return sec >= 0 && sec < (int) src->sectionMute.size() && (src->sectionMute[(size_t) sec] >> g & 1) != 0; };
             for (auto& clip : proj.clips)
             {
-                if (clip.drummer != ch.id || clip.muted || clip.hidden) continue;
+                if (clip.drummer != srcId || clip.muted || clip.hidden) continue;
                 if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 auto it = drumHits.find (clip.uid);
@@ -1158,10 +1162,28 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
                     if (s < b0 || s >= b1) continue;
-                    if (const int sec = (int) ((clip.start + h.beat) / 32.0); sec >= 0 && sec < (int) ch.drum.sectionMute.size()
-                        && (ch.drum.sectionMute[(size_t) sec] >> drumGroupOf (h.lane) & 1) != 0) continue;   // this drum is off in this 8-bar section
-                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (ch.drum, clip.start + h.beat));
+                    const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
+                    if ((mask >> g & 1) == 0 || silent (sec, g) || src->steps.count (sec) > 0) continue;   // off here, or a manual STEPS section
+                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
+                }
+                if (src->steps.empty()) continue;
+                // manual STEPS sections: their 16-step bar repeats on the exact grid
+                for (int n = juce::jmax (0, (int) std::ceil ((b0 - shiftBeats - clip.start) * 4.0 - 1.0e-9)); ; ++n)
+                {
+                    const double rel = n * 0.25, at = clip.start + rel, s = at + shiftBeats;
+                    if (rel >= clip.length || s >= b1) break;
+                    if (s < b0) continue;
+                    const int sec = (int) (at / 32.0), step = (int) (std::llround (at * 4.0) % 16);
+                    const auto st = src->steps.find (sec);
+                    if (st == src->steps.end()) continue;
+                    for (int g = 0; g < NumDrumGroups; ++g)
+                        if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
+                        {
+                            Note nt; nt.key = drumGroupLane (g); nt.start = rel; nt.length = 0.125;
+                            nt.velocity = juce::jlimit (0.02f, 1.0f, (step % 4 == 0 ? 0.9f : 0.72f) * drummerDynamics (*src, at));
+                            emit (ci, nt, s);
+                        }
                 }
             }
         }

@@ -69,6 +69,8 @@ struct DrummerParams
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
+    int groupMask = 31;                       // bit g = this channel plays drum group g (Split by drum)
+    std::map<int, std::array<int, 5>> steps;  // manual 8-bar sections: per drum group a 16-step bar (bit = hit), repeated
     juce::String performanceKey() const;      // only what changes the notes played
 };
 
@@ -81,6 +83,7 @@ struct Channel
     int builtinDrum = -1;                  // synthesized fallback kit voice
     SynthParams synth;                     // synth
     DrummerParams drum;                    // drummer (sampleFile = the kit folder)
+    int drumLink = 0;                      // Split by drum: plays that Drummer channel's regions (0 = its own)
     juce::String pluginId;                 // plugin: PluginDescription::createIdentifierString
     juce::MemoryBlock pluginState;
     int   mixerTrack = 0;                  // 0 = master

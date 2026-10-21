@@ -10,7 +10,9 @@ struct DrumHit { double beat; int lane; float vel; int variant; };
 enum DrumGroup { GroupKick = 0, GroupSnare, GroupHats, GroupToms, GroupCymbals, NumDrumGroups };
 const char* drumGroupName (int g);
 int drumGroupOf (int lane);
-float drummerDynamics (const DrummerParams&, double songBeat);   // velocity scale from the per-section dynamics %, ramped over the last 2 bars   // kit lane -> DrumGroup
+float drummerDynamics (const DrummerParams&, double songBeat);
+int drumGroupLane (int group);
+std::array<int, 5> drummerSeedSteps (const DrummerParams&, double bpm, int section);   // velocity scale from the per-section dynamics %, ramped over the last 2 bars   // kit lane -> DrumGroup
 
 // the hits a Drummer region of `lengthBeats` plays (fill into the end of the region); cached, message thread
 std::shared_ptr<const std::vector<DrumHit>> drummerHits (const DrummerParams&, double bpm, double lengthBeats);
