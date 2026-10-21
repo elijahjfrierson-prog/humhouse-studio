@@ -2,6 +2,41 @@
 #include <set>
 #include "Drummer/DrummerCore.h"
 #include "StemSplit.h"
+#include "Instruments.h"
+
+// FL-style clip stretch: renders the clip's audio to its own WAV in the song's Recordings folder (glued with the song).
+// Resample = tape (speed and pitch together), Stretch = length only, pitch kept
+static juce::File bakeClipStretch (const juce::File& src, double offSec, double lenSec, double factor, bool keepPitch, const juce::File& dir)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (src));
+    if (rd == nullptr || rd->sampleRate <= 0) return {};
+    const double sr = rd->sampleRate;
+    const auto a = juce::jmax ((juce::int64) 0, (juce::int64) (offSec * sr));
+    const int len = (int) juce::jmin ((juce::int64) (lenSec * sr), rd->lengthInSamples - a);
+    if (len < 64) return {};
+    const int nch = juce::jlimit (1, 2, (int) rd->numChannels);
+    juce::AudioBuffer<float> b (nch, len + 16); b.clear();
+    rd->read (&b, 0, len, a, true, nch > 1);
+    juce::AudioBuffer<float> out;
+    if (keepPitch) { b.setSize (nch, len, true); out = hhs::olaStretch (b, factor); out.setSize (nch, juce::jmax (1, (int) std::lround (len * factor)), true); }
+    else
+    {
+        const int outLen = juce::jmax (1, (int) std::lround (len * factor));
+        out.setSize (nch, outLen);
+        for (int ch = 0; ch < nch; ++ch) { juce::LagrangeInterpolator li; li.process (1.0 / factor, b.getReadPointer (ch), out.getWritePointer (ch), outLen); }
+    }
+    dir.createDirectory();
+    const auto f = dir.getNonexistentChildFile (src.getFileNameWithoutExtension() + (keepPitch ? "_stretch" : "_resample"), ".wav", false);
+    juce::WavAudioFormat wav;
+    auto* os = f.createOutputStream().release();
+    if (os == nullptr) return {};
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, sr, (unsigned int) nch, 24, {}, 0));
+    if (w == nullptr) { delete os; return {}; }
+    w->writeFromAudioSampleBuffer (out, 0, out.getNumSamples());
+    w.reset();
+    return f;
+}
 
 namespace hhs
 {
@@ -339,7 +374,7 @@ public:
         if (lastMouse.y >= toolbarH && lastMouse.y < toolbarH + rulerH && lastMouse.x > headerW)
             return "Ruler: click = move playhead, drag the triangle = scrub (Alt = no snap), drag the numbers = loop range (E: also selects), double-click = clear";
         if (lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH)
-            return "Double-click = place pattern | drag clip = move | drag edges = trim | top corners = fades (Alt = curve) | right-click = takes, routing, split";
+            return "Double-click = place pattern | drag clip = move | drag edges = trim | Alt+drag right edge = stretch | top corners = fades (Alt = curve) | right-click = takes, routing, split";
         return {};
     }
 
@@ -579,6 +614,7 @@ public:
         drag = part == Part::Curve ? Drag::Curve : part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
              : part == Part::Left ? Drag::Trim : Drag::Move;
         cloneOnDrag = drag == Drag::Move && e.mods.isShiftDown(); cloned = false;   // FL: Shift+drag clones
+        stretchDrag = drag == Drag::Resize && e.mods.isAltDown() && p.clips[(size_t) i].isAudio();
         repaint();
     }
 
@@ -681,6 +717,7 @@ public:
         else if (changed)
         {
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
+            if (stretchDrag && dragOrig.size() == p.clips.size()) { stretchClips(); drag = Drag::None; dragClip = -1; stretchDrag = false; repaint(); return; }
             s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
                 // routing follows the recording: a moved audio clip keeps playing through the insert it came from
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
@@ -950,6 +987,7 @@ private:
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
+    bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
@@ -1257,6 +1295,30 @@ private:
                 pl->s.edit ("Key Finder", [g, r] (Project& p) { p.keyRoot = g.root; p.scaleIndex = g.scaleIndex; if (r == 1 && g.bpm > 0) p.bpm = g.bpm; });
             });
     }
+    void stretchClips()
+    {
+        auto& p = s.p();
+        const auto dir = p.recordingsFolder();
+        std::vector<std::pair<int, juce::File>> baked;
+        for (size_t i = 0; i < p.clips.size(); ++i)
+        {
+            const auto& c = p.clips[i]; const auto& o = dragOrig[i];
+            if (! c.isAudio() || c.uid != o.uid || std::abs (c.length - o.length) < 1.0e-6 || o.length <= 0) continue;
+            const auto f = bakeClipStretch (o.audioFile, o.sourceOffset, beatsToSeconds (o.length, p.bpm), c.length / o.length, stretchMode == 1, dir);
+            if (f != juce::File()) baked.push_back ({ c.uid, f });
+        }
+        auto orig = dragOrig;
+        s.edit (stretchMode == 1 ? "Stretch clip" : "Resample clip", [orig, baked] (Project& pr) {
+            for (size_t i = 0; i < pr.clips.size() && i < orig.size(); ++i)
+            {
+                auto& c = pr.clips[i];
+                auto it = std::find_if (baked.begin(), baked.end(), [&] (const auto& b) { return b.first == c.uid; });
+                if (it == baked.end()) { if (c.uid == orig[i].uid && c.isAudio()) c.length = orig[i].length; continue; }   // couldn't render: unchanged
+                const double k = c.length / orig[i].length;
+                c.audioFile = it->second; c.sourceOffset = 0; c.fadeIn = orig[i].fadeIn * k; c.fadeOut = orig[i].fadeOut * k;
+            }
+        });
+    }
     void clipMenu (int index)
     {
         auto& p = s.p();
@@ -1293,6 +1355,12 @@ private:
         if (clip.lane >= 0 && clip.lane < (int) p.lanes.size()) m.addSubMenu ("Track color", colourMenu (50));
        #if ! HHS_LICENSED
         m.addItem (9, "Find key / BPM / tune", clip.isAudio());
+        {
+            juce::PopupMenu sm;
+            sm.addItem (12, "Resample (speed + pitch, like tape)", true, stretchMode == 0);
+            sm.addItem (13, "Stretch (keep pitch)", true, stretchMode == 1);
+            m.addSubMenu ("Stretch mode (Alt+drag clip edge)", sm, clip.isAudio());
+        }
         if (clip.isDrummer()) m.addItem (10, "Drummer settings (kit, style, mix)...");
        #if ! HHS_LICENSED
         m.addItem (11, "Split stems (Drums, Bass, Vocals, Melodies)", clip.isAudio());
@@ -1308,6 +1376,7 @@ private:
                 return;
             }
             if (r == 11) { splitClipStems (uid); return; }
+            if (r == 12 || r == 13) { stretchMode = r - 12; return; }
             if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
             if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
             if (r >= 30 && r <= 43)

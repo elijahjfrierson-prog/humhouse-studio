@@ -1272,10 +1272,13 @@ public:
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
                         centre = onset ? now : centre + (now - centre) * (1.0f - std::exp (-hopSec / 0.12f));
                         int target = snapToScale ((int) std::round (centre), root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.55f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.7f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
-                        const int fast = snapToScale ((int) std::round (now), root, scale);
-                        if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
+                        // Hard Tune (MetaTune-strong): the note is picked from what's sung, not the look-ahead (that leaned
+                        // scoops up into the next note), and drift short of ~a semitone never flips it
+                        const float pick = hard ? midi : now;
+                        const int fast = snapToScale ((int) std::round (pick), root, scale);
+                        if (heldNote > 0 && fast != heldNote && std::abs (pick - (float) heldNote) > (hard ? 0.85f : 0.75f))
                         {
                             if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
                         }

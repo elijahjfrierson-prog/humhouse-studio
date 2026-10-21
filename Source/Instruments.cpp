@@ -424,7 +424,7 @@ SharedSample loadSampleFile (const juce::File& f, double targetRate)
     return std::make_shared<const juce::AudioBuffer<float>> (std::move (res));
 }
 
-static juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor)
+juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor)
 {
     const int N = 2048, hopOut = N / 4, inLen = in.getNumSamples(), nch = in.getNumChannels();
     const double hopIn = hopOut / factor;
