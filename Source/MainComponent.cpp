@@ -1153,16 +1153,20 @@ private:
             std::set<juce::String> want; for (auto& m : missing) want.insert (m.toLowerCase());
             std::map<juce::String, juce::File> byName;
             const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
-            juce::Array<juce::File> roots { juce::File::getSpecialLocation (juce::File::userMusicDirectory), juce::File::getSpecialLocation (juce::File::userDesktopDirectory),
-                                            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), home.getChildFile ("Downloads"),
-                                            home.getChildFile ("Library/Mobile Documents"), juce::File::getSpecialLocation (juce::File::userMoviesDirectory), home.getChildFile ("OneDrive") };
+            juce::Array<juce::File> roots;   // whole user folder (minus Library caches) + every mounted drive, most likely places first
+            for (auto* sub : { "Music", "Desktop", "Documents", "Downloads", "Library/Mobile Documents" }) roots.add (home.getChildFile (sub));
+            for (const auto& e : juce::RangedDirectoryIterator (home, false, "*", juce::File::findDirectories))
+                if (! e.getFile().getFileName().startsWith (".") && e.getFile().getFileName() != "Library") roots.addIfNotAlreadyThere (e.getFile());
+            for (const auto& e : juce::RangedDirectoryIterator (juce::File ("/Volumes"), false, "*", juce::File::findDirectories)) roots.add (e.getFile());
+            { juce::Array<juce::File> drives; juce::File::findFileSystemRoots (drives);
+              for (auto& d : drives) if (! home.isAChildOf (d)) roots.add (d); }   // other Windows drives (D:, E:, USB)
             int seen = 0;
             for (auto& r : roots)
             {
                 if (! r.isDirectory() || byName.size() == want.size()) continue;
                 for (const auto& e : juce::RangedDirectoryIterator (r, true, "*", juce::File::findFiles, juce::File::FollowSymlinks::no))
                 {
-                    if (++seen > 2000000 || sp == nullptr) break;
+                    if (++seen > 4000000 || sp == nullptr) break;
                     const auto n = e.getFile().getFileName().toLowerCase();
                     if (want.count (n) && ! e.getFile().getFullPathName().contains ("/.Trash")) byName.emplace (n, e.getFile());
                     if (byName.size() == want.size()) break;
