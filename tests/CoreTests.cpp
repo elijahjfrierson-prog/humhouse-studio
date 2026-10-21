@@ -1725,7 +1725,7 @@ int main()
         Clip c2 = c; c2.uid = p.newUid(); c2.start = 8; p.clips.push_back (c2);
         e.sync(); e.setPositionBeats (0.0); e.play();
         const int total = 48000 * 2; juce::AudioBuffer<float> rec (2, total + 512), out (2, 512);
-        for (int pos = 0; pos < total; pos += 512) { float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (nullptr, 0, o, 2, 512); rec.copyFrom (0, pos, out, 0, 0, 512); rec.copyFrom (1, pos, out, 1, 0, 512); }
+        for (int pos = 0; pos < total; pos += 512) { float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (nullptr, 0, o, 2, 512); juce::Thread::sleep (11); rec.copyFrom (0, pos, out, 0, 0, 512); rec.copyFrom (1, pos, out, 1, 0, 512); }
         e.stop();
         auto ref = [&] (int i) { const double ps = i * (double) fileRate / 48000.0; const int i0 = (int) ps; const double fr = ps - i0; return src.getSample (0, i0) * (1 - fr) + src.getSample (0, juce::jmin (n - 1, i0 + 1)) * fr; };
         double num = 0, den = 0, err = 0, sig = 0; int glitches = 0;

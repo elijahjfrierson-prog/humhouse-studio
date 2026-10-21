@@ -510,9 +510,6 @@ void Engine::sync()
 
     std::map<int, std::unique_ptr<ClipRuntime>> newClips;
     juce::AudioFormatManager fm; fm.registerBasicFormats();
-    std::map<juce::String, const MemoryClipReader*> decoded;
-    for (auto& [id, rt] : clipRt)
-        if (rt) if (auto* m = dynamic_cast<const MemoryClipReader*> (rt->reader.get())) decoded[rt->file.getFullPathName()] = m;
     for (auto& c : proj.clips)
     {
         if (! c.isAudio()) continue;
@@ -520,26 +517,11 @@ void Engine::sync()
         if (it != clipRt.end() && it->second->file == c.audioFile) continue;
         auto rt = std::make_unique<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
-        if (auto d = decoded.find (c.audioFile.getFullPathName()); d != decoded.end())
-        {
-            rt->fileRate = d->second->sampleRate; rt->length = d->second->lengthInSamples;
-            rt->reader = std::make_unique<MemoryClipReader> (*d->second);
-        }
-        else if (auto* r = fm.createReaderFor (c.audioFile))
+        if (auto* r = fm.createReaderFor (c.audioFile))   // every clip streams from its file on disk (as before 1.2.7)
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
-            if (r->lengthInSamples > 0 && r->lengthInSamples < (juce::int64) (r->sampleRate * 360))
-            {
-                auto m = std::make_unique<MemoryClipReader> (*r);
-                decoded[c.audioFile.getFullPathName()] = m.get();
-                rt->reader = std::move (m);
-                delete r;
-            }
-            else
-            {
-                rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
-                static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
-            }
+            rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
+            static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
         }
         rt->tmp.setSize (2, maxBlock * 4 + 8);
         newClips[c.uid] = std::move (rt);
