@@ -175,6 +175,37 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.drawRoundedRectangle (r, 4.0f, 1.0f);
 }
 
+void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
+{
+    const auto font = getTextButtonFont (b, b.getHeight());
+    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
+        return LookAndFeel_V4::drawButtonText (g, b, over, down);
+    g.setFont (font);
+    const int yIndent = juce::jmin (4, b.proportionOfHeight (0.3f)), cornerSize = juce::jmin (b.getHeight(), b.getWidth()) / 2;
+    const int fontHeight = juce::roundToInt (font.getHeight() * 0.6f);
+    const int leftIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnLeft() ? 4 : 2));
+    const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
+    const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
+    if (area.getWidth() <= 0) return;
+    col::setFontGradientFill (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, b.isEnabled() ? 1.0f : 0.5f);
+    g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+}
+
+void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
+{
+    const auto font = getLabelFont (l);
+    if (! col::fontGradient || l.isBeingEdited() || ! col::isHeadline (font) || l.findColour (juce::Label::textColourId) != col::text)
+        return LookAndFeel_V4::drawLabel (g, l);
+    g.fillAll (l.findColour (juce::Label::backgroundColourId));
+    g.setFont (font);
+    const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
+    const float alpha = l.isEnabled() ? 1.0f : 0.5f;
+    col::setFontGradientFill (g, l.getText(), area.toFloat(), l.getJustificationType(), alpha);
+    g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+    g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));
+    g.drawRect (l.getLocalBounds());
+}
+
 void HHLookAndFeel::drawFileBrowserRow (juce::Graphics& g, int w, int h, const juce::File& file, const juce::String& filename, juce::Image* icon,
                                         const juce::String& size, const juce::String& time, bool isDir, bool selected, int index,
                                         juce::DirectoryContentsDisplayComponent& c)
@@ -395,6 +426,7 @@ public:
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
+        if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);

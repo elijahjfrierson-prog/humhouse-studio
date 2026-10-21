@@ -127,14 +127,28 @@ public:
             auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : ""));
             b->setColour (juce::TextButton::buttonColourId, fc == 0 ? col::panel2 : juce::Colour (fc));
             b->setTooltip (fc == 0 ? "Automatic text color for the theme" : "Text color across the whole app");
-            b->onClick = [this, fc] { col::fontColour = juce::Colour (fc); if (s.settings) s.settings->setValue ("fontColour", juce::Colour (fc).toString()); apply(); };
+            b->onClick = [this, fc] { col::fontColour = juce::Colour (fc); if (s.settings) s.settings->setValue ("fontColour", juce::Colour (fc).toString()); setFontGradient ({}); apply(); };
             addAndMakeVisible (b);
         }
+        // font: Solid (the color row) or Gradient (headline text: tabs, titles, track / channel / insert names)
+        setupButton (fontSolid, "Solid", "One text color (the row below)");
+        setupButton (fontGrad, "Gradient", "Headline text (tabs, panel titles, track, channel and insert names) gets a color gradient");
+        fontSolid.onClick = [this] { setFontGradient ({}); };
+        fontGrad.onClick = [this] { setFontGradient (col::fontLo.toString() + " " + col::fontMid.toString() + " " + col::fontHi.toString()); };
+        for (auto* b : { &fontSolid, &fontGrad }) { b->setColour (juce::TextButton::buttonOnColourId, col::accent); addAndMakeVisible (b); }
+        for (auto& gc : grads)
+        {
+            const juce::String v = juce::Colour (gc[0]).toString() + " " + juce::Colour (gc[1]).toString() + " " + juce::Colour (gc[2]).toString();
+            auto* b = fontGradButtons.add (new GradSwatch (juce::Colour (gc[0]), juce::Colour (gc[1]), juce::Colour (gc[2]), true));
+            b->onClick = [this, v] { setFontGradient (v); };
+            addAndMakeVisible (b);
+        }
+        syncFontMode();
         setupButton (reset, "Reset", "Back to the original HumHouse orange");
         reset.onClick = [this] {
             resetTheme();
-            applyGradient ({}); black = false;
-            if (s.settings) { s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->removeValue ("gradColours"); s.settings->removeValue ("themeBlack"); s.settings->saveIfNeeded(); }
+            applyGradient ({}); applyFontGradient ({}); syncFontMode(); black = false;
+            if (s.settings) { s.settings->removeValue ("fontGrad"); s.settings->removeValue ("themeColour"); s.settings->removeValue ("themeTint"); s.settings->removeValue ("gradColours"); s.settings->removeValue ("themeBlack"); s.settings->saveIfNeeded(); }
             wheel.hue = col::accent.getHue(); wheel.sat = col::accent.getSaturation(); wheel.repaint();
             bright.setValue (col::accent.getBrightness(), juce::dontSendNotification);
         };
@@ -157,7 +171,7 @@ public:
             };
             addAndMakeVisible (b);
         }
-        setSize (340, 670);
+        setSize (340, 700);
     }
     void paint (juce::Graphics& g) override
     {
@@ -181,10 +195,15 @@ public:
         auto grow = r.removeFromTop (28);
         const int gw = grow.getWidth() / gradButtons.size();
         for (auto* b : gradButtons) b->setBounds (grow.removeFromLeft (gw).reduced (3));
-        fontLabel.setBounds (r.removeFromTop (18));
+        auto flab = r.removeFromTop (24);
+        fontGrad.setBounds (flab.removeFromRight (76).reduced (2, 1)); fontSolid.setBounds (flab.removeFromRight (60).reduced (2, 1));
+        fontLabel.setBounds (flab);
         auto frow = r.removeFromTop (30);
         const int fw = frow.getWidth() / fontSw.size();
         for (auto* b : fontSw) b->setBounds (frow.removeFromLeft (fw).reduced (3));
+        auto fgrow = r.removeFromTop (28);
+        const int fgw = fgrow.getWidth() / fontGradButtons.size();
+        for (auto* b : fontGradButtons) b->setBounds (fgrow.removeFromLeft (fgw).reduced (3));
         r.removeFromTop (10);
         trackLabel.setBounds (r.removeFromTop (18));
         trackBox.setBounds (r.removeFromTop (24));
@@ -205,26 +224,42 @@ private:
     bool light = s.settings != nullptr && s.settings->getBoolValue ("themeLight", false);
     juce::OwnedArray<juce::TextButton> fontSw;
     juce::Label fontLabel { {}, "Font color" };
+    juce::TextButton fontSolid, fontGrad;
     struct GradSwatch : public juce::Button
     {
-        GradSwatch (juce::Colour a, juce::Colour b, juce::Colour c) : juce::Button ("gradient"), lo (a), mid (b), hi (c) { setTooltip ("Meter + scope gradient"); }
+        GradSwatch (juce::Colour a, juce::Colour b, juce::Colour c, bool forFont = false) : juce::Button ("gradient"), lo (a), mid (b), hi (c), font (forFont)
+        {
+            setTooltip (font ? "Font gradient (headline text)" : "Meter + scope gradient");
+        }
         juce::Colour lo, mid, hi;
+        bool font;
         void paintButton (juce::Graphics& g, bool over, bool) override
         {
             auto r = getLocalBounds().toFloat().reduced (1);
             juce::ColourGradient gr (lo, r.getX(), 0, hi, r.getRight(), 0, false); gr.addColour (0.5, mid);
             g.setGradientFill (gr); g.fillRoundedRectangle (r, 3);
-            const bool on = col::gradLo == lo && col::gradMid == mid && col::gradHi == hi;
+            const bool on = font ? col::fontGradient && col::fontLo == lo && col::fontMid == mid && col::fontHi == hi
+                                 : col::gradLo == lo && col::gradMid == mid && col::gradHi == hi;
             g.setColour (on ? col::text : over ? col::dim : col::grid); g.drawRoundedRectangle (r, 3, on ? 2.0f : 1.0f);
         }
     };
-    juce::OwnedArray<GradSwatch> gradButtons;
+    juce::OwnedArray<GradSwatch> gradButtons, fontGradButtons;
     juce::Label gradLabel { {}, "Meters + scopes gradient" };
     juce::TextButton reset;
     juce::Label trackLabel { {}, "Track color (Playlist)" };
     juce::ComboBox trackBox;
     juce::OwnedArray<juce::TextButton> trackSwatches;
 
+    void syncFontMode()
+    {
+        fontSolid.setToggleState (! col::fontGradient, juce::dontSendNotification);
+        fontGrad.setToggleState (col::fontGradient, juce::dontSendNotification);
+    }
+    void setFontGradient (const juce::String& v)   // "" = solid
+    {
+        applyFontGradient (v); syncFontMode();
+        if (s.settings) { s.settings->setValue ("fontGrad", v); s.settings->saveIfNeeded(); }
+    }
     void apply()
     {
         const auto c = juce::Colour::fromHSV (wheel.hue, wheel.sat, (float) bright.getValue(), 1.0f);
@@ -285,6 +320,14 @@ void applyGradient (const juce::String& colours)
     auto t = juce::StringArray::fromTokens (colours, " ", "");
     if (t.size() == 3) { col::gradLo = juce::Colour::fromString (t[0]); col::gradMid = juce::Colour::fromString (t[1]); col::gradHi = juce::Colour::fromString (t[2]); }
     else { col::gradLo = juce::Colour (0xff3ddc84); col::gradMid = juce::Colour (0xffffd23d); col::gradHi = juce::Colour (0xffff3b57); }
+    refreshAll();
+}
+
+void applyFontGradient (const juce::String& colours)
+{
+    auto t = juce::StringArray::fromTokens (colours, " ", "");
+    col::fontGradient = t.size() == 3;
+    if (col::fontGradient) { col::fontLo = juce::Colour::fromString (t[0]); col::fontMid = juce::Colour::fromString (t[1]); col::fontHi = juce::Colour::fromString (t[2]); }
     refreshAll();
 }
 

@@ -32,6 +32,38 @@ namespace col
         gr.addColour (0.22, gradMid.withMultipliedAlpha (alpha)); gr.addColour (0.5, gradLo.withMultipliedAlpha (alpha)); gr.addColour (0.78, gradMid.withMultipliedAlpha (alpha));
         return gr;
     }
+    // font gradient (Theme > Font: Gradient): headline text gets a left-to-right lo -> mid -> hi fill
+    inline bool fontGradient = false;
+    inline juce::Colour fontLo (0xff3ddc84), fontMid (0xffffd23d), fontHi (0xffff3b57);
+    // big / bold text only; small plain text stays solid so it reads
+    inline bool isHeadline (const juce::Font& f) { return f.getHeight() >= 13.0f || (f.isBold() && f.getHeight() >= 11.0f); }
+    // White theme: darken the stops so they read on white backgrounds
+    inline juce::Colour fontStop (juce::Colour c)
+    {
+        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
+    }
+    inline juce::ColourGradient fontGradientFill (float x0, float x1, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (fontStop (fontLo).withMultipliedAlpha (alpha), x0, 0, fontStop (fontHi).withMultipliedAlpha (alpha), juce::jmax (x0 + 1.0f, x1), 0, false);
+        gr.addColour (0.5, fontStop (fontMid).withMultipliedAlpha (alpha));
+        return gr;
+    }
+    // fill for one line of text in `area`: the gradient spans just the glyphs, so short words still show all three colours
+    inline void setFontGradientFill (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j, float alpha = 1.0f)
+    {
+        const float w = juce::jmin (area.getWidth(), juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text));
+        const float x = j.testFlags (juce::Justification::right) ? area.getRight() - w
+                      : j.testFlags (juce::Justification::horizontallyCentred) ? area.getCentreX() - w * 0.5f : area.getX();
+        g.setGradientFill (fontGradientFill (x, x + w, alpha));
+    }
+}
+
+// Panel titles / names drawn in paint(): gradient when Font = Gradient, otherwise the colour already set on g
+inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, juce::Justification j, bool fitted = false)
+{
+    if (col::fontGradient && col::isHeadline (g.getCurrentFont())) col::setFontGradientFill (g, text, area.toFloat(), j);
+    if (fitted) g.drawFittedText (text, area, j, 1);
+    else g.drawText (text, area, j, true);
 }
 
 // FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
@@ -177,6 +209,8 @@ public:
     void refreshColours();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;   // Font = Gradient
+    void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                            juce::Slider::SliderStyle, juce::Slider&) override;
     void drawFileBrowserRow (juce::Graphics&, int w, int h, const juce::File&, const juce::String& filename, juce::Image* icon,
@@ -265,6 +299,7 @@ void closeEditorsForPlugin (juce::AudioProcessor*);
 void applyTheme (juce::Colour accent, float tint, bool black = false);   // tint 0..1 = how much the accent colors the background
 void resetTheme();
 void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
+void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex, empty = solid font
 void showThemeDialog (Studio&);
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 

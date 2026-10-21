@@ -435,7 +435,7 @@ public:
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText ("PLAYLIST", 8, toolbarH, headerW - 16, rulerH, juce::Justification::centredLeft);
+        drawHeadline (g, "PLAYLIST", { 8, toolbarH, headerW - 16, rulerH }, juce::Justification::centredLeft);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
