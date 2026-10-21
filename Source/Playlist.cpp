@@ -240,7 +240,7 @@ public:
     explicit Playlist (Studio& st) : s (st)
     {
         s.addChangeListener (this);
-        setupButton (addDrummer, "+ Drummer", "HumHouse Drummer: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
+        setupButton (addDrummer, "HumHouse Drums", "HumHouse Drums: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
         addDrummer.onClick = [this] {
             auto id = std::make_shared<int> (-1);
             const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
@@ -315,13 +315,14 @@ public:
         laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
-        if (addDrummer.isVisible()) { addDrummer.setBounds (t.removeFromLeft (92)); t.removeFromLeft (12); }
+        t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
         t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
+        if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
         layoutHeaders();
     }
