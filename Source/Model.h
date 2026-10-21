@@ -127,6 +127,7 @@ struct Clip
     double start = 0.0;            // beats
     double length = 4.0;           // beats
     int    patternIndex = -1;      // pattern clip if >=0
+    double patOffset = 0.0;        // pattern clip: beats into the pattern where it starts (slice / left trim)
     juce::File audioFile;          // audio clip otherwise
     double sourceOffset = 0.0;     // seconds into the audio file
     float  gain = 1.0f;

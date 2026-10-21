@@ -435,6 +435,46 @@ int main()
         e.stop();
     }
 
+    // slice tool on pattern clips (FL): cutting a pattern clip anywhere plays exactly like the uncut clip
+    {
+        auto render = [] (bool cut)
+        {
+            Engine e;
+            e.prepare (44100, 512);
+            auto pr = Project::createDemo(); pr.songMode = true;
+            if (cut)
+            {
+                std::vector<Clip> add;
+                for (auto& c : pr.clips)
+                    if (c.patternIndex >= 0 && ! c.isDrummer() && c.length > 2.0)
+                    {
+                        const double at = c.start + 1.5;
+                        Clip b = c; b.uid = pr.newUid(); b.start = at; b.length = c.start + c.length - at; b.patOffset += at - c.start;
+                        c.length = at - c.start; add.push_back (b);
+                    }
+                CHECK (! add.empty());
+                for (auto& b : add) pr.clips.push_back (b);
+            }
+            e.newProject (pr);
+            e.sync();
+            e.play();
+            std::vector<float> outL;
+            juce::AudioBuffer<float> out (2, 512);
+            for (int blk = 0; blk < 300; ++blk)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (nullptr, 0, o, 2, 512);
+                outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+            }
+            return outL;
+        };
+        const auto a0 = render (false), a1 = render (true);
+        double maxDiff = 0, pk = 0;
+        for (size_t i = 0; i < a0.size(); ++i) { maxDiff = std::max (maxDiff, (double) std::abs (a0[i] - a1[i])); pk = std::max (pk, (double) std::abs (a0[i])); }
+        std::printf ("pattern slice: max diff %.6f (peak %.3f)\n", maxDiff, pk);
+        CHECK (pk > 0.01 && maxDiff < 1.0e-4);
+    }
+
     // an edit while playing (delete clips, etc.) keeps the beat running exactly where it was: no fade, no re-hit, no gap
     {
         auto render = [] (bool editMidway, int mode)
