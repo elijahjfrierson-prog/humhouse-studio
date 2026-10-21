@@ -1148,7 +1148,7 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1235,6 +1235,10 @@ public:
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (hard && midi == -1.0f && heldNote > 0) wetTarget = 1.0f;
+                    // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
+                    // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
+                    if (midi > 0) tailHops = 0;
+                    else if (hard && midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && ++tailHops * hopSec < 0.07f) wetTarget = 1.0f;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1264,7 +1268,7 @@ public:
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) (0.08 * dsr / hop)) { targetRatio = 1.0f; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.12 : 0.08) * dsr / hop)) { targetRatio = 1.0f; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -1290,7 +1294,7 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
-    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
