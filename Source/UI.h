@@ -42,6 +42,23 @@ namespace col
     {
         return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
     }
+    // text sitting on a color: the opposite hue, dark on light colors and bright on dark ones
+    inline juce::Colour contrastOn (juce::Colour bg)
+    {
+        const bool light = bg.getPerceivedBrightness() > 0.6f;
+        return juce::Colour::fromHSV (std::fmod (bg.getHue() + 0.5f, 1.0f), juce::jmin (0.45f, bg.getSaturation()), light ? 0.1f : 0.98f, 1.0f);
+    }
+
+    inline juce::Font laneNameFont (const juce::String& f, float h)
+    {
+        if (f == "Bold")   return juce::FontOptions (h, juce::Font::bold);
+        if (f == "Italic") return juce::FontOptions (h, juce::Font::italic);
+        if (f == "Mono")   return juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), h, juce::Font::plain);
+        if (f == "Serif")  return juce::FontOptions (juce::Font::getDefaultSerifFontName(), h, juce::Font::plain);
+        if (f == "Sans")   return juce::FontOptions (juce::Font::getDefaultSansSerifFontName(), h, juce::Font::bold);
+        return juce::FontOptions (h);
+    }
+
     inline juce::ColourGradient fontGradientFill (float x0, float x1, float alpha = 1.0f)
     {
         juce::ColourGradient gr (fontStop (fontLo).withMultipliedAlpha (alpha), x0, 0, fontStop (fontHi).withMultipliedAlpha (alpha), juce::jmax (x0 + 1.0f, x1), 0, false);

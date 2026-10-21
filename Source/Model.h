@@ -67,6 +67,7 @@ struct DrummerParams
     float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
     // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
+    std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
     juce::String performanceKey() const;      // only what changes the notes played
 };
@@ -152,6 +153,8 @@ struct Lane
     bool monitor = true;
     float height = 56.0f;
     juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
+    juce::Colour nameColour {};    // track name color (transparent = automatic, opposite of what it sits on)
+    juce::String nameFont;         // track name font: "" app font, Bold, Italic, Mono, Serif, Sans
 };
 
 // ---------------------------------------------------------------- mixer

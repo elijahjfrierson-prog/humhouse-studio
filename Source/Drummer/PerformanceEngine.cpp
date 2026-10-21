@@ -662,6 +662,16 @@ namespace hhx
             return false;
         };
 
+        // The whole fill sits on one grid - straight thirty-seconds or triplet
+        // sixteenths - so a late straight stroke is never pulled onto a triplet.
+        float errStraight = 0.0f, errTriplet = 0.0f;
+        for (const float rel : placed)
+        {
+            errStraight += std::abs (rel - std::round (rel * 8.0f) / 8.0f);
+            errTriplet  += std::abs (rel - std::round (rel * 6.0f) / 6.0f);
+        }
+        const float gridDiv = errTriplet < errStraight * 0.5f ? 6.0f : 8.0f;
+
         for (const auto& h : f.hits)
         {
             const float src = h.gridBeat();
@@ -676,9 +686,7 @@ namespace hhx
             // The take's own micro-timing then rides on top, but only as far
             // as Humanize asks.
             const float rel  = (src - srcSkip) * scale;
-            const float q32  = std::round (rel * 8.0f) / 8.0f;
-            const float q24  = std::round (rel * 6.0f) / 6.0f;
-            const float snap = std::abs (rel - q32) <= std::abs (rel - q24) ? q32 : q24;
+            const float snap = std::round (rel * gridDiv) / gridDiv;
 
             // An isolated stroke is played dead on the grid. Micro-timing is
             // heard as feel inside a run, but a lone hit nudged off the beat is

@@ -364,6 +364,7 @@ enum MenuIds
     mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
+    mMidiDevice = 90,
     mHistory = 1000
 };
 
@@ -689,11 +690,22 @@ public:
     std::map<int, int> heldTyping;
     std::map<int, std::pair<double, float>> heldNotes;
 
+    juce::Array<juce::MidiDeviceInfo> midiDevs;
+    int midiSeen = -1, midiPoll = 0;
+    // the chosen device (or every connected one when none is chosen) plays live; a keyboard plugged in later just works
     void enableMidiInputs()
     {
-        for (auto& d : juce::MidiInput::getAvailableDevices())
-            if (! engine.deviceManager.isMidiInputDeviceEnabled (d.identifier))
-                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, true);
+        const auto pick = studio.settings->getValue ("midiIn");
+        const auto all = juce::MidiInput::getAvailableDevices();
+        bool found = false;
+        for (auto& d : all) found = found || d.identifier == pick;
+        for (auto& d : all)
+        {
+            const bool want = pick.isEmpty() || ! found || d.identifier == pick;
+            if (engine.deviceManager.isMidiInputDeviceEnabled (d.identifier) != want)
+                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, want);
+        }
+        midiSeen = all.size();
     }
 
     void liveNote (int key, float vel, bool on)
@@ -793,7 +805,16 @@ public:
             add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup (every 8 edits + every 2 minutes)", {}, true, autoBackup());
             add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
-            add (mMidiInputs, "Connect MIDI keyboards");
+            {
+                juce::PopupMenu md;   // pick the keyboard / piano: it plays the selected channel at once, no other setup
+                midiDevs = juce::MidiInput::getAvailableDevices();
+                const auto pick = studio.settings->getValue ("midiIn");
+                md.addItem (mMidiInputs, "All connected (auto, plug and play)", true, pick.isEmpty());
+                for (int i = 0; i < juce::jmin (10, midiDevs.size()); ++i)
+                    md.addItem (mMidiDevice + i, midiDevs[i].name, true, pick == midiDevs[i].identifier);
+                if (midiDevs.isEmpty()) md.addItem (-1, "(no MIDI device connected)", false);
+                m.addSubMenu ("MIDI input device", md);
+            }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
             {
@@ -836,6 +857,14 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= mMidiDevice && id < mMidiDevice + 10 && id - mMidiDevice < midiDevs.size())
+        {
+            const auto& d = midiDevs[id - mMidiDevice];
+            studio.settings->setValue ("midiIn", d.identifier);
+            enableMidiInputs();
+            flash ("MIDI: " + d.name);
+            return;
+        }
         if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
         if (id == 396) { addTemplateFolder(); return; }
         if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
@@ -924,7 +953,7 @@ public:
             case mTheme: showThemeDialog (studio); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
-            case mMidiInputs: enableMidiInputs(); break;
+            case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
             case mAutoBackup: studio.settings->setValue ("autoBackup", ! autoBackup()); break;
             case mShortcuts: showShortcuts(); break;
             case mAbout:
@@ -1074,6 +1103,7 @@ private:
 
     void timerCallback() override
     {
+        if (++midiPoll >= 60) { midiPoll = 0; if (juce::MidiInput::getAvailableDevices().size() != midiSeen) enableMidiInputs(); }   // hot-plug
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);

@@ -1232,7 +1232,7 @@ public:
                     else if (midi != -1.0f) pendingMidi = 0;
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
-                    wetTarget = midi > 0 && ! rough && aper < (wetTarget > 0.5f ? 0.3f : 0.2f) ? 1.0f : 0.0f;
+                    wetTarget = midi > 0 && (hard || ! rough) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : (wetTarget > 0.5f ? 0.3f : 0.2f)) ? 1.0f : 0.0f;   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (hard && midi == -1.0f && heldNote > 0) wetTarget = 1.0f;
@@ -1240,7 +1240,7 @@ public:
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.09f : 0.07f)) wetTarget = 1.0f;
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.14f : 0.07f)) wetTarget = 1.0f;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1270,7 +1270,7 @@ public:
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) (0.12 * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.18 : 0.12) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;

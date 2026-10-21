@@ -159,6 +159,8 @@ struct LaneHeader : public juce::Component
         if (index >= (int) p.lanes.size()) return;
         auto& l = p.lanes[(size_t) index];
         name.setText (l.name, juce::dontSendNotification);
+        name.setColour (juce::Label::textColourId, l.nameColour.isTransparent() ? col::text : l.nameColour);
+        name.setFont (col::laneNameFont (l.nameFont, 15.0f));
         arm.setToggleState (l.armed, juce::dontSendNotification);
         mute.setToggleState (l.muted, juce::dontSendNotification);
         mon.setToggleState (l.monitor, juce::dontSendNotification);
@@ -267,6 +269,8 @@ struct LaneHeader : public juce::Component
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
         if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
         m.addSubMenu ("Color", colourMenu (30));
+        { auto nc = colourMenu (50); nc.addSeparator(); nc.addItem (49, "Automatic (opposite of the clip color)"); m.addSubMenu ("Name color", nc); }
+        { juce::PopupMenu fm; const char* fonts[] { "Default", "Bold", "Italic", "Mono", "Serif", "Sans" }; for (int k = 0; k < 6; ++k) fm.addItem (70 + k, fonts[k]); m.addSubMenu ("Name font", fm); }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
        #if ! HHS_LICENSED
         m.addItem (7, "HumHouse Drummer (turn this track into drums)");
@@ -284,6 +288,8 @@ struct LaneHeader : public juce::Component
             else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
             else if (r >= 20 && r <= 22) { if (onAllHeights) onAllHeights (r - 20); }
             else if (r >= 30 && r <= 42) { const auto t = targets(); const auto c = pickedColour (r - 30); s.edit ("Track color", [t, c] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].colour = c; }); }
+            else if (r == 49 || (r >= 50 && r <= 62)) { const auto t = targets(); const auto c = r == 49 ? juce::Colour() : pickedColour (r - 50); s.edit ("Track name color", [t, c] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].nameColour = c; }); }
+            else if (r >= 70 && r <= 75) { const auto t = targets(); static const char* fonts[] { "", "Bold", "Italic", "Mono", "Serif", "Sans" }; const juce::String f (fonts[r - 70]); s.edit ("Track name font", [t, f] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].nameFont = f; }); }
             else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
@@ -1168,7 +1174,9 @@ private:
                 if (n > 1) label << "  [take " << k << "/" << n << "]";
             }
         }
-        g.setColour (juce::Colours::black); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
+        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
+        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
         else if (! c.isAudio() && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used

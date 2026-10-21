@@ -1382,9 +1382,10 @@ int main()
         pr.channels = { c };
         NoteList nl;
         const int keys[] { 60, 63, 65, 67, 70, 67, 65, 63 }, same[] { 60, 67, 60, 67, 60, 67, 60, 67 };
-        for (int k = 0; k < 8; ++k)
+        const int NN = 100;   // FL: a slide chain keeps going for 100+ notes
+        for (int k = 0; k < NN; ++k)
         {
-            Note n; n.key = shape == 5 ? same[k] : keys[k]; n.start = k * 0.5; n.slide = k > 0;
+            Note n; n.key = shape == 5 ? same[k % 8] : keys[k % 8]; n.start = k * 0.5; n.slide = k > 0;
             n.length = shape == 2 ? 0.3 : shape == 4 ? 0.7 : 0.5;
             nl.push_back (n);
         }
@@ -1394,7 +1395,7 @@ int main()
         std::vector<float> outL;
         juce::AudioBuffer<float> out (2, 512);
         const int noteLen = (int) (0.5 * 60.0 / bpm * sr);
-        for (int blk = 0; blk * 512 < noteLen * 8 + 1024; ++blk)
+        for (int blk = 0; blk * 512 < noteLen * NN + 1024; ++blk)
         {
             float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
             e.processBlock (nullptr, 0, o, 2, 512);
@@ -1403,14 +1404,16 @@ int main()
         e.stop();
         float lo = 1;
         juce::String lv;
-        for (int k = 0; k < 8; ++k)   // the middle half of each note
+        int firstDead = -1;
+        for (int k = 0; k < NN; ++k)   // the middle half of each note
         {
             double sum = 0; const int a0 = k * noteLen + noteLen / 4, b0 = a0 + noteLen / 2;
             for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
             const float rms = (float) std::sqrt (sum / (b0 - a0));
-            lo = std::min (lo, rms); lv << juce::String (rms, 3) << " ";
+            if (rms <= 0.03f && firstDead < 0) firstDead = k;
+            lo = std::min (lo, rms); if (k < 8 || k % 10 == 0) lv << juce::String (rms, 3) << " ";
         }
-        std::printf ("808 slide chain (%s, %s, shape %d): note levels %s\n", mono ? "mono" : "poly", mode ? "stretch" : "resample", shape, lv.toRawUTF8());
+        std::printf ("808 slide chain (%s, %s, shape %d): note levels %s first dead %d\n", mono ? "mono" : "poly", mode ? "stretch" : "resample", shape, lv.toRawUTF8(), firstDead);
         CHECK (lo > 0.03f);
         wav.deleteFile();
     }
@@ -1576,6 +1579,18 @@ int main()
         CHECK (h8->size() > 60 && count (*h8, 0, 0, 32) > 8 && count (*h8, 1, 0, 32) > 6);
         CHECK (count (*h8, -1, 32, 1e9) == 0 && count (*h6, -1, 24, 1e9) == 0);
         CHECK (toms (*h6, 20, 24) > toms (*h8, 20, 24) || toms (*h6, 20, 24) >= 4);   // the fill moved to the new end
+        {   // Humanize 0 = every hit, fills included, dead on the grid, in every style
+            DrummerParams z; z.humanize = 0; z.swing = 0; z.fills = 1;
+            for (int st : { 0, 2, 3, 4, 5, 6, 9 })
+            {
+                z.character = st; auto hz = drummerHits (z, 120, 32); int off = 0;
+                for (auto& h : *hz) { const double a = h.beat * 8, b = h.beat * 6; if (std::abs (a - std::round (a)) > 0.02 && std::abs (b - std::round (b)) > 0.02) ++off; }
+                std::printf ("drummer humanize 0 style %d: %d of %d hits off the grid\n", st, off, (int) hz->size());
+                CHECK (off == 0 && hz->size() > 40);
+            }
+            DrummerParams dv; dv.sectionVel = { 40, 100 };
+            CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);
+        }
         const auto kits = drumKits();
         std::printf ("drummer kits: %d\n", kits.size());
         CHECK (kits.size() >= 3);

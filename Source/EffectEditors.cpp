@@ -1058,7 +1058,7 @@ struct DrummerPad : juce::Component, juce::Timer
 // SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song
 struct DrumSections : juce::Component
 {
-    DrumSections (Studio& st, int id) : s (st), channelId (id) { setSize (620, 230); }
+    DrumSections (Studio& st, int id) : s (st), channelId (id) { setSize (620, 268); }
     int sections() const
     {
         double end = 0;
@@ -1070,7 +1070,7 @@ struct DrumSections : juce::Component
     {
         const auto* c = s.channel (channelId); if (c == nullptr) return;
         const int n = sections(); const auto r = grid();
-        const float cw = r.getWidth() / (float) n, rh = r.getHeight() / (float) NumDrumGroups;
+        const float cw = r.getWidth() / (float) n, rh = r.getHeight() / (float) (NumDrumGroups + 1);
         g.setFont (juce::FontOptions (12.0f));
         for (int k = 0; k < n; ++k)
         {
@@ -1090,13 +1090,47 @@ struct DrumSections : juce::Component
                 g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : "ON", cell, juce::Justification::centred);
             }
         }
+        // DYNAMICS: how hard each section is played (drag up / down, double-click = 100%); it ramps into the next section
+        const float y = r.getY() + NumDrumGroups * rh;
+        g.setColour (col::text); g.drawText ("Dynamics", juce::Rectangle<float> (r.getX() - 68, y, 64, rh), juce::Justification::centredRight);
+        for (int k = 0; k < n; ++k)
+        {
+            const int v = dyn (*c, k);
+            auto cell = juce::Rectangle<float> (r.getX() + k * cw, y, cw, rh).reduced (2.0f);
+            g.setColour (col::bg); g.fillRoundedRectangle (cell, 3.0f);
+            g.setColour (col::accent.withAlpha (0.8f)); g.fillRoundedRectangle (cell.withTrimmedTop (cell.getHeight() * (1.0f - juce::jmin (1.0f, v / 150.0f))), 3.0f);
+            g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+            g.setColour (col::text); g.drawText (juce::String (v) + "%", cell, juce::Justification::centred);
+        }
+    }
+    static int dyn (const Channel& c, int k) { return k < (int) c.drum.sectionVel.size() && c.drum.sectionVel[(size_t) k] > 0 ? c.drum.sectionVel[(size_t) k] : 100; }
+    void setDyn (int k, int v)
+    {
+        const int id = channelId;
+        s.live ([&] (Project& p) { for (auto& c : p.channels) if (c.id == id) { auto& m = c.drum.sectionVel; if ((int) m.size() <= k) m.resize ((size_t) k + 1, 100); m[(size_t) k] = juce::jlimit (5, 150, v); } });
+        s.engine.sync(); repaint();
+    }
+    int cellAt (const juce::MouseEvent& e, int& row) const
+    {
+        const int n = sections(); const auto r = grid();
+        row = juce::jlimit (0, (int) NumDrumGroups, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) (NumDrumGroups + 1))));
+        return juce::jlimit (0, n - 1, (int) ((e.position.x - r.getX()) / (r.getWidth() / (float) n)));
+    }
+    int dragK = -1, dragV = 100;
+    void mouseDrag (const juce::MouseEvent& e) override { if (dragK >= 0) setDyn (dragK, juce::roundToInt ((dragV - e.getDistanceFromDragStartY() * 0.75f) / 5.0f) * 5); }
+    void mouseUp (const juce::MouseEvent&) override { if (dragK >= 0) s.commit ("Drummer dynamics"); dragK = -1; }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (! grid().contains (e.position)) return;
+        int row = 0; const int k = cellAt (e, row);
+        if (row == NumDrumGroups) { setDyn (k, 100); s.commit ("Drummer dynamics"); }
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
         const int n = sections(); const auto r = grid();
         if (! r.contains (e.position)) return;
-        const int k = juce::jlimit (0, n - 1, (int) ((e.position.x - r.getX()) / (r.getWidth() / (float) n)));
-        const int gi = juce::jlimit (0, NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
+        int gi = 0; const int k = cellAt (e, gi);
+        if (gi == NumDrumGroups) { if (auto* c = s.channel (channelId)) { dragK = k; dragV = dyn (*c, k); } return; }
         const int id = channelId;
         s.edit ("Drummer section", [id, k, gi] (Project& p) {
             for (auto& c : p.channels)
@@ -1143,6 +1177,12 @@ void openChannelEditor (Studio& s, int channelId)
         auto& d = ch->drum;
         std::vector<ParamGrid::P> perf, mix;
         if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
+        perf.push_back ({ "character", "Style (genre)", 0, 9, 1, (float) d.character, { "Pop Rock", "Rock", "Hard Rock", "Punk", "Metal", "Shuffle", "Half Time", "Roots Rock", "Prog", "Metal 2x Kick" } });
+        static std::vector<std::string> mixNames; mixNames.clear();
+        for (size_t i = 0; i < s.p().mixer.size(); ++i) mixNames.push_back (i == 0 ? std::string ("Master") : std::to_string (i) + " " + s.p().mixer[i].name.toStdString());
+        std::vector<const char*> mixChoices; for (auto& n : mixNames) mixChoices.push_back (n.c_str());
+        if (mixChoices.size() > 1)
+            perf.push_back ({ "mixer", "Mixer insert (FX)", 0, (float) mixChoices.size() - 1, 0, (float) juce::jlimit (0, (int) mixChoices.size() - 1, ch->mixerTrack), mixChoices });
         perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
         perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
         perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
@@ -1192,6 +1232,8 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "drive") d.drive = v; else if (id == "micBlend") d.micBlend = v; else if (id == "space") d.space = (int) v;
                 else if (id == "roomMix") d.roomMix = v; else if (id == "squeeze") d.squeeze = v; else if (id == "glow") d.glow = (int) v;
                 else if (id == "volume") c->volume = v;
+                else if (id == "character") { d.character = juce::jlimit (0, 9, juce::roundToInt (v)); if (d.character == 6) d.halfTime = true; }
+                else if (id == "mixer") c->mixerTrack = juce::roundToInt (v);
                 else if (id.startsWith ("pc") && id.length() == 4)
                 {
                     const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
