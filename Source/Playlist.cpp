@@ -312,6 +312,7 @@ public:
 
     void resized() override
     {
+        placeSplitBars();
         laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
@@ -1109,6 +1110,34 @@ private:
         const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
         s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
     }
+    // live "Splitting stems: NN%" badge (top-right of the Playlist) while a split runs
+    struct SplitProgress : juce::Component, juce::Timer
+    {
+        SplitProgress (std::shared_ptr<std::atomic<float>> pr, juce::String n) : prog (std::move (pr)), name (std::move (n)) { setInterceptsMouseClicks (false, false); startTimerHz (15); }
+        void timerCallback() override { repaint(); }
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1.0f);
+            const float v = juce::jlimit (0.0f, 1.0f, prog->load());
+            g.setColour (juce::Colour (0xe0101418)); g.fillRoundedRectangle (r, 6.0f);
+            auto bar = r.reduced (6.0f).removeFromBottom (5.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.15f)); g.fillRoundedRectangle (bar, 2.5f);
+            g.setColour (juce::Colour (0xff4ad991)); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * v), 2.5f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (13.0f));
+            g.drawText ("Splitting stems: " + juce::String (juce::roundToInt (v * 100.0f)) + "%  " + name,
+                        r.reduced (8.0f, 3.0f).withTrimmedBottom (8.0f), juce::Justification::centredLeft, true);
+        }
+        std::shared_ptr<std::atomic<float>> prog; juce::String name;
+    };
+    juce::OwnedArray<SplitProgress> splitBars;
+    void placeSplitBars()
+    {
+        for (int i = 0; i < splitBars.size(); ++i)
+        {
+            splitBars[i]->setBounds (getWidth() - 330, 46 + i * 38, 320, 34);
+            splitBars[i]->toFront (false);
+        }
+    }
     // HumHouse Stem Splitter: runs in the background; the stems land on 4 new tracks under the clip, the original is muted (kept)
     void splitClipStems (int uid)
     {
@@ -1118,14 +1147,18 @@ private:
         auto& pr = s.p();
         const auto dir = (pr.projectFile.existsAsFile() ? pr.projectFile.getParentDirectory() : pr.recordingsFolder().getParentDirectory()).getChildFile ("Stems");
         const double secs = beatsToSeconds (c.length, pr.bpm);
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem Splitter",
-            "Splitting \"" + c.audioFile.getFileNameWithoutExtension() + "\" into Drums, Bass, Vocals and Melodies.\nKeep working - the 4 tracks appear under the clip when it's done.");
+        auto prog = std::make_shared<std::atomic<float>> (0.0f);
+        addAndMakeVisible (splitBars.add (new SplitProgress (prog, c.audioFile.getFileNameWithoutExtension())));
+        placeSplitBars();
         juce::Component::SafePointer<Playlist> safe (this);
-        juce::Thread::launch ([safe, c, dir, secs] {
-            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir);
-            juce::MessageManager::callAsync ([safe, c, files] {
+        juce::Thread::launch ([safe, c, dir, secs, prog] {
+            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir, prog.get());
+            juce::MessageManager::callAsync ([safe, c, files, prog] {
                 auto* pl = safe.getComponent();
                 if (pl == nullptr) return;
+                for (int i = pl->splitBars.size(); --i >= 0;)
+                    if (pl->splitBars[i]->prog == prog) pl->splitBars.remove (i);
+                pl->placeSplitBars();
                 if (files[0] == juce::File()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Stem Splitter", "Couldn't split this clip. The original clip is unchanged."); return; }
                 pl->s.edit ("Split stems", [c, files] (Project& p) {
                     const juce::uint32 cols[] { 0xffff5d5d, 0xff3d9bff, 0xffffc93d, 0xff4ad991 };
