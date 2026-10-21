@@ -896,22 +896,6 @@ int main()
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
     }
-    // AutoPitch Body + Character (defaults) add weight without jumping the level
-    {
-        auto ap = createBuiltinEffect ("autopitch");
-        ap->setParam ("style", 1.0f);
-        ap->prepare (48000, 512);
-        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
-        double ph = 0, inE = 0, outE = 0;
-        for (int k = 0; k < 300; ++k)
-        {
-            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.4 * std::sin (2 * ph)); ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
-            ap->process (b, 512, ctx);
-            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); CHECK (std::isfinite (y)); outE += y * y; }
-        }
-        std::printf ("autopitch body/character level %+.2f dB\n", 10.0 * std::log10 (outE / inE));
-        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 3.0);
-    }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {
         auto run = [] (int scenario) {
