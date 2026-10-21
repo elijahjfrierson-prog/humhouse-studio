@@ -53,7 +53,14 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
         tries.add (ioBase.getChildFile ("Audio").getChildFile (name));
         tries.add (ioBase.getParentDirectory().getChildFile ("Recordings").getChildFile (name));
     }
-    tries.add (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Recordings").getChildFile (name));
+    for (auto root : { juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"),
+                       juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile ("HumHouse Studio") })
+    {
+        tries.add (root.getChildFile ("Recordings").getChildFile (name));
+        tries.add (root.getChildFile ("Templates").getChildFile ("Recordings").getChildFile (name));   // older builds recorded template-based songs here
+        tries.add (root.getChildFile ("Audio Files").getChildFile (name));
+    }
+    if (ioBase != juce::File()) tries.add (ioBase.getChildFile ("Templates").getChildFile ("Recordings").getChildFile (name));
     for (auto& c : tries) if (auto a = alt (c); a != juce::File()) return a;
     if (ioBase.isDirectory())   // last try: anywhere inside the project folder (bounded so a Desktop full of files can't stall opening)
     {

@@ -1322,7 +1322,7 @@ private:
         if (templ.existsAsFile())
         {
             Project t;
-            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; }
+            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; fresh.projectFile = juce::File(); }   // a new song never records into / saves over the template
         }
         engine.newProject (std::move (fresh));
         studio.selectedTrack = 1; studio.selectedLanes.clear(); studio.laneAnchor = -1;
