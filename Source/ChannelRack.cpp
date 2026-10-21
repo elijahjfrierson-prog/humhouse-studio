@@ -113,7 +113,8 @@ struct NameTag : public juce::Component, public juce::SettableTooltipClient
         g.setColour (colour); g.fillRect (r.removeFromLeft (4));
         g.setColour (selected ? juce::Colours::black : col::text);
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
+        if (selected) g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
+        else drawHeadline (g, text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, true);
     }
     void mouseUp (const juce::MouseEvent& e) override { if (onMouse && contains (e.getPosition())) onMouse (e); }
     std::function<void (int)> onShuffle;
@@ -370,7 +371,7 @@ public:
         g.fillAll (col::panel);
         g.setColour (col::bg); g.fillRect (0, 0, getWidth(), headerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText ("CHANNEL RACK", getWidth() - 140, 0, 130, headerH, juce::Justification::centredRight);
+        drawHeadline (g, "CHANNEL RACK", { getWidth() - 140, 0, 130, headerH }, juce::Justification::centredRight);
         auto& p = s.p();
         if (p.patterns.empty()) return;
         auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];

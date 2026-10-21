@@ -260,7 +260,7 @@ public:
         drawLogo (g, h.reduced (6, 5).removeFromLeft (150), true);
         g.setColour (col::dim);
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText ("SAMPLES", h.reduced (8, 0), juce::Justification::centredRight);
+        drawHeadline (g, "SAMPLES", h.reduced (8, 0).toNearestInt(), juce::Justification::centredRight);
     }
     void resized() override
     {
