@@ -1055,6 +1055,63 @@ struct DrummerPad : juce::Component, juce::Timer
     Studio& s; int channelId; bool dirty = false;
 };
 
+// SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song
+struct DrumSections : juce::Component
+{
+    DrumSections (Studio& st, int id) : s (st), channelId (id) { setSize (620, 230); }
+    int sections() const
+    {
+        double end = 0;
+        for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
+        return juce::jlimit (4, 32, (int) std::ceil (end / 32.0 - 1e-6) + 1);
+    }
+    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (12, 10).withTrimmedLeft (70).withTrimmedTop (22).toFloat(); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const int n = sections(); const auto r = grid();
+        const float cw = r.getWidth() / (float) n, rh = r.getHeight() / (float) NumDrumGroups;
+        g.setFont (juce::FontOptions (12.0f));
+        for (int k = 0; k < n; ++k)
+        {
+            g.setColour (col::dim);
+            g.drawText ("Bar " + juce::String (k * 8 + 1), juce::Rectangle<float> (r.getX() + k * cw, r.getY() - 20, cw, 18), juce::Justification::centred);
+        }
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+        {
+            g.setColour (col::text);
+            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 68, r.getY() + gi * rh, 64, rh), juce::Justification::centredRight);
+            for (int k = 0; k < n; ++k)
+            {
+                const bool off = k < (int) c->drum.sectionMute.size() && (c->drum.sectionMute[(size_t) k] >> gi & 1) != 0;
+                auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
+                g.setColour (off ? col::bg : juce::Colour (0xffffc93d).withAlpha (0.85f)); g.fillRoundedRectangle (cell, 3.0f);
+                g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+                g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : "ON", cell, juce::Justification::centred);
+            }
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const int n = sections(); const auto r = grid();
+        if (! r.contains (e.position)) return;
+        const int k = juce::jlimit (0, n - 1, (int) ((e.position.x - r.getX()) / (r.getWidth() / (float) n)));
+        const int gi = juce::jlimit (0, NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
+        const int id = channelId;
+        s.edit ("Drummer section", [id, k, gi] (Project& p) {
+            for (auto& c : p.channels)
+                if (c.id == id)
+                {
+                    auto& m = c.drum.sectionMute;
+                    if ((int) m.size() <= k) m.resize ((size_t) k + 1, 0);
+                    m[(size_t) k] ^= 1 << gi;
+                }
+        });
+        repaint();
+    }
+    Studio& s; int channelId;
+};
+
 void openChannelEditor (Studio& s, int channelId)
 {
     auto* ch = s.channel (channelId);
@@ -1105,6 +1162,22 @@ void openChannelEditor (Studio& s, int channelId)
         mix.push_back ({ "squeeze", "Squeeze", 0, 1, 0, d.squeeze, {} });
         mix.push_back ({ "glow", "Squeeze glow", 0, 4, 0, (float) d.glow, { "Off", "Clean", "Tube", "Tape", "Transformer" } });
         mix.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+        std::vector<ParamGrid::P> kitp;
+        static std::vector<std::string> kitIds, kitLabels; kitIds.clear(); kitLabels.clear();
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+            for (auto* what : { "Level", "Pan", "Tune", "Decay" })
+            {
+                kitIds.push_back (std::string ("pc") + what[0] + std::to_string (gi));
+                kitLabels.push_back (std::string (drumGroupName (gi)) + " " + what);
+            }
+        for (int gi = 0, k = 0; gi < NumDrumGroups; ++gi)
+        {
+            const auto g = (size_t) gi;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -24, 12, 0, d.pieceDb[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -1, 1, 0, d.piecePan[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -12, 12, 0, d.pieceTune[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceDamp[g], {} }); ++k;
+        }
         auto setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
                 auto* c = s.channel (channelId);
@@ -1119,12 +1192,20 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "drive") d.drive = v; else if (id == "micBlend") d.micBlend = v; else if (id == "space") d.space = (int) v;
                 else if (id == "roomMix") d.roomMix = v; else if (id == "squeeze") d.squeeze = v; else if (id == "glow") d.glow = (int) v;
                 else if (id == "volume") c->volume = v;
+                else if (id.startsWith ("pc") && id.length() == 4)
+                {
+                    const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
+                    const auto w = id[2];
+                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v;
+                }
             });
         };
         auto commit = [&s] { s.commit ("Drummer settings"); };
         auto* tabs = new ChannelTabs();
         tabs->add ("DRUMMER", new StackPage ({ new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
         tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
+        tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
+        tabs->add ("SECTIONS", new DrumSections (s, channelId));
         tabs->finish();
         EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
         return;

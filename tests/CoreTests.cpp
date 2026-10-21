@@ -1704,9 +1704,10 @@ int main()
         std::printf ("drummer audio: rms %.3f peak %.3f\n", std::sqrt (sum / (44100 * 3)), peak);
         CHECK (peak > 0.05f && peak <= 1.2f);
         auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-drummer-test.hhs");
-        p.channels.back().drum.fills = 0.9f; CHECK (saveProject (p, f));
+        p.channels.back().drum.fills = 0.9f; p.channels.back().drum.sectionMute = { 0, 4 }; p.channels.back().drum.pieceDb[1] = -3.5f; CHECK (saveProject (p, f));
         Project q; CHECK (loadProject (q, f));
         CHECK (q.clips.back().drummer == id && q.channels.back().type == ChannelType::Drummer && std::abs (q.channels.back().drum.fills - 0.9f) < 1e-4f && q.channels.back().sampleFile.isDirectory());
+        CHECK (q.channels.back().drum.sectionMute.size() == 2 && q.channels.back().drum.sectionMute[1] == 4 && std::abs (q.channels.back().drum.pieceDb[1] + 3.5f) < 1e-3f);
         f.deleteFile();
     }
 

@@ -1158,6 +1158,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
                     if (s < b0 || s >= b1) continue;
+                    if (const int sec = (int) ((clip.start + h.beat) / 32.0); sec >= 0 && sec < (int) ch.drum.sectionMute.size()
+                        && (ch.drum.sectionMute[(size_t) sec] >> drumGroupOf (h.lane) & 1) != 0) continue;   // this drum is off in this 8-bar section
                     Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = h.vel;
                     emit (ci, nt, s);
                 }

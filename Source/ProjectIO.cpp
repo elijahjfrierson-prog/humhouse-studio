@@ -129,6 +129,12 @@ juce::ValueTree projectToTree (const Project& p)
             for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
             t.setProperty ("drHt", d.halfTime, nullptr); t.setProperty ("drRi", d.ride, nullptr); t.setProperty ("drCh", d.character, nullptr);
             t.setProperty ("drSe", d.seed, nullptr); t.setProperty ("drVo", d.voicing, nullptr); t.setProperty ("drSp", d.space, nullptr); t.setProperty ("drGw", d.glow, nullptr);
+            {
+                juce::StringArray pc, sm;
+                for (int g = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) pc.add (juce::String ((*a)[(size_t) g], 3));
+                for (int m : d.sectionMute) sm.add (juce::String (m));
+                t.setProperty ("drPc", pc.joinIntoString (","), nullptr); t.setProperty ("drSM", sm.joinIntoString (","), nullptr);
+            }
         }
         t.setProperty ("plugin", c.pluginId, nullptr); t.setProperty ("state", c.pluginState.toBase64Encoding(), nullptr);
         t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("vol", c.volume, nullptr); t.setProperty ("pan", c.pan, nullptr);
@@ -242,6 +248,13 @@ Project projectFromTree (const juce::ValueTree& root)
             for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
             d.halfTime = t.getProperty ("drHt", d.halfTime); d.ride = t.getProperty ("drRi", d.ride); d.character = t.getProperty ("drCh", d.character);
             d.seed = t.getProperty ("drSe", d.seed); d.voicing = t.getProperty ("drVo", d.voicing); d.space = t.getProperty ("drSp", d.space); d.glow = t.getProperty ("drGw", d.glow);
+            {
+                const auto pc = juce::StringArray::fromTokens (t["drPc"].toString(), ",", "");
+                if (pc.size() == 20)
+                    for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
+                d.sectionMute.clear();
+                for (auto& v : juce::StringArray::fromTokens (t["drSM"].toString(), ",", "")) if (v.isNotEmpty()) d.sectionMute.push_back (v.getIntValue());
+            }
             if (! c.sampleFile.isDirectory()) { const auto kit = drumKits(); for (auto& k : kit) if (k.getFileName() == c.sampleFile.getFileName()) c.sampleFile = k; }
             if (! c.sampleFile.isDirectory()) c.sampleFile = defaultDrumKit();   // an older install path: use this install's kit
         }

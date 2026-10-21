@@ -15,6 +15,21 @@ juce::String DrummerParams::performanceKey() const
     return k + juce::String ((int) halfTime) + juce::String ((int) ride) + "," + juce::String (character) + "," + juce::String (seed);
 }
 
+const char* drumGroupName (int g)
+{
+    static const char* n[] { "Kick", "Snare", "Hats", "Toms", "Cymbals" };
+    return g >= 0 && g < NumDrumGroups ? n[g] : "";
+}
+
+int drumGroupOf (int lane)
+{
+    if (lane == hhx::LaneKick) return GroupKick;
+    if (lane <= hhx::LaneSnareRoll) return GroupSnare;
+    if (lane <= hhx::LaneHatBell) return GroupHats;
+    if (lane >= hhx::LaneTom1 && lane <= hhx::LaneTom4) return GroupToms;
+    return GroupCymbals;   // ride, crashes, china, splash, perc
+}
+
 static const hhx::GrooveCorpus& corpus()
 {
     static hhx::GrooveCorpus c;
@@ -162,6 +177,12 @@ public:
         kit->setMicBlend (d.micBlend); kit->setRoomSpace (d.space);
         kit->setRoom (kit->getRoomSize(), kit->getRoomDamping(), d.roomMix);
         kit->setSqueeze (d.squeeze); kit->setSqueezeGlow (d.glow);
+        for (int l = 0; l < hhx::NumLanes; ++l)
+        {
+            const int g = drumGroupOf (l);
+            kit->setLaneGainDb (l, d.pieceDb[(size_t) g]); kit->setLanePan (l, d.piecePan[(size_t) g]);
+            kit->setLaneTune (l, d.pieceTune[(size_t) g]); kit->setLaneDamp (l, d.pieceDamp[(size_t) g]);
+        }
     }
 private:
     std::shared_ptr<hhx::KitEngine> kit = std::make_shared<hhx::KitEngine>();

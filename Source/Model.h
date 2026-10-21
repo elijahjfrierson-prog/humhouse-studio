@@ -65,6 +65,9 @@ struct DrummerParams
     int   character = 1, seed = 1;
     int   voicing = 1, space = 1, glow = 0;   // mix voicing (Raw, Modern, Punch, Room, Vintage), room space, squeeze glow
     float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
+    // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
+    std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
+    std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
     juce::String performanceKey() const;      // only what changes the notes played
 };
 

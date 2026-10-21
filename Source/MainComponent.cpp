@@ -1,3 +1,4 @@
+#include <set>
 #include "UI.h"
 #include <thread>
 #include "BinaryData.h"
@@ -1140,6 +1141,51 @@ private:
     }
 
     void locateMissingAudio()
+    {
+        juce::StringArray missing;
+        for (auto& c : engine.project().clips)
+            if (c.isAudio() && c.audioFile != juce::File() && ! c.audioFile.existsAsFile()) missing.addIfNotAlreadyThere (c.audioFile.getFileName());
+        if (missing.isEmpty()) return;
+        // first search the whole user folder in the background (Music, Desktop, Documents, Downloads, iCloud, Movies) and glue what's found
+        flash ("Searching your disk for " + juce::String (missing.size()) + " missing audio file(s)...");
+        juce::Component::SafePointer<MainComponent> sp (this);
+        juce::Thread::launch ([sp, missing] {
+            std::set<juce::String> want; for (auto& m : missing) want.insert (m.toLowerCase());
+            std::map<juce::String, juce::File> byName;
+            const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+            juce::Array<juce::File> roots { juce::File::getSpecialLocation (juce::File::userMusicDirectory), juce::File::getSpecialLocation (juce::File::userDesktopDirectory),
+                                            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), home.getChildFile ("Downloads"),
+                                            home.getChildFile ("Library/Mobile Documents"), juce::File::getSpecialLocation (juce::File::userMoviesDirectory), home.getChildFile ("OneDrive") };
+            int seen = 0;
+            for (auto& r : roots)
+            {
+                if (! r.isDirectory() || byName.size() == want.size()) continue;
+                for (const auto& e : juce::RangedDirectoryIterator (r, true, "*", juce::File::findFiles, juce::File::FollowSymlinks::no))
+                {
+                    if (++seen > 2000000 || sp == nullptr) break;
+                    const auto n = e.getFile().getFileName().toLowerCase();
+                    if (want.count (n) && ! e.getFile().getFullPathName().contains ("/.Trash")) byName.emplace (n, e.getFile());
+                    if (byName.size() == want.size()) break;
+                }
+            }
+            juce::MessageManager::callAsync ([sp, byName] {
+                auto* mc = sp.getComponent(); if (mc == nullptr) return;
+                int found = 0;
+                if (! byName.empty())
+                    mc->studio.edit ("Find lost audio", [&] (Project& pr) {
+                        for (auto& c : pr.clips)
+                            if (c.isAudio() && ! c.audioFile.existsAsFile())
+                                if (auto it = byName.find (c.audioFile.getFileName().toLowerCase()); it != byName.end()) { c.audioFile = it->second; ++found; }
+                        for (auto& f : pr.audioPool)
+                            if (! f.existsAsFile()) if (auto it = byName.find (f.getFileName().toLowerCase()); it != byName.end()) f = it->second;
+                    });
+                if (found > 0) { mc->collectAudio(); mc->engine.sync(); mc->flash ("Found " + juce::String (found) + " audio clip(s) on disk and glued them into this song's folder - save to keep"); }
+                mc->askForMissingAudio();
+            });
+        });
+    }
+
+    void askForMissingAudio()
     {
         juce::StringArray missing;
         for (auto& c : engine.project().clips)
