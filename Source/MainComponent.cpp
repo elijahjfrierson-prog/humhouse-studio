@@ -112,12 +112,13 @@ void showWhatsNewIfUpdated()
 
 void HHLookAndFeel::refreshColours()
 {
+    const auto onAccent = col::accent.getPerceivedBrightness() > 0.5f ? juce::Colours::black : juce::Colours::white;
     setColourScheme ({ col::bg, col::panel2, col::panel, col::gridBar, col::text, col::accent,
                        juce::Colours::black, col::accent, col::text });
     setColour (juce::TextButton::buttonColourId, col::panel2);
     setColour (juce::TextButton::buttonOnColourId, col::accent);
     setColour (juce::TextButton::textColourOffId, col::text);
-    setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    setColour (juce::TextButton::textColourOnId, onAccent);
     setColour (juce::ComboBox::backgroundColourId, col::panel2);
     setColour (juce::ComboBox::outlineColourId, col::gridBar);
     setColour (juce::Slider::rotarySliderFillColourId, col::accent);
@@ -131,7 +132,7 @@ void HHLookAndFeel::refreshColours()
     setColour (juce::TooltipWindow::outlineColourId, col::accent);
     setColour (juce::PopupMenu::backgroundColourId, col::panel);
     setColour (juce::PopupMenu::highlightedBackgroundColourId, col::accent);
-    setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::black);
+    setColour (juce::PopupMenu::highlightedTextColourId, onAccent);
     setColour (juce::Label::textColourId, col::text);
     setColour (juce::ListBox::backgroundColourId, col::panel);
     setColour (juce::TextEditor::backgroundColourId, col::panel2);
@@ -920,9 +921,9 @@ private:
         std::function<void (int)> onDrag; std::function<void()> onToggle; bool minimized = false; int startY = 0;
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (juce::Colour (0xff15181d));
+            g.fillAll (col::lightMode ? col::panel2 : juce::Colour (0xff15181d));
             g.setColour (juce::Colour (0xffff8a4c).withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
-            g.setColour (juce::Colours::white.withAlpha (0.6f)); g.setFont (12.0f);
+            g.setColour (col::text.withAlpha (0.6f)); g.setFont (12.0f);
             g.drawText (minimized ? "PIANO ROLL  [+] click to show" : "PIANO ROLL  [-] click to minimize  |  drag to resize",
                         getLocalBounds(), juce::Justification::centred);
         }
