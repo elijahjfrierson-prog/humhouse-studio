@@ -306,11 +306,12 @@ int main()
     if (std::getenv ("HHS_AP_PROBE2") != nullptr)
     {
         for (double m : { 57.6, 56.6, 64.3, 50.5 })
-            for (int st = 0; st < 4; ++st)
+            for (int st = 0; st < 6; ++st)
             {
                 for (int ab = 0; ab < 1; ++ab)
                 {
                     if (st == 1 || st == 2) continue;
+                    if (auto* only = std::getenv ("HHS_AP_ST"); only != nullptr && std::atoi (only) != st) continue;
                     const auto r0 = probeHeld (st, m, 0.0), r = probeHeld (st, m);
                     std::printf ("held %.1f style %d %s: f0 %.1f HNR clean %.1f -> %.1f, jitter %.1f -> %.1f dB, tone error %.2f / %.2f dB\n", m, st, ab ? "NEW" : "old",
                                  r.f0Out, r0.hnrIn, r0.hnrOut, r.hnrIn, r.hnrOut, r0.envErrDb, r.envErrDb);
@@ -1112,7 +1113,9 @@ int main()
         CHECK (dMax < 0.012 * 48000);
         CHECK (jump < 0.2 * ratio);
     }
-    // PSOLA (Retune / Humanize styles): pitch moves, the voice's tone (formant) stays put - no chipmunk
+    // PSOLA (Retune / Humanize styles): pitch moves, the voice's tone (formant) stays put - no chipmunk;
+    // with the Formant knob (+4 st) the tone moves up on its own, like a vocal bender
+    for (double fmt : { 1.0, std::exp2 (4.0 / 12.0) })
     {
         const double fs = 48000, f0 = 168.0, fc = 1000.0, ratio = 1.12;
         const double rr = std::exp (-juce::MathConstants<double>::pi * 60.0 / fs), cw = std::cos (juce::MathConstants<double>::twoPi * fc / fs);
@@ -1124,7 +1127,7 @@ int main()
             ph += f0 / fs; double x = 0; if (ph >= 1.0) { ph -= 1.0; x = 1.0; }
             const double y = x + 2 * rr * cw * y1 - rr * rr * y2; y2 = y1; y1 = y;
             float l = 0.02f * (float) y, r = l;
-            sh.process (l, r, ratio, fs / f0);
+            sh.process (l, r, ratio, fs / f0, fmt);
             if (i >= 48000) { out.push_back (l); dMax = std::max (dMax, sh.delaySamples()); jump = std::max (jump, std::abs (l - prev)); }
             prev = l;
         }
@@ -1133,8 +1136,8 @@ int main()
             return std::sqrt (re * re + im * im); };
         int best = 0; double bm = 0;
         for (int k = 3; k <= 10; ++k) { const double m = mag (k * f0 * ratio); if (m > bm) { bm = m; best = k; } }
-        std::printf ("psola: formant harmonic %d (%.0f Hz, tone kept at ~1 kHz), delay %.1f ms\n", best, best * f0 * ratio, dMax / 48.0);
-        CHECK (best == 5);   // 5 x 188 Hz = 941 Hz stays nearest the 1 kHz formant; a sped-up (chipmunk) voice peaks at 6 x 188 = 1129 Hz
+        std::printf ("psola: formant x%.2f -> harmonic %d (%.0f Hz), delay %.1f ms\n", fmt, best, best * f0 * ratio, dMax / 48.0);
+        CHECK (fmt > 1.1 ? best >= 6 : best == 5);   // 5 x 188 Hz = 941 Hz stays nearest the 1 kHz formant; a sped-up (chipmunk) voice peaks at 6 x 188 = 1129 Hz
         CHECK (dMax < 0.03 * fs);
     }
     // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps

@@ -1020,11 +1020,12 @@ float PsolaShifter::read (const std::vector<float>& b, double pos) const
     return ((c3 * t + c2) * t + c1) * t + y1;
 }
 
-void PsolaShifter::process (float& l, float& r, double ratio, double period)
+void PsolaShifter::process (float& l, float& r, double ratio, double period, double formant)
 {
     inL[(size_t) (n & mask)] = l; inR[(size_t) (n & mask)] = r;
     const double P = juce::jlimit (0.0015 * sr, 0.02 * sr, period > 8.0 ? period : 0.006 * sr);
     ratio = juce::jlimit (0.25, 4.0, ratio);
+    const double fr = juce::jlimit (0.5, 2.0, formant);   // grains read faster / slower = vowel tone up / down, pitch untouched
     if (ts < (double) n) ts = (double) n;
     // the cycle got longer (a lower note): the next grain would start in the past and fade in at half
     // weight = a step in the output (the squeak on low note starts). Start it now from zero weight instead.
@@ -1038,7 +1039,7 @@ void PsolaShifter::process (float& l, float& r, double ratio, double period)
         // is, so the new grains line up with the last ones (a snapped grid here was the squeak on low note starts)
         if (std::abs (c - want) > P || std::abs (P - lastP) > 0.15 * lastP) c = want;
         lastP = P;
-        while (c + P > (double) n - 1.0) c -= P;                                // only use input we already have
+        while (c + P * fr > (double) n - 1.0) c -= P;                                // only use input we already have
         mark = c;
         for (long long j = (long long) std::ceil (ts - P); j <= (long long) std::floor (ts + P); ++j)
         {
@@ -1046,7 +1047,7 @@ void PsolaShifter::process (float& l, float& r, double ratio, double period)
             const double off = (double) j - ts;
             const float w = 0.5f + 0.5f * std::cos (kPi * (float) (off / P));
             const size_t o = (size_t) (j & mask);
-            outL[o] += w * read (inL, c + off); outR[o] += w * read (inR, c + off); wsum[o] += w;
+            outL[o] += w * read (inL, c + off * fr); outR[o] += w * read (inR, c + off * fr); wsum[o] += w;
         }
         ts += P / ratio;
     }
@@ -1139,7 +1140,8 @@ public:
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
-            { "body", "Body", 0, 1, 0.4f }, { "character", "Character", 0, 1, 0.3f } };
+            { "body", "Body", 0, 1, 0.4f }, { "character", "Character", 0, 1, 0.3f },
+            { "formant", "Formant (st, tone without pitch)", -12, 12, 0 } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1163,8 +1165,8 @@ public:
             dblBase[k] = (float) (base[k] * s); dblDepth[k] = (float) (cents[k] / 1200.0 * std::log (2.0) / w * s);
         }
         envC = (float) (1.0 - std::exp (-1.0 / (0.005 * s))); pc = (float) (1.0 - std::exp (-1.0 / (0.25 * s))); gc = (float) (1.0 - std::exp (-1.0 / (0.06 * s)));
-        airHP.set (Biquad::HighPass, s, 9000.0, 0.7, 0.0); excHP.set (Biquad::HighPass, s, 3500.0, 0.7, 0.0); airHP.clear(); excHP.clear();
-        envHF = envFull = pIn = pOut = 0.0f; glossGain = 1.0f;
+        dblHP.set (Biquad::HighPass, s, 1600.0, 0.6, 0.0); dblHP.clear(); airHP.set (Biquad::HighPass, s, 9000.0, 0.7, 0.0); excHP.set (Biquad::HighPass, s, 3500.0, 0.7, 0.0); airHP.clear(); excHP.clear();
+        envHF = envFull = pIn = pOut = 0.0f; glossGain = 1.0f; bodyHz = 190.0f;
         currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
@@ -1188,6 +1190,11 @@ public:
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = hard ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
+        // a whole-semitone Pitch move resampled = chipmunk up / muffled down: every style keeps the voice's tone then (PSOLA).
+        // note correction alone stays on the instant zero-latency splice (under a semitone, the tone barely moves)
+        const float formantSt = p (15);
+        const double formantR = std::exp2 (formantSt / 12.0);
+        const bool keepTone = style < 3 || std::abs (std::round (p (7))) >= 1.0f || std::abs (formantSt) > 0.05f;
         const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
         const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
@@ -1200,7 +1207,11 @@ public:
         const bool colourOn = lock || body > 0.001f || chr > 0.001f;
         if (colourOn)
         {
-            tone[0].set (Biquad::LowShelf, sr, 190.0, 0.7, 3.5 * body);
+            // chest weight follows the singer's register: a deep rap voice gets it at ~120 Hz (no boom on the
+            // low end), a high voice at ~240 Hz (no thin vowel); glides between notes so the tone never steps
+            if (const float dm = detectedMidi.load(); dm > 0.0f)
+                bodyHz += (juce::jlimit (120.0f, 240.0f, 1.1f * 440.0f * std::exp2 ((dm - 69.0f) / 12.0f)) - bodyHz) * 0.15f;
+            tone[0].set (Biquad::LowShelf, sr, bodyHz, 0.7, 3.5 * body);
             tone[1].set (Biquad::Peak, sr, 420.0, 0.8, 1.5 * body);
             tone[2].set (Biquad::Peak, sr, 2900.0, 0.9, 2.0 * chr);
             if (classic) tone[3].set (Biquad::HighShelf, sr, 8000.0, 0.7, 2.5);   // glass sheen
@@ -1320,10 +1331,10 @@ public:
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
-            if (style >= 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            if (! keepTone) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
             else
             {
-                psola.process (pl, pr, ratio, period);
+                psola.process (pl, pr, ratio, period, formantR);
                 l[i] = psola.dryL; r[i] = psola.dryR;
                 wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
             }
@@ -1358,8 +1369,10 @@ private:
             tap[k][1] = dblR[(size_t) i0] + t * (dblR[(size_t) i1] - dblR[(size_t) i0]);
         }
         dblW = (dblW + 1) & dblMask;
-        cl += 0.32f * (0.65f * tap[0][0] + 0.35f * tap[1][0]);
-        cr += 0.32f * (0.35f * tap[0][1] + 0.65f * tap[1][1]);
+        // doubles only above ~1.6 kHz: full-band copies 11-17 ms late comb-filter the vowel (notches every ~70 Hz
+        // through F1/F2 = hollow, phasey formants); up top they just add width and shine, the vowel stays the singer's
+        cl += 0.20f * dblHP.tick (0.65f * tap[0][0] + 0.35f * tap[1][0], 0);
+        cr += 0.20f * dblHP.tick (0.35f * tap[0][1] + 0.65f * tap[1][1], 1);
         // gloss: air shelf + soft exciter, pulled back on sibilance so s / t / sh stay clean
         const float el = excHP.tick (cl, 0), er = excHP.tick (cr, 1);
         const float al = airHP.tick (cl, 0), ar = airHP.tick (cr, 1);
@@ -1383,6 +1396,7 @@ private:
         return a <= k ? x : std::copysign (k + (1.0f - k) * std::tanh ((a - k) / (1.0f - k)), x);
     }
     std::vector<float> dblL, dblR; int dblMask = 0, dblW = 0;
+    Biquad dblHP; float bodyHz = 190.0f;
     float dblC[2] { 1, 1 }, dblS[2] {}, dblRc[2] { 1, 1 }, dblRs[2] {}, dblBase[2] {}, dblDepth[2] {};
     Biquad airHP, excHP; float envHF = 0, envFull = 0, pIn = 0, pOut = 0, glossGain = 1, envC = 0, pc = 0, gc = 0;
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
