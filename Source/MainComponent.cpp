@@ -344,7 +344,7 @@ struct BpmSlider : public juce::Slider   // drag / wheel in whole BPM, Shift for
 };
 struct TransportButton : public juce::TextButton   // drawn icons: font glyphs can be missing in the tattoo fonts
 {
-    int kind = 0;   // 0 play/pause, 1 stop, 2 record
+    int kind = 0;   // 0 play/pause, 1 stop, 2 record, 3 back to start
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         getLookAndFeel().drawButtonBackground (g, *this, findColour (getToggleState() ? buttonOnColourId : buttonColourId), over, down);
@@ -354,6 +354,7 @@ struct TransportButton : public juce::TextButton   // drawn icons: font glyphs c
         if (kind == 0 && on) { g.fillRect (r.removeFromLeft (5.0f)); r.removeFromLeft (4.0f); g.fillRect (r.removeFromLeft (5.0f)); }
         else if (kind == 0) { juce::Path p; p.addTriangle (r.getX() + 1, r.getY(), r.getX() + 1, r.getBottom(), r.getRight(), r.getCentreY()); g.fillPath (p); }
         else if (kind == 1) g.fillRect (r.reduced (1.0f));
+        else if (kind == 3) { r = r.reduced (1.0f); g.fillRect (r.removeFromLeft (2.5f)); juce::Path p; p.addTriangle (r.getRight(), r.getY(), r.getRight(), r.getBottom(), r.getX() + 0.5f, r.getCentreY()); g.fillPath (p); }
         else g.fillEllipse (r);
     }
 };
@@ -486,6 +487,8 @@ public:
         }
         setupButton (songBtn, "PAT", "Pattern / Song mode (L)", true);
         songBtn.onClick = [this] { studio.edit ("Pattern/Song", [this] (Project& p) { p.songMode = songBtn.getToggleState(); }); };
+        setupButton (startBtn, {}, "Back to the start (Home)"); startBtn.kind = 3;
+        startBtn.onClick = [this] { engine.setPositionBeats (0.0); };
         setupButton (playBtn, {}, "Play / pause (Space)"); playBtn.kind = 0;
         playBtn.onClick = [this] { engine.togglePlay(); };
         setupButton (stopBtn, {}, "Stop: back to where you started (press again for the song start)"); stopBtn.kind = 1;
@@ -512,7 +515,7 @@ public:
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
-        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
+        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -597,7 +600,7 @@ public:
         for (auto* b : { &beatTab, &recordTab, &mixTab }) { b->setBounds (t.removeFromLeft (84)); t.removeFromLeft (4); }
         t.removeFromLeft (16);
         songBtn.setBounds (t.removeFromLeft (48)); t.removeFromLeft (4);
-        for (auto* b : { &playBtn, &stopBtn, &recBtn }) { b->setBounds (t.removeFromLeft (40)); t.removeFromLeft (4); }
+        for (auto* b : { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setBounds (t.removeFromLeft (40)); t.removeFromLeft (4); }
         t.removeFromLeft (8);
         bpm.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
@@ -641,6 +644,7 @@ public:
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
+        if (is (juce::KeyPress::homeKey, 0)) { engine.setPositionBeats (0.0); return true; }
         if (is ('u', cmd)) { showShortcuts(); return true; }   // Cmd/Ctrl+U: Shortcuts window on / off
         if (isTypingNoteKey (k))
         {
@@ -996,7 +1000,7 @@ private:
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    TransportButton playBtn, stopBtn, recBtn;
+    TransportButton startBtn, playBtn, stopBtn, recBtn;
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it

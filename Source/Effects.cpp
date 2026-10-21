@@ -1198,7 +1198,7 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1271,6 +1271,16 @@ public:
                         else if (std::abs (dj + 12.0f) < 0.7f && octSlip < 8) { midi += 12.0f; ++octSlip; }
                         else octSlip = 0;
                     }
+                    // inside a held note the reading is the median of the last 3: vowel / formant changes jolt the detector
+                    // for a hop, and that jolt went straight into the tuned note (the "swingy" wobble instead of a straight lock)
+                    // (the median only steers which note is chosen; the correction itself still follows the voice exactly)
+                    float med = midi;
+                    if (midi > 0 && lastMidi > 0 && std::abs (midi - lastMidi) < 1.0f)
+                    {
+                        hist[(size_t) (histN++ % 3)] = midi;
+                        if (histN >= 3) med = std::max (std::min (hist[0], hist[1]), std::min (std::max (hist[0], hist[1]), hist[2]));
+                    }
+                    else if (midi > 0) { hist[0] = midi; histN = 1; }
                     // a new note (word start or a leap) must read the same twice in a row before it's tuned to: one-off
                     // misreads from noise or consonants were the chirps / squeaks (a wrong ratio for a few ms)
                     if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
@@ -1302,7 +1312,8 @@ public:
                         missHops = 0; lastMidi = midi; releasing = false;
                         period = (float) (sr / hz);
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
-                        centre = onset ? now : centre + (now - centre) * (1.0f - std::exp (-hopSec / 0.12f));
+                        const float steer = med + (now - midi);
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / 0.12f));
                         int target = snapToScale ((int) std::round (centre), root, scale);
                         if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.55f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
@@ -1347,6 +1358,7 @@ private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
+    std::array<float, 3> hist {}; int histN = 0;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
