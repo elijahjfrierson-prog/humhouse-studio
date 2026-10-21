@@ -49,6 +49,23 @@ static void deleteLanes (Project& p, juce::SortedSet<int> which)
     }
 }
 
+static void moveLane (Project& p, int from, int to)
+{
+    const int n = (int) p.lanes.size();
+    if (from < 0 || from >= n) return;
+    to = juce::jlimit (0, n - 1, to);
+    if (to == from) return;
+    const Lane l = p.lanes[(size_t) from];
+    p.lanes.erase (p.lanes.begin() + from);
+    p.lanes.insert (p.lanes.begin() + to, l);
+    for (auto& c : p.clips)
+    {
+        if (c.lane == from) c.lane = to;
+        else if (from < to && c.lane > from && c.lane <= to) --c.lane;
+        else if (from > to && c.lane >= to && c.lane < from) ++c.lane;
+    }
+}
+
 static void insertLane (Project& p, int at)
 {
     at = juce::jlimit (0, (int) p.lanes.size(), at);
@@ -174,6 +191,7 @@ struct LaneHeader : public juce::Component
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (edgeDrag && onHeight) onHeight (index, dragStartH + e.getDistanceFromDragStartY());
+        else if (! e.mods.isPopupMenu() && std::abs (e.getDistanceFromDragStartY()) > 6) setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -193,7 +211,22 @@ struct LaneHeader : public juce::Component
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (edgeDrag) { edgeDrag = false; return; }
-        if (! e.mods.isPopupMenu()) return;
+        if (! e.mods.isPopupMenu())
+        {
+            // drag a track's header up/down to reorder; the tracks in between shift to make room, each keeps its mixer insert
+            const int dy = e.getDistanceFromDragStartY(), h = juce::jmax (1, getHeight());
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+            if (std::abs (dy) > h / 2)
+            {
+                const int from = index, to = juce::jlimit (0, juce::jmax (0, (int) s.p().lanes.size() - 1), index + (int) std::lround ((double) dy / h));
+                if (to != from)
+                {
+                    s.selectedLanes.clear(); s.selectedLanes.add (to); s.laneAnchor = to;
+                    s.edit ("Move track", [from, to] (Project& p) { moveLane (p, from, to); });
+                }
+            }
+            return;
+        }
         juce::PopupMenu m;
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
@@ -245,7 +278,7 @@ public:
             auto id = std::make_shared<int> (-1);
             const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
             s.selectedLanes.clear();
-            s.edit ("HumHouse Drummer", [id, at] (Project& p) { *id = addDrummerTrack (p, at, 8); });
+            s.edit ("HumHouse Drummer", [id, at] (Project& p) { insertLane (p, 0); *id = makeLaneDrummer (p, 0, at, 8); });   // always track 1
             if (*id >= 0) openChannelEditor (s, *id);
         };
        #if ! HHS_LICENSED
@@ -752,6 +785,16 @@ public:
         }
         if (k == juce::KeyPress ('g', cmd, 0)) { groupSelected (true); return true; }
         if (k == juce::KeyPress ('g', cmd | juce::ModifierKeys::shiftModifier, 0)) { groupSelected (false); return true; }
+        if (k.getKeyCode() == juce::KeyPress::upKey || k.getKeyCode() == juce::KeyPress::downKey)   // Up/Down: slide the selected clips to the track above/below
+        {
+            const int dir = k.getKeyCode() == juce::KeyPress::upKey ? -1 : 1;
+            int lo = 1 << 30, hi = -1;
+            for (auto& c : s.p().clips) if (c.selected) { lo = juce::jmin (lo, c.lane); hi = juce::jmax (hi, c.lane); }
+            if (hi < 0) return false;
+            if (lo + dir < 0 || hi + dir >= (int) s.p().lanes.size()) return true;
+            s.edit ("Move clips", [dir] (Project& p) { for (auto& c : p.clips) if (c.selected) c.lane += dir; });
+            return true;
+        }
        #if ! HHS_LICENSED
         if (k.getModifiers().isAltDown() && (k.getKeyCode() == 'a' || k.getKeyCode() == 'A'))   // Alt+A: hi-hat style roll on the selected audio clips
         {
