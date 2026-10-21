@@ -1247,7 +1247,7 @@ private:
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
         studio.dirty = false;
         studio.sendChangeMessage();
-        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) sp->locateMissingAudio(); });
+        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) { sp->collectAudio(); sp->locateMissingAudio(); } });   // glue: copy outside audio into the song folder
     }
 
     void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }
