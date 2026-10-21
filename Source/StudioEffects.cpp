@@ -372,6 +372,93 @@ private:
     double sr = 44100; int la = 64, w = 0; juce::AudioBuffer<float> dl; float g = 1, pl = 0, pr = 0;
 };
 
+// 3-band mastering maximizer: Linkwitz-Riley split, per-band pre/threshold/ratio/attack/release/post,
+// saturation, then a zero-latency master limiter
+class Maximizer : public BuiltinEffect
+{
+public:
+    Maximizer() { initDefaults(); }
+    const char* typeId() const override { return "stmax"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "xlo", "Low / Mid Hz", 40, 1000, 180 }, { "xhi", "Mid / High Hz", 1000, 12000, 4500 },
+            { "lpre", "Low Pre dB", -24, 24, 0 }, { "lthr", "Low Threshold", -40, 0, -12 }, { "lratio", "Low Ratio", 1, 20, 2 },
+            { "latk", "Low Attack ms", 0.1f, 100, 15 }, { "lrel", "Low Release ms", 5, 1000, 150 }, { "lpost", "Low Post dB", -24, 24, 0 },
+            { "mpre", "Mid Pre dB", -24, 24, 0 }, { "mthr", "Mid Threshold", -40, 0, -12 }, { "mratio", "Mid Ratio", 1, 20, 2 },
+            { "matk", "Mid Attack ms", 0.1f, 100, 10 }, { "mrel", "Mid Release ms", 5, 1000, 120 }, { "mpost", "Mid Post dB", -24, 24, 0 },
+            { "hpre", "High Pre dB", -24, 24, 0 }, { "hthr", "High Threshold", -40, 0, -12 }, { "hratio", "High Ratio", 1, 20, 2 },
+            { "hatk", "High Attack ms", 0.1f, 100, 5 }, { "hrel", "High Release ms", 5, 1000, 80 }, { "hpost", "High Post dB", -24, 24, 0 },
+            { "sat", "Saturation", 0, 1, 0 }, { "gain", "Master Gain", 0, 24, 0 }, { "ceiling", "Ceiling", -6, 0, -0.3f },
+            { "release", "Master Release ms", 1, 1000, 60 } };
+        return ps;
+    }
+    void prepare (double s, int mb) override
+    {
+        sr = s;
+        juce::dsp::ProcessSpec spec { s, (juce::uint32) juce::jmax (1, mb), 2 };
+        for (auto* f : { &lp1, &hp1, &lp2, &hp2, &ap }) { f->prepare (spec); f->reset(); }
+        lp1.setType (juce::dsp::LinkwitzRileyFilterType::lowpass); hp1.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+        lp2.setType (juce::dsp::LinkwitzRileyFilterType::lowpass); hp2.setType (juce::dsp::LinkwitzRileyFilterType::highpass);
+        ap.setType (juce::dsp::LinkwitzRileyFilterType::allpass);
+        curLo = curHi = -1; g = 1; pl = pr = 0;
+        for (auto& e : env) e = 0;
+    }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const float xlo = juce::jlimit (20.0f, (float) sr * 0.2f, p (0)), xhi = juce::jlimit (xlo * 1.5f, (float) sr * 0.45f, p (1));
+        if (xlo != curLo) { lp1.setCutoffFrequency (xlo); hp1.setCutoffFrequency (xlo); curLo = xlo; }
+        if (xhi != curHi) { lp2.setCutoffFrequency (xhi); hp2.setCutoffFrequency (xhi); ap.setCutoffFrequency (xhi); curHi = xhi; }
+        float pre[3], thr[3], slope[3], atk[3], rel[3], post[3];
+        for (int k = 0; k < 3; ++k)
+        {
+            const int o = 2 + 6 * k;
+            pre[k] = dB (p (o)); thr[k] = p (o + 1); slope[k] = 1.0f - 1.0f / juce::jmax (1.0f, p (o + 2));
+            atk[k] = std::exp (-1.0f / (0.001f * juce::jmax (0.1f, p (o + 3)) * (float) sr));
+            rel[k] = std::exp (-1.0f / (0.001f * juce::jmax (1.0f, p (o + 4)) * (float) sr));
+            post[k] = dB (p (o + 5));
+        }
+        const float sat = p (20), in = dB (p (21)), ceil = dB (p (22)), mrel = std::exp (-1.0f / (0.001f * juce::jmax (1.0f, p (23)) * (float) sr));
+        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            float band[3][2];
+            const float x[2] { l[i], r[i] };
+            for (int c = 0; c < 2; ++c)
+            {
+                const float rest = hp1.processSample (c, x[c]);
+                band[0][c] = ap.processSample (c, lp1.processSample (c, x[c]));   // keeps the low band in phase with the mid/high split
+                band[1][c] = lp2.processSample (c, rest);
+                band[2][c] = hp2.processSample (c, rest);
+            }
+            float y[2] { 0, 0 };
+            for (int k = 0; k < 3; ++k)
+            {
+                const float lvl = std::max (std::abs (band[k][0]), std::abs (band[k][1])) * pre[k];
+                env[k] = lvl > env[k] ? atk[k] * env[k] + (1 - atk[k]) * lvl : rel[k] * env[k] + (1 - rel[k]) * lvl;
+                const float over = juce::Decibels::gainToDecibels (env[k], -120.0f) - thr[k];
+                const float gr = over <= -3.0f ? 0.0f : over < 3.0f ? slope[k] * (over + 3.0f) * (over + 3.0f) / 12.0f : slope[k] * over;   // 6 dB soft knee
+                const float gk = pre[k] * post[k] * dB (-gr);
+                y[0] += band[k][0] * gk; y[1] += band[k][1] * gk;
+            }
+            for (auto& v : y)
+            {
+                v *= in;
+                if (sat > 0) v = (1.0f - sat) * v + sat * std::tanh (v);
+            }
+            const float a = std::max ({ std::abs (y[0]), std::abs (y[1]), std::abs (0.5f * (y[0] + pl)) * 1.05f, std::abs (0.5f * (y[1] + pr)) * 1.05f });
+            pl = y[0]; pr = y[1];
+            const float t = a > ceil ? ceil / a : 1.0f;
+            g = t < g ? t : mrel * g + (1 - mrel) * t;
+            l[i] = juce::jlimit (-ceil, ceil, y[0] * g); r[i] = juce::jlimit (-ceil, ceil, y[1] * g);
+        }
+    }
+private:
+    double sr = 44100;
+    juce::dsp::LinkwitzRileyFilter<float> lp1, hp1, lp2, hp2, ap;
+    float curLo = -1, curHi = -1, env[3] {}, g = 1, pl = 0, pr = 0;
+};
+
 class Saturator : public BuiltinEffect
 {
 public:
@@ -383,40 +470,51 @@ public:
                                                  { "mix", "Mix", 0, 1, 1 }, { "out", "Output", -24, 6, 0 } };
         return ps;
     }
+    // zero latency: anti-derivative anti-aliasing instead of oversampling (no lookahead, no delay)
     void prepare (double s, int mb) override
     {
-        os = std::make_unique<juce::dsp::Oversampling<float>> (2, 1, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, false);
-        os->initProcessing ((size_t) mb); juce::ignoreUnused (s);
+        juce::ignoreUnused (s);
         dry.setSize (2, mb);
+        xPrev[0] = xPrev[1] = 0;
     }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
-        if (! os || n > dry.getNumSamples()) return;
+        if (n > dry.getNumSamples()) return;
         for (int c = 0; c < 2; ++c) dry.copyFrom (c, 0, b, c, 0, n);
-        juce::dsp::AudioBlock<float> blk (b.getArrayOfWritePointers(), 2, (size_t) n);
-        auto up = os->processSamplesUp (blk);
         const float k = dB (p (0)); const int ch = (int) p (1);
-        for (size_t c = 0; c < up.getNumChannels(); ++c)
-        {
-            auto* d = up.getChannelPointer (c);
-            for (size_t i = 0; i < up.getNumSamples(); ++i)
-            {
-                const float x = d[i] * k;
-                d[i] = ch == 0 ? std::tanh (x) : ch == 1 ? (x >= 0 ? std::tanh (x) : std::tanh (0.7f * x) / 0.7f * 0.9f) : x / (1.0f + std::abs (x));
-                d[i] /= std::max (1.0f, std::sqrt (k));
-            }
-        }
-        os->processSamplesDown (blk);
+        const float norm = 1.0f / std::max (1.0f, std::sqrt (k));
         const float mix = p (2), og = dB (p (3));
         for (int c = 0; c < 2; ++c)
         {
             auto* d = b.getWritePointer (c); auto* s = dry.getReadPointer (c);
-            for (int i = 0; i < n; ++i) d[i] = (s[i] * (1 - mix) + d[i] * mix) * og;
+            double x1 = xPrev[c];
+            for (int i = 0; i < n; ++i)
+            {
+                const double x = (double) s[i] * k;
+                const double dx = x - x1;
+                const double y = std::abs (dx) > 1.0e-5 ? (prim (x, ch) - prim (x1, ch)) / dx : shape (0.5 * (x + x1), ch);
+                x1 = x;
+                d[i] = (s[i] * (1 - mix) + (float) y * norm * mix) * og;
+            }
+            xPrev[c] = std::isfinite (x1) ? x1 : 0.0;
         }
     }
-    int latencySamples() const override { return os ? (int) os->getLatencyInSamples() : 0; }
 private:
-    std::unique_ptr<juce::dsp::Oversampling<float>> os; juce::AudioBuffer<float> dry;
+    static double logCosh (double x) { const double a = std::abs (x); return a + std::log1p (std::exp (-2.0 * a)) - 0.69314718055994531; }
+    static double shape (double x, int ch)
+    {
+        if (ch == 0) return std::tanh (x);
+        if (ch == 1) return x >= 0 ? std::tanh (x) : std::tanh (0.7 * x) / 0.7 * 0.9;
+        return x / (1.0 + std::abs (x));
+    }
+    static double prim (double x, int ch)
+    {
+        if (ch == 0) return logCosh (x);
+        if (ch == 1) return x >= 0 ? logCosh (x) : 0.9 / 0.49 * logCosh (0.7 * x);
+        const double a = std::abs (x); return a - std::log1p (a);
+    }
+    double xPrev[2] {};
+    juce::AudioBuffer<float> dry;
 };
 
 class ChannelStrip : public BuiltinEffect
@@ -545,14 +643,99 @@ private:
     double sr = 44100;
 };
 
+// HumHouse Vocal Room: a finished-vocal chain on six knobs - Body, Air, Compress, Room, Echo, Double.
+// Zero latency; any stage with its knob at 0 is skipped, so a light setting costs almost no CPU.
+class VocalRoom : public BuiltinEffect
+{
+public:
+    VocalRoom() { initDefaults(); }
+    const char* typeId() const override { return "vroom"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "body", "Body", 0, 1, 0.4f }, { "air", "Air", 0, 1, 0.4f }, { "compress", "Compress", 0, 1, 0.5f },
+            { "room", "Room", 0, 1, 0.2f }, { "roomType", "Room Type", 0, 2, 1, { "Booth", "Plate", "Hall" } },
+            { "echo", "Echo", 0, 1, 0.15f }, { "echoTime", "Echo Time", 0, 3, 1, { "1/16", "1/8", "1/8 dot", "1/4" } },
+            { "double", "Double", 0, 1, 0 }, { "out", "Output", -12, 12, 0 } };
+        return ps;
+    }
+    double tailSeconds() const override { return 4.0; }
+    int latencySamples() const override { return 0; }
+    void prepare (double s, int maxBlock) override
+    {
+        sr = s; core.prepare (s);
+        for (auto& f : eq) f.clear();
+        wet.setSize (2, juce::jmax (64, maxBlock));
+        verb = createBuiltinEffect ("verb"); echo = createBuiltinEffect ("delay"); dbl = createBuiltinEffect ("chorus");
+        verb->prepare (s, maxBlock); echo->prepare (s, maxBlock); dbl->prepare (s, maxBlock);
+        verb->setParam ("mix", 1.0f); verb->setParam ("lowcut", 280.0f); verb->setParam ("width", 1.0f);
+        echo->setParam ("mix", 1.0f); echo->setParam ("feedback", 0.32f); echo->setParam ("tone", 4500.0f); echo->setParam ("pingpong", 1.0f);
+        dbl->setParam ("mix", 1.0f); dbl->setParam ("depth", 0.2f); dbl->setParam ("rate", 0.35f); dbl->setParam ("delay", 14.0f); dbl->setParam ("feedback", 0.0f);
+        lastType = lastTime = -1;
+    }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
+    {
+        if (n > wet.getNumSamples()) wet.setSize (2, n, false, false, true);
+        const float body = p (0), air = p (1), cmp = p (2), room = p (3), ech = p (5), dub = p (7);
+        eq[0].set (Biquad::HighPass, sr, 85, 0.707, 0);
+        eq[1].set (Biquad::Peak, sr, 230, 0.8, 4.0 * body);
+        eq[2].set (Biquad::Peak, sr, 3200, 1.0, 1.5 * air);
+        eq[3].set (Biquad::HighShelf, sr, 9500, 0.707, 6.0 * air);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto* d = b.getWritePointer (ch);
+            for (int i = 0; i < n; ++i)
+            {
+                float x = eq[0].tick (d[i], ch);
+                if (body > 0.0f) x = eq[1].tick (x, ch);
+                if (air > 0.0f) { x = eq[2].tick (x, ch); x = eq[3].tick (x, ch); }
+                d[i] = x;
+            }
+        }
+        if (cmp > 0.0f) core.run (b, n, -12.0f - 18.0f * cmp, 2.0f + 4.0f * cmp, 8.0f, 6.0f, 110.0f, true, 120.0f, 9.0f * cmp, 1.0f);
+        const int type = (int) p (4), et = (int) p (6);
+        if (type != lastType)
+        {
+            static const float size[] { 0.3f, 0.55f, 0.82f }, damp[] { 0.6f, 0.35f, 0.45f };
+            verb->setParam ("size", size[juce::jlimit (0, 2, type)]); verb->setParam ("damp", damp[juce::jlimit (0, 2, type)]); lastType = type;
+        }
+        if (et != lastTime) { static const float idx[] { 1, 2, 3, 4 }; echo->setParam ("time", idx[juce::jlimit (0, 3, et)]); lastTime = et; }
+        // sends read the dry chain in parallel (copied first) so they don't feed each other
+        if (room > 0.0f || ech > 0.0f || dub > 0.0f)
+        {
+            if (dry.getNumSamples() < n) dry.setSize (2, n, false, false, true);
+            for (int c = 0; c < 2; ++c) dry.copyFrom (c, 0, b, c, 0, n);
+            juce::AudioBuffer<float> src (dry.getArrayOfWritePointers(), 2, n);
+            auto sendFrom = [&] (BuiltinEffect& fx, float amt) {
+                if (amt <= 0.0f) return;
+                for (int c = 0; c < 2; ++c) wet.copyFrom (c, 0, src, c, 0, n);
+                juce::AudioBuffer<float> v (wet.getArrayOfWritePointers(), 2, n);
+                fx.process (v, n, ctx);
+                for (int c = 0; c < 2; ++c) b.addFrom (c, 0, v, c, 0, n, amt);
+            };
+            sendFrom (*dbl, 0.5f * dub);
+            sendFrom (*verb, 0.55f * room);
+            sendFrom (*echo, 0.45f * ech);
+        }
+        b.applyGain (0, n, dB (p (8)));
+    }
+private:
+    double sr = 44100; CompCore core; Biquad eq[4];
+    std::unique_ptr<BuiltinEffect> verb, echo, dbl;
+    juce::AudioBuffer<float> wet, dry;
+    int lastType = -1, lastTime = -1;
+};
+
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id)
 {
+    if (id == "vroom") return std::make_unique<VocalRoom>();
     if (id == "stvocal") return std::make_unique<StudioVocal>();
     if (id == "steq7") return std::make_unique<StudioEQ7>();
     if (id == "stdyn") return std::make_unique<StudioDyn>();
     if (id == "fet76") return std::make_unique<Fet76>();
     if (id == "stgate") return std::make_unique<StudioGate>();
     if (id == "stlimit") return std::make_unique<StudioLimiter>();
+    if (id == "stmax") return std::make_unique<Maximizer>();
     if (id == "satur") return std::make_unique<Saturator>();
     if (id == "strip") return std::make_unique<ChannelStrip>();
     return {};

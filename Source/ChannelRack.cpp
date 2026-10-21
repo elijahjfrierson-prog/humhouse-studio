@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Drummer/DrummerCore.h"
 
 namespace hhs
 {
@@ -41,10 +42,11 @@ static Channel poolChannel (const PoolInstrument& e)
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
 }
-static bool isMelodicSample (const juce::File& f)   // 808s / bass get played as notes; drums, loops, FX stay the sample as-is
+static bool isMelodicSample (const juce::File& f)   // notes change the pitch (root key plays the WAV as-is); drum hits stay put
 {
-    const auto n = f.getFileNameWithoutExtension().toLowerCase();
-    return n.contains ("808") || n.contains ("bass") || n.contains ("sub") || n.contains ("reese");
+    const auto n = f.getFileNameWithoutExtension().toLowerCase(), dir = f.getParentDirectory().getFileName().toLowerCase();
+    if (n.contains ("808") || dir.contains ("808") || f.getFullPathName().containsIgnoreCase ("Instruments")) return true;
+    return ! isDrumSampleName (n) && ! isDrumSampleName (dir);   // a kit's Hi-Hats / Snares folder keeps every hit at its own pitch
 }
 static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg"); }
 
@@ -111,7 +113,8 @@ struct NameTag : public juce::Component, public juce::SettableTooltipClient
         g.setColour (colour); g.fillRect (r.removeFromLeft (4));
         g.setColour (selected ? juce::Colours::black : col::text);
         g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
+        if (selected) g.drawFittedText (text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, 1);
+        else drawHeadline (g, text, getLocalBounds().reduced (8, 0), juce::Justification::centredLeft, true);
     }
     void mouseUp (const juce::MouseEvent& e) override { if (onMouse && contains (e.getPosition())) onMouse (e); }
     std::function<void (int)> onShuffle;
@@ -150,7 +153,9 @@ struct Row : public juce::Component
         bind (vol, [] (Channel& c, float v) { c.volume = v; });
         bind (pan, [] (Channel& c, float v) { c.pan = v; });
         bind (pitch, [] (Channel& c, float v) { c.pitch = v; });
+        glide.setSkewFactorFromMidPoint (0.15);
         bind (glide, [] (Channel& c, float v) { c.glide = v; });
+        bind (shift, [] (Channel& c, float v) { c.shift = v; });
         insert.setSliderStyle (juce::Slider::LinearBar);
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");
         insert.onValueChange = [this] { s.edit ("Route channel", [&] (Project&) { if (auto* c = s.channel (channelId)) c->mixerTrack = (int) insert.getValue(); }); };
@@ -159,10 +164,10 @@ struct Row : public juce::Component
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
-                                    (juce::Component*) &glide, (juce::Component*) &name, (juce::Component*) &insert })
+                                    (juce::Component*) &glide, (juce::Component*) &shift, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
         name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
-        name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
+        name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Drop a sample here: replace this channel's sound. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
             auto* c = s.channel (channelId);
@@ -189,6 +194,7 @@ struct Row : public juce::Component
         mute.setToggleState (! c->muted, juce::dontSendNotification);
         vol.setValue (c->volume, juce::dontSendNotification); pan.setValue (c->pan, juce::dontSendNotification);
         pitch.setValue (c->pitch, juce::dontSendNotification); glide.setValue (c->glide, juce::dontSendNotification);
+        shift.setValue (c->shift, juce::dontSendNotification);
         insert.setRange (0, juce::jmax (1, (int) s.p().mixer.size() - 1), 1);
         insert.setValue (c->mixerTrack, juce::dontSendNotification);
         name.text = c->name; name.colour = c->colour; name.selected = s.selectedChannel == channelId;
@@ -215,6 +221,7 @@ struct Row : public juce::Component
         m.addItem (6, "Clear notes in this pattern");
         m.addItem (8, "Cut itself (808s never overlap)", c->type == ChannelType::Sampler, c->cutItself);
         m.addItem (9, "One-shot (play whole sample)", c->type == ChannelType::Sampler, c->oneShot);
+        m.addSubMenu ("Color", colourMenu (30));
         m.addSeparator();
         m.addItem (7, "Delete channel");
         m.showMenuAsync ({}, [this] (int r) {
@@ -228,6 +235,7 @@ struct Row : public juce::Component
             else if (r == 8) s.edit ("Cut itself", [&] (Project&) { if (auto* ch = s.channel (id)) ch->cutItself = ! ch->cutItself; });
             else if (r == 9) s.edit ("One-shot", [&] (Project&) { if (auto* ch = s.channel (id)) ch->oneShot = ! ch->oneShot; });
             else if (r == 6) s.edit ("Clear notes", [&] (Project&) { s.notes (id).clear(); });
+            else if (r >= 30 && r <= 42) { const auto c = pickedColour (r - 30); s.edit ("Channel color", [&] (Project&) { if (auto* ch = s.channel (id)) ch->colour = c; }); }
             else if (r == 7) s.edit ("Delete channel", [&] (Project& p) {
                 p.channels.erase (std::remove_if (p.channels.begin(), p.channels.end(), [id] (const Channel& ch) { return ch.id == id; }), p.channels.end());
                 for (auto& pt : p.patterns) pt.notes.erase (id);
@@ -297,7 +305,7 @@ struct Row : public juce::Component
     {
         auto r = getLocalBounds().reduced (2);
         mute.setBounds (r.removeFromLeft (16).reduced (0, 6)); r.removeFromLeft (4);
-        for (auto* k : { &vol, &pan, &pitch, &glide }) k->setBounds (r.removeFromLeft (30));
+        for (auto* k : { &vol, &pan, &pitch, &glide, &shift }) k->setBounds (r.removeFromLeft (30));
         r.removeFromLeft (4);
         insert.setBounds (r.removeFromRight (34).reduced (0, 4));
         wrench.setBounds (r.removeFromRight (30).reduced (1, 4));
@@ -307,7 +315,8 @@ struct Row : public juce::Component
     juce::TextButton mute, wrench;
     Knob vol { "Volume", "channel level", 0.0, 1.25, 0.8 }, pan { "Pan", "left / right", -1.0, 1.0, 0.0 },
          pitch { "Pitch", "transpose in semitones", -24.0, 24.0, 0.0, " st" },
-         glide { "Glide", "slide time between notes (808s, melodies); 0 = off", 0.0, 1.0, 0.0, " s" };
+         glide { "Glide", "slide time between notes (808s, melodies); 0 = off", 0.0, 1.0, 0.0, " s" },
+         shift { "Shift", "play this channel's hits off the grid: + late (laid back), - early (pushed); 0 = on the grid", -60.0, 60.0, 0.0, " ms" };
     NameTag name;
     juce::Slider insert;
 };
@@ -331,7 +340,14 @@ public:
         patternBox.onChange = [this] {
             const int i = patternBox.getSelectedItemIndex();
             if (i == (int) s.p().patterns.size())
-                s.edit ("New pattern", [] (Project& p) { Pattern pt; pt.name = "Pattern " + juce::String (p.patterns.size() + 1); p.patterns.push_back (pt); p.currentPattern = (int) p.patterns.size() - 1; });
+                s.edit ("New pattern", [] (Project& p) {
+                    Pattern pt; pt.name = "Pattern " + juce::String (p.patterns.size() + 1);
+                   #if HHS_LICENSED
+                    p.patterns.push_back (pt); p.currentPattern = (int) p.patterns.size() - 1;
+                   #else
+                    p.currentPattern = p.insertPatternAfter (p.currentPattern, pt);   // stacks right after the pattern you were editing
+                   #endif
+                });
             else if (i >= 0 && i != s.p().currentPattern)
                 s.edit ("Select pattern", [i] (Project& p) { p.currentPattern = i; });
         };
@@ -355,7 +371,7 @@ public:
         g.fillAll (col::panel);
         g.setColour (col::bg); g.fillRect (0, 0, getWidth(), headerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText ("CHANNEL RACK", getWidth() - 140, 0, 130, headerH, juce::Justification::centredRight);
+        drawHeadline (g, "CHANNEL RACK", { getWidth() - 140, 0, 130, headerH }, juce::Justification::centredRight);
         auto& p = s.p();
         if (p.patterns.empty()) return;
         auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
@@ -456,7 +472,7 @@ public:
         }
     }
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
-    void filesDropped (const juce::StringArray& files, int, int) override
+    void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         juce::Array<juce::File> samples;
         for (auto& f : files)
@@ -465,7 +481,30 @@ public:
             if (file.isDirectory()) importKit (s, file);
             else if (isAudioFile (file)) samples.add (file);
         }
+        if (samples.size() == 1 && replaceSampleAt ({ x, y }, samples[0])) return;
         if (! samples.isEmpty()) addSampleChannels (s, samples, samples.size() > 1 ? "Samples" : juce::String());
+    }
+    // FL: a sample dropped onto a channel swaps that channel's sound; its notes, steps, routing and settings stay
+    bool replaceSampleAt (juce::Point<int> pt, const juce::File& f)
+    {
+        if (pt.y < headerH) return false;
+        const int row = (pt.y - headerH + scrollY) / rowH;
+        if (row < 0 || row >= (int) rows.size()) return false;
+        const int id = rows[(size_t) row]->channelId;
+        auto* c = s.channel (id);
+        if (c == nullptr) return false;
+        s.edit ("Replace sample", [&] (Project&) {
+            auto* ch = s.channel (id);
+            if (ch == nullptr) return;
+            if (ch->type != ChannelType::Sampler) { ch->type = ChannelType::Sampler; ch->pluginId = {}; ch->pluginState.reset(); ch->builtinDrum = -1; }
+            ch->sampleFile = f;
+            ch->keyTrack = isMelodicSample (f);
+            ch->name = f.getFileNameWithoutExtension();
+        });
+        s.selectedChannel = id;
+        s.sendChangeMessage();
+        if (! s.engine.isPlaying()) s.engine.previewFile (f);
+        return true;
     }
 
 private:
@@ -527,6 +566,9 @@ private:
         m.addItem (1, "Sampler (pick a sample)...");
         m.addItem (2, "Synth (keys / lead)");
         m.addItem (3, "808 (glide bass)");
+       #if ! HHS_LICENSED
+        m.addItem (4, "HumHouse Drummer (rock drums)");
+       #endif
         juce::PopupMenu pool;
         pool.addSectionHeader ("Psychedelic synths");
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
@@ -557,6 +599,8 @@ private:
                     c.colour = r == 3 ? juce::Colour (0xffff5d8a) : juce::Colour (0xff8a7dff);
                     s.selectedChannel = p.addChannel (c);
                 });
+            else if (r == 4)
+                s.edit ("Add Drummer", [&] (Project& p) { s.selectedChannel = addDrummerTrack (p, 0.0, 8); });
             else if (r >= 2000 && r < 2000 + (int) instrumentPool().size())
                 s.edit ("Add instrument", [&] (Project& p) { s.selectedChannel = p.addChannel (poolChannel (instrumentPool()[(size_t) (r - 2000)])); });
             else if (r >= 1000) addPluginChannel (s, types.getReference (r - 1000));

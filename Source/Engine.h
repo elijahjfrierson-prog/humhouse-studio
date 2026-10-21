@@ -2,6 +2,7 @@
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
+#include "Drummer/DrummerCore.h"
 #include "Instruments.h"
 #include "Effects.h"
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -19,16 +20,26 @@ public:
     ~WorkerPool();
     void run (int count, Job job, void* ctx);   // blocks until all indices are done
     int size() const { return (int) threads.size(); }
+    // macOS: workers join the audio device's workgroup so the OS schedules them like the audio thread
+    // (other apps such as OBS can't starve them mid-block)
+    void setWorkgroup (const juce::AudioWorkgroup& wg);
     std::atomic<long> workerJobs { 0 }, runs { 0 };
 private:
+    struct Worker : juce::Thread
+    {
+        explicit Worker (WorkerPool& p) : juce::Thread ("HHS audio worker"), pool (p) {}
+        void run() override { pool.workerLoop(); }
+        WorkerPool& pool;
+    };
     void workerLoop();
-    std::vector<std::thread> threads;
+    std::vector<std::unique_ptr<Worker>> threads;
     std::atomic<bool> quit { false };
-    std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 };
+    std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 }, wgGeneration { 0 };
     std::atomic<Job> job { nullptr };
     std::atomic<void*> ctx { nullptr };
-    std::mutex m;
+    std::mutex m, wgMutex;
     std::condition_variable cv;
+    juce::AudioWorkgroup workgroup;
 };
 
 class Engine : public juce::AudioIODeviceCallback,
@@ -61,6 +72,7 @@ public:
     double positionBeats() const { return position.load(); }
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
+    std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
     float trackPeak (int track) const;
     ScopeTap* trackScope (int t) { return t >= 0 && t < maxScopeTracks ? &(*trackScopes)[(size_t) t] : nullptr; }
@@ -90,7 +102,9 @@ public:
     void storePluginStates();
 
     // offline
-    bool renderToWav (const juce::File& out, bool songMode, std::function<bool (float)> progress, int track = -1);
+    bool renderToWav (const juce::File& out, bool songMode, std::function<bool (float)> progress, int track = -1, int bits = 24, double rate = 0, int format = 0);   // bits 16/24/32 float/64 float, rate 0 = engine rate, format 0 WAV / 1 MP3 / 2 M4A
+    int exportBits = 24; double exportRate = 0; int exportFormat = 0;
+    float lastRenderPeak = 0;   // peak of the last render (stems: silent tracks are skipped)
     bool freezeTrack (int track);
 
     // headless processing (tests / offline)
@@ -141,6 +155,7 @@ private:
     std::vector<ChannelRuntime*> channelOrder;
     std::vector<std::unique_ptr<TrackRuntime>> trackRt;
     std::map<int, std::unique_ptr<ClipRuntime>> clipRt;
+    std::map<int, std::shared_ptr<const std::vector<DrumHit>>> drumHits;   // Drummer region uid -> what it plays
     std::map<juce::String, SharedSample> sampleCache;
     std::vector<std::vector<int>> levels;
     std::vector<std::vector<std::pair<int, float>>> sources; // per track: (source track, gain)
@@ -149,9 +164,11 @@ private:
     std::atomic<bool> playing { false }, recording { false }, countingIn { false };
     std::atomic<double> position { 0.0 };
     std::atomic<float> declickGain { 1.0f };   // 4 ms fade-in after starting / jumping mid-sound
+    std::atomic<bool> editChase { false };     // chase caused by an edit while playing: keep the mix running, no fade, no re-hit
     std::atomic<bool> chasePending { true };   // start notes already sounding under the playhead
     double countInRemaining = 0.0;
     std::unique_ptr<WorkerPool> pool;
+    juce::AudioWorkgroup deviceWorkgroup;
     std::atomic<bool> mtOn { true }, smartOn { true };
     std::vector<float> trackCost, chanCost;
     std::vector<int> chanJobOrder;

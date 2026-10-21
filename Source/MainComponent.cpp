@@ -1,3 +1,4 @@
+#include <set>
 #include "UI.h"
 #include <thread>
 #include "BinaryData.h"
@@ -28,12 +29,12 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
-int& fontStyle() { static int st = appDataFile ("font.txt").existsAsFile() ? appDataFile ("font.txt").loadFileAsString().getIntValue() : 0; return st; }
+int& fontStyle() { static int st = appDataFile ("font-v2.txt").existsAsFile() ? appDataFile ("font-v2.txt").loadFileAsString().getIntValue() : 3; return st; }
 void setFontStyle (int st)
 {
     fontStyle() = st;
-    appDataFile ("font.txt").getParentDirectory().createDirectory();
-    appDataFile ("font.txt").replaceWithText (juce::String (st));
+    appDataFile ("font-v2.txt").getParentDirectory().createDirectory();
+    appDataFile ("font-v2.txt").replaceWithText (juce::String (st));
     juce::Typeface::clearTypefaceCache();
     for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
@@ -42,6 +43,9 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
     static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
     static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
+    static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
+    static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
+    if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
     if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
     if (fontStyle() == 1 && flash != nullptr) return flash;
     return juce::LookAndFeel_V4::getTypefaceForFont (f);
@@ -109,12 +113,13 @@ void showWhatsNewIfUpdated()
 
 void HHLookAndFeel::refreshColours()
 {
+    const auto onAccent = col::accent.getPerceivedBrightness() > 0.5f ? juce::Colours::black : juce::Colours::white;
     setColourScheme ({ col::bg, col::panel2, col::panel, col::gridBar, col::text, col::accent,
                        juce::Colours::black, col::accent, col::text });
     setColour (juce::TextButton::buttonColourId, col::panel2);
     setColour (juce::TextButton::buttonOnColourId, col::accent);
     setColour (juce::TextButton::textColourOffId, col::text);
-    setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    setColour (juce::TextButton::textColourOnId, onAccent);
     setColour (juce::ComboBox::backgroundColourId, col::panel2);
     setColour (juce::ComboBox::outlineColourId, col::gridBar);
     setColour (juce::Slider::rotarySliderFillColourId, col::accent);
@@ -128,7 +133,7 @@ void HHLookAndFeel::refreshColours()
     setColour (juce::TooltipWindow::outlineColourId, col::accent);
     setColour (juce::PopupMenu::backgroundColourId, col::panel);
     setColour (juce::PopupMenu::highlightedBackgroundColourId, col::accent);
-    setColour (juce::PopupMenu::highlightedTextColourId, juce::Colours::black);
+    setColour (juce::PopupMenu::highlightedTextColourId, onAccent);
     setColour (juce::Label::textColourId, col::text);
     setColour (juce::ListBox::backgroundColourId, col::panel);
     setColour (juce::TextEditor::backgroundColourId, col::panel2);
@@ -170,6 +175,45 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.fillRoundedRectangle (r, 4.0f);
     g.setColour (col::gridBar.withAlpha (0.7f));
     g.drawRoundedRectangle (r, 4.0f, 1.0f);
+}
+
+void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
+{
+    const auto font = getTextButtonFont (b, b.getHeight());
+    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
+        return LookAndFeel_V4::drawButtonText (g, b, over, down);
+    g.setFont (font);
+    const int yIndent = juce::jmin (4, b.proportionOfHeight (0.3f)), cornerSize = juce::jmin (b.getHeight(), b.getWidth()) / 2;
+    const int fontHeight = juce::roundToInt (font.getHeight() * 0.6f);
+    const int leftIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnLeft() ? 4 : 2));
+    const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
+    const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
+    if (area.getWidth() <= 0) return;
+    col::setFontGradientFill (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, b.isEnabled() ? 1.0f : 0.5f);
+    g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+}
+
+void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
+{
+    const auto font = getLabelFont (l);
+    if (! col::fontGradient || l.isBeingEdited() || ! col::isHeadline (font) || l.findColour (juce::Label::textColourId) != col::text)
+        return LookAndFeel_V4::drawLabel (g, l);
+    g.fillAll (l.findColour (juce::Label::backgroundColourId));
+    g.setFont (font);
+    const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
+    const float alpha = l.isEnabled() ? 1.0f : 0.5f;
+    col::setFontGradientFill (g, l.getText(), area.toFloat(), l.getJustificationType(), alpha);
+    g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+    g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));
+    g.drawRect (l.getLocalBounds());
+}
+
+void HHLookAndFeel::drawFileBrowserRow (juce::Graphics& g, int w, int h, const juce::File& file, const juce::String& filename, juce::Image* icon,
+                                        const juce::String& size, const juce::String& time, bool isDir, bool selected, int index,
+                                        juce::DirectoryContentsDisplayComponent& c)
+{
+    const auto shown = isDir || ! filename.containsChar ('.') ? filename : filename.upToLastOccurrenceOf (".", false, false);
+    LookAndFeel_V4::drawFileBrowserRow (g, w, h, file, shown, icon, size, time, isDir, selected, index, c);
 }
 
 void HHLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
@@ -320,25 +364,46 @@ enum MenuIds
     mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
+    mMidiDevice = 90,
     mHistory = 1000
 };
 
 struct RenderJob : public juce::ThreadWithProgressWindow
 {
-    RenderJob (Engine& e, juce::File f, bool song, int t)
-        : juce::ThreadWithProgressWindow ("Exporting " + f.getFileName() + " ...", true, true), engine (e), file (f), songMode (song), track (t) {}
+    struct Item { juce::File file; int track; };
+    RenderJob (Engine& e, std::vector<Item> it, bool song, bool stemMode)
+        : juce::ThreadWithProgressWindow ("Exporting " + (it.size() == 1 ? it.front().file.getFileName() : juce::String ((int) it.size()) + " stems") + " ...", true, true),
+          engine (e), items (std::move (it)), songMode (song), stems (stemMode) {}
     void run() override
     {
-        ok = engine.renderToWav (file, songMode, [this] (float p) { setProgress (p); return ! threadShouldExit(); }, track);
+        const float n = (float) items.size();
+        for (size_t i = 0; i < items.size() && ! threadShouldExit(); ++i)
+        {
+            auto& it = items[i];
+            setStatusMessage (it.file.getFileName());
+            const bool ok = engine.renderToWav (it.file, songMode, [this, i, n] (float p) { setProgress (((float) i + p) / n); return ! threadShouldExit(); },
+                                                it.track, engine.exportBits, engine.exportRate, engine.exportFormat);
+            if (! ok) { if (! threadShouldExit()) ++failed; continue; }
+            if (stems && engine.lastRenderPeak < 1.0e-5f) { it.file.deleteFile(); ++skipped; }   // silent insert: no empty stem
+            else { ++saved; last = it.file; }
+        }
     }
     void threadComplete (bool cancelled) override
     {
         if (! cancelled)
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export",
-                                                    ok ? "Saved " + file.getFullPathName() : "Export failed.");
+        {
+            juce::String msg;
+            if (saved == 0) msg = engine.exportFormat == 2 ? "Export failed (M4A needs the macOS / Windows AAC encoder)." : "Export failed.";
+            else if (! stems) msg = "Saved " + last.getFullPathName();
+            else msg = "Saved " + juce::String (saved) + " stems (all start at bar 1) to\n" + last.getParentDirectory().getFullPathName()
+                       + (skipped > 0 ? "\n" + juce::String (skipped) + " silent inserts skipped" : juce::String());
+            if (failed > 0 && saved > 0) msg << "\n" << failed << " failed";
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export", msg);
+            if (saved > 0) last.revealToUser();
+        }
         juce::MessageManager::callAsync ([this] { delete this; });
     }
-    Engine& engine; juce::File file; bool songMode; int track; bool ok = false;
+    Engine& engine; std::vector<Item> items; bool songMode, stems; int saved = 0, skipped = 0, failed = 0; juce::File last;
 };
 }
 
@@ -358,8 +423,13 @@ public:
 
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
+        col::lightMode = studio.settings->getBoolValue ("themeLight", false);
+        col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
+        if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (studio.settings->containsKey ("themeColour"))
-            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5));
+            applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
+        if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
+        if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);
@@ -390,6 +460,13 @@ public:
         mixer = createMixer (studio);
         browser = createBrowser (studio);
         for (auto* c : { rack.get(), piano.get(), playlist.get(), mixer.get(), browser.get() }) addChildComponent (c);
+        addChildComponent (pianoSplit);
+        pianoSplit.onDrag = [this] (int y) {
+            if (splitTotal <= 0) return;
+            pianoMin = y > splitTop + splitTotal - 70;
+            if (! pianoMin) rackFrac = juce::jlimit (0.15f, 0.9f, (float) (y - splitTop) / (float) splitTotal);
+            resized(); };
+        pianoSplit.onToggle = [this] { pianoMin = ! pianoMin; resized(); };
 
         titleLabel.setText ("HUMHOUSE", juce::dontSendNotification);
         titleLabel.setFont (juce::FontOptions (19.0f, juce::Font::bold));
@@ -429,6 +506,12 @@ public:
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
+        setupButton (mixPopBtn, "POP MIXER", "Pop the Mixer out into its own window so it stays visible on Beat and Rec (click again to dock it)", true);
+        mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
+        addAndMakeVisible (mixPopBtn);
+        setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
+        saveBtn.onClick = [this] { save (false); };
+        addAndMakeVisible (saveBtn);
         for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
@@ -454,6 +537,8 @@ public:
         hintBar.setFont (juce::FontOptions (13.0f));
         addAndMakeVisible (hintBar);
 
+        hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+        if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
 #else
@@ -482,6 +567,8 @@ public:
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (nullptr);
 #endif
+        hostKeyHandler = nullptr;
+        juce::Desktop::getInstance().removeGlobalMouseListener (&floatRaiser);
         closeAllEditorWindows();
         engine.onPluginDiscard = nullptr;
         engine.knownPlugins.removeChangeListener (this);
@@ -516,9 +603,12 @@ public:
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
+        saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
+        mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
+        mixPopBtn.setBounds (t.removeFromRight (96)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
@@ -528,9 +618,17 @@ public:
         if (pianoHere) piano->setVisible (view == 0);
         if (here (playlist)) playlist->setVisible (view == 1);
         if (here (mixer)) mixer->setVisible (view == 2);
+        pianoSplit.setVisible (false);
         if (view == 0)
         {
-            if (rackHere && pianoHere) { rack->setBounds (r.removeFromTop (juce::jmax (180, (int) (r.getHeight() * 0.42f)))); piano->setBounds (r); }
+            if (rackHere && pianoHere)
+            {
+                splitTop = r.getY(); splitTotal = r.getHeight();
+                const int rh = pianoMin ? splitTotal - 22 : juce::jlimit (80, juce::jmax (80, splitTotal - 140), (int) (splitTotal * rackFrac));
+                rack->setBounds (r.removeFromTop (rh));
+                pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (22)); pianoSplit.repaint();
+                piano->setVisible (! pianoMin); piano->setBounds (r);
+            }
             else if (rackHere) rack->setBounds (r);
             else if (pianoHere) piano->setBounds (r);
         }
@@ -543,6 +641,7 @@ public:
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
+        if (is ('u', cmd)) { showShortcuts(); return true; }   // Cmd/Ctrl+U: Shortcuts window on / off
         if (isTypingNoteKey (k))
         {
             const int key = 48 + typingKeyOffset (k.getKeyCode());
@@ -591,11 +690,22 @@ public:
     std::map<int, int> heldTyping;
     std::map<int, std::pair<double, float>> heldNotes;
 
+    juce::Array<juce::MidiDeviceInfo> midiDevs;
+    int midiSeen = -1, midiPoll = 0;
+    // the chosen device (or every connected one when none is chosen) plays live; a keyboard plugged in later just works
     void enableMidiInputs()
     {
-        for (auto& d : juce::MidiInput::getAvailableDevices())
-            if (! engine.deviceManager.isMidiInputDeviceEnabled (d.identifier))
-                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, true);
+        const auto pick = studio.settings->getValue ("midiIn");
+        const auto all = juce::MidiInput::getAvailableDevices();
+        bool found = false;
+        for (auto& d : all) found = found || d.identifier == pick;
+        for (auto& d : all)
+        {
+            const bool want = pick.isEmpty() || ! found || d.identifier == pick;
+            if (engine.deviceManager.isMidiInputDeviceEnabled (d.identifier) != want)
+                engine.deviceManager.setMidiInputDeviceEnabled (d.identifier, want);
+        }
+        midiSeen = all.size();
     }
 
     void liveNote (int key, float vel, bool on)
@@ -647,15 +757,20 @@ public:
             {
                 juce::PopupMenu tm;
                 auto ts = templateFiles();
-                for (int i = 0; i < ts.size() && i < 90; ++i) tm.addItem (300 + i, ts[i].getFileNameWithoutExtension());
+                for (int i = 0; i < ts.size() && i < 90; ++i)
+                    tm.addItem (300 + i, ts[i].getFileNameWithoutExtension() + (ts[i].isAChildOf (templatesDir()) ? juce::String() : "   (" + ts[i].getParentDirectory().getFileName() + ")"));
                 if (ts.isEmpty()) tm.addItem (-1, "(no templates yet)", false);
+                tm.addSeparator();
+                tm.addItem (396, "Add a templates folder (e.g. Desktop)...");
+                tm.addItem (397, "Show templates folder");
                 m.addSubMenu ("New from template", tm);
             }
             add (mSaveTemplate, "Save as template...");
+            if (lastTemplate.isNotEmpty()) m.addItem (395, "Update template \"" + lastTemplate + "\" (overwrite)");
             add (mDefaultTemplate, "Use this project as default template");
             add (mClearDefaultTemplate, "Reset default template", {}, defaultTemplate().existsAsFile());
             m.addSeparator();
-            add (mExport, "Export WAV...", "Ctrl+R"); add (mExportTrack, "Export selected mixer track (stem)...");
+            add (mExport, "Export (WAV / MP3 / M4A / stems)...", "Ctrl+R"); add (mExportTrack, "Export selected track / stems...");
             m.addSeparator(); add (mQuit, "Quit");
         }
         else if (index == 1)
@@ -690,7 +805,16 @@ public:
             add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup (every 8 edits + every 2 minutes)", {}, true, autoBackup());
             add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
-            add (mMidiInputs, "Connect MIDI keyboards");
+            {
+                juce::PopupMenu md;   // pick the keyboard / piano: it plays the selected channel at once, no other setup
+                midiDevs = juce::MidiInput::getAvailableDevices();
+                const auto pick = studio.settings->getValue ("midiIn");
+                md.addItem (mMidiInputs, "All connected (auto, plug and play)", true, pick.isEmpty());
+                for (int i = 0; i < juce::jmin (10, midiDevs.size()); ++i)
+                    md.addItem (mMidiDevice + i, midiDevs[i].name, true, pick == midiDevs[i].identifier);
+                if (midiDevs.isEmpty()) md.addItem (-1, "(no MIDI device connected)", false);
+                m.addSubMenu ("MIDI input device", md);
+            }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
             {
@@ -700,8 +824,8 @@ public:
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
                 juce::PopupMenu fm;
-                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "Clean" };
-                for (int i = 0; i < 3; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "System", "Pro (sleek, default)" };
+                for (int i = 0; i < 4; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
                 m.addSubMenu ("Font", fm);
             }
             {
@@ -720,6 +844,8 @@ public:
                #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
+            m.addSeparator();
+            add (mShortcuts, "Shortcuts", "Cmd/Ctrl+U", true, shortcutsWin != nullptr && shortcutsWin->isVisible());
         }
         else
         {
@@ -731,13 +857,24 @@ public:
     void menuItemSelected (int id, int) override
     {
         if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= mMidiDevice && id < mMidiDevice + 10 && id - mMidiDevice < midiDevs.size())
+        {
+            const auto& d = midiDevs[id - mMidiDevice];
+            studio.settings->setValue ("midiIn", d.identifier);
+            enableMidiInputs();
+            flash ("MIDI: " + d.name);
+            return;
+        }
+        if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
+        if (id == 396) { addTemplateFolder(); return; }
+        if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
         if (id >= 300 && id < 390)
         {
             auto ts = templateFiles();
             if (id - 300 < ts.size()) newProject (ts[id - 300]);
             return;
         }
-        if (id >= 250 && id < 253) { setFontStyle (id - 250); return; }
+        if (id >= 250 && id < 254) { setFontStyle (id - 250); return; }
         if (id == 480)
         {
             captureFriendlyDrawing() = ! captureFriendlyDrawing();
@@ -816,7 +953,7 @@ public:
             case mTheme: showThemeDialog (studio); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
-            case mMidiInputs: enableMidiInputs(); break;
+            case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
             case mAutoBackup: studio.settings->setValue ("autoBackup", ! autoBackup()); break;
             case mShortcuts: showShortcuts(); break;
             case mAbout:
@@ -831,7 +968,7 @@ private:
     juce::ApplicationProperties props;
     Engine engine;
     Studio studio { engine };
-    juce::TooltipWindow tooltips { this, 450 };
+    juce::TooltipWindow tooltips { this, 1000 };   // hover anything for 1 second = help
     // a click anywhere stops a sample preview that is already playing (a click that starts a new one keeps it)
     struct PreviewStopper : juce::MouseListener
     {
@@ -840,10 +977,36 @@ private:
         Engine& e;
     } previewStopper { engine };
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
+    struct SplitBar : juce::Component   // drag to resize Channel Rack vs Piano Roll; click to minimize / show the Piano Roll
+    {
+        SplitBar() { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); }
+        std::function<void (int)> onDrag; std::function<void()> onToggle; bool minimized = false; int startY = 0;
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (col::lightMode ? col::panel2 : juce::Colour (0xff15181d));
+            g.setColour (juce::Colour (0xffff8a4c).withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
+            g.setColour (col::text.withAlpha (0.6f)); g.setFont (12.0f);
+            g.drawText (minimized ? "PIANO ROLL  [+] click to show" : "PIANO ROLL  [-] click to minimize  |  drag to resize",
+                        getLocalBounds(), juce::Justification::centred);
+        }
+        void mouseDown (const juce::MouseEvent&) override { startY = getY(); }
+        void mouseDrag (const juce::MouseEvent& e) override { if (onDrag && std::abs (e.getDistanceFromDragStartY()) > 2) onDrag (startY + e.getDistanceFromDragStartY()); }
+        void mouseUp (const juce::MouseEvent& e) override { if (! e.mouseWasDraggedSinceMouseDown() && onToggle) onToggle(); }
+    } pianoSplit;
+    float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton playBtn, stopBtn, recBtn;
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn, saveBtn;
+    int savedFlash = 0;
+    struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
+    {
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            auto* top = e.eventComponent != nullptr ? e.eventComponent->getTopLevelComponent() : nullptr;
+            if (top != nullptr && ! isFloating (top) && juce::Process::isForegroundProcess()) raiseFloatingWindows();
+        }
+    } floatRaiser;
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
@@ -864,11 +1027,13 @@ private:
     void flash (const juce::String& t) { flashText = t; flashUntil = juce::Time::getMillisecondCounter() + 2500; }
 
     // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
-    struct PopOut : public juce::DocumentWindow
+    struct PopOut : public juce::DocumentWindow, private juce::Timer
     {
-        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) {}
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { markFloating (*this); startTimer (300); }
         std::function<void()> onClose;
         void closeButtonPressed() override { if (onClose) onClose(); }
+        bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
+        void timerCallback() override { updateFloating (*this); }   // stays visible over the main window while you work, not over other apps
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
 
@@ -938,6 +1103,8 @@ private:
 
     void timerCallback() override
     {
+        if (++midiPoll >= 60) { midiPoll = 0; if (juce::MidiInput::getAvailableDevices().size() != midiSeen) enableMidiInputs(); }   // hot-plug
+        if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
         const int bar = (int) (pos / bpb) + 1, beat = (int) std::fmod (pos, (double) bpb) + 1, step = (int) (std::fmod (pos, 1.0) * 4) + 1;
@@ -971,9 +1138,125 @@ private:
         }
     }
 
+    // Pro Tools-style session folder: every save copies the audio the song uses (takes, imported vocals, your own
+    // samples) into the project's folder, so the folder alone opens, plays and exports stems anywhere, years later
+    void collectAudio()
+    {
+        auto& p = engine.project();
+        if (p.projectFile == juce::File()) return;
+        const auto base = p.projectFile.getParentDirectory();
+        const auto app = juce::File::getSpecialLocation (juce::File::currentApplicationFile), exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+        std::map<juce::String, juce::File> moved;
+        auto take = [&] (const juce::File& f, const juce::File& dest) {
+            if (! f.existsAsFile() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || moved.count (f.getFullPathName())) return;
+            dest.createDirectory();
+            auto t = dest.getChildFile (f.getFileName());
+            if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
+            if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+        };
+        const auto shared = docsDir().getChildFile ("Recordings");
+        for (auto& c : p.clips) take (c.audioFile, base.getChildFile (c.audioFile.isAChildOf (shared) ? "Recordings" : "Audio Files"));
+        for (auto& f : p.audioPool) take (f, base.getChildFile ("Audio Files"));
+        for (auto& c : p.channels) take (c.sampleFile, base.getChildFile ("Samples"));
+        for (auto& m : p.mixer) take (m.frozenFile, base.getChildFile ("Recordings").getChildFile ("Freeze"));
+        if (moved.empty()) return;
+        studio.live ([&moved] (Project& pr) {
+            auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
+            for (auto& c : pr.clips) re (c.audioFile);
+            for (auto& f : pr.audioPool) re (f);
+            for (auto& c : pr.channels) re (c.sampleFile);
+            for (auto& m : pr.mixer) re (m.frozenFile);
+        });
+        engine.sync();
+    }
+
+    void locateMissingAudio()
+    {
+        juce::StringArray missing;
+        for (auto& c : engine.project().clips)
+            if (c.isAudio() && c.audioFile != juce::File() && ! c.audioFile.existsAsFile()) missing.addIfNotAlreadyThere (c.audioFile.getFileName());
+        if (missing.isEmpty()) return;
+        // first search the whole user folder in the background (Music, Desktop, Documents, Downloads, iCloud, Movies) and glue what's found
+        flash ("Searching your disk for " + juce::String (missing.size()) + " missing audio file(s)...");
+        juce::Component::SafePointer<MainComponent> sp (this);
+        juce::Thread::launch ([sp, missing] {
+            std::set<juce::String> want; for (auto& m : missing) want.insert (m.toLowerCase());
+            std::map<juce::String, juce::File> byName;
+            const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
+            juce::Array<juce::File> roots;   // whole user folder (minus Library caches) + every mounted drive, most likely places first
+            for (auto* sub : { "Music", "Desktop", "Documents", "Downloads", "Library/Mobile Documents" }) roots.add (home.getChildFile (sub));
+            for (const auto& e : juce::RangedDirectoryIterator (home, false, "*", juce::File::findDirectories))
+                if (! e.getFile().getFileName().startsWith (".") && e.getFile().getFileName() != "Library") roots.addIfNotAlreadyThere (e.getFile());
+            for (const auto& e : juce::RangedDirectoryIterator (juce::File ("/Volumes"), false, "*", juce::File::findDirectories)) roots.add (e.getFile());
+            { juce::Array<juce::File> drives; juce::File::findFileSystemRoots (drives);
+              for (auto& d : drives) if (! home.isAChildOf (d)) roots.add (d); }   // other Windows drives (D:, E:, USB)
+            int seen = 0;
+            for (auto& r : roots)
+            {
+                if (! r.isDirectory() || byName.size() == want.size()) continue;
+                for (const auto& e : juce::RangedDirectoryIterator (r, true, "*", juce::File::findFiles, juce::File::FollowSymlinks::no))
+                {
+                    if (++seen > 4000000 || sp == nullptr) break;
+                    const auto n = e.getFile().getFileName().toLowerCase();
+                    if (want.count (n) && ! e.getFile().getFullPathName().contains ("/.Trash")) byName.emplace (n, e.getFile());
+                    if (byName.size() == want.size()) break;
+                }
+            }
+            juce::MessageManager::callAsync ([sp, byName] {
+                auto* mc = sp.getComponent(); if (mc == nullptr) return;
+                int found = 0;
+                if (! byName.empty())
+                    mc->studio.edit ("Find lost audio", [&] (Project& pr) {
+                        for (auto& c : pr.clips)
+                            if (c.isAudio() && ! c.audioFile.existsAsFile())
+                                if (auto it = byName.find (c.audioFile.getFileName().toLowerCase()); it != byName.end()) { c.audioFile = it->second; ++found; }
+                        for (auto& f : pr.audioPool)
+                            if (! f.existsAsFile()) if (auto it = byName.find (f.getFileName().toLowerCase()); it != byName.end()) f = it->second;
+                    });
+                if (found > 0) { mc->collectAudio(); mc->engine.sync(); mc->flash ("Found " + juce::String (found) + " audio clip(s) on disk and glued them into this song's folder - save to keep"); }
+                mc->askForMissingAudio();
+            });
+        });
+    }
+
+    void askForMissingAudio()
+    {
+        juce::StringArray missing;
+        for (auto& c : engine.project().clips)
+            if (c.isAudio() && c.audioFile != juce::File() && ! c.audioFile.existsAsFile()) missing.addIfNotAlreadyThere (c.audioFile.getFileName());
+        if (missing.isEmpty()) return;
+        auto* w = new juce::AlertWindow ("Audio not found", juce::String (missing.size()) + " audio file(s) in this project weren't found where they were saved:\n"
+                                         + missing.joinIntoString ("\n").substring (0, 600) + "\n\nPick the folder they're in (sub-folders are searched too).",
+                                         juce::MessageBoxIconType::WarningIcon);
+        w->addButton ("Locate folder...", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Skip", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int r) {
+            if (r != 1) return;
+            chooser = std::make_unique<juce::FileChooser> ("Folder with the missing audio", engine.project().projectFile.getParentDirectory());
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+                const auto dir = fc.getResult();
+                if (! dir.isDirectory()) return;
+                std::map<juce::String, juce::File> byName;
+                for (const auto& e : juce::RangedDirectoryIterator (dir, true, "*", juce::File::findFiles))
+                    byName.emplace (e.getFile().getFileName().toLowerCase(), e.getFile());
+                int found = 0;
+                studio.edit ("Locate audio", [&] (Project& pr) {
+                    for (auto& c : pr.clips)
+                        if (c.isAudio() && ! c.audioFile.existsAsFile())
+                            if (auto it = byName.find (c.audioFile.getFileName().toLowerCase()); it != byName.end()) { c.audioFile = it->second; ++found; }
+                    for (auto& f : pr.audioPool)
+                        if (! f.existsAsFile()) if (auto it = byName.find (f.getFileName().toLowerCase()); it != byName.end()) f = it->second;
+                });
+                engine.sync();
+                flash ("Found " + juce::String (found) + " audio clip(s)");
+            });
+        }), true);
+    }
+
     void writeProject()
     {
         engine.storePluginStates();
+        collectAudio();
         auto& p = engine.project();
         if (saveProject (p, p.projectFile))
         {
@@ -981,25 +1264,49 @@ private:
             studio.dirty = false;
             syncControls();
             flash ("Saved " + p.projectFile.getFileName() + " + backup");
+            saveBtn.setButtonText ("SAVED"); saveBtn.setToggleState (true, juce::dontSendNotification);   // opposite color = confirmed
+            savedFlash = 45;
         }
         else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save", "Could not save the project.");
     }
 
-    void save (bool as)
+    // FL-style: Save / Don't Save / Cancel before the current project is closed
+    void askToSave (std::function<void()> then)
+    {
+        if (! studio.dirty) { then(); return; }
+        if (savePromptOpen) return;
+        savePromptOpen = true;
+        auto* w = new juce::AlertWindow ("Save changes?", "Save changes to \"" + engine.project().title + "\" first?", juce::MessageBoxIconType::QuestionIcon);
+        w->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Don't Save", 2);
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, then] (int r) {
+            savePromptOpen = false;
+            if (r == 2) { engine.storePluginStates(); writeBackup (engine.project()); then(); }   // "Don't Save" still keeps a backup
+            else if (r == 1) save (false, then);
+        }), true);
+    }
+public:
+    void requestQuit() { askToSave ([] { juce::JUCEApplication::getInstance()->quit(); }); }
+private:
+    bool savePromptOpen = false;
+
+    void save (bool as, std::function<void()> after = {})
     {
         auto& p = engine.project();
-        if (! as && p.projectFile.existsAsFile()) { writeProject(); return; }
+        if (! as && p.projectFile.existsAsFile()) { writeProject(); if (after && ! studio.dirty) after(); return; }
         docsDir().createDirectory();
         chooser = std::make_unique<juce::FileChooser> ("Save project", docsDir().getChildFile (p.title + ".hhs"), "*.hhs");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                   | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this] (const juce::FileChooser& fc) {
+                              [this, after] (const juce::FileChooser& fc) {
                                   auto f = fc.getResult();
                                   if (f == juce::File()) return;
                                   f = f.withFileExtension ("hhs");
                                   engine.project().projectFile = f;
                                   engine.project().title = f.getFileNameWithoutExtension();
                                   writeProject();
+                                  if (after && ! studio.dirty) after();
                               });
     }
 
@@ -1020,9 +1327,11 @@ private:
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
         studio.dirty = false;
         studio.sendChangeMessage();
+        juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) { sp->collectAudio(); sp->locateMissingAudio(); } });   // glue: copy outside audio into the song folder
     }
 
-    void open (bool backups)
+    void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }
+    void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
         chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project", dir, "*.hhs");
@@ -1032,38 +1341,68 @@ private:
 
     static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
-    static juce::Array<juce::File> templateFiles()
+    juce::StringArray templateFolders() const
     {
-        auto fs = templatesDir().findChildFiles (juce::File::findFiles, false, "*.hhs");
-        fs.removeIf ([] (const juce::File& f) { return f.getFileName() == "_default.hhs"; });
-        fs.sort();
+        juce::StringArray dirs { templatesDir().getFullPathName() };
+        if (studio.settings) for (auto& d : juce::StringArray::fromLines (studio.settings->getValue ("templateFolders"))) if (d.isNotEmpty()) dirs.addIfNotAlreadyThere (d);
+        return dirs;
+    }
+    juce::Array<juce::File> templateFiles() const
+    {
+        juce::Array<juce::File> fs;
+        for (auto& d : templateFolders())
+            for (auto& f : juce::File (d).findChildFiles (juce::File::findFiles, true, "*.hhs"))
+                if (f.getFileName() != "_default.hhs" && ! f.getFullPathName().contains ("Backup") && ! fs.contains (f)) fs.add (f);
+        std::sort (fs.begin(), fs.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileNameWithoutExtension().compareNatural (b.getFileNameWithoutExtension()) < 0; });
         return fs;
+    }
+    void addTemplateFolder()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Folder with templates", juce::File::getSpecialLocation (juce::File::userDesktopDirectory));
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+            const auto d = fc.getResult();
+            if (! d.isDirectory() || ! studio.settings) return;
+            auto dirs = juce::StringArray::fromLines (studio.settings->getValue ("templateFolders"));
+            dirs.addIfNotAlreadyThere (d.getFullPathName()); dirs.removeEmptyStrings();
+            studio.settings->setValue ("templateFolders", dirs.joinIntoString ("\n")); studio.settings->saveIfNeeded();
+            flash (juce::String (templateFiles().size()) + " templates");
+        });
     }
     void saveTemplate()
     {
         auto* aw = new juce::AlertWindow ("Save as template", "Name this template (tracks, mixer, FX and kit are saved)", juce::MessageBoxIconType::NoIcon);
-        aw->addTextEditor ("name", "My template");
+        aw->addTextEditor ("name", lastTemplate.isNotEmpty() ? lastTemplate : juce::String ("My template"));
         aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
         aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         aw->enterModalState (true, juce::ModalCallbackFunction::create ([this, aw] (int r) {
             const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
             if (r != 1 || name.isEmpty()) return;
-            engine.storePluginStates();
-            templatesDir().createDirectory();
-            saveProject (engine.project(), templatesDir().getChildFile (name + ".hhs"));
+            writeTemplate (name);
         }), true);
     }
+    juce::String lastTemplate;   // the template this project came from / was last saved as
+    void writeTemplate (const juce::String& name)
+    {
+        engine.storePluginStates();
+        templatesDir().createDirectory();
+        auto f = templatesDir().getChildFile (name + ".hhs");
+        auto tmp = f.getSiblingFile (name + ".hhs.tmp");
+        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) lastTemplate = name;   // same name = replace, never half-written
+        else tmp.deleteFile();
+    }
 
-    void newProject (juce::File templ = {})
+    void newProject (juce::File templ = {}) { askToSave ([this, templ] { startNewProject (templ); }); }
+    void startNewProject (juce::File templ)
     {
         if (studio.dirty) { engine.storePluginStates(); writeBackup (engine.project()); }
         closeAllEditorWindows();
         if (templ == juce::File()) templ = defaultTemplate();
+        lastTemplate = templ.existsAsFile() && templ != defaultTemplate() ? templ.getFileNameWithoutExtension() : juce::String();
         Project fresh = Project::createDefault();
         if (templ.existsAsFile())
         {
             Project t;
-            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; }
+            if (loadProject (t, templ)) { fresh = std::move (t); fresh.title = Project().title; fresh.projectFile = juce::File(); }   // a new song never records into / saves over the template
         }
         engine.newProject (std::move (fresh));
         studio.selectedTrack = 1; studio.selectedLanes.clear(); studio.laneAnchor = -1;
@@ -1074,18 +1413,77 @@ private:
         studio.sendChangeMessage();
     }
 
+    // File > Export: name, WAV / MP3 / M4A, full mix / one track / every track as a stem, then pick the folder
     void exportWav (int track)
     {
+        static const int bitsTab[] { 16, 24, 32, 64 };
+        static const double rateTab[] { 0, 44100, 48000, 88200, 96000, 192000 };
         auto& p = engine.project();
-        auto name = p.title + (track >= 0 && track < (int) p.mixer.size() ? " - " + p.mixer[(size_t) track].name : juce::String());
-        chooser = std::make_unique<juce::FileChooser> ("Export WAV", docsDir().getChildFile (name + ".wav"), "*.wav");
-        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
-                                  | juce::FileBrowserComponent::warnAboutOverwriting,
-                              [this, track] (const juce::FileChooser& fc) {
-                                  auto f = fc.getResult();
-                                  if (f == juce::File()) return;
+        const bool hasTrack = track > 0 && track < (int) p.mixer.size();
+        auto* w = new juce::AlertWindow ("Export", "Name it, pick the format and what to export - then choose the folder", juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", p.title, "Name");
+        w->addComboBox ("what", { "Full mix",
+                                  hasTrack ? "Selected track only (" + juce::String (track) + " " + p.mixer[(size_t) track].name + ")" : juce::String ("Selected track only (select a mixer insert first)"),
+                                  "All tracks as stems (each starts at bar 1)" }, "Export");
+        w->addComboBox ("fmt", { "WAV", "MP3 (320 kbps)", "M4A / AAC" }, "Format");
+        w->addComboBox ("bits", { "16-bit", "24-bit", "32-bit float", "64-bit float" }, "WAV bit depth");
+        w->addComboBox ("rate", { "Project / device rate", "44.1 kHz", "48 kHz", "88.2 kHz", "96 kHz", "192 kHz" }, "Sample rate (MP3/M4A: 44.1 or 48)");
+        int bi = 1, ri = 0;
+        for (int i = 0; i < 4; ++i) if (bitsTab[i] == engine.exportBits) bi = i;
+        for (int i = 0; i < 6; ++i) if (rateTab[i] == engine.exportRate) ri = i;
+        w->getComboBoxComponent ("what")->setSelectedItemIndex (hasTrack ? 1 : 0);
+        w->getComboBoxComponent ("fmt")->setSelectedItemIndex (juce::jlimit (0, 2, engine.exportFormat));
+        w->getComboBoxComponent ("bits")->setSelectedItemIndex (bi);
+        w->getComboBoxComponent ("rate")->setSelectedItemIndex (ri);
+        w->addButton ("Choose folder...", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([this, w, track, hasTrack] (int r) {
+            if (r != 1) return;
+            engine.exportBits = bitsTab[juce::jlimit (0, 3, w->getComboBoxComponent ("bits")->getSelectedItemIndex())];
+            engine.exportRate = rateTab[juce::jlimit (0, 5, w->getComboBoxComponent ("rate")->getSelectedItemIndex())];
+            engine.exportFormat = juce::jlimit (0, 2, w->getComboBoxComponent ("fmt")->getSelectedItemIndex());
+            int what = juce::jlimit (0, 2, w->getComboBoxComponent ("what")->getSelectedItemIndex());
+            if (what == 1 && ! hasTrack) what = 0;
+            auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
+            if (name.isEmpty()) name = juce::File::createLegalFileName (engine.project().title);
+            chooseExportFolder (name, what, track);
+        }), true);
+    }
+
+    static bool insertUsed (const Project& p, int t)
+    {
+        for (auto& c : p.channels) if (c.mixerTrack == t) return true;
+        for (auto& l : p.lanes) if (l.mixerTrack == t) return true;
+        for (size_t i = 0; i < p.mixer.size(); ++i)
+            if ((int) i != t) for (auto& sd : p.mixer[i].sends) if (sd.target == t) return true;
+        return false;
+    }
+
+    void chooseExportFolder (juce::String name, int what, int track)
+    {
+        juce::File start (studio.settings ? studio.settings->getValue ("exportDir") : juce::String());
+        if (! start.isDirectory()) start = docsDir();
+        chooser = std::make_unique<juce::FileChooser> ("Choose the export folder", start);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [this, name, what, track] (const juce::FileChooser& fc) {
+                                  const auto dir = fc.getResult();
+                                  if (! dir.isDirectory()) return;
+                                  if (studio.settings) { studio.settings->setValue ("exportDir", dir.getFullPathName()); studio.settings->saveIfNeeded(); }
+                                  const juce::String ext = engine.exportFormat == 1 ? ".mp3" : engine.exportFormat == 2 ? ".m4a" : ".wav";
+                                  auto& p = engine.project();
+                                  std::vector<RenderJob::Item> items;
+                                  auto trackName = [&p] (int t) { return juce::File::createLegalFileName (p.mixer[(size_t) t].name.isEmpty() ? "Insert " + juce::String (t) : p.mixer[(size_t) t].name); };
+                                  if (what == 2)
+                                  {
+                                      for (int t = 1; t < (int) p.mixer.size(); ++t)
+                                          if (insertUsed (p, t))
+                                              items.push_back ({ dir.getChildFile (name + " - " + juce::String (t).paddedLeft ('0', 2) + " " + trackName (t) + ext), t });
+                                      if (items.empty()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Export", "No mixer inserts have anything routed to them."); return; }
+                                  }
+                                  else items.push_back ({ dir.getChildFile (name + (what == 1 ? " - " + trackName (track) : juce::String()) + ext), what == 1 ? track : -1 });
                                   engine.stop();
-                                  (new RenderJob (engine, f.withFileExtension ("wav"), engine.project().songMode, track))->launchThread();
+                                  // stems always render the whole song from bar 1 so they line up in any DAW
+                                  (new RenderJob (engine, std::move (items), what == 2 ? true : p.songMode, what == 2))->launchThread();
                               });
     }
 
@@ -1102,25 +1500,56 @@ private:
         o.launchAsync();
     }
 
+    struct ShortcutsWindow : juce::DocumentWindow
+    {
+        ShortcutsWindow (const juce::String& text, std::function<void()> close)
+            : juce::DocumentWindow ("Shortcuts  (Cmd/Ctrl+U to close)", col::panel, juce::DocumentWindow::closeButton), onClose (std::move (close))
+        {
+            auto* ed = new juce::TextEditor();
+            ed->setMultiLine (true); ed->setReadOnly (true); ed->setCaretVisible (false); ed->setScrollbarsShown (true);
+            ed->setFont (juce::FontOptions (14.0f)); ed->setText (text, false);
+            ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
+            ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
+            setContentOwned (ed, false);
+            setUsingNativeTitleBar (true); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
+        }
+        void closeButtonPressed() override { if (onClose) onClose(); }
+        bool keyPressed (const juce::KeyPress& k) override
+        {
+            if (k == juce::KeyPress ('u', juce::ModifierKeys::commandModifier, 0) || k == juce::KeyPress::escapeKey) { if (onClose) onClose(); return true; }
+            return false;
+        }
+        std::function<void()> onClose;
+    };
+    std::unique_ptr<ShortcutsWindow> shortcutsWin;
     void showShortcuts()
     {
+        if (shortcutsWin != nullptr) { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); return; }   // toggle off
         juce::String t;
         t << "GLOBAL\nSpace play/stop | R record | L pattern/song | F5 playlist | F6/F7 rack/piano roll | F8 Plugin House | F9 mixer\n"
-          << "Ctrl+S save + backup | Ctrl+Shift+S save as | Ctrl+O open | Ctrl+N new | Ctrl+R export WAV | Ctrl+M metronome\n"
+          << "Ctrl+S save + backup | Ctrl+Shift+S save as | Ctrl+O open | Ctrl+N new | Ctrl+R export (WAV / MP3 / M4A / stems) | Ctrl+M metronome\n"
           << "Ctrl+Z undo | Ctrl+Shift+Z / Ctrl+Y redo | Ctrl+Alt+Z step back (999 levels)\n\n"
           << "PIANO ROLL\nAlt+A arpeggiator / rolls | Alt+S strum | Alt+U chop | Alt+F flam | Alt+Q quantize | Alt+R randomize\n"
           << "Alt+K limit | Alt+L articulate | Alt+X scale levels | Alt+Y flip | Alt+W claw | Alt+O LFO | Alt+M mute | Alt+V ghost notes\n"
-          << "Ctrl+B duplicate | Ctrl+G glue | Ctrl+L legato | Ctrl+U quick chop | Ctrl+Q quick quantize | Shift+Q quantize starts\n"
+          << "Ctrl+B duplicate | Ctrl+G glue | Ctrl+L legato | Ctrl+Shift+U quick chop | Ctrl+Q quick quantize | Shift+Q quantize starts\n"
           << "Shift+Up/Down semitone | Ctrl+Up/Down octave | Shift+Left/Right move | Alt+Left/Right nudge | Ctrl+A select all | Del delete\n"
           << "Ctrl+C / Ctrl+V copy / paste | Shift+D reset lengths | double-click note = slide/glide\n\n"
           << "PLAYLIST\nDrag ruler = punch range (double-click clears) | double-click empty = place pattern | drag clip corners = fades\n"
           << "Alt-drag fade = curve | right-click clip = takes, route to insert, split, fades | Ctrl+B duplicate | Del delete\n\n"
+          << "PLAYLIST TRACKS\nRight-click a track = color, HumHouse Drummer, routing, delete | side bar = all track heights | mini box (track corner) = this track's height, double-click = small / large\n"
+          << "Alt+A roll audio clips | E select | P/B paint | D delete | T mute | C slice | Alt+wheel = track heights\n\n"
+          << "HELP\nHover anything for 1 second to see what it does | Cmd/Ctrl+U = this Shortcuts window\n\n"
           << "Ctrl = Cmd and Alt = Option on macOS.";
-        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::NoIcon, "Keyboard shortcuts", t);
+        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); });
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
 
 std::unique_ptr<juce::Component> createMainComponent() { return std::make_unique<MainComponent>(); }
+void requestQuit (juce::Component* main)
+{
+    if (auto* m = dynamic_cast<MainComponent*> (main)) m->requestQuit();
+    else juce::JUCEApplication::getInstance()->quit();
+}
 }

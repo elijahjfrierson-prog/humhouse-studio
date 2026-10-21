@@ -1,4 +1,42 @@
 #include "UI.h"
+#include <set>
+#include "Drummer/DrummerCore.h"
+#include "StemSplit.h"
+#include "Instruments.h"
+
+// FL-style clip stretch: renders the clip's audio to its own WAV in the song's Recordings folder (glued with the song).
+// Resample = tape (speed and pitch together), Stretch = length only, pitch kept
+static juce::File bakeClipStretch (const juce::File& src, double offSec, double lenSec, double factor, bool keepPitch, const juce::File& dir)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (src));
+    if (rd == nullptr || rd->sampleRate <= 0) return {};
+    const double sr = rd->sampleRate;
+    const auto a = juce::jmax ((juce::int64) 0, (juce::int64) (offSec * sr));
+    const int len = (int) juce::jmin ((juce::int64) (lenSec * sr), rd->lengthInSamples - a);
+    if (len < 64) return {};
+    const int nch = juce::jlimit (1, 2, (int) rd->numChannels);
+    juce::AudioBuffer<float> b (nch, len + 16); b.clear();
+    rd->read (&b, 0, len, a, true, nch > 1);
+    juce::AudioBuffer<float> out;
+    if (keepPitch) { b.setSize (nch, len, true); out = hhs::olaStretch (b, factor); out.setSize (nch, juce::jmax (1, (int) std::lround (len * factor)), true); }
+    else
+    {
+        const int outLen = juce::jmax (1, (int) std::lround (len * factor));
+        out.setSize (nch, outLen);
+        for (int ch = 0; ch < nch; ++ch) { juce::LagrangeInterpolator li; li.process (1.0 / factor, b.getReadPointer (ch), out.getWritePointer (ch), outLen); }
+    }
+    dir.createDirectory();
+    const auto f = dir.getNonexistentChildFile (src.getFileNameWithoutExtension() + (keepPitch ? "_stretch" : "_resample"), ".wav", false);
+    juce::WavAudioFormat wav;
+    auto* os = f.createOutputStream().release();
+    if (os == nullptr) return {};
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os, sr, (unsigned int) nch, 24, {}, 0));
+    if (w == nullptr) { delete os; return {}; }
+    w->writeFromAudioSampleBuffer (out, 0, out.getNumSamples());
+    w.reset();
+    return f;
+}
 
 namespace hhs
 {
@@ -46,6 +84,23 @@ static void deleteLanes (Project& p, juce::SortedSet<int> which)
     }
 }
 
+static void moveLane (Project& p, int from, int to)
+{
+    const int n = (int) p.lanes.size();
+    if (from < 0 || from >= n) return;
+    to = juce::jlimit (0, n - 1, to);
+    if (to == from) return;
+    const Lane l = p.lanes[(size_t) from];
+    p.lanes.erase (p.lanes.begin() + from);
+    p.lanes.insert (p.lanes.begin() + to, l);
+    for (auto& c : p.clips)
+    {
+        if (c.lane == from) c.lane = to;
+        else if (from < to && c.lane > from && c.lane <= to) --c.lane;
+        else if (from > to && c.lane >= to && c.lane < from) ++c.lane;
+    }
+}
+
 static void insertLane (Project& p, int at)
 {
     at = juce::jlimit (0, (int) p.lanes.size(), at);
@@ -64,7 +119,9 @@ struct LaneHeader : public juce::Component
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
         name.setEditable (false, true);
-        name.setTooltip ("Track name (double-click to rename). Right-click the header for routing / delete");
+        rightClick.f = [this] (const juce::MouseEvent& e) { mouseDown (e.getEventRelativeTo (this)); };
+        name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
+        name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
         arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
@@ -72,10 +129,17 @@ struct LaneHeader : public juce::Component
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
-        setupButton (norm, "NORM", "Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
+        soft.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); soft.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        soft.setRange (-80.0, 80.0, 1.0); soft.setDoubleClickReturnValue (true, 0.0); soft.setTextValueSuffix (" ms");
+        soft.setTooltip ("Soft: slide this whole track earlier (left) or later (right) in ms to line the vocal up with the beat. Double-click = 0");
+        soft.setPopupDisplayEnabled (true, true, nullptr);
+        soft.onValueChange = [this] { const float v = (float) soft.getValue(); s.live ([&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].shiftMs = v; }); s.engine.sync(); };
+        soft.onDragEnd = [this] { s.sendChangeMessage(); };
+        addAndMakeVisible (soft);
+        setupButton (norm, "N", "N = Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
         norm.setColour (juce::TextButton::buttonOnColourId, col::good);
         norm.onClick = [this] { const bool on = norm.getToggleState(); s.edit ("Auto normalize", [&] (Project& p) { p.lanes[(size_t) index].autoNorm = on; }); };
-        setupButton (mon, "MON", "Hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
+        setupButton (mon, "L", "L = Listen (input monitoring): hear the input live through this track's insert FX (AutoPitch, EQ, comp...)", true);
         mon.setColour (juce::TextButton::buttonOnColourId, col::accent2);
         mon.onClick = [this] { const bool on = mon.getToggleState(); s.edit ("Monitor", [&] (Project& p) { p.lanes[(size_t) index].monitor = on; }); };
         input.setTooltip ("Recording input: MONO puts one mic in the centre (both ears), STEREO records an input pair");
@@ -95,21 +159,28 @@ struct LaneHeader : public juce::Component
         if (index >= (int) p.lanes.size()) return;
         auto& l = p.lanes[(size_t) index];
         name.setText (l.name, juce::dontSendNotification);
+        name.setColour (juce::Label::textColourId, l.nameColour.isTransparent() ? col::text : l.nameColour);
+        name.setFont (col::laneNameFont (l.nameFont, 15.0f));
         arm.setToggleState (l.armed, juce::dontSendNotification);
         mute.setToggleState (l.muted, juce::dontSendNotification);
         mon.setToggleState (l.monitor, juce::dontSendNotification);
         norm.setToggleState (l.autoNorm, juce::dontSendNotification);
+        soft.setValue (l.shiftMs, juce::dontSendNotification);
         input.clear (juce::dontSendNotification);
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
         input.addSectionHeading ("Mono (both ears)");
-        for (int i = 0; i < juce::jmax (1, ins); ++i) input.addItem ("In " + juce::String (i + 1) + " Mono", i + 1);
+        for (int i = 0; i < juce::jmax (1, ins); ++i) input.addItem (juce::String (i + 1), i + 1);
         input.addSectionHeading ("Stereo");
-        for (int i = 0; i < juce::jmax (1, ins / 2); ++i) input.addItem ("In " + juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2) + " Stereo", 1000 + i);
+        for (int i = 0; i < juce::jmax (1, ins / 2); ++i) input.addItem (juce::String (i * 2 + 1) + "/" + juce::String (i * 2 + 2), 1000 + i);
         input.setSelectedId (l.stereoIn ? 1000 + l.inputPair : 1 + l.inputCh, juce::dontSendNotification);
         insert.clear (juce::dontSendNotification);
-        for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name), (int) i + 1);
+        for (size_t i = 0; i < p.mixer.size(); ++i) insert.addItem ((i == 0 ? juce::String ("M") : juce::String ((int) i)), (int) i + 1);
         insert.setSelectedItemIndex (juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack), juce::dontSendNotification);
+        input.setTooltip ("Input: " + (l.stereoIn ? "stereo pair " + juce::String (l.inputPair * 2 + 1) + "/" + juce::String (l.inputPair * 2 + 2) : "mono input " + juce::String (l.inputCh + 1) + ", centred in both ears")
+                          + ". 1, 2... = one mic (mono), 1/2 = stereo pair");
+        const int mt = juce::jlimit (0, (int) p.mixer.size() - 1, l.mixerTrack);
+        insert.setTooltip ("Mixer insert: " + (mt == 0 ? juce::String ("Master") : juce::String (mt) + " " + p.mixer[(size_t) mt].name) + ". This track plays and records through it");
     }
     void paint (juce::Graphics& g) override
     {
@@ -119,9 +190,17 @@ struct LaneHeader : public juce::Component
             g.setColour (col::accent.withAlpha (0.16f)); g.fillRect (getLocalBounds());
             g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (3));
         }
+        if (index < (int) s.p().lanes.size() && ! s.p().lanes[(size_t) index].colour.isTransparent())
+        {
+            g.setColour (s.p().lanes[(size_t) index].colour); g.fillRect (getLocalBounds().removeFromRight (5));
+        }
         g.setColour (col::gridBar); g.drawHorizontalLine (getHeight() - 1, 0.0f, (float) getWidth());
         if (arm.getToggleState() && s.engine.isRecording()) { g.setColour (col::rec.withAlpha (0.25f)); g.fillRect (getLocalBounds().removeFromLeft (4)); }
+        const auto gr = grip().toFloat();   // FL-style mini box: drag = this track's height, double-click = minimize / large
+        g.setColour (col::dim.withAlpha (0.55f)); g.drawRoundedRectangle (gr, 1.5f, 1.0f);
+        g.fillRect (gr.reduced (2.5f, 3.0f));
     }
+    juce::Rectangle<int> grip() const { return { getWidth() - 19, getHeight() - 10, 11, 8 }; }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 3);
@@ -132,13 +211,16 @@ struct LaneHeader : public juce::Component
         r.removeFromTop (2);
         mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
         norm.setBounds (r.removeFromLeft (44)); r.removeFromLeft (3);
+        soft.setBounds (r.removeFromLeft (24)); r.removeFromLeft (3);
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
     }
     std::function<void (int lane, int height)> onHeight;
     std::function<void (int size)> onAllHeights;
     bool edgeDrag = false; int dragStartH = 0;
-    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5; }
+    bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
+    juce::Slider soft;
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
         setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
@@ -146,6 +228,7 @@ struct LaneHeader : public juce::Component
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (edgeDrag && onHeight) onHeight (index, dragStartH + e.getDistanceFromDragStartY());
+        else if (! e.mods.isPopupMenu() && std::abs (e.getDistanceFromDragStartY()) > 6) setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -165,12 +248,33 @@ struct LaneHeader : public juce::Component
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (edgeDrag) { edgeDrag = false; return; }
-        if (! e.mods.isPopupMenu()) return;
+        if (! e.mods.isPopupMenu())
+        {
+            // drag a track's header up/down to reorder; the tracks in between shift to make room, each keeps its mixer insert
+            const int dy = e.getDistanceFromDragStartY(), h = juce::jmax (1, getHeight());
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+            if (std::abs (dy) > h / 2)
+            {
+                const int from = index, to = juce::jlimit (0, juce::jmax (0, (int) s.p().lanes.size() - 1), index + (int) std::lround ((double) dy / h));
+                if (to != from)
+                {
+                    s.selectedLanes.clear(); s.selectedLanes.add (to); s.laneAnchor = to;
+                    s.edit ("Move track", [from, to] (Project& p) { moveLane (p, from, to); });
+                }
+            }
+            return;
+        }
         juce::PopupMenu m;
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
         if (index < (int) s.p().lanes.size()) m.addSubMenu ("Presets", trackPresetMenu (s, s.p().lanes[(size_t) index].mixerTrack));
+        m.addSubMenu ("Color", colourMenu (30));
+        { auto nc = colourMenu (50); nc.addSeparator(); nc.addItem (49, "Automatic (opposite of the clip color)"); m.addSubMenu ("Name color", nc); }
+        { juce::PopupMenu fm; const char* fonts[] { "Default", "Bold", "Italic", "Mono", "Serif", "Sans" }; for (int k = 0; k < 6; ++k) fm.addItem (70 + k, fonts[k]); m.addSubMenu ("Name font", fm); }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
+       #if ! HHS_LICENSED
+        m.addItem (7, "HumHouse Drummer (turn this track into drums)");
+       #endif
         {
             juce::PopupMenu hm;
             hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
@@ -183,12 +287,23 @@ struct LaneHeader : public juce::Component
             else if (r == 2) s.edit ("New insert", [i] (Project& p) { p.lanes[(size_t) i].mixerTrack = p.addMixerTrack (p.lanes[(size_t) i].name); });
             else if (r == 3) { s.selectedTrack = s.p().lanes[(size_t) i].mixerTrack; if (s.showView) s.showView (2); s.sendChangeMessage(); }
             else if (r >= 20 && r <= 22) { if (onAllHeights) onAllHeights (r - 20); }
+            else if (r >= 30 && r <= 42) { const auto t = targets(); const auto c = pickedColour (r - 30); s.edit ("Track color", [t, c] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].colour = c; }); }
+            else if (r == 49 || (r >= 50 && r <= 62)) { const auto t = targets(); const auto c = r == 49 ? juce::Colour() : pickedColour (r - 50); s.edit ("Track name color", [t, c] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].nameColour = c; }); }
+            else if (r >= 70 && r <= 75) { const auto t = targets(); static const char* fonts[] { "", "Bold", "Italic", "Mono", "Serif", "Sans" }; const juce::String f (fonts[r - 70]); s.edit ("Track name font", [t, f] (Project& p) { for (int li : t) if (li >= 0 && li < (int) p.lanes.size()) p.lanes[(size_t) li].nameFont = f; }); }
             else if (r == 4) { const auto t = targets(); s.selectedLanes.clear(); s.edit ("Delete track", [t] (Project& p) { deleteLanes (p, t); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
+            else if (r == 7)
+            {
+                auto id = std::make_shared<int> (-1);
+                const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
+                s.edit ("Session Drummer", [i, id, at] (Project& p) { *id = makeLaneDrummer (p, i, at, 8); });
+                if (*id >= 0) openChannelEditor (s, *id);
+            }
         });
     }
     Studio& s; int index;
+    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, mon, norm; juce::ComboBox input, insert;
 };
 
@@ -199,6 +314,17 @@ public:
     explicit Playlist (Studio& st) : s (st)
     {
         s.addChangeListener (this);
+        setupButton (addDrummer, "HumHouse Drums", "HumHouse Drums: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
+        addDrummer.onClick = [this] {
+            auto id = std::make_shared<int> (-1);
+            const double at = std::floor (juce::jmax (0.0, s.engine.positionBeats()) / 4.0) * 4.0;
+            s.selectedLanes.clear();
+            s.edit ("HumHouse Drummer", [id, at] (Project& p) { insertLane (p, 0); *id = makeLaneDrummer (p, 0, at, 8); });   // always track 1
+            if (*id >= 0) openChannelEditor (s, *id);
+        };
+       #if ! HHS_LICENSED
+        addAndMakeVisible (addDrummer);
+       #endif
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
@@ -227,6 +353,11 @@ public:
             snapBox.setTooltip ("Playlist snap: (none) = free placement; 1/2, 1/3, 1/6 step or beat for meticulous edits (hold Alt while dragging to bypass)");
             snapBox.onChange = [this] { plSnap = kSnapValues[juce::jmax (0, snapBox.getSelectedItemIndex())]; repaint(); };
             addAndMakeVisible (snapBox);
+            vZoom.setRange (0.35, 4.0); vZoom.setSkewFactorFromMidPoint (1.0); vZoom.setValue (zoomH, juce::dontSendNotification);
+            vZoom.setTooltip ("Track height: slide to squeeze all tracks skinny or stretch them large");
+            vZoom.setColour (juce::Slider::thumbColourId, col::accent); vZoom.setColour (juce::Slider::trackColourId, col::panel2);
+            vZoom.onValueChange = [this] { zoomH = (float) vZoom.getValue(); layoutHeaders(); repaint(); };
+            addAndMakeVisible (vZoom);
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
@@ -247,23 +378,27 @@ public:
     juce::String getTooltip() override
     {
         if (lastMouse.y >= toolbarH && lastMouse.y < toolbarH + rulerH && lastMouse.x > headerW)
-            return "Ruler: click / drag = move playhead (Alt = no snap), E + drag = time selection, Shift + drag = punch range, double-click = clear";
+            return "Ruler: click = move playhead, drag the triangle = scrub (Alt = no snap), drag the numbers = loop range (E: also selects), double-click = clear";
         if (lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH)
-            return "Double-click = place pattern | drag clip = move | drag edges = trim | top corners = fades (Alt = curve) | right-click = takes, routing, split";
+            return "Double-click = place pattern | drag clip = move | drag edges = trim | Alt+drag right edge = stretch | top corners = fades (Alt = curve) | right-click = takes, routing, split";
         return {};
     }
 
     void resized() override
     {
+        placeSplitBars();
         laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
-        addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (12);
+        addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
+        t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
         t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
+        if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
+        vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
         layoutHeaders();
     }
 
@@ -343,14 +478,16 @@ public:
         juce::Rectangle<int> ruler (headerW, toolbarH, getWidth() - headerW, rulerH);
         g.setColour (col::panel2); g.fillRect (ruler);
         g.setFont (juce::FontOptions (11.0f));
+        const int every = rulerLabelStep (beatToX (p.beatsPerBar) - beatToX (0));
         for (int bar = (int) (scrollX / p.beatsPerBar); ; ++bar)
         {
             const float x = beatToX (bar * p.beatsPerBar);
             if (x > getWidth()) break;
             if (x < headerW) continue;
             g.setColour (col::dim);
-            g.drawText (juce::String (bar + 1), (int) x + 3, toolbarH, 40, rulerH, juce::Justification::centredLeft);
-            g.drawVerticalLine ((int) x, (float) toolbarH + 12, (float) (toolbarH + rulerH));
+            const bool label = bar % every == 0;
+            if (label) g.drawText (juce::String (bar + 1), (int) x + 3, toolbarH, 40, rulerH, juce::Justification::centredLeft);
+            g.drawVerticalLine ((int) x, (float) toolbarH + (label ? 12 : 18), (float) (toolbarH + rulerH));
         }
         if (p.hasPunch())
         {
@@ -374,13 +511,19 @@ public:
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText ("PLAYLIST", 8, toolbarH, headerW - 16, rulerH, juce::Justification::centredLeft);
+        drawHeadline (g, "PLAYLIST", { 8, toolbarH, headerW - 16, rulerH }, juce::Justification::centredLeft);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
     {
         lastMouse = e.getPosition();
         Part part; const int i = hitClip (e.position, part);
+        if (tool != PTool::Select && e.position.y > toolbarH + rulerH && e.position.x > headerW)
+        {
+            setMouseCursor (tool == PTool::Paint ? toolCursor (CursorIcon::Brush) : tool == PTool::Delete ? toolCursor (CursorIcon::Bin)
+                            : tool == PTool::Mute ? toolCursor (CursorIcon::Mute) : toolCursor (CursorIcon::Scissors));
+            return;
+        }
         setMouseCursor (i < 0 ? juce::MouseCursor::NormalCursor
                         : part == Part::Curve ? juce::MouseCursor::UpDownResizeCursor
                         : part == Part::FadeIn || part == Part::FadeOut ? juce::MouseCursor::PointingHandCursor
@@ -396,9 +539,9 @@ public:
         dragStart = e.position;
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
-            // handle = always scrub; Shift+drag = punch; E (select) + drag = time selection; otherwise click / drag moves the playhead
+            // handle = drag the playhead; drag on the numbers = loop range (E: also selects clips in it); click = move playhead
             drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
-                 : e.mods.isShiftDown() ? Drag::Ruler : tool == PTool::Select ? Drag::TimeSel : Drag::Scrub;
+                 : tool == PTool::Select && ! e.mods.isShiftDown() ? Drag::TimeSel : Drag::Ruler;
             if (drag == Drag::Scrub) mouseDrag (e);
             return;
         }
@@ -477,6 +620,7 @@ public:
         drag = part == Part::Curve ? Drag::Curve : part == Part::FadeIn ? Drag::FadeIn : part == Part::FadeOut ? Drag::FadeOut : part == Part::Right ? Drag::Resize
              : part == Part::Left ? Drag::Trim : Drag::Move;
         cloneOnDrag = drag == Drag::Move && e.mods.isShiftDown(); cloned = false;   // FL: Shift+drag clones
+        stretchDrag = drag == Drag::Resize && e.mods.isAltDown() && p.clips[(size_t) i].isAudio();
         repaint();
     }
 
@@ -572,12 +716,14 @@ public:
         if (drag == Drag::TimeSel)
         {
             if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x)))); }
+            else if (timeSelB > timeSelA) s.edit ("Loop range", [a = timeSelA, b = timeSelB] (Project& pr) { pr.punchIn = a; pr.punchOut = b; });   // FL: playback loops the selection
             drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
         else if (changed)
         {
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
+            if (stretchDrag && dragOrig.size() == p.clips.size()) { stretchClips(); drag = Drag::None; dragClip = -1; stretchDrag = false; repaint(); return; }
             s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
                 // routing follows the recording: a moved audio clip keeps playing through the insert it came from
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
@@ -602,6 +748,17 @@ public:
         Part part; const int i = hitClip (e.position, part);
         if (i >= 0)
         {
+            if (p.clips[(size_t) i].isDrummer()) { openChannelEditor (s, p.clips[(size_t) i].drummer); return; }
+           #if ! HHS_LICENSED
+            if (p.clips[(size_t) i].isAudio())
+            {
+                const int uid = p.clips[(size_t) i].uid;
+                juce::PopupMenu m;
+                m.addItem (1, "Split stems (Drums, Bass, Vocals, Melodies)");
+                m.showMenuAsync ({}, [this, uid] (int r) { if (r == 1) splitClipStems (uid); });
+                return;
+            }
+           #endif
             if (! p.clips[(size_t) i].isAudio())
             {
                 const int pat = p.clips[(size_t) i].patternIndex;
@@ -633,6 +790,7 @@ public:
         if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
         {
             zoomH = juce::jlimit (0.4f, 4.0f, zoomH * (w.deltaY > 0 ? 1.1f : 1.0f / 1.1f));
+            vZoom.setValue (zoomH, juce::dontSendNotification);
             layoutHeaders(); repaint();
             return;
         }
@@ -670,6 +828,25 @@ public:
         }
         if (k == juce::KeyPress ('g', cmd, 0)) { groupSelected (true); return true; }
         if (k == juce::KeyPress ('g', cmd | juce::ModifierKeys::shiftModifier, 0)) { groupSelected (false); return true; }
+        if (k.getKeyCode() == juce::KeyPress::upKey || k.getKeyCode() == juce::KeyPress::downKey)   // Up/Down: slide the selected clips to the track above/below
+        {
+            const int dir = k.getKeyCode() == juce::KeyPress::upKey ? -1 : 1;
+            int lo = 1 << 30, hi = -1;
+            for (auto& c : s.p().clips) if (c.selected) { lo = juce::jmin (lo, c.lane); hi = juce::jmax (hi, c.lane); }
+            if (hi < 0) return false;
+            if (lo + dir < 0 || hi + dir >= (int) s.p().lanes.size()) return true;
+            s.edit ("Move clips", [dir] (Project& p) { for (auto& c : p.clips) if (c.selected) c.lane += dir; });
+            return true;
+        }
+       #if ! HHS_LICENSED
+        if (k.getModifiers().isAltDown() && (k.getKeyCode() == 'a' || k.getKeyCode() == 'A'))   // Alt+A: hi-hat style roll on the selected audio clips
+        {
+            std::vector<int> u;
+            for (auto& c : s.p().clips) if (c.selected && c.isAudio()) u.push_back (c.uid);
+            if (! u.empty()) rollMenu (u);
+            return true;
+        }
+       #endif
         if (k.getModifiers().isAnyModifierKeyDown() == false)
         {
             const std::pair<int, PTool> keys[] { { 'e', PTool::Select }, { 'p', PTool::Paint }, { 'b', PTool::Paint }, { 'd', PTool::Delete }, { 't', PTool::Mute }, { 'c', PTool::Slice } };
@@ -722,9 +899,33 @@ public:
         return false;
     }
 
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString() == "sample"; }
-    void itemDropped (const SourceDetails& d) override   // drag from the Samples browser
+    bool isInterestedInDragSource (const SourceDetails& d) override
     {
+        const auto t = d.description.toString();
+        return t == "sample" || t.startsWith ("pattern:") || t.startsWith ("audio:");
+    }
+    void itemDropped (const SourceDetails& d) override   // drag from the Samples browser / PATTERNS tab
+    {
+        const auto desc = d.description.toString();
+        if (desc.startsWith ("audio:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("audio:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
+        if (desc.startsWith ("pattern:"))
+        {
+            const int pat = desc.fromFirstOccurrenceOf ("pattern:", false, false).getIntValue();
+            const double at = juce::jmax (0.0, snap (xToBeat ((float) d.localPosition.x)));
+            int lane = laneAt ((float) d.localPosition.y);
+            s.edit ("Place pattern", [&] (Project& p) {
+                if (pat < 0 || pat >= (int) p.patterns.size()) return;
+                if (lane < 0 || lane >= (int) p.lanes.size())
+                {
+                    Lane l; l.name = p.patterns[(size_t) pat].name; l.mixerTrack = p.addMixerTrack (l.name);
+                    p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                }
+                Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.patternIndex = pat;
+                c.length = p.patterns[(size_t) pat].lengthBeats();
+                p.clips.push_back (c);
+            });
+            return;
+        }
         if (auto* t = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get()))
         {
             juce::StringArray files;
@@ -782,7 +983,7 @@ private:
     }
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
-    juce::TextButton addTrack, loopRec, rts, preroll, clearPunch;
+    juce::TextButton addTrack, addDrummer, loopRec, rts, preroll, clearPunch;
     juce::ComboBox snapBox;
     double plSnap = 1.0;
     float lastPx = -1.0f;
@@ -792,6 +993,7 @@ private:
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
+    bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
@@ -802,7 +1004,8 @@ private:
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
     std::map<int, float> laneMul;   // per-track height (drag a header's bottom edge)
-    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks)
+    float zoomH = 1.0f;             // all tracks (Alt+wheel, Make all tracks, side bar)
+    juce::Slider vZoom { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
     int numLanes() const { return (int) const_cast<Studio&> (s).p().lanes.size(); }
     int laneHOf (int lane) const
     {
@@ -879,7 +1082,9 @@ private:
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
-        juce::Colour colour = c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        juce::Colour colour = c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
+        if (! c.colour.isTransparent()) colour = c.colour;
         if (c.muted) colour = col::dim;
         g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
         g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);
@@ -919,6 +1124,24 @@ private:
             g.fillRect (r.getX() + fi - 3, r.getY(), 6.0f, 6.0f);
             g.fillRect (r.getRight() - fo - 3, r.getY(), 6.0f, 6.0f);
         }
+        else if (c.isDrummer())
+        {   // Logic-style drummer region: cymbals on top, snare in the middle, kick at the bottom
+            const Channel* dc = nullptr; for (auto& ch : p.channels) if (ch.id == c.drummer) dc = &ch;
+            if (dc != nullptr)
+                if (auto hits = drummerHits (dc->drum, p.bpm, c.length))
+                {
+                    const float rowH = (body.getHeight() - 6) / 3.0f;
+                    for (auto& h : *hits)
+                    {
+                        if (h.beat >= c.length) break;
+                        const int row = h.lane == 0 ? 2 : (h.lane <= 6 || (h.lane >= 25 && h.lane <= 28)) ? 1 : 0;
+                        g.setColour (colour.brighter (0.6f).withAlpha (0.35f + 0.65f * h.vel));
+                        g.fillRect (body.getX() + (float) (h.beat * pxPerBeat), body.getY() + 3 + row * rowH + rowH * 0.2f, 2.0f, rowH * 0.6f);
+                    }
+                }
+            g.setColour (colour.brighter (0.4f).withAlpha (0.5f));
+            for (double bar = 4; bar < c.length; bar += 4) g.fillRect (body.getX() + (float) (bar * pxPerBeat), body.getY(), 1.0f, body.getHeight());
+        }
         else if (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size())
         {
             auto& pat = p.patterns[(size_t) c.patternIndex];
@@ -939,7 +1162,7 @@ private:
             }
         }
         juce::String label = c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
-                                         : (c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
+                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
         if (c.isAudio())
         {
             const int ins = p.clipInsert (c);
@@ -951,9 +1174,158 @@ private:
                 if (n > 1) label << "  [take " << k << "/" << n << "]";
             }
         }
-        g.setColour (juce::Colours::black); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
+        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
+        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
+        else if (! c.isAudio() && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
+    }
+    static void addRollItems (juce::PopupMenu& m)
+    {
+        const char* names[] { "1/4", "1/8", "1/16", "1/32", "1/8 triplet", "1/16 triplet" };
+        for (int i = 0; i < 6; ++i) m.addItem (300 + i, juce::String ("Roll ") + names[i]);
+    }
+    void rollMenu (std::vector<int> uids)
+    {
+        juce::PopupMenu m; addRollItems (m);
+        m.showMenuAsync ({}, [this, uids] (int r) { applyRoll (uids, r); });
+    }
+    // ruler range set: only that part rolls; otherwise the whole clip. Audio outside the range is kept.
+    void applyRoll (const std::vector<int>& uids, int r)
+    {
+        static const double divs[] { 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
+        if (r < 300 || r > 305) return;
+        const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
+        s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
+    }
+    // live "Splitting stems: NN%" badge (top-right of the Playlist) while a split runs
+    struct SplitProgress : juce::Component, juce::Timer
+    {
+        SplitProgress (std::shared_ptr<std::atomic<float>> pr, juce::String n) : prog (std::move (pr)), name (std::move (n)) { setInterceptsMouseClicks (false, false); startTimerHz (15); }
+        void timerCallback() override { repaint(); }
+        void paint (juce::Graphics& g) override
+        {
+            auto r = getLocalBounds().toFloat().reduced (1.0f);
+            const float v = juce::jlimit (0.0f, 1.0f, prog->load());
+            g.setColour (juce::Colour (0xe0101418)); g.fillRoundedRectangle (r, 6.0f);
+            auto bar = r.reduced (6.0f).removeFromBottom (5.0f);
+            g.setColour (juce::Colours::white.withAlpha (0.15f)); g.fillRoundedRectangle (bar, 2.5f);
+            g.setColour (juce::Colour (0xff4ad991)); g.fillRoundedRectangle (bar.withWidth (bar.getWidth() * v), 2.5f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (13.0f));
+            g.drawText ("Splitting stems: " + juce::String (juce::roundToInt (v * 100.0f)) + "%  " + name,
+                        r.reduced (8.0f, 3.0f).withTrimmedBottom (8.0f), juce::Justification::centredLeft, true);
+        }
+        std::shared_ptr<std::atomic<float>> prog; juce::String name;
+    };
+    juce::OwnedArray<SplitProgress> splitBars;
+    void placeSplitBars()
+    {
+        for (int i = 0; i < splitBars.size(); ++i)
+        {
+            splitBars[i]->setBounds (getWidth() - 330, 46 + i * 38, 320, 34);
+            splitBars[i]->toFront (false);
+        }
+    }
+    // HumHouse Stem Splitter: runs in the background; the stems land on 4 new tracks under the clip, the original is muted (kept)
+    void splitClipStems (int uid)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio() || ! cp->audioFile.existsAsFile()) return;
+        const Clip c = *cp;
+        auto& pr = s.p();
+        const auto dir = (pr.projectFile.existsAsFile() ? pr.projectFile.getParentDirectory() : pr.recordingsFolder().getParentDirectory()).getChildFile ("Stems");
+        const double secs = beatsToSeconds (c.length, pr.bpm);
+        auto prog = std::make_shared<std::atomic<float>> (0.0f);
+        addAndMakeVisible (splitBars.add (new SplitProgress (prog, c.audioFile.getFileNameWithoutExtension())));
+        placeSplitBars();
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::Thread::launch ([safe, c, dir, secs, prog] {
+            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir, prog.get());
+            juce::MessageManager::callAsync ([safe, c, files, prog] {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr) return;
+                for (int i = pl->splitBars.size(); --i >= 0;)
+                    if (pl->splitBars[i]->prog == prog) pl->splitBars.remove (i);
+                pl->placeSplitBars();
+                if (files[0] == juce::File()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Stem Splitter", "Couldn't split this clip. The original clip is unchanged."); return; }
+                pl->s.edit ("Split stems", [c, files] (Project& p) {
+                    const juce::uint32 cols[] { 0xffff5d5d, 0xff3d9bff, 0xffffc93d, 0xff4ad991 };
+                    for (int k = 0; k < NumStems; ++k)
+                    {
+                        const int at = juce::jmin ((int) p.lanes.size(), c.lane + 1 + k);
+                        insertLane (p, at);
+                        auto& l = p.lanes[(size_t) at]; l.name = stemName (k); l.colour = juce::Colour (cols[k]);
+                        Clip n = c; n.uid = p.newUid(); n.lane = at; n.audioFile = files[(size_t) k]; n.sourceOffset = 0;
+                        n.selected = false; n.group = 0; n.takeGroup = 0; n.colour = {}; n.mixerTrack = -1; n.muted = false;
+                        p.clips.push_back (n);
+                    }
+                    for (auto& o : p.clips) if (o.uid == c.uid) o.muted = true;   // the original stays, muted
+                });
+            });
+        });
+    }
+    // Key Finder: key, scale, BPM and tuning offset of an audio clip (analysed off the audio thread)
+    void findKeyForClip (const Clip& c)
+    {
+        juce::Component::SafePointer<Playlist> safe (this);
+        const auto file = c.audioFile; const double off = c.sourceOffset, secs = juce::jmin (120.0, beatsToSeconds (c.length, s.p().bpm));
+        juce::Thread::launch ([safe, file, off, secs] {
+            KeyGuess g; bool ok = false;
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> rd { fm.createReaderFor (file) })
+            {
+                const double sr = rd->sampleRate;
+                const auto a = (juce::int64) (off * sr);
+                const int len = (int) juce::jmin ((juce::int64) (secs * sr), rd->lengthInSamples - a);
+                if (len > (int) sr)
+                {
+                    juce::AudioBuffer<float> b (2, len);
+                    rd->read (&b, 0, len, a, true, true);
+                    b.addFrom (0, 0, b, 1, 0, len); b.applyGain (0, 0, len, 0.5f);
+                    g = findKey (b.getReadPointer (0), len, sr); ok = true;
+                }
+            }
+            juce::MessageManager::callAsync ([safe, g, ok] { if (auto* pl = safe.getComponent()) pl->showKeyResult (g, ok); });
+        });
+    }
+    void showKeyResult (const KeyGuess& g, bool ok)
+    {
+        if (! ok) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Key Finder", "Couldn't read this clip (it needs at least 1 second of audio)."); return; }
+        const float a4 = 440.0f * std::pow (2.0f, g.cents / 1200.0f);
+        const juce::String msg = g.describe() + "\n\nAutoPitch: set Tuning A4 to " + juce::String (a4, 1) + " Hz to tune to this audio.";
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Key Finder").withMessage (msg)
+                                        .withButton ("Set project key + BPM").withButton ("Set key only").withButton ("Close"),
+            [safe, g] (int r) {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr || r == 0) return;
+                pl->s.edit ("Key Finder", [g, r] (Project& p) { p.keyRoot = g.root; p.scaleIndex = g.scaleIndex; if (r == 1 && g.bpm > 0) p.bpm = g.bpm; });
+            });
+    }
+    void stretchClips()
+    {
+        auto& p = s.p();
+        const auto dir = p.recordingsFolder();
+        std::vector<std::pair<int, juce::File>> baked;
+        for (size_t i = 0; i < p.clips.size(); ++i)
+        {
+            const auto& c = p.clips[i]; const auto& o = dragOrig[i];
+            if (! c.isAudio() || c.uid != o.uid || std::abs (c.length - o.length) < 1.0e-6 || o.length <= 0) continue;
+            const auto f = bakeClipStretch (o.audioFile, o.sourceOffset, beatsToSeconds (o.length, p.bpm), c.length / o.length, stretchMode == 1, dir);
+            if (f != juce::File()) baked.push_back ({ c.uid, f });
+        }
+        auto orig = dragOrig;
+        s.edit (stretchMode == 1 ? "Stretch clip" : "Resample clip", [orig, baked] (Project& pr) {
+            for (size_t i = 0; i < pr.clips.size() && i < orig.size(); ++i)
+            {
+                auto& c = pr.clips[i];
+                auto it = std::find_if (baked.begin(), baked.end(), [&] (const auto& b) { return b.first == c.uid; });
+                if (it == baked.end()) { if (c.uid == orig[i].uid && c.isAudio()) c.length = orig[i].length; continue; }   // couldn't render: unchanged
+                const double k = c.length / orig[i].length;
+                c.audioFile = it->second; c.sourceOffset = 0; c.fadeIn = orig[i].fadeIn * k; c.fadeOut = orig[i].fadeOut * k;
+            }
+        });
     }
     void clipMenu (int index)
     {
@@ -976,10 +1348,59 @@ private:
         for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
         m.addSubMenu ("Takes", takes, group.size() > 1);
         m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+       #if ! HHS_LICENSED
+        juce::PopupMenu roll; addRollItems (roll);
+        m.addSubMenu ("Roll (hi-hat style)   Alt+A", roll, clip.isAudio());
+       #endif
         m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
+        m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
+        {
+            auto cm = colourMenu (30);
+            cm.addItem (43, "Use track color", ! clip.colour.isTransparent());
+            m.addSubMenu ("Color (selected clips)", cm);
+        }
+        if (clip.lane >= 0 && clip.lane < (int) p.lanes.size()) m.addSubMenu ("Track color", colourMenu (50));
+       #if ! HHS_LICENSED
+        m.addItem (9, "Find key / BPM / tune", clip.isAudio());
+        {
+            juce::PopupMenu sm;
+            sm.addItem (12, "Resample (speed + pitch, like tape)", true, stretchMode == 0);
+            sm.addItem (13, "Stretch (keep pitch)", true, stretchMode == 1);
+            m.addSubMenu ("Stretch mode (Alt+drag clip edge)", sm, clip.isAudio());
+        }
+        if (clip.isDrummer()) m.addItem (10, "Drummer settings (kit, style, mix)...");
+       #if ! HHS_LICENSED
+        m.addItem (11, "Split stems (Drums, Bass, Vocals, Melodies)", clip.isAudio());
+       #endif
+       #endif
         m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
             if (r == 0) return;
+            if (r >= 300 && r <= 305)
+            {
+                std::vector<int> u;
+                for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio()) u.push_back (o.uid);
+                applyRoll (u, r);
+                return;
+            }
+            if (r == 11) { splitClipStems (uid); return; }
+            if (r == 12 || r == 13) { stretchMode = r - 12; return; }
+            if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
+            if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
+            if (r >= 30 && r <= 43)
+            {
+                const auto c = r == 43 ? juce::Colour() : pickedColour (r - 30);
+                s.edit ("Clip color", [uid, c] (Project& pr) { for (auto& o : pr.clips) if (o.selected || o.uid == uid) o.colour = c; });
+                return;
+            }
+            if (r >= 50 && r <= 62)
+            {
+                const auto c = pickedColour (r - 50);
+                s.edit ("Track color", [uid, c] (Project& pr) {
+                    std::set<int> ls; for (auto& o : pr.clips) if (o.selected || o.uid == uid) ls.insert (o.lane);
+                    for (int li : ls) if (li >= 0 && li < (int) pr.lanes.size()) pr.lanes[(size_t) li].colour = c; });
+                return;
+            }
             s.edit ("Clip edit", [&] (Project& pr) {
                 auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
                 if (it == pr.clips.end()) return;
@@ -999,6 +1420,12 @@ private:
                     }
                 }
                 else if (r == 3) c.muted = ! c.muted;
+                else if (r == 8)
+                {
+                    const int pat = c.patternIndex;
+                    for (auto& o : pr.clips) o.selected = ! o.isAudio() && o.patternIndex == pat;
+                    pr.currentPattern = pat;
+                }
                 else if (r == 4) c.reversed = ! c.reversed;
                 else if (r == 6 || r == 7)
                 {
@@ -1045,6 +1472,18 @@ private:
                 else if (r >= 100 && r < 1000) forSel ([r] (Clip& o) { o.mixerTrack = r - 100; });
                 else if (r >= 1000) { const int keep = r - 1000; for (auto& o : pr.clips) if (o.takeGroup == c.takeGroup) o.hidden = o.uid != keep; }
             });
+            if (r == 8)   // jump the view to the first use
+            {
+                double first = 1.0e9; int lane = 0;
+                for (auto& o : s.p().clips) if (o.selected && o.start < first) { first = o.start; lane = o.lane; }
+                if (first < 1.0e9)
+                {
+                    scrollX = juce::jmax (0.0, first - (double) s.p().beatsPerBar);
+                    scrollY = juce::jmax (0, laneY (lane) + scrollY - (toolbarH + rulerH));
+                    resized();
+                }
+                repaint();
+            }
         });
     }
     void layoutHeaders()
@@ -1074,6 +1513,7 @@ private:
                 {
                     laneMul.clear();
                     zoomH = size == 0 ? 0.6f : size == 1 ? 1.0f : 1.8f;
+                    vZoom.setValue (zoomH, juce::dontSendNotification);
                     layoutHeaders(); repaint();
                 };
                 addAndMakeVisible (*headers.back());

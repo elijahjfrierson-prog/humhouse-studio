@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Drummer/DrummerCore.h"
 #include <complex>
 #include <map>
 
@@ -19,9 +20,12 @@ public:
         centreWithSize (getWidth(), getHeight());
         setVisible (true);
         makeCaptureFriendly (*this);
-        startTimer (400);
+        markFloating (*this);
+        if (floatWithTopmost) setAlwaysOnTop (true);
+        startTimer (300);
     }
     void closeButtonPressed() override { close (this); }
+    bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
     static void close (EditorWindow* w) { juce::MessageManager::callAsync ([w] { windows().removeObject (w); }); }
     static juce::OwnedArray<EditorWindow>& windows() { static juce::OwnedArray<EditorWindow> w; return w; }
     juce::String key;
@@ -29,7 +33,12 @@ public:
 
 private:
     std::function<bool()> valid;
-    void timerCallback() override { if (valid && ! valid()) { stopTimer(); close (this); } }
+    void timerCallback() override
+    {
+        if (valid && ! valid()) { stopTimer(); close (this); return; }
+        // FL-style: plug-in windows float over the app while you click around it, but not over other apps
+        updateFloating (*this);
+    }
 };
 
 bool focusExisting (const juce::String& key)
@@ -55,6 +64,7 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "comp", { { "Vocal", { { "threshold", -22.0f }, { "ratio", 3.0f }, { "attack", 8.0f }, { "release", 120.0f } } }, { "Drums", { { "threshold", -18.0f }, { "ratio", 4.0f }, { "attack", 25.0f }, { "release", 90.0f } } }, { "Glue", { { "threshold", -14.0f }, { "ratio", 2.0f }, { "attack", 30.0f }, { "release", 300.0f } } }, { "Parallel Smash", { { "threshold", -30.0f }, { "ratio", 8.0f }, { "mix", 0.5f } } } } },
         { "fet76", { { "Vocal Grab", { { "input", 28.0f }, { "ratio", 0.0f }, { "attack", 4.0f }, { "release", 5.0f } } }, { "All Buttons Smash", { { "input", 36.0f }, { "ratio", 4.0f }, { "mix", 0.5f } } }, { "Drum Crunch", { { "input", 32.0f }, { "ratio", 2.0f } } } } },
         { "stgate", { { "Vocal Gate", { { "threshold", -45.0f }, { "range", -30.0f }, { "release", 150.0f } } }, { "Tight Drums", { { "threshold", -35.0f }, { "range", -60.0f }, { "hold", 10.0f }, { "release", 60.0f } } }, { "Soft Expander", { { "mode", 1.0f }, { "threshold", -40.0f }, { "ratio", 2.0f } } } } },
+        { "stmax", { { "Master Aid 1", { { "xlo", 150.0f }, { "xhi", 5000.0f }, { "lpre", 0.0f }, { "lthr", -14.0f }, { "lratio", 2.0f }, { "latk", 20.0f }, { "lrel", 160.0f }, { "lpost", 0.5f }, { "mpre", 0.0f }, { "mthr", -16.0f }, { "mratio", 1.8f }, { "matk", 12.0f }, { "mrel", 120.0f }, { "mpost", 0.0f }, { "hpre", 0.5f }, { "hthr", -18.0f }, { "hratio", 2.0f }, { "hatk", 5.0f }, { "hrel", 80.0f }, { "hpost", 0.8f }, { "sat", 0.15f }, { "gain", 3.0f }, { "ceiling", -0.3f }, { "release", 60.0f } } }, { "Loud Master", { { "xlo", 160.0f }, { "xhi", 4500.0f }, { "lpre", 1.0f }, { "lthr", -18.0f }, { "lratio", 3.0f }, { "latk", 15.0f }, { "lrel", 140.0f }, { "lpost", 0.5f }, { "mpre", 0.5f }, { "mthr", -18.0f }, { "mratio", 2.5f }, { "matk", 10.0f }, { "mrel", 110.0f }, { "mpost", 0.5f }, { "hpre", 1.0f }, { "hthr", -20.0f }, { "hratio", 3.0f }, { "hatk", 4.0f }, { "hrel", 70.0f }, { "hpost", 1.0f }, { "sat", 0.25f }, { "gain", 6.0f }, { "ceiling", -0.2f }, { "release", 40.0f } } }, { "Clean Glue", { { "xlo", 180.0f }, { "xhi", 5000.0f }, { "lpre", 0.0f }, { "lthr", -10.0f }, { "lratio", 1.5f }, { "latk", 30.0f }, { "lrel", 200.0f }, { "lpost", 0.0f }, { "mpre", 0.0f }, { "mthr", -10.0f }, { "mratio", 1.5f }, { "matk", 20.0f }, { "mrel", 160.0f }, { "mpost", 0.0f }, { "hpre", 0.0f }, { "hthr", -10.0f }, { "hratio", 1.5f }, { "hatk", 10.0f }, { "hrel", 120.0f }, { "hpost", 0.0f }, { "sat", 0.0f }, { "gain", 1.5f }, { "ceiling", -0.5f }, { "release", 80.0f } } }, { "808 Tamer", { { "xlo", 120.0f }, { "xhi", 4000.0f }, { "lpre", 0.0f }, { "lthr", -20.0f }, { "lratio", 4.0f }, { "latk", 10.0f }, { "lrel", 120.0f }, { "lpost", 0.0f }, { "mpre", 0.0f }, { "mthr", -12.0f }, { "mratio", 1.5f }, { "matk", 12.0f }, { "mrel", 120.0f }, { "mpost", 0.5f }, { "hpre", 0.0f }, { "hthr", -12.0f }, { "hratio", 1.5f }, { "hatk", 5.0f }, { "hrel", 80.0f }, { "hpost", 0.5f }, { "sat", 0.1f }, { "gain", 2.0f }, { "ceiling", -0.3f }, { "release", 60.0f } } }, { "Vocal Mix Polish", { { "xlo", 250.0f }, { "xhi", 6000.0f }, { "lpre", 0.0f }, { "lthr", -14.0f }, { "lratio", 2.0f }, { "latk", 20.0f }, { "lrel", 160.0f }, { "lpost", -0.5f }, { "mpre", 0.0f }, { "mthr", -16.0f }, { "mratio", 2.0f }, { "matk", 8.0f }, { "mrel", 100.0f }, { "mpost", 0.5f }, { "hpre", 0.0f }, { "hthr", -20.0f }, { "hratio", 2.5f }, { "hatk", 3.0f }, { "hrel", 60.0f }, { "hpost", 1.0f }, { "sat", 0.1f }, { "gain", 2.0f }, { "ceiling", -0.3f }, { "release", 60.0f } } }, { "Limiter Only", { { "xlo", 180.0f }, { "xhi", 4500.0f }, { "lpre", 0.0f }, { "lthr", 0.0f }, { "lratio", 1.0f }, { "latk", 10.0f }, { "lrel", 100.0f }, { "lpost", 0.0f }, { "mpre", 0.0f }, { "mthr", 0.0f }, { "mratio", 1.0f }, { "matk", 10.0f }, { "mrel", 100.0f }, { "mpost", 0.0f }, { "hpre", 0.0f }, { "hthr", 0.0f }, { "hratio", 1.0f }, { "hatk", 10.0f }, { "hrel", 100.0f }, { "hpost", 0.0f }, { "sat", 0.0f }, { "gain", 3.0f }, { "ceiling", -0.3f }, { "release", 60.0f } } } } },
         { "stlimit", { { "Master Loud", { { "gain", 6.0f }, { "ceiling", -0.3f } } }, { "Safe", { { "gain", 0.0f }, { "ceiling", -1.0f } } }, { "Transparent", { { "gain", 3.0f }, { "ceiling", -1.0f }, { "release", 100.0f } } } } },
         { "limiter", { { "Master Loud", { { "gain", 6.0f }, { "ceiling", -0.3f } } }, { "Safe", { { "gain", 0.0f }, { "ceiling", -1.0f } } }, { "Transparent", { { "gain", 3.0f }, { "ceiling", -1.0f }, { "release", 100.0f } } } } },
         { "stvocal", { { "Smooth Rap Lead", { { "smooth", 0.6f }, { "deess", 0.5f }, { "silk", 0.3f }, { "warmth", 0.25f } } },
@@ -66,7 +76,8 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
                        { "Background Stack", { { "smooth", 0.7f }, { "deess", 0.7f }, { "silk", 0.2f }, { "warmth", 0.2f }, { "out", -3.0f } } } } },
         { "satur", { { "Tape Warmth", { { "drive", 6.0f }, { "char", 0.0f } } }, { "Tube Push", { { "drive", 10.0f }, { "char", 1.0f } } }, { "Transformer Grit", { { "drive", 14.0f }, { "char", 2.0f }, { "mix", 0.7f } } } } },
         { "strip", { { "Rap Vocal", { { "gateTh", -55.0f }, { "compTh", -20.0f }, { "compRatio", 4.0f }, { "makeup", 5.0f }, { "hpf", 100.0f }, { "mid", -2.0f }, { "midF", 400.0f }, { "high", 3.0f } } }, { "Singer", { { "compTh", -18.0f }, { "compRatio", 3.0f }, { "hpf", 80.0f }, { "high", 2.0f } } }, { "Podcast", { { "gateTh", -50.0f }, { "compTh", -22.0f }, { "compRatio", 3.0f }, { "hpf", 90.0f }, { "low", -2.0f }, { "high", 2.0f } } } } },
-        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "speed", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "speed", 0.8f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "speed", 1.0f } } }, { "Robot", { { "style", 3.0f }, { "speed", 1.0f }, { "humanize", 0.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
+        { "purify", { { "A  Warm Glue", { { "mode", 0.0f }, { "amount", 0.5f } } }, { "B  Bright Air", { { "mode", 1.0f }, { "amount", 0.5f } } }, { "C  Punch", { { "mode", 2.0f }, { "amount", 0.55f } } }, { "D  Wide Polish", { { "mode", 3.0f }, { "amount", 0.5f } } }, { "E  Loud Master", { { "mode", 4.0f }, { "amount", 0.6f } } } } },
+        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "speed", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "speed", 0.8f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "speed", 1.0f } } }, { "Robot", { { "style", 3.0f }, { "speed", 1.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
         { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
         { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
         { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
@@ -83,7 +94,8 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "gain", { { "+6 dB", { { "gain", 6.0f } } }, { "-6 dB", { { "gain", -6.0f } } }, { "Mono", { { "mono", 1.0f } } }, { "Flip Phase", { { "phase", 1.0f } } } } },
         { "grit", { { "Tape", { { "mode", 0.0f }, { "drive", 0.3f } } }, { "Tube", { { "mode", 1.0f }, { "drive", 0.5f } } }, { "Fuzz", { { "mode", 2.0f }, { "drive", 0.8f }, { "mix", 0.6f } } }, { "Fold", { { "mode", 3.0f }, { "drive", 0.6f } } } } },
         { "crush", { { "8-bit", { { "bits", 8.0f }, { "down", 4.0f } } }, { "Lo-fi", { { "bits", 12.0f }, { "down", 2.0f }, { "mix", 0.6f } } }, { "Destroy", { { "bits", 4.0f }, { "down", 16.0f } } } } },
-        { "glitch", { { "Stutter All", { { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
+        { "hhmaster", { { "Master Glue", { { "drive", 8.0f }, { "smashmix", 50.0f }, { "grit", 25.0f }, { "pocket", 100.0f }, { "threshold", -10.0f }, { "makeup", 2.0f } } }, { "Hard Smash", { { "drive", 18.0f }, { "smashmix", 70.0f }, { "grit", 45.0f }, { "threshold", -14.0f }, { "makeup", 4.0f } } }, { "Gentle Polish", { { "drive", 3.0f }, { "smashmix", 25.0f }, { "grit", 10.0f }, { "pocket", 60.0f }, { "threshold", -6.0f }, { "makeup", 1.0f } } } } },
+        { "glitch", { { "Stutter All", { { "fx", 0.0f }, { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
     static const std::vector<FactoryPreset> none;
     auto it = all.find (type);
     return it != all.end() ? it->second : none;
@@ -214,10 +226,12 @@ private:
         return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio")
             .getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (kind));
     }
+    juce::String lastPreset;   // saving again with this name overwrites the old preset
     void showPresetMenu()
     {
         juce::PopupMenu menu;
         menu.addItem (1, "Save preset...");
+        if (lastPreset.isNotEmpty()) menu.addItem (2, "Save (overwrite \"" + lastPreset + "\")");
         const auto& fac = factoryPresets (kind);
         if (! fac.empty()) menu.addSectionHeader ("Factory presets");
         for (size_t i = 0; i < fac.size(); ++i) menu.addItem (5000 + (int) i, fac[i].name);
@@ -227,26 +241,32 @@ private:
         for (int i = 0; i < files.size() && i < 200; ++i) menu.addItem (100 + i, files[i].getFileNameWithoutExtension());
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
+            else if (r == 2) writePreset (lastPreset);
             else if (r >= 5000 && r - 5000 < (int) factoryPresets (kind).size()) loadFactory (factoryPresets (kind)[(size_t) (r - 5000)]);
-            else if (r >= 100 && r - 100 < files.size()) loadPreset (files[r - 100]);
+            else if (r >= 100 && r - 100 < files.size()) { lastPreset = files[r - 100].getFileNameWithoutExtension(); loadPreset (files[r - 100]); }
         });
     }
     void savePreset()
     {
         auto* aw = new juce::AlertWindow ("Save preset", "Preset name", juce::MessageBoxIconType::NoIcon);
-        aw->addTextEditor ("name", "My preset");
+        aw->addTextEditor ("name", lastPreset.isNotEmpty() ? lastPreset : juce::String ("My preset"));
         aw->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
         aw->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         juce::Component::SafePointer<ParamGrid> safe (this);
         aw->enterModalState (true, juce::ModalCallbackFunction::create ([safe, aw] (int r) {
             const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
             if (r != 1 || name.isEmpty() || safe == nullptr) return;
-            juce::XmlElement x ("HUMHOUSE_PRESET");
-            x.setAttribute ("kind", safe->kind);
-            for (auto& p : safe->params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
-            safe->presetDir().createDirectory();
-            x.writeTo (safe->presetDir().getChildFile (name + ".hhpreset"));
+            safe->writePreset (name);
         }), true);
+    }
+    void writePreset (const juce::String& name)
+    {
+        juce::XmlElement x ("HUMHOUSE_PRESET");
+        x.setAttribute ("kind", kind);
+        for (auto& p : params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+        presetDir().createDirectory();
+        auto f = presetDir().getChildFile (name + ".hhpreset");
+        if (x.writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
     }
     void loadFactory (const FactoryPreset& fp)
     {
@@ -729,6 +749,79 @@ private:
     juce::String type;
 };
 
+// Glitch Gate: click a labeled pad and hear it (Gross Beat / ShaperBox style); "Steps" opens the 16-step strip
+class GlitchPads : public juce::Component, private juce::Timer
+{
+public:
+    explicit GlitchPads (ParamGrid& g) : grid (g)
+    {
+        auto fx = createBuiltinEffect ("glitch");
+        const auto& defs = fx->params();
+        const int fi = fx->paramIndex ("fx");
+        names = defs[(size_t) fi].choices;
+        for (int k = 1; k <= (int) names.size(); ++k)
+        {
+            const int v = k % (int) names.size();   // pads first, "Steps" last
+            auto* b = pads.add (new juce::TextButton());
+            setupButton (*b, juce::String (names[(size_t) v]).toUpperCase(), v == 0 ? juce::String ("Build your own: 16 steps, click a step to change it")
+                                                                                 : juce::String ("Click to hear ") + names[(size_t) v], true);
+            b->setRadioGroupId (8801);
+            b->getProperties().set ("fx", v);
+            b->onClick = [this, v] { grid.setExternal ("fx", (float) v); grid.commitNow(); sync(); };
+            addAndMakeVisible (b);
+        }
+        sync(); startTimerHz (8);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        drawPanelBg (g, getLocalBounds().toFloat());
+        if (! stepsShown()) return;
+        static const char* shortNames[] { "-", "1/4", "1/8", "1/16", "1/32", "REV", "HALF", "STOP", "MUTE", "TRIP" };
+        auto strip = stripArea();
+        const float w = strip.getWidth() / 16.0f;
+        for (int i = 0; i < 16; ++i)
+        {
+            const int m = juce::jlimit (0, 9, (int) std::round (grid.valueOf ("s" + juce::String (i + 1))));
+            auto c = juce::Rectangle<float> (strip.getX() + i * w, strip.getY(), w, strip.getHeight()).reduced (1.5f);
+            g.setColour (m == 0 ? col::bg : col::accent.withAlpha (0.35f + 0.06f * (float) m)); g.fillRoundedRectangle (c, 3.0f);
+            g.setColour (i % 4 == 0 ? col::text : col::dim); g.drawRoundedRectangle (c, 3.0f, 1.0f);
+            g.setColour (col::text); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawText (shortNames[m], c.toNearestInt(), juce::Justification::centred);
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! stepsShown() || ! stripArea().contains (e.position)) return;
+        const int i = juce::jlimit (0, 15, (int) ((e.position.x - stripArea().getX()) / (stripArea().getWidth() / 16.0f)));
+        const auto id = "s" + juce::String (i + 1);
+        const int m = (int) std::round (grid.valueOf (id));
+        grid.setExternal (id, (float) ((m + (e.mods.isPopupMenu() ? 9 : 1)) % 10));
+        grid.commitNow(); repaint();
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (8);
+        r.removeFromBottom (40);
+        const int cols = 7, rows = (pads.size() + cols - 1) / cols;
+        const int cw = r.getWidth() / cols, rh = juce::jmin (40, r.getHeight() / juce::jmax (1, rows));
+        for (int i = 0; i < pads.size(); ++i)
+            pads[i]->setBounds (juce::Rectangle<int> (r.getX() + (i % cols) * cw, r.getY() + (i / cols) * rh, cw, rh).reduced (3));
+    }
+private:
+    bool stepsShown() const { return (int) std::round (grid.valueOf ("fx")) == 0; }
+    juce::Rectangle<float> stripArea() const { return getLocalBounds().toFloat().reduced (10.0f).removeFromBottom (34.0f); }
+    void sync()
+    {
+        const int cur = (int) std::round (grid.valueOf ("fx"));
+        for (auto* b : pads) b->setToggleState ((int) b->getProperties()["fx"] == cur, juce::dontSendNotification);
+        repaint();
+    }
+    void timerCallback() override { if (isShowing()) sync(); }
+    ParamGrid& grid;
+    std::vector<const char*> names;
+    juce::OwnedArray<juce::TextButton> pads;
+};
+
 class FxEditor : public juce::Component
 {
 public:
@@ -810,6 +903,11 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
+    else if (ty == "glitch")
+    {
+        grid->hideWhere ([] (const juce::String& id) { return id == "fx" || id == "steplen" || (id.startsWithChar ('s') && id != "smooth"); });
+        visual = new GlitchPads (*grid); vh = 260;
+    }
     else visual = createScopeView (tapFn, trackName);
     auto* editor = new FxEditor (grid, visual, vh);
     EditorWindow::windows().add (new EditorWindow (title + " - " + trackName, editor, key,
@@ -913,6 +1011,238 @@ struct ChannelTabs : juce::Component
     void resized() override { tabs.setBounds (getLocalBounds()); }
 };
 
+// Logic-style drummer pad: across = simple -> complex, up = soft -> loud; dragging rewrites the region live
+struct DrummerPad : juce::Component, juce::Timer
+{
+    DrummerPad (Studio& st, int id) : s (st), channelId (id) { setSize (560, 250); startTimerHz (10); }
+    juce::Rectangle<float> pad() const { return getLocalBounds().reduced (14, 10).toFloat(); }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = pad();
+        g.setColour (col::bg); g.fillRoundedRectangle (r, 6.0f);
+        g.setColour (col::grid);
+        for (int i = 1; i < 8; ++i)
+        {
+            g.drawVerticalLine ((int) (r.getX() + r.getWidth() * (float) i / 8.0f), r.getY(), r.getBottom());
+            g.drawHorizontalLine ((int) (r.getY() + r.getHeight() * (float) i / 8.0f), r.getX(), r.getRight());
+        }
+        g.setColour (col::gridBar); g.drawRoundedRectangle (r, 6.0f, 1.0f);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f));
+        auto t = r.reduced (8, 6);
+        g.drawText ("Loud", t, juce::Justification::topLeft); g.drawText ("Soft", t, juce::Justification::bottomLeft);
+        g.drawText ("Complex", t, juce::Justification::bottomRight); g.drawText ("Simple", t.withTrimmedLeft (40), juce::Justification::bottomLeft);
+        if (auto* c = s.channel (channelId))
+        {
+            const float x = r.getX() + r.getWidth() * c->drum.complexity, y = r.getBottom() - r.getHeight() * c->drum.loudness;
+            const auto glow = juce::Colour (0xffffc93d);
+            g.setColour (glow.withAlpha (0.18f)); g.fillEllipse (x - 22, y - 22, 44, 44);
+            g.setColour (glow.withAlpha (0.35f)); g.fillEllipse (x - 13, y - 13, 26, 26);
+            g.setColour (glow); g.fillEllipse (x - 7, y - 7, 14, 14);
+        }
+    }
+    void set (const juce::MouseEvent& e)
+    {
+        auto r = pad();
+        const float cx = juce::jlimit (0.0f, 1.0f, (e.position.x - r.getX()) / r.getWidth());
+        const float cy = juce::jlimit (0.0f, 1.0f, (r.getBottom() - e.position.y) / r.getHeight());
+        s.live ([&] (Project&) { if (auto* c = s.channel (channelId)) { c->drum.complexity = cx; c->drum.loudness = cy; } });
+        dirty = true; repaint();
+    }
+    void timerCallback() override { if (dirty) { dirty = false; s.engine.sync(); s.sendChangeMessage(); } }   // rewrite the region ~10x / s while dragging
+    void mouseDown (const juce::MouseEvent& e) override { set (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { set (e); }
+    void mouseUp (const juce::MouseEvent&) override { dirty = false; s.commit ("Drummer pad"); }
+    Studio& s; int channelId; bool dirty = false;
+};
+
+// STEPS: the mini manual sequencer for one 8-bar section: a 16-step bar per drum, repeated over the 8 bars, dead on the grid
+struct DrumSteps : juce::Component
+{
+    DrumSteps (Studio& st, int id, int sec) : s (st), channelId (id), section (sec)
+    {
+        addAndMakeVisible (autoBtn);
+        autoBtn.setButtonText ("Back to auto");
+        autoBtn.onClick = [this]
+        {
+            const int i = channelId, k = section;
+            s.edit ("Drummer steps", [i, k] (Project& p) { for (auto& c : p.channels) if (c.id == i) c.drum.steps.erase (k); });
+            repaint();
+        };
+        setSize (600, 210);
+    }
+    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (10).withTrimmedLeft (64).withTrimmedTop (24).withTrimmedBottom (32).toFloat(); }
+    void resized() override { autoBtn.setBounds (getWidth() - 130, getHeight() - 34, 120, 26); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const auto it = c->drum.steps.find (section);
+        const bool man = it != c->drum.steps.end();
+        g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
+        g.drawText ("Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8) + (man ? "  |  STEPS: this bar repeats for 8 bars" : "  |  AUTO: click a step to edit"),
+                    10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
+        const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+        {
+            g.setColour (col::text);
+            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 62, r.getY() + gi * rh, 58, rh), juce::Justification::centredRight);
+            for (int k = 0; k < 16; ++k)
+            {
+                const bool on = man && (it->second[(size_t) gi] >> k & 1) != 0;
+                auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
+                g.setColour (on ? juce::Colour (0xffffc93d) : k / 4 % 2 == 0 ? col::bg.brighter (0.08f) : col::bg); g.fillRoundedRectangle (cell, 3.0f);
+                g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+            }
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const auto r = grid(); if (! r.contains (e.position)) return;
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const int gi = juce::jlimit (0, (int) NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
+        const int st = juce::jlimit (0, 15, (int) ((e.position.x - r.getX()) / (r.getWidth() / 16.0f)));
+        const int i = channelId, k = section;
+        const auto seed = c->drum.steps.count (k) > 0 ? std::array<int, 5> {} : drummerSeedSteps (c->drum, s.p().bpm, k);
+        s.edit ("Drummer steps", [i, k, gi, st, seed] (Project& p) {
+            for (auto& ch : p.channels)
+                if (ch.id == i)
+                {
+                    auto f = ch.drum.steps.find (k);
+                    if (f == ch.drum.steps.end()) f = ch.drum.steps.emplace (k, seed).first;
+                    f->second[(size_t) gi] ^= 1 << st;
+                }
+        });
+        repaint();
+    }
+    Studio& s; int channelId, section; juce::TextButton autoBtn;
+};
+
+// SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song; double-click = STEPS editor
+struct DrumSections : juce::Component
+{
+    DrumSections (Studio& st, int id) : s (st), channelId (id)
+    {
+        addAndMakeVisible (splitBtn);
+        splitBtn.setButtonText ("Split by drum (own mixer inserts)");
+        splitBtn.onClick = [this] { split(); };
+        setSize (620, 300);
+    }
+    void resized() override { splitBtn.setBounds (getWidth() - 252, getHeight() - 32, 240, 24); }
+    // Kick stays here; Snare, Hats, Toms and Cymbals get their own channels playing the same part, each on its own insert
+    void split()
+    {
+        const int id = channelId;
+        s.edit ("Split drummer by drum", [id] (Project& p) {
+            for (auto& c : p.channels) if (c.drumLink == id) return;
+            Channel* src = nullptr;
+            for (auto& c : p.channels) if (c.id == id && c.type == ChannelType::Drummer && c.drumLink == 0) src = &c;
+            if (src == nullptr) return;
+            const Channel base = *src;
+            src->drum.groupMask = 1 << GroupKick;
+            src->name = base.name + " " + drumGroupName (GroupKick);
+            src->mixerTrack = p.addMixerTrack (src->name);
+            for (int g = GroupSnare; g < NumDrumGroups; ++g)
+            {
+                Channel c = base;
+                c.id = p.nextChannelId++; c.drumLink = id; c.drum.groupMask = 1 << g;
+                c.name = base.name + " " + drumGroupName (g);
+                c.mixerTrack = p.addMixerTrack (c.name);
+                p.channels.push_back (c);
+            }
+        });
+        s.engine.sync();
+        juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Split by drum",
+            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert. Edit the groove (style, sections, steps) on the Kick channel.");
+    }
+    juce::TextButton splitBtn;
+    int sections() const
+    {
+        double end = 0;
+        for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
+        return juce::jlimit (4, 32, (int) std::ceil (end / 32.0 - 1e-6) + 1);
+    }
+    juce::Rectangle<float> grid() const { return getLocalBounds().reduced (12, 10).withTrimmedLeft (70).withTrimmedTop (22).withTrimmedBottom (32).toFloat(); }
+    void paint (juce::Graphics& g) override
+    {
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const int n = sections(); const auto r = grid();
+        const float cw = r.getWidth() / (float) n, rh = r.getHeight() / (float) (NumDrumGroups + 1);
+        g.setFont (juce::FontOptions (12.0f));
+        for (int k = 0; k < n; ++k)
+        {
+            g.setColour (col::dim);
+            g.drawText ("Bar " + juce::String (k * 8 + 1), juce::Rectangle<float> (r.getX() + k * cw, r.getY() - 20, cw, 18), juce::Justification::centred);
+        }
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+        {
+            g.setColour (col::text);
+            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 68, r.getY() + gi * rh, 64, rh), juce::Justification::centredRight);
+            for (int k = 0; k < n; ++k)
+            {
+                const bool off = k < (int) c->drum.sectionMute.size() && (c->drum.sectionMute[(size_t) k] >> gi & 1) != 0;
+                auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
+                g.setColour (off ? col::bg : juce::Colour (0xffffc93d).withAlpha (0.85f)); g.fillRoundedRectangle (cell, 3.0f);
+                g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+                g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : c->drum.steps.count (k) > 0 ? "STEPS" : "ON", cell, juce::Justification::centred);
+            }
+        }
+        // DYNAMICS: how hard each section is played (drag up / down, double-click = 100%); it ramps into the next section
+        const float y = r.getY() + NumDrumGroups * rh;
+        g.setColour (col::text); g.drawText ("Dynamics", juce::Rectangle<float> (r.getX() - 68, y, 64, rh), juce::Justification::centredRight);
+        for (int k = 0; k < n; ++k)
+        {
+            const int v = dyn (*c, k);
+            auto cell = juce::Rectangle<float> (r.getX() + k * cw, y, cw, rh).reduced (2.0f);
+            g.setColour (col::bg); g.fillRoundedRectangle (cell, 3.0f);
+            g.setColour (col::accent.withAlpha (0.8f)); g.fillRoundedRectangle (cell.withTrimmedTop (cell.getHeight() * (1.0f - juce::jmin (1.0f, v / 150.0f))), 3.0f);
+            g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
+            g.setColour (col::text); g.drawText (juce::String (v) + "%", cell, juce::Justification::centred);
+        }
+    }
+    static int dyn (const Channel& c, int k) { return k < (int) c.drum.sectionVel.size() && c.drum.sectionVel[(size_t) k] > 0 ? c.drum.sectionVel[(size_t) k] : 100; }
+    void setDyn (int k, int v)
+    {
+        const int id = channelId;
+        s.live ([&] (Project& p) { for (auto& c : p.channels) if (c.id == id) { auto& m = c.drum.sectionVel; if ((int) m.size() <= k) m.resize ((size_t) k + 1, 100); m[(size_t) k] = juce::jlimit (5, 150, v); } });
+        s.engine.sync(); repaint();
+    }
+    int cellAt (const juce::MouseEvent& e, int& row) const
+    {
+        const int n = sections(); const auto r = grid();
+        row = juce::jlimit (0, (int) NumDrumGroups, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) (NumDrumGroups + 1))));
+        return juce::jlimit (0, n - 1, (int) ((e.position.x - r.getX()) / (r.getWidth() / (float) n)));
+    }
+    int dragK = -1, dragV = 100;
+    void mouseDrag (const juce::MouseEvent& e) override { if (dragK >= 0) setDyn (dragK, juce::roundToInt ((dragV - e.getDistanceFromDragStartY() * 0.75f) / 5.0f) * 5); }
+    void mouseUp (const juce::MouseEvent&) override { if (dragK >= 0) s.commit ("Drummer dynamics"); dragK = -1; }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (! grid().contains (e.position)) return;
+        int row = 0; const int k = cellAt (e, row);
+        if (row == NumDrumGroups) { setDyn (k, 100); s.commit ("Drummer dynamics"); return; }
+        juce::CallOutBox::launchAsynchronously (std::make_unique<DrumSteps> (s, channelId, k), juce::Rectangle<int> (e.getScreenX(), e.getScreenY(), 1, 1), nullptr);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const int n = sections(); const auto r = grid();
+        if (! r.contains (e.position)) return;
+        int gi = 0; const int k = cellAt (e, gi);
+        if (gi == NumDrumGroups) { if (auto* c = s.channel (channelId)) { dragK = k; dragV = dyn (*c, k); } return; }
+        const int id = channelId;
+        s.edit ("Drummer section", [id, k, gi] (Project& p) {
+            for (auto& c : p.channels)
+                if (c.id == id)
+                {
+                    auto& m = c.drum.sectionMute;
+                    if ((int) m.size() <= k) m.resize ((size_t) k + 1, 0);
+                    m[(size_t) k] ^= 1 << gi;
+                }
+        });
+        repaint();
+    }
+    Studio& s; int channelId;
+};
+
 void openChannelEditor (Studio& s, int channelId)
 {
     auto* ch = s.channel (channelId);
@@ -934,6 +1264,91 @@ void openChannelEditor (Studio& s, int channelId)
         EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
         return;
     }
+    if (ch->type == ChannelType::Drummer)
+    {
+        static std::vector<std::string> kitNames; static juce::Array<juce::File> kits;
+        kits = drumKits(); kitNames.clear();
+        int cur = 0;
+        for (int i = 0; i < kits.size(); ++i) { kitNames.push_back (kits[i].getFileName().toStdString()); if (kits[i] == ch->sampleFile) cur = i; }
+        std::vector<const char*> kitChoices; for (auto& n : kitNames) kitChoices.push_back (n.c_str());
+        auto& d = ch->drum;
+        std::vector<ParamGrid::P> perf, mix;
+        if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
+        perf.push_back ({ "character", "Style (genre)", 0, 9, 1, (float) d.character, { "Pop Rock", "Rock", "Hard Rock", "Punk", "Metal", "Shuffle", "Half Time", "Roots Rock", "Prog", "Metal 2x Kick" } });
+        static std::vector<std::string> mixNames; mixNames.clear();
+        for (size_t i = 0; i < s.p().mixer.size(); ++i) mixNames.push_back (i == 0 ? std::string ("Master") : std::to_string (i) + " " + s.p().mixer[i].name.toStdString());
+        std::vector<const char*> mixChoices; for (auto& n : mixNames) mixChoices.push_back (n.c_str());
+        if (mixChoices.size() > 1)
+            perf.push_back ({ "mixer", "Mixer insert (FX)", 0, (float) mixChoices.size() - 1, 0, (float) juce::jlimit (0, (int) mixChoices.size() - 1, ch->mixerTrack), mixChoices });
+        perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
+        perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
+        perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
+        perf.push_back ({ "humanize", "Feel (human timing)", 0, 1, 0.5f, d.humanize, {} });
+        perf.push_back ({ "ghost", "Ghost notes", 0, 1, 0.5f, d.ghost, {} });
+        perf.push_back ({ "hatOpen", "Hi-hat open", 0, 1, 0, d.hatOpen, {} });
+        perf.push_back ({ "ride", "Cymbal", 0, 1, 0, d.ride ? 1.0f : 0.0f, { "Hi-hat", "Ride" } });
+        perf.push_back ({ "halfTime", "Half time", 0, 1, 0, d.halfTime ? 1.0f : 0.0f, { "Off", "On" } });
+        perf.push_back ({ "seed", "Take (variation)", 1, 32, 1, (float) d.seed, {} });
+        mix.push_back ({ "voicing", "Mix style", 0, 4, 1, (float) d.voicing, { "Raw", "Modern", "Punch", "Room", "Vintage" } });
+        mix.push_back ({ "punch", "Punch (attack)", 0, 1, 0.55f, d.punch, {} });
+        mix.push_back ({ "glue", "Glue (bus comp)", 0, 1, 0.45f, d.glue, {} });
+        mix.push_back ({ "drive", "Drive (saturation)", 0, 1, 0.2f, d.drive, {} });
+        mix.push_back ({ "micBlend", "Close - Room mics", 0, 1, 0.45f, d.micBlend, {} });
+        mix.push_back ({ "space", "Room", 0, 4, 1, (float) d.space, { "Dry", "Studio", "Room", "Hall", "Plate" } });
+        mix.push_back ({ "roomMix", "Room amount", 0, 1, 0.22f, d.roomMix, {} });
+        mix.push_back ({ "squeeze", "Squeeze", 0, 1, 0, d.squeeze, {} });
+        mix.push_back ({ "glow", "Squeeze glow", 0, 4, 0, (float) d.glow, { "Off", "Clean", "Tube", "Tape", "Transformer" } });
+        mix.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+        std::vector<ParamGrid::P> kitp;
+        static std::vector<std::string> kitIds, kitLabels; kitIds.clear(); kitLabels.clear();
+        for (int gi = 0; gi < NumDrumGroups; ++gi)
+            for (auto* what : { "Level", "Pan", "Tune", "Decay" })
+            {
+                kitIds.push_back (std::string ("pc") + what[0] + std::to_string (gi));
+                kitLabels.push_back (std::string (drumGroupName (gi)) + " " + what);
+            }
+        for (int gi = 0, k = 0; gi < NumDrumGroups; ++gi)
+        {
+            const auto g = (size_t) gi;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -24, 12, 0, d.pieceDb[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -1, 1, 0, d.piecePan[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -12, 12, 0, d.pieceTune[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceDamp[g], {} }); ++k;
+        }
+        auto setter = [&s, channelId] (const juce::String& id, float v) {
+            s.live ([&] (Project&) {
+                auto* c = s.channel (channelId);
+                if (c == nullptr) return;
+                auto& d = c->drum;
+                if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
+                else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
+                else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "ghost") d.ghost = v; else if (id == "hatOpen") d.hatOpen = v; else if (id == "ride") d.ride = v > 0.5f;
+                else if (id == "halfTime") d.halfTime = v > 0.5f; else if (id == "seed") d.seed = juce::roundToInt (v);
+                else if (id == "voicing") d.voicing = (int) v; else if (id == "punch") d.punch = v; else if (id == "glue") d.glue = v;
+                else if (id == "drive") d.drive = v; else if (id == "micBlend") d.micBlend = v; else if (id == "space") d.space = (int) v;
+                else if (id == "roomMix") d.roomMix = v; else if (id == "squeeze") d.squeeze = v; else if (id == "glow") d.glow = (int) v;
+                else if (id == "volume") c->volume = v;
+                else if (id == "character") { d.character = juce::jlimit (0, 9, juce::roundToInt (v)); if (d.character == 6) d.halfTime = true; }
+                else if (id == "mixer") c->mixerTrack = juce::roundToInt (v);
+                else if (id.startsWith ("pc") && id.length() == 4)
+                {
+                    const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
+                    const auto w = id[2];
+                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v;
+                }
+            });
+        };
+        auto commit = [&s] { s.commit ("Drummer settings"); };
+        auto* tabs = new ChannelTabs();
+        tabs->add ("DRUMMER", new StackPage ({ new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
+        tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
+        tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
+        tabs->add ("SECTIONS", new DrumSections (s, channelId));
+        tabs->finish();
+        EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
+        return;
+    }
     const bool sampler = ch->type == ChannelType::Sampler;
     std::vector<ParamGrid::P> smp, ins, func;
     if (sampler)
@@ -948,6 +1363,8 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
         smp.push_back ({ "stretchMode", "Time mode", 0, 2, 0, (float) ch->stretchMode, { "Resample", "Stretch", "Stretch X" } });
         smp.push_back ({ "stretchTime", "Time mul", 0.25f, 4, 1, ch->stretchTime, {} });
+        smp.push_back ({ "tempoSync", "Tempo sync", 0, 1, 1, ch->tempoSync ? 1.0f : 0.0f, { "Off", "On" } });   // loops follow the song BPM
+        smp.push_back ({ "sampleBpm", "Sample BPM (0 = name)", 0, 250, 0, ch->sampleBpm, {} });
         smp.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
         smp.push_back ({ "root", "Root / step note", 24, 96, 60, (float) ch->rootKey, {} });
         smp.push_back ({ "keyTrack", "Key", 0, 1, 0, ch->keyTrack ? 1.0f : 0.0f, { "Off", "On" } });   // off = every note plays the sample as-is
@@ -1009,6 +1426,7 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "smpDeclick") c->smpDeclick = v > 0.5f; else if (id == "smpTrim") c->smpTrim = v > 0.5f;
                 else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
                 else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
+                else if (id == "tempoSync") c->tempoSync = v > 0.5f; else if (id == "sampleBpm") c->sampleBpm = v;
             });
         };
     auto commit = [&s] { s.commit ("Channel settings"); };
@@ -1031,6 +1449,7 @@ void openChannelEditor (Studio& s, int channelId)
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }
+std::function<bool (const juce::KeyPress&)> hostKeyHandler;
 
 void openScopeWindow (Studio&)
 {

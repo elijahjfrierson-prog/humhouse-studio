@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "Engine.h"
@@ -13,6 +14,73 @@ namespace col
     inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
         gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xffff8a3d), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+    inline bool lightMode = false;                          // White theme: light backgrounds, dark text
+    inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
+    // meters + scopes gradient (quiet -> loud), set in Theme
+    inline juce::Colour gradLo (0xff3ddc84), gradMid (0xffffd23d), gradHi (0xffff3b57);
+    // bottom (quiet) to top (loud), like the mixer volume meters
+    inline juce::ColourGradient levelGradient (float x, float yTop, float yBottom, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (gradHi.withMultipliedAlpha (alpha), x, yTop, gradLo.withMultipliedAlpha (alpha), x, yBottom, false);
+        gr.addColour (0.45, gradMid.withMultipliedAlpha (alpha));
+        return gr;
+    }
+    // mirrored around the centre line for waveforms: quiet near the middle, hot at the peaks
+    inline juce::ColourGradient mirrorGradient (float x, float yTop, float yBottom, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (gradHi.withMultipliedAlpha (alpha), x, yTop, gradHi.withMultipliedAlpha (alpha), x, yBottom, false);
+        gr.addColour (0.22, gradMid.withMultipliedAlpha (alpha)); gr.addColour (0.5, gradLo.withMultipliedAlpha (alpha)); gr.addColour (0.78, gradMid.withMultipliedAlpha (alpha));
+        return gr;
+    }
+    // font gradient (Theme > Font: Gradient): headline text gets a left-to-right lo -> mid -> hi fill
+    inline bool fontGradient = false;
+    inline juce::Colour fontLo (0xff3ddc84), fontMid (0xffffd23d), fontHi (0xffff3b57);
+    // big / bold text only; small plain text stays solid so it reads
+    inline bool isHeadline (const juce::Font& f) { return f.getHeight() >= 13.0f || (f.isBold() && f.getHeight() >= 11.0f); }
+    // White theme: darken the stops so they read on white backgrounds
+    inline juce::Colour fontStop (juce::Colour c)
+    {
+        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
+    }
+    // text sitting on a color: the opposite hue, dark on light colors and bright on dark ones
+    inline juce::Colour contrastOn (juce::Colour bg)
+    {
+        const bool light = bg.getPerceivedBrightness() > 0.6f;
+        return juce::Colour::fromHSV (std::fmod (bg.getHue() + 0.5f, 1.0f), juce::jmin (0.45f, bg.getSaturation()), light ? 0.1f : 0.98f, 1.0f);
+    }
+
+    inline juce::Font laneNameFont (const juce::String& f, float h)
+    {
+        if (f == "Bold")   return juce::FontOptions (h, juce::Font::bold);
+        if (f == "Italic") return juce::FontOptions (h, juce::Font::italic);
+        if (f == "Mono")   return juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), h, juce::Font::plain);
+        if (f == "Serif")  return juce::FontOptions (juce::Font::getDefaultSerifFontName(), h, juce::Font::plain);
+        if (f == "Sans")   return juce::FontOptions (juce::Font::getDefaultSansSerifFontName(), h, juce::Font::bold);
+        return juce::FontOptions (h);
+    }
+
+    inline juce::ColourGradient fontGradientFill (float x0, float x1, float alpha = 1.0f)
+    {
+        juce::ColourGradient gr (fontStop (fontLo).withMultipliedAlpha (alpha), x0, 0, fontStop (fontHi).withMultipliedAlpha (alpha), juce::jmax (x0 + 1.0f, x1), 0, false);
+        gr.addColour (0.5, fontStop (fontMid).withMultipliedAlpha (alpha));
+        return gr;
+    }
+    // fill for one line of text in `area`: the gradient spans just the glyphs, so short words still show all three colours
+    inline void setFontGradientFill (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j, float alpha = 1.0f)
+    {
+        const float w = juce::jmin (area.getWidth(), juce::GlyphArrangement::getStringWidth (g.getCurrentFont(), text));
+        const float x = j.testFlags (juce::Justification::right) ? area.getRight() - w
+                      : j.testFlags (juce::Justification::horizontallyCentred) ? area.getCentreX() - w * 0.5f : area.getX();
+        g.setGradientFill (fontGradientFill (x, x + w, alpha));
+    }
+}
+
+// Panel titles / names drawn in paint(): gradient when Font = Gradient, otherwise the colour already set on g
+inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, juce::Justification j, bool fitted = false)
+{
+    if (col::fontGradient && col::isHeadline (g.getCurrentFont())) col::setFontGradientFill (g, text, area.toFloat(), j);
+    if (fitted) g.drawFittedText (text, area, j, 1);
+    else g.drawText (text, area, j, true);
 }
 
 // FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
@@ -58,6 +126,98 @@ inline void makeCaptureFriendly (juce::Component& c)
    #endif
 }
 
+// Pop-out Mixer / plug-in windows float over the app. On macOS a real "always on top" (floating level) window is hidden
+// from OBS / screen-capture window lists, so there they stay normal windows and are raised above the app after each click.
+#if JUCE_MAC
+inline constexpr bool floatWithTopmost = false;
+#else
+inline constexpr bool floatWithTopmost = true;
+#endif
+inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
+inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
+inline void raiseFloatingWindows()
+{
+    auto& d = juce::Desktop::getInstance();
+    for (int i = 0; i < d.getNumComponents(); ++i)
+        if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
+            c->toFront (false);
+}
+inline void updateFloating (juce::Component& c)
+{
+    if (! floatWithTopmost) return;
+    const bool front = juce::Process::isForegroundProcess();
+    if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
+}
+
+// Zoomed out, ruler bar numbers thin to every 2 / 4 / 8 (then 16...) bars so they never crowd; the grid itself is unchanged
+inline int rulerLabelStep (float barPx)
+{
+    int step = 1;
+    while (step < 64 && step * barPx < 36.0f) step *= 2;
+    return step;
+}
+
+// FL-style tool cursors (white icon, dark outline so it reads on any background)
+enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom };
+inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
+{
+    constexpr int S = 32;
+    juce::Image img (juce::Image::ARGB, S, S, true);
+    juce::Graphics g (img);
+    juce::Path p;
+    hx = 2; hy = 2;
+    using juce::AffineTransform;
+    switch (k)
+    {
+        case CursorIcon::Pencil:
+        {
+            juce::Path body; body.addRectangle (-2.5f, 0.0f, 5.0f, 18.0f); body.startNewSubPath (-2.5f, 18.0f);
+            body.lineTo (0.0f, 24.0f); body.lineTo (2.5f, 18.0f); body.closeSubPath();
+            p.addPath (body, AffineTransform::rotation (juce::MathConstants<float>::pi * 0.75f).translated (19.0f, 19.0f));
+            hx = 2; hy = 2; break;
+        }
+        case CursorIcon::Brush:
+        {
+            juce::Path b; b.addRoundedRectangle (-2.0f, 0.0f, 4.0f, 14.0f, 1.5f); b.addEllipse (-4.0f, 13.0f, 8.0f, 9.0f);
+            p.addPath (b, AffineTransform::rotation (juce::MathConstants<float>::pi * 0.75f).translated (24.0f, 24.0f));
+            hx = 4; hy = 4; break;
+        }
+        case CursorIcon::Bin:
+            p.addRectangle (7.0f, 4.0f, 14.0f, 3.0f); p.addRectangle (11.0f, 1.5f, 6.0f, 3.0f);
+            p.startNewSubPath (8.0f, 8.0f); p.lineTo (20.0f, 8.0f); p.lineTo (18.5f, 24.0f); p.lineTo (9.5f, 24.0f); p.closeSubPath();
+            hx = 14; hy = 14; break;
+        case CursorIcon::Mute:
+            p.startNewSubPath (4.0f, 11.0f); p.lineTo (9.0f, 11.0f); p.lineTo (15.0f, 5.0f); p.lineTo (15.0f, 23.0f);
+            p.lineTo (9.0f, 17.0f); p.lineTo (4.0f, 17.0f); p.closeSubPath();
+            p.addLineSegment ({ 18.0f, 9.0f, 26.0f, 19.0f }, 2.5f); p.addLineSegment ({ 26.0f, 9.0f, 18.0f, 19.0f }, 2.5f);
+            hx = 9; hy = 14; break;
+        case CursorIcon::Scissors:
+            p.addEllipse (3.0f, 18.0f, 8.0f, 8.0f); p.addEllipse (17.0f, 18.0f, 8.0f, 8.0f);
+            p.addLineSegment ({ 9.5f, 19.0f, 19.0f, 2.0f }, 2.5f); p.addLineSegment ({ 18.5f, 19.0f, 9.0f, 2.0f }, 2.5f);
+            hx = 14; hy = 2; break;
+        case CursorIcon::Zoom:
+            p.addEllipse (3.0f, 3.0f, 15.0f, 15.0f); p.addLineSegment ({ 16.0f, 16.0f, 26.0f, 26.0f }, 4.0f);
+            hx = 10; hy = 10; break;
+    }
+    g.setColour (juce::Colours::black.withAlpha (0.9f)); g.strokePath (p, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (juce::Colours::white); g.fillPath (p); g.strokePath (p, juce::PathStrokeType (1.0f));
+    if (k == CursorIcon::Scissors || k == CursorIcon::Zoom)
+    {
+        g.setColour (juce::Colours::black); // keep ring holes see-through-ish
+        if (k == CursorIcon::Scissors) { g.fillEllipse (5.5f, 20.5f, 3.0f, 3.0f); g.fillEllipse (19.5f, 20.5f, 3.0f, 3.0f); }
+        else g.fillEllipse (6.0f, 6.0f, 9.0f, 9.0f);
+    }
+    return img;
+}
+inline juce::MouseCursor toolCursor (CursorIcon k)
+{
+    static std::map<int, juce::MouseCursor> cache;
+    if (auto it = cache.find ((int) k); it != cache.end()) return it->second;
+    int hx, hy;
+    const auto img = toolCursorImage (k, hx, hy);
+    return cache.emplace ((int) k, juce::MouseCursor (img, hx, hy)).first->second;
+}
+
 class HHLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
@@ -66,8 +226,13 @@ public:
     void refreshColours();
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
+    void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;   // Font = Gradient
+    void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                            juce::Slider::SliderStyle, juce::Slider&) override;
+    void drawFileBrowserRow (juce::Graphics&, int w, int h, const juce::File&, const juce::String& filename, juce::Image* icon,
+                             const juce::String& size, const juce::String& time, bool isDir, bool selected, int index,
+                             juce::DirectoryContentsDisplayComponent&) override;   // samples show without .wav / .flac / .mp3
 };
 
 // Rotary knob; hovering shows its name, what it does and its value (tooltip + hint bar + popup).
@@ -107,6 +272,7 @@ struct Studio : public juce::ChangeBroadcaster
 };
 
 std::unique_ptr<juce::Component> createMainComponent();
+void requestQuit (juce::Component* main);   // asks Save / Don't Save / Cancel when the project has changes
 std::unique_ptr<juce::Component> createChannelRack (Studio&);
 std::unique_ptr<juce::Component> createPianoRoll (Studio&);
 std::unique_ptr<juce::Component> createPlaylist (Studio&);
@@ -123,15 +289,34 @@ void showPluginScanner (Studio&);
 
 void openEffectEditor (Studio&, int track, int slotUid);
 juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Presets on tracks / inserts
+// right-click > Color: ids base..base+11 = palette, base+12 = random
+inline juce::Colour pickedColour (int i)
+{
+    static const juce::uint32 c[] { 0xffff5d5d, 0xffff8a3d, 0xffffc93d, 0xffb8e04a, 0xff4ad991, 0xff3dd6d6,
+                                    0xff3d9bff, 0xff6f6bff, 0xffa86bff, 0xffff6bd6, 0xffc8c8c8, 0xff9a7a5a };
+    if (i < 0 || i >= 12) return juce::Colour::fromHSV (juce::Random::getSystemRandom().nextFloat(), 0.6f, 0.95f, 1.0f);
+    return juce::Colour (c[i]);
+}
+inline juce::PopupMenu colourMenu (int base)
+{
+    static const char* names[] { "Red", "Orange", "Yellow", "Lime", "Green", "Cyan", "Blue", "Indigo", "Purple", "Pink", "Silver", "Brown" };
+    juce::PopupMenu m;
+    for (int i = 0; i < 12; ++i) m.addColouredItem (base + i, names[i], pickedColour (i));
+    m.addSeparator(); m.addItem (base + 12, "Random");
+    return m;
+}
 void openChannelEditor (Studio&, int channelId);
 void closeAllEditorWindows();
+extern std::function<bool (const juce::KeyPress&)> hostKeyHandler;   // app shortcuts (Cmd+S, Space, undo...) from pop-out / plug-in windows
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);
 void openScopeWindow (Studio&);
 void openTrackScopeWindow (Studio&, int track);   // master scope, pops out + resizable
 void closeEditorsForPlugin (juce::AudioProcessor*);
 
-void applyTheme (juce::Colour accent, float tint);   // tint 0..1 = how much the accent colors the background
+void applyTheme (juce::Colour accent, float tint, bool black = false);   // tint 0..1 = how much the accent colors the background
 void resetTheme();
+void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
+void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex, empty = solid font
 void showThemeDialog (Studio&);
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 

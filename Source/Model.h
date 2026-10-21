@@ -8,6 +8,15 @@
 
 namespace hhs
 {
+// drum one-shots keep their pitch on every key; everything else follows the Piano Roll (root key = the WAV as-is)
+inline bool isDrumSampleName (juce::String n)
+{
+    n = n.toLowerCase();
+    for (auto* d : { "kick", "kik", "kck", "snare", "snr", "clap", "hat", "hihat", "perc", "rim", "crash", "ride", "cymbal", "shaker", "tamb", "cowbell", "snap", "conga", "bongo" })
+        if (n.contains (d)) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------- scales
 struct ScaleDef { const char* name; std::vector<int> steps; };
 const std::vector<ScaleDef>& allScales();
@@ -31,7 +40,7 @@ struct Note
 };
 using NoteList = std::vector<Note>;
 
-enum class ChannelType { Sampler, Synth, Plugin };
+enum class ChannelType { Sampler, Synth, Plugin, Drummer };
 
 struct SynthParams
 {
@@ -47,6 +56,24 @@ struct SynthParams
     float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
 };
 
+// Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
+struct DrummerParams
+{
+    float complexity = 0.45f, loudness = 0.55f, intensity = 0.6f, fills = 0.4f;
+    float swing = 0.0f, humanize = 0.5f, ghost = 0.5f, hatOpen = 0.0f;
+    bool  halfTime = false, ride = false;
+    int   character = 1, seed = 1;
+    int   voicing = 1, space = 1, glow = 0;   // mix voicing (Raw, Modern, Punch, Room, Vintage), room space, squeeze glow
+    float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
+    // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
+    std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
+    std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
+    std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
+    int groupMask = 31;                       // bit g = this channel plays drum group g (Split by drum)
+    std::map<int, std::array<int, 5>> steps;  // manual 8-bar sections: per drum group a 16-step bar (bit = hit), repeated
+    juce::String performanceKey() const;      // only what changes the notes played
+};
+
 struct Channel
 {
     int id = 0;
@@ -55,11 +82,14 @@ struct Channel
     juce::File sampleFile;                 // sampler
     int builtinDrum = -1;                  // synthesized fallback kit voice
     SynthParams synth;                     // synth
+    DrummerParams drum;                    // drummer (sampleFile = the kit folder)
+    int drumLink = 0;                      // Split by drum: plays that Drummer channel's regions (0 = its own)
     juce::String pluginId;                 // plugin: PluginDescription::createIdentifierString
     juce::MemoryBlock pluginState;
     int   mixerTrack = 0;                  // 0 = master
     float volume = 0.8f, pan = 0.0f, pitch = 0.0f; // pitch in semitones
     float glide = 0.0f;                    // seconds, 0 = off
+    float shift = 0.0f;                    // ms, FL channel Shift: plays every hit this much late (+) or early (-), off the grid
     bool  mono = false;                    // legato/mono mode
     bool  muted = false, solo = false;
     int   rootKey = 60;                    // step-sequencer note
@@ -74,6 +104,8 @@ struct Channel
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
     int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
+    bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
+    float sampleBpm = 0.0f;                // the sample's own tempo; 0 = read it from the file name
     juce::Colour colour { 0xffff8a3d };
 };
 
@@ -105,7 +137,10 @@ struct Clip
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
     int    group = 0;               // FL-style clip group: grouped clips select / move together
-    bool isAudio() const { return patternIndex < 0; }
+    juce::Colour colour {};         // own clip colour (transparent = track colour)
+    int    drummer = -1;            // Drummer region: the drummer channel id it plays
+    bool isAudio() const { return patternIndex < 0 && drummer < 0; }
+    bool isDrummer() const { return drummer >= 0; }
 };
 
 struct Lane
@@ -114,11 +149,15 @@ struct Lane
     int  inputPair = 0;            // stereo input pair (0 = in 1/2)
     int  inputCh = 0;              // mono input channel (0 = in 1)
     bool stereoIn = false;         // false: mono input centred in both ears
+    float shiftMs = 0.0f;          // Soft: shift the whole track later (+) / earlier (-) in ms to line vocals up
     bool autoNorm = false;         // zero-latency leveler: brings the voice to a steady strong level
     int  mixerTrack = 0;
     bool armed = false, muted = false;
     bool monitor = true;
     float height = 56.0f;
+    juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
+    juce::Colour nameColour {};    // track name color (transparent = automatic, opposite of what it sits on)
+    juce::String nameFont;         // track name font: "" app font, Bold, Italic, Mono, Serif, Sans
 };
 
 // ---------------------------------------------------------------- mixer
@@ -177,6 +216,9 @@ struct Project
     std::vector<Lane>       lanes;
     std::vector<Clip>       clips;
     std::vector<MixerTrack> mixer;   // [0] master
+    std::vector<juce::File> audioPool;   // every audio clip ever used, kept until "Clear unused / Clear all"
+    int  insertPatternAfter (int after, Pattern pt);                 // returns the new index; clip indices are remapped
+    void removePatterns (const std::function<bool (int)>& drop);    // drops patterns + their clips, remaps the rest
     juce::File projectFile;
 
     int nextChannelId = 1;
@@ -203,4 +245,7 @@ struct Project
 
 double beatsToSeconds (double beats, double bpm);
 double secondsToBeats (double secs, double bpm);
+// hi-hat style roll on audio clips: inside [rangeA, rangeB) (whole clip if no range) the hit at the
+// range start repeats every `div` beats; audio outside the range is kept. Returns clips rolled.
+int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA = -1, double rangeB = -1);
 }

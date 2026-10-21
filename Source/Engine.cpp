@@ -1,5 +1,7 @@
 #include "Engine.h"
+#include <thread>
 #include "DrumSynth.h"
+#include "AudioEncode.h"
 #include <algorithm>
 
 namespace hhs
@@ -7,22 +9,43 @@ namespace hhs
 // =============================================================== worker pool
 WorkerPool::WorkerPool (int n)
 {
-    for (int i = 0; i < n; ++i) threads.emplace_back ([this] { workerLoop(); });
+    for (int i = 0; i < n; ++i)
+    {
+        auto& t = threads.emplace_back (std::make_unique<Worker> (*this));
+        // real-time priority so a busy machine (OBS, browsers, screen capture) can't preempt a worker mid-block
+        if (! t->startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (10)))
+            t->startThread (juce::Thread::Priority::highest);
+    }
+}
+void WorkerPool::setWorkgroup (const juce::AudioWorkgroup& wg)
+{
+    { const std::lock_guard<std::mutex> lk (wgMutex); workgroup = wg; }
+    wgGeneration.fetch_add (1);
 }
 WorkerPool::~WorkerPool()
 {
     quit = true;
     generation.fetch_add (1);
     cv.notify_all();
-    for (auto& t : threads) t.join();
+    for (auto& t : threads) t->stopThread (4000);
 }
 void WorkerPool::workerLoop()
 {
     juce::FloatVectorOperations::disableDenormalisedNumberSupport();   // denormals in reverb tails cause CPU spikes
     int seen = generation.load();
+    int wgSeen = -1;
+    juce::WorkgroupToken token;
     auto lastWork = std::chrono::steady_clock::now();
     while (! quit.load())
     {
+        if (const int g = wgGeneration.load(); g != wgSeen)
+        {
+            wgSeen = g;
+            token.reset();
+            juce::AudioWorkgroup wg;
+            { const std::lock_guard<std::mutex> lk (wgMutex); wg = workgroup; }
+            if (wg) wg.join (token);
+        }
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
@@ -254,6 +277,37 @@ struct Engine::TrackRuntime
     juce::File frozenFile;
 };
 
+// short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
+struct MemoryClipReader : juce::AudioFormatReader
+{
+    explicit MemoryClipReader (juce::AudioFormatReader& src) : juce::AudioFormatReader (nullptr, "HHS memory")
+    {
+        sampleRate = src.sampleRate; numChannels = juce::jmax (1u, src.numChannels); lengthInSamples = src.lengthInSamples;
+        bitsPerSample = 32; usesFloatingPointData = true;
+        auto d = std::make_shared<juce::AudioBuffer<float>> ((int) numChannels, (int) lengthInSamples);
+        src.read (d.get(), 0, (int) lengthInSamples, 0, true, true);
+        data = std::move (d);
+    }
+    // clips cut from the same file (rolls, splits, chops) share one decoded copy
+    explicit MemoryClipReader (const MemoryClipReader& o) : juce::AudioFormatReader (nullptr, "HHS memory"), data (o.data)
+    {
+        sampleRate = o.sampleRate; numChannels = o.numChannels; lengthInSamples = o.lengthInSamples;
+        bitsPerSample = 32; usesFloatingPointData = true;
+    }
+    bool readSamples (int* const* dest, int numDest, int startOffsetInDest, juce::int64 start, int num) override
+    {
+        for (int ch = 0; ch < numDest; ++ch)
+        {
+            if (dest[ch] == nullptr) continue;
+            auto* d = reinterpret_cast<float*> (dest[ch]) + startOffsetInDest;
+            const auto* src = data->getReadPointer (juce::jmin (ch, data->getNumChannels() - 1));
+            for (int i = 0; i < num; ++i) { const auto p = start + i; d[i] = p >= 0 && p < lengthInSamples ? src[p] : 0.0f; }
+        }
+        return true;
+    }
+    std::shared_ptr<const juce::AudioBuffer<float>> data;
+};
+
 struct Engine::ClipRuntime
 {
     int uid = 0;
@@ -264,15 +318,34 @@ struct Engine::ClipRuntime
     juce::AudioBuffer<float> tmp;
 };
 
-static juce::String channelSignature (const Channel& c)
+static juce::String channelSignature (const Channel& c, double bpm)
 {
     return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
          + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
          + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
-         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f);
+         + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f)
+         + "|" + juce::String (c.type == ChannelType::Sampler && c.tempoSync && sampleTempo (c) > 0.0 ? sampleTempo (c) / bpm : 1.0);
 }
 
 // =============================================================== engine
+// Pro Tools-style -2.5 dB pan law (sin/cos curve), scaled so a centred pan stays at unity
+static inline float panGain (float pan, bool right)
+{
+    pan = juce::jlimit (-1.0f, 1.0f, pan);
+    if (pan == 0.0f) return 1.0f;
+    const float th = (pan + 1.0f) * juce::MathConstants<float>::pi * 0.25f;
+    return std::pow (std::max (0.0f, right ? std::sin (th) : std::cos (th)), 2.5f / 3.0103f) * 1.33352f;
+}
+
+// TPDF dither (1 LSB) for 16/24-bit exports; digital silence stays silent
+static void tpdfDither (juce::AudioBuffer<float>& b, int n, int bits, juce::Random& rnd)
+{
+    if ((bits != 16 && bits != 24) || b.getMagnitude (0, n) == 0.0f) return;
+    const float lsb = 1.0f / (float) (1 << (bits - 1));
+    for (int ch = 0; ch < b.getNumChannels(); ++ch)
+        for (auto* x = b.getWritePointer (ch), * e = x + n; x < e; ++x) *x += (rnd.nextFloat() - rnd.nextFloat()) * lsb;
+}
+
 Engine::Engine()
 {
     formats.addDefaultFormats();
@@ -290,6 +363,12 @@ Engine::~Engine()
     alive->store (false);
     deviceManager.removeAudioCallback (this);
     finishRecordingWriters();
+    {
+        // disk readers unregister from diskThread, which is declared after them and would be destroyed first
+        const juce::ScopedLock sl (lock);
+        clipRt.clear();
+        for (auto& t : trackRt) if (t) t->frozen.reset();
+    }
     diskThread.stopThread (2000);
 }
 
@@ -350,12 +429,21 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 
 void Engine::sync()
 {
-    if (playing.load()) chasePending = true;
+    if (playing.load()) { editChase = true; chasePending = true; }
+    {   // Drummer regions: resizing one re-writes its part right away (the fill moves to the new end)
+        std::map<int, std::shared_ptr<const std::vector<DrumHit>>> hits;
+        for (auto& c : proj.clips)
+            if (c.isDrummer())
+                for (auto& ch : proj.channels)
+                    if (ch.id == c.drummer && ch.type == ChannelType::Drummer) hits[c.uid] = drummerHits (ch.drum, proj.bpm, c.length);
+        const juce::ScopedLock sl (lock);
+        drumHits.swap (hits);
+    }
     // ---- build new objects outside the audio lock (sample loading / plugin creation can be slow)
     std::map<int, std::unique_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
     {
-        const auto sig = channelSignature (ch);
+        const auto sig = channelSignature (ch, proj.bpm);
         auto it = channelRt.find (ch.id);
         if (it != channelRt.end() && it->second->signature == sig) continue;
         auto rt = std::make_unique<ChannelRuntime>();
@@ -379,7 +467,7 @@ void Engine::sync()
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
                 if (c == sampleCache.end()) c = sampleCache.emplace (key, loadSampleFile (ch.sampleFile, sampleRate)).first;
-                s = processSample (c->second, ch, sampleRate);
+                s = processSample (c->second, ch, sampleRate, proj.bpm);
             }
             rt->inst = createInstrument (ch, s, sampleRate);
         }
@@ -435,7 +523,7 @@ void Engine::sync()
         if (it != clipRt.end() && it->second->file == c.audioFile) continue;
         auto rt = std::make_unique<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
-        if (auto* r = fm.createReaderFor (c.audioFile))
+        if (auto* r = fm.createReaderFor (c.audioFile))   // every clip streams from its file on disk (as before 1.2.7)
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
             rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
@@ -610,6 +698,12 @@ void Engine::prepareRuntimes()
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
+    recordLatency = juce::jmax (0, d->getInputLatencyInSamples() + d->getOutputLatencyInSamples());
+    {
+        const juce::ScopedLock sl (lock);
+        deviceWorkgroup = d->getWorkgroup();
+        if (pool) pool->setWorkgroup (deviceWorkgroup);
+    }
     juce::MessageManager::callAsync ([this, a = alive] { if (a->load()) sync(); });
 }
 void Engine::audioDeviceStopped() {}
@@ -624,7 +718,7 @@ void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
     if (! pool || pool->size() != workers) fresh = std::make_unique<WorkerPool> (workers);
     {
         const juce::ScopedLock sl (lock);
-        if (fresh) std::swap (pool, fresh);
+        if (fresh) { fresh->setWorkgroup (deviceWorkgroup); std::swap (pool, fresh); }
         mtOn = multithreaded; smartOn = smartDisable;
     }
 }
@@ -722,11 +816,14 @@ void Engine::play()
 {
     if (playing.load()) return;
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
-    const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : position.load();
+    const double here = position.load();
+    const bool loopSel = ! rec && proj.songMode && proj.hasPunch() && (here < proj.punchIn || here >= proj.punchOut);   // FL: Space plays the selected range
+    const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : loopSel ? proj.punchIn : here;
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     if (rec) startRecordingWriters();     // create take files outside the audio lock, so nothing drops out as recording starts
     const juce::ScopedLock sl (lock);
     if (playing) return;
+    if (loopSel) position = from;
     startBeat = position.load();
     if (rec)
     {
@@ -734,7 +831,7 @@ void Engine::play()
         countInRemaining = countInOn.load() && ! (proj.songMode && proj.hasPunch()) ? proj.beatsPerBar : 0.0;
         countingIn = countInRemaining > 0.0;
     }
-    chasePending = true;
+    editChase = false; chasePending = true;
     if (std::abs (std::fmod (position.load() * 4.0, 1.0)) > 1.0e-6) declickGain = 0.0f;   // off the grid: fade in
     playing = true;
 }
@@ -759,7 +856,7 @@ void Engine::stop()
 
 void Engine::setPositionBeats (double b)
 {
-    position = std::max (0.0, b); startBeat = position; chasePending = true;
+    position = std::max (0.0, b); startBeat = position; editChase = false; chasePending = true;
     if (playing.load()) declickGain = 0.0f;
 }
 
@@ -782,7 +879,10 @@ void Engine::startRecordingWriters()
         if (! proj.lanes[(size_t) l].armed) continue;
         auto t = std::make_unique<Take>();
         t->lane = l;
-        t->file = recordingFolder.getNonexistentChildFile (proj.lanes[(size_t) l].name.replaceCharacters (" /\\", "___") + "_take", ".wav");
+        recordingFolder.createDirectory();
+        const auto song = juce::File::createLegalFileName (proj.projectFile.existsAsFile() ? proj.projectFile.getFileNameWithoutExtension() : proj.title).replaceCharacter (' ', '_');
+        t->file = recordingFolder.getNonexistentChildFile (proj.lanes[(size_t) l].name.replaceCharacters (" /\\", "___") + "_" + song + "_"
+                                                           + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + "_take", ".wav");
         juce::WavAudioFormat wav;
         if (auto* os = t->file.createOutputStream().release())
         {
@@ -810,7 +910,8 @@ void Engine::finishRecordingWriters()
     {
         const juce::int64 written = t->samplesWritten;
         t->writer.reset();       // flushes
-        if (! t->started || written <= 0) { t->file.deleteFile(); continue; }
+        if (written <= 0) { t->file.deleteFile(); continue; }   // nothing was recorded at all
+        if (! t->started) continue;                             // never delete a take that holds audio
         if (t->lane < 0 || t->lane >= (int) proj.lanes.size()) continue;   // lane deleted while recording: keep the WAV
         auto& lane = proj.lanes[(size_t) t->lane];
         const int insert = lane.mixerTrack;
@@ -823,7 +924,9 @@ void Engine::finishRecordingWriters()
         std::vector<Clip> newClips;
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
-            const juce::int64 s0 = passes[i].first, s1 = passes[i + 1].first;
+            // latency compensation: what you sang at beat b reaches the file `lat` samples later
+            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) recordLatency.load());
+            const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
             double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
             if (proj.songMode && proj.hasPunch())
@@ -867,10 +970,11 @@ void Engine::finishRecordingWriters()
         for (auto& c : proj.clips)
         {
             if (c.lane != t->lane || ! c.isAudio() || c.hidden || c.start >= r1 || c.start + c.length <= r0) { keep.push_back (c); continue; }
-            if (c.start < r0) { Clip a = c; a.length = r0 - c.start; a.fadeOut = 0.02; keep.push_back (a); }
+            // the part after punch-out keeps the old uid, so its already-streaming reader keeps playing with no dropout
+            if (c.start < r0) { Clip a = c; a.uid = proj.newUid(); a.length = r0 - c.start; a.fadeOut = 0.02; keep.push_back (a); }
             if (c.start + c.length > r1)
             {
-                Clip b = c; b.uid = proj.newUid();
+                Clip b = c;
                 b.sourceOffset += (r1 - c.start) * 60.0 / proj.bpm; b.start = r1; b.length = c.start + c.length - r1; b.fadeIn = 0.02;
                 keep.push_back (b);
             }
@@ -890,7 +994,7 @@ void Engine::finishRecordingWriters()
     }
     if (added)
     {
-        juce::MessageManager::callAsync ([this, a = alive] { if (! a->load()) return; sync(); if (onRecordingAdded) onRecordingAdded(); });
+        juce::MessageManager::callAsync ([this, a = alive] { if (! a->load()) return; sync(); primeClipReaders (position.load()); if (onRecordingAdded) onRecordingAdded(); });
     }
 }
 
@@ -1004,43 +1108,90 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     };
     // FL-style: when playback starts, jumps, loops or the pattern is edited mid-note, the note still sounds
     const bool chase = chasePending.exchange (false);
+    const bool quietChase = chase && editChase.exchange (false);
     auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
     {
         if (absStart >= b0) return;
         auto& c = proj.channels[ci];
         const bool shot = c.type == ChannelType::Sampler && c.oneShot;   // one-shots play the whole sample, whatever the note length
         const double end = std::min (absStart + note.length, limit);
-        if (shot ? b0 - absStart > 64.0 : end <= b0 + 1.0 / 32.0) return;
+        if (shot ? (quietChase || b0 - absStart > 64.0) : end <= b0 + 1.0 / 32.0) return;   // after an edit a one-shot is still ringing: never re-hit it
         auto* rt = channelOrder[ci];
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
         Note tail = note; tail.length = std::max (end - b0, 1.0 / 32.0); tail.slide = false;
         emit (ci, tail, b0, (b0 - absStart) * 60.0 / proj.bpm);   // samplers start from the matching point in the sample
-        declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in
+        if (! quietChase) declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in (edits: the voice fades itself, the mix keeps going)
     };
 
     for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
     {
         auto& ch = proj.channels[ci];
         if (ch.muted || (anySolo && ! ch.solo)) continue;
+        const double shiftBeats = (double) ch.shift * 0.001 * proj.bpm / 60.0;   // channel Shift (ms) in beats
         if (! proj.songMode)
         {
             if (proj.currentPattern < 0 || proj.currentPattern >= (int) proj.patterns.size()) continue;
             auto& pat = proj.patterns[(size_t) proj.currentPattern];
             auto it = pat.notes.find (ch.id);
             if (it == pat.notes.end()) continue;
+            const double plen = pat.lengthBeats();
             for (auto& note : it->second)
             {
                 if (note.muted) continue;
-                const double s = swingBeat (note.start);
+                double s = swingBeat (note.start) + shiftBeats;
+                if (s < 0.0) s += plen; else if (s >= plen) s -= plen;   // shifted past the loop edge: wraps like FL
                 if (s >= b0 && s < b1) emit (ci, note, s);
                 else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
+            }
+        }
+        else if (ch.type == ChannelType::Drummer)
+        {
+            const int srcId = ch.drumLink != 0 ? ch.drumLink : ch.id, mask = ch.drum.groupMask;
+            const DrummerParams* src = &ch.drum;
+            for (auto& o : proj.channels) if (o.id == srcId && o.type == ChannelType::Drummer) src = &o.drum;
+            const auto silent = [src] (int sec, int g) { return sec >= 0 && sec < (int) src->sectionMute.size() && (src->sectionMute[(size_t) sec] >> g & 1) != 0; };
+            for (auto& clip : proj.clips)
+            {
+                if (clip.drummer != srcId || clip.muted || clip.hidden) continue;
+                if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
+                if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
+                auto it = drumHits.find (clip.uid);
+                if (it == drumHits.end() || ! it->second) continue;
+                for (auto& h : *it->second)
+                {
+                    if (h.beat >= clip.length) break;
+                    const double s = clip.start + h.beat + shiftBeats;
+                    if (s < b0 || s >= b1) continue;
+                    const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
+                    if ((mask >> g & 1) == 0 || silent (sec, g) || src->steps.count (sec) > 0) continue;   // off here, or a manual STEPS section
+                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
+                    emit (ci, nt, s);
+                }
+                if (src->steps.empty()) continue;
+                // manual STEPS sections: their 16-step bar repeats on the exact grid
+                for (int n = juce::jmax (0, (int) std::ceil ((b0 - shiftBeats - clip.start) * 4.0 - 1.0e-9)); ; ++n)
+                {
+                    const double rel = n * 0.25, at = clip.start + rel, s = at + shiftBeats;
+                    if (rel >= clip.length || s >= b1) break;
+                    if (s < b0) continue;
+                    const int sec = (int) (at / 32.0), step = (int) (std::llround (at * 4.0) % 16);
+                    const auto st = src->steps.find (sec);
+                    if (st == src->steps.end()) continue;
+                    for (int g = 0; g < NumDrumGroups; ++g)
+                        if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
+                        {
+                            Note nt; nt.key = drumGroupLane (g); nt.start = rel; nt.length = 0.125;
+                            nt.velocity = juce::jlimit (0.02f, 1.0f, (step % 4 == 0 ? 0.9f : 0.72f) * drummerDynamics (*src, at));
+                            emit (ci, nt, s);
+                        }
+                }
             }
         }
         else
         {
             for (auto& clip : proj.clips)
             {
-                if (clip.isAudio() || clip.muted || clip.hidden) continue;
+                if (clip.isAudio() || clip.isDrummer() || clip.patternIndex < 0 || clip.muted || clip.hidden) continue;
                 if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 if (clip.patternIndex >= (int) proj.patterns.size()) continue;
@@ -1054,8 +1205,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     for (auto& note : it->second)
                     {
                         if (note.muted) continue;
-                        const double s = clip.start + rep * plen + swingBeat (note.start);
-                        if (s >= b0 && s < b1 && s < clip.start + clip.length && s >= clip.start) emit (ci, note, s);
+                        const double s = clip.start + rep * plen + swingBeat (note.start) + shiftBeats;
+                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, note, s);
                         else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
                     }
             }
@@ -1069,7 +1220,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         {
             if (! clip.isAudio() || clip.muted || clip.hidden) continue;
             if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
-            const double c0 = std::max (b0, clip.start), c1 = std::min (b1, clip.start + clip.length);
+            const double shB = (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? proj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * proj.bpm / 60.0;   // Soft
+            const double c0 = std::max (b0, clip.start + shB), c1 = std::min (b1, clip.start + clip.length + shB);
             if (c1 <= c0) continue;
             auto it = clipRt.find (clip.uid);
             if (it == clipRt.end() || ! it->second->reader) continue;
@@ -1082,15 +1234,18 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const int len = o1 - o0;
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
-            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start, proj.bpm);
-            const juce::int64 srcStart = (juce::int64) (srcSec * cr.fileRate);
-            const int need = std::min (cr.tmp.getNumSamples(), (int) std::ceil (len * ratio) + 2);
+            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, proj.bpm);
+            // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
+            const double srcPos = srcSec * cr.fileRate;
+            const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
+            const double frac0 = juce::jlimit (0.0, 0.999999, srcPos - (double) srcStart);
+            const int need = std::min (cr.tmp.getNumSamples() - 2, (int) std::ceil (len * ratio + frac0) + 2);
             cr.tmp.clear();
-            cr.reader->read (&cr.tmp, 0, need, srcStart, true, true);
+            cr.reader->read (&cr.tmp, 0, need + 2, srcStart - 1, true, true);   // one sample of history for 4-point Hermite
             const double spbC = spb;
             for (int i = 0; i < len; ++i)
             {
-                const double sp = i * ratio;
+                const double sp = frac0 + i * ratio;
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
@@ -1101,7 +1256,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);
-                    dest.addSample (ch, o0 + i, (s[i0] + fr * (s[i0 + 1] - s[i0])) * g);
+                    const float xm = s[i0], x0 = s[i0 + 1], x1 = s[i0 + 2], x2 = s[i0 + 3];   // Hermite instead of linear: no dulled highs / grit when the clip rate differs
+                    const float c1 = 0.5f * (x1 - xm), c2 = xm - 2.5f * x0 + 2.0f * x1 - 0.5f * x2, c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
+                    dest.addSample (ch, o0 + i, (((c3 * fr + c2) * fr + c1) * fr + x0) * g);
                 }
             }
         }
@@ -1222,7 +1379,12 @@ void Engine::processTrack (int t)
             struct Blend { juce::AudioBuffer<float>& v; juce::AudioBuffer<float>& d; int n; float mix; bool on;
                 ~Blend() { if (on) for (int c = 0; c < 2; ++c) { v.applyGain (c, 0, n, mix); v.addFrom (c, 0, d, c, 0, n, 1.0f - mix); } } }
                 blendOut { view, tr.dry, n, mix, blend };
-            if (f.builtin) f.builtin->process (view, n, ctx);
+            if (f.builtin)
+            {
+                f.builtin->process (view, n, ctx);
+                for (int ch = 0; ch < view.getNumChannels(); ++ch)   // one bad effect must never blow up the whole mix / meters
+                    for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x) || std::abs (*x) > 64.0f) *x = 0.0f;
+            }
             else if (f.plugin)
             {
                 auto& pl = *f.plugin;
@@ -1270,7 +1432,7 @@ void Engine::processTrack (int t)
 
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
-    const float gl = vol * std::min (1.0f, 1.0f - mt.pan), gr = vol * std::min (1.0f, 1.0f + mt.pan);
+    const float gl = vol * panGain (mt.pan, false), gr = vol * panGain (mt.pan, true);
     tr.out.applyGain (0, 0, n, gl);
     tr.out.applyGain (1, 0, n, gr);
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
@@ -1281,8 +1443,15 @@ void Engine::processTrack (int t)
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
     juce::ScopedNoDenormals noDenormals;
-    const juce::ScopedTryLock sl (lock);
-    if (! sl.isLocked() || trackRt.empty())
+    // an edit holds the lock for a moment: wait briefly for it instead of dropping a silent block (that was the click / pause)
+    bool locked = lock.tryEnter();
+    if (! locked && ! offline.load())
+    {
+        const double until = juce::Time::getMillisecondCounterHiRes() + 0.4 * 1000.0 * n / sampleRate;
+        while (! locked && juce::Time::getMillisecondCounterHiRes() < until) { std::this_thread::yield(); locked = lock.tryEnter(); }
+    }
+    struct Unlock { const juce::CriticalSection* c; ~Unlock() { if (c != nullptr) c->exit(); } } unlock { locked ? &lock : nullptr };
+    if (! locked || trackRt.empty())
     {
         for (int c = 0; c < numOut; ++c) if (out[c]) juce::FloatVectorOperations::clear (out[c], n);
         return;
@@ -1339,7 +1508,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             double loopStart = 0.0, loopEnd = loopLength();
             if (proj.songMode && proj.hasPunch() && recording.load() && proj.loopRecord)
             { loopStart = std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar); loopEnd = proj.punchOut; }
-            else if (proj.songMode && proj.hasPunch() && ! recording.load()) { loopStart = proj.punchIn; loopEnd = proj.punchOut; }
+            else if (proj.songMode && proj.hasPunch() && ! recording.load() && ! offline.load()) { loopStart = proj.punchIn; loopEnd = proj.punchOut; }
             if (metronomeOn.load() || (recording.load() && countInOn.load() && false)) { clickB0 = pos; clickB1 = pos + blockBeats; doClick = metronomeOn.load(); }
             int done = 0;
             recordFrom = 0;
@@ -1353,7 +1522,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 renderSegment (pos, segEnd, done, len);
                 done += len;
                 pos = wrap ? loopStart : segEnd;
-                if (wrap) chasePending = true;
+                if (wrap) { editChase = false; chasePending = true; }
                 if (wrap)
                 {
                     const juce::SpinLock::ScopedTryLockType tl (takeLock);
@@ -1378,7 +1547,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         auto& ch = proj.channels[ci];
         auto* rt = channelOrder[ci];
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
-        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * std::min (1.0f, 1.0f - ch.pan), gr = v * std::min (1.0f, 1.0f + ch.pan);
+        const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * panGain (ch.pan, false), gr = v * panGain (ch.pan, true);
         auto& dest = trackRt[(size_t) t]->in;
         dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
         dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
@@ -1543,8 +1712,54 @@ void Engine::mixTracks (const float* const*, int, int)
 }
 
 // =============================================================== offline
-bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track)
+static bool writeExportWav (const juce::File& file, const juce::AudioBuffer<float>& mem, double sr, double outRate, int bits, int format = 0)
 {
+    juce::AudioBuffer<float> res;
+    const juce::AudioBuffer<float>* src = &mem;
+    if (std::abs (outRate - sr) > 0.5)
+    {
+        const int outLen = (int) ((double) mem.getNumSamples() * outRate / sr);
+        res.setSize (2, juce::jmax (1, outLen));
+        for (int ch = 0; ch < 2; ++ch) sincResample (mem.getReadPointer (ch), mem.getNumSamples(), res.getWritePointer (ch), outLen, sr / outRate);
+        src = &res;
+    }
+    if (format == 1) return encodeMp3 (*src, outRate, file, 320);
+    if (format == 2) return encodeM4a (*src, outRate, file, 256);
+    file.deleteFile();
+    const int len = src->getNumSamples();
+    juce::AudioBuffer<float> dith;
+    if (bits == 16 || bits == 24)
+    {
+        juce::Random rnd (0x484853);
+        dith.makeCopyOf (*src);
+        for (int at = 0; at < len; at += 4096) { juce::AudioBuffer<float> v (dith.getArrayOfWritePointers(), 2, at, std::min (4096, len - at)); tpdfDither (v, v.getNumSamples(), bits, rnd); }
+        src = &dith;
+    }
+    if (bits == 64)
+    {
+        juce::FileOutputStream os (file);
+        if (! os.openedOk()) return false;
+        const juce::uint32 dataBytes = (juce::uint32) len * 16u;
+        os.write ("RIFF", 4); os.writeInt ((int) (36 + dataBytes)); os.write ("WAVE", 4);
+        os.write ("fmt ", 4); os.writeInt (16); os.writeShort (3); os.writeShort (2); os.writeInt ((int) outRate);
+        os.writeInt ((int) outRate * 16); os.writeShort (16); os.writeShort (64);
+        os.write ("data", 4); os.writeInt ((int) dataBytes);
+        for (int i = 0; i < len; ++i) { os.writeDouble ((double) src->getSample (0, i)); os.writeDouble ((double) src->getSample (1, i)); }
+        os.flush(); return ! os.getStatus().failed();
+    }
+    juce::WavAudioFormat wav;
+    auto os = file.createOutputStream();
+    if (! os) return false;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), outRate, 2, bits, {}, 0));
+    if (! w) return false;
+    os.release();
+    return w->writeFromAudioSampleBuffer (*src, 0, len);
+}
+
+bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool (float)> progress, int track, int bits, double rate, int format)
+{
+    format = juce::jlimit (0, 2, format);
+    bits = bits == 16 || bits == 32 || bits == 64 ? bits : 24;
     const bool wasPlaying = playing.load();
     if (wasPlaying) stop();
     deviceManager.removeAudioCallback (this);
@@ -1554,26 +1769,39 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const double lenBeats = song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
     const double tail = 2.0;
     const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
+    const double outRate = format != 0 ? compressedRate (rate > 0 ? rate : sr) : rate > 0 ? rate : sr;
+    const bool viaMemory = format != 0 || bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
+    juce::AudioBuffer<float> mem;
+    if (viaMemory) mem.setSize (2, (int) total);
 
     file.deleteFile();
     std::unique_ptr<juce::AudioFormatWriter> writer;
+    if (! viaMemory)
     {
         juce::WavAudioFormat wav;
         if (auto os = file.createOutputStream())
-            if (auto* w = wav.createWriterFor (os.get(), sr, 2, 24, {}, 0)) { os.release(); writer.reset (w); }
+            if (auto* w = wav.createWriterFor (os.get(), sr, 2, bits, {}, 0)) { os.release(); writer.reset (w); }
     }
-    if (! writer) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
+    if (! writer && ! viaMemory) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
 
     {
         const juce::ScopedLock sl (lock);
         for (auto& t : trackRt) { t->silentSamples = 0; }
         position = 0.0; playing = true; countingIn = false;
     }
+    // export plays the whole song from bar 1 (no selection loop) and waits for every disk read (no silent gaps)
+    auto setTimeouts = [this] (int ms) {
+        for (auto& [uid, cr] : clipRt) if (auto* br = dynamic_cast<juce::BufferingAudioReader*> (cr->reader.get())) br->setReadTimeout (ms);
+        for (auto& t : trackRt) if (auto* br = dynamic_cast<juce::BufferingAudioReader*> (t->frozen.get())) br->setReadTimeout (ms);
+    };
+    setTimeouts (10000);
     offline = true;
     renderTrackOnly = track;
     const bool rec = recording.load(); recording = false;
     juce::AudioBuffer<float> outBuf (2, block);
+    juce::Random ditherRnd (0x484853);
     bool ok = true;
+    lastRenderPeak = 0;
     for (juce::int64 done = 0; done < total; done += block)
     {
         const int n = (int) std::min<juce::int64> (block, total - done);
@@ -1581,11 +1809,15 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         float* outs[2] { outBuf.getWritePointer (0), outBuf.getWritePointer (1) };
         // offline reads must not miss disk data
         processBlock (nullptr, 0, outs, 2, n);
-        writer->writeFromAudioSampleBuffer (outBuf, 0, n);
+        lastRenderPeak = std::max ({ lastRenderPeak, outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n) });
+        if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
+        else { tpdfDither (outBuf, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (outBuf, 0, n); }
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
     }
     writer.reset();
+    if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits, format);
     offline = false;
+    setTimeouts (0);
     renderTrackOnly = -1;
     recording = rec;
     {

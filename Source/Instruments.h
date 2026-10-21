@@ -28,5 +28,8 @@ std::unique_ptr<ChannelInstrument> createInstrument (const Channel&, SharedSampl
 SharedSample loadSampleFile (const juce::File&, double targetRate);
 void sincResample (const float* in, int inLen, float* out, int outLen, double ratio);   // ratio = input samples per output sample
 // applies the channel's SMP-page edits (trim, reverse, polarity, boost, normalize, stretch, fades, declick)
-SharedSample processSample (SharedSample, const Channel&, double sampleRate);
+SharedSample processSample (SharedSample, const Channel&, double sampleRate, double songBpm = 0.0);
+juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor);   // pitch kept, length x factor
+// the sample's own tempo: typed in, or from the file name ("Loop 140 BPM", "140bpm"); 0 if unknown
+double sampleTempo (const Channel&);
 }

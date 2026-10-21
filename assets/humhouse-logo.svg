@@ -12,6 +12,8 @@
   <path d="M232 470 L512 230 L792 470" fill="none" stroke="url(#acc)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
   <rect x="300" y="470" width="72" height="330" rx="36" fill="url(#acc)"/>
   <rect x="652" y="470" width="72" height="330" rx="36" fill="url(#acc)"/>
+  <rect x="120" y="520" width="68" height="250" rx="34" fill="url(#acc)"/>
+  <rect x="836" y="520" width="68" height="250" rx="34" fill="url(#acc)"/>
   <rect x="402" y="575" width="40" height="120" rx="20" fill="#ffffff"/>
   <rect x="462" y="515" width="40" height="240" rx="20" fill="#ffffff"/>
   <rect x="522" y="550" width="40" height="170" rx="20" fill="#ffffff"/>

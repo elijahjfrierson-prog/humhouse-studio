@@ -1,4 +1,5 @@
 #include "Effects.h"
+#include "rockglue/RockGlueEngine.h"
 #include "Model.h"
 #include <cmath>
 
@@ -379,7 +380,10 @@ public:
                 wl += a * (1.0f - juce::jmax (0.0f, pan)); wr += c * (1.0f + juce::jmin (0.0f, pan));
             }
             const float norm = 1.0f / std::sqrt ((float) nv);
-            wl *= norm; wr *= norm; fb[0] = wl; fb[1] = wr;
+            // feedback uses the voice average (loop gain stays < 1 even when voices line up) and a soft limit, so it can't run away
+            auto soft = [] (float x) { return std::isfinite (x) ? std::tanh (x) : 0.0f; };
+            fb[0] = soft (wl / (float) nv); fb[1] = soft (wr / (float) nv);
+            wl *= norm; wr *= norm;
             L[i] = inL * (1.0f - 0.5f * mix) + wl * mix * 0.7f;
             if (st) R[i] = inR * (1.0f - 0.5f * mix) + wr * mix * 0.7f;
             phase += inc; if (phase >= 1.0f) phase -= 1.0f;
@@ -498,16 +502,22 @@ private:
     double sr = 44100; float ic[4] {};
 };
 
-// ------------------------------------------------------------ Glitch Gate (Gross Beat-style 16-step time/volume sequencer)
+// ------------------------------------------------------------ Glitch Gate (Gross Beat + ShaperBox style: one-click time / volume / filter / pan shapes)
 class GlitchGate : public BuiltinEffect
 {
 public:
     enum Mode { Thru = 0, Rep4, Rep8, Rep16, Rep32, Reverse, HalfSpeed, TapeStop, Mute, Stutter3 };
+    enum Fx { Steps = 0, FxTapeStop, FxTapeStart, FxStut8, FxStut16, FxStutTrip, FxRoll, FxScratch, FxBaby, FxReverse, FxRewind, FxHalf,
+              FxGate8, FxGate16, FxTrance, FxPump, FxSweep, FxWobble, FxPan, FxCrush, FxDrop, NumFx };
+    static constexpr int iSmooth = 17, iMix = 18, iFx = 19, iLen = 20, iDepth = 21;
     GlitchGate() { initDefaults(); }
     const char* typeId() const override { return "glitch"; }
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<const char*> modes { "Thru", "Repeat 1/4", "Repeat 1/8", "Repeat 1/16", "Repeat 1/32", "Reverse", "Half Speed", "Tape Stop", "Mute", "Triplet Stutter" };
+        static const std::vector<const char*> fxs { "Steps", "Tape Stop", "Tape Start", "Stutter 1/8", "Stutter 1/16", "Triplet Stutter", "Stutter Roll",
+                                                     "Scratch", "Baby Scratch", "Reverse", "Rewind", "Half Speed", "Gate 1/8", "Gate 1/16", "Trance Gate",
+                                                     "Sidechain Pump", "Filter Sweep", "Wobble", "Pan Swirl", "Lo-Fi Crush", "Drop" };
         static const std::vector<ParamDef> ps = []
         {
             std::vector<ParamDef> v;
@@ -517,33 +527,169 @@ public:
             v.push_back ({ "steplen", "Step", 0, 2, 1, { "1/8", "1/16", "1/32" } });
             v.push_back ({ "smooth", "Smooth ms", 0.5f, 20, 3 });
             v.push_back ({ "mix", "Mix", 0, 1, 1 });
+            v.push_back ({ "fx", "Effect", 0, (float) (NumFx - 1), (float) FxStut8, fxs });
+            v.push_back ({ "length", "Length", 0, 3, 2, { "1 beat", "2 beats", "1 bar", "2 bars" } });
+            v.push_back ({ "depth", "Depth", 0, 1, 1 });
             return v;
         }();
         return ps;
     }
-    void prepare (double s, int) override { sr = s; size = (int) (s * 8.0); ring.setSize (2, size); ring.clear(); w = 0; lastStep = -1; }
+    void prepare (double s, int) override
+    {
+        sr = s; size = (int) (s * 16.0); ring.setSize (2, size); ring.clear(); w = 0; lastStep = -1;
+        prevRb = oldRb = 0; xf = 0; vs = 1; gl = gr = 1; fcS = 20000; ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0; holdN = 0; freeBeat = 0;
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
-        static const double stepBeats[] { 0.5, 0.25, 0.125 };
-        const double sb = stepBeats[(int) p (16)];
-        const double samplesPerBeat = sr * 60.0 / ctx.bpm;
-        const double stepSamples = sb * samplesPerBeat;
-        const float mix = p (18);
-        const float smoothStep = 1.0f / std::max (1.0f, p (17) * 0.001f * (float) sr);
+        const double spb = sr * 60.0 / juce::jmax (20.0, ctx.bpm);
+        const double beat0 = ctx.playing ? ctx.beatPos : freeBeat;   // stopped: keeps running on its own clock so you hear it
+        freeBeat = beat0 + n / spb;
+        const int fx = juce::jlimit (0, NumFx - 1, (int) std::round (p (iFx)));
+        if (fx == Steps) processSteps (b, n, beat0, spb, ctx.playing);
+        else processShape (b, n, beat0, spb, fx);
+    }
+private:
+    float readHead (const float* buf, double rb) const
+    {
+        const double rpos = std::fmod ((double) w - rb + 2.0 * size, (double) size);
+        const int i0 = (int) rpos, i1 = (i0 + 1) % size; const float f = (float) (rpos - i0);
+        return buf[i0] + f * (buf[i1] - buf[i0]);
+    }
+    void processShape (juce::AudioBuffer<float>& b, int n, double beat0, double spb, int fx)
+    {
+        static const double lens[] { 1.0, 2.0, 4.0, 8.0 };
+        static const int trance[16] { 1,0,1,1, 0,1,1,0, 1,0,1,1, 0,1,0,1 };
+        const double cyc = lens[juce::jlimit (0, 3, (int) std::round (p (iLen)))];
+        const float depth = p (iDepth), mix = p (iMix);
+        const float sm = 1.0f / std::max (1.0f, p (iSmooth) * 0.001f * (float) sr);
+        const double xfStep = 1.0 / std::max (16.0, std::max (4.0, (double) p (iSmooth)) * 0.001 * sr);
+        const double maxRb = size - 8.0;
+        const bool timeFx = fx <= FxHalf || fx == FxDrop;
+        const bool useFilter = fx == FxSweep || fx == FxWobble || fx == FxCrush || fx == FxDrop;
+        const float fsm = 1.0f / (0.02f * (float) sr);
+        if (fx != lastFx) { lastFx = fx; lf = std::log (20000.0f); ic1[0] = ic1[1] = ic2[0] = ic2[1] = 0.0f; }
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         auto* rl = ring.getWritePointer (0); auto* rr = ring.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
             rl[w] = l[i]; rr[w] = r[i];
-            const double beat = ctx.beatPos + i / samplesPerBeat;
-            const long stepAbs = ctx.playing ? (long) std::floor (beat / sb + 1.0e-9) : -1;
-            if (stepAbs != lastStep) { lastStep = stepAbs; stepStart = w; posInStep = 0; }
-            const int mode = stepAbs >= 0 ? (int) p ((int) (stepAbs % 16)) : 0;
+            const double beat = beat0 + i / spb;
+            const double cpos = beat - cyc * std::floor (beat / cyc);     // beats into the cycle
+            const double bpos = beat - std::floor (beat);                 // beats into the beat
+            const double half = cyc * 0.5;
+            double rb = 0.0; float vol = 1.0f, fc = 20000.0f, pan = 0.0f; bool crush = false;
+            auto repeat = [&] (double sinceBeats, double sliceBeats) { const double u = sinceBeats * spb, L = std::max (16.0, sliceBeats * spb); return u - std::fmod (u, L); };
+            switch (fx)
+            {
+                case FxTapeStop:
+                    if (cpos >= half) { const double T = half * spb, u = (cpos - half) * spb, x = u / T; rb = u * u / (2.0 * T); vol = (float) (1.0 - x * x * x * x); }
+                    break;
+                case FxTapeStart:
+                {
+                    const double T = cyc * 0.25 * spb, u = cpos * spb;
+                    rb = u < T ? u - u * u / (2.0 * T) : T * 0.5;
+                    if (u < T) vol = (float) std::sqrt (u / T);
+                    break;
+                }
+                case FxStut8:    rb = repeat (bpos, 0.5); break;
+                case FxStut16:   rb = repeat (bpos, 0.25); break;
+                case FxStutTrip: rb = repeat (bpos, 1.0 / 3.0); break;
+                case FxRoll:
+                {
+                    const double q = cpos / cyc * 4.0;
+                    if (q >= 2.0) rb = repeat (cpos - half, q < 3.0 ? 0.5 : q < 3.5 ? 0.25 : 0.125);
+                    break;
+                }
+                case FxScratch:
+                    if (cpos >= half) { const double u = (cpos - half) * spb, wv = juce::MathConstants<double>::twoPi / spb; rb = u - std::sin (wv * u) / wv; }
+                    break;
+                case FxBaby:
+                {
+                    const double u = bpos * spb, wv = juce::MathConstants<double>::twoPi * 2.0 / spb;
+                    rb = 0.9 * (u - std::sin (wv * u) / wv);
+                    break;
+                }
+                case FxReverse: if (cpos >= half) rb = 2.0 * (cpos - half) * spb; break;
+                case FxRewind:  if (cpos >= half) rb = 2.5 * (cpos - half) * spb; break;
+                case FxHalf:    rb = 0.5 * cpos * spb; break;
+                case FxDrop:    if (cpos >= half) { rb = 0.5 * (cpos - half) * spb; fc = 900.0f; } break;
+                case FxGate8:   vol = std::fmod (cpos, 0.5) < 0.3 ? 1.0f : 0.0f; break;
+                case FxGate16:  vol = std::fmod (cpos, 0.25) < 0.15 ? 1.0f : 0.0f; break;
+                case FxTrance:  { const double s16 = cpos / 0.25; vol = trance[(int) s16 % 16] && (s16 - std::floor (s16)) < 0.8 ? 1.0f : 0.0f; break; }
+                case FxPump:    { const double x = 1.0 - bpos; vol = (float) (1.0 - x * x * x); break; }
+                case FxSweep:   { const double t = cpos / cyc; fc = (float) (200.0 * std::pow (100.0, t < 0.75 ? t / 0.75 : (1.0 - t) / 0.25)); break; }
+                case FxWobble:  fc = (float) (250.0 * std::pow (24.0, 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * 2.0 * bpos))); break;
+                case FxPan:     pan = (float) std::sin (juce::MathConstants<double>::twoPi * cpos / 2.0); break;
+                case FxCrush:   crush = true; fc = 7000.0f; break;
+                default: break;
+            }
+            rb = juce::jlimit (0.0, maxRb, rb);
+            // a jump in the read position (new slice, loop restart) crossfades from the old head instead of clicking
+            if (std::abs (rb - prevRb) > 3.0) { oldRb = prevRb; xf = 1.0; }
+            prevRb = rb;
+            float wl = l[i], wr = r[i];
+            if (timeFx)
+            {
+                float hl = readHead (rl, rb), hr = readHead (rr, rb);
+                if (xf > 0.0)
+                {
+                    const float o = (float) xf;
+                    hl = hl * (1.0f - o) + readHead (rl, oldRb) * o;
+                    hr = hr * (1.0f - o) + readHead (rr, oldRb) * o;
+                    xf -= xfStep;
+                }
+                wl += (hl - wl) * depth; wr += (hr - wr) * depth;
+            }
+            vs += ((1.0f - depth * (1.0f - vol)) - vs) * sm * 4.0f;
+            wl *= vs; wr *= vs;
+            if (useFilter)
+            {
+                lf += (std::log (20000.0f * std::pow (fc / 20000.0f, depth)) - lf) * fsm;   // log-smoothed cutoff: sweeps, never jumps
+                fcS = std::exp (lf);
+                if ((i & 15) == 0 || fg <= 0.0f) fg = (float) std::tan (juce::MathConstants<double>::pi * std::min (fcS, 0.45f * (float) sr) / sr);
+                const float k = 1.0f / 1.1f, a1 = 1.0f / (1.0f + fg * (fg + k)), a2 = fg * a1, a3 = fg * a2;
+                float* ch[2] { &wl, &wr };
+                for (int c = 0; c < 2; ++c)
+                {
+                    const float v3 = *ch[c] - ic2[c], v1 = a1 * ic1[c] + a2 * v3, v2 = ic2[c] + a2 * ic1[c] + a3 * v3;
+                    ic1[c] = 2.0f * v1 - ic1[c]; ic2[c] = 2.0f * v2 - ic2[c];
+                    *ch[c] = v2;
+                }
+            }
+            if (crush && depth > 0.0f)
+            {
+                if (holdN-- <= 0) { holdN = 1 + (int) (5.0f * depth); holdL = wl; holdR = wr; }
+                const float q = std::pow (2.0f, 12.0f - 6.0f * depth);
+                wl = std::round (holdL * q) / q; wr = std::round (holdR * q) / q;
+            }
+            const float pn = pan * depth;
+            const float tl = std::sqrt (std::max (0.0f, 1.0f - pn)), tr = std::sqrt (std::max (0.0f, 1.0f + pn));
+            gl += (tl - gl) * sm; gr += (tr - gr) * sm;
+            wl *= gl; wr *= gr;
+            l[i] += (wl - l[i]) * mix; r[i] += (wr - r[i]) * mix;
+            if (++w >= size) w = 0;
+        }
+    }
+    void processSteps (juce::AudioBuffer<float>& b, int n, double beat0, double samplesPerBeat, bool)
+    {
+        static const double stepBeats[] { 0.5, 0.25, 0.125 };
+        const double sb = stepBeats[juce::jlimit (0, 2, (int) p (16))];
+        const double stepSamples = sb * samplesPerBeat;
+        const float mix = p (iMix);
+        const float smoothStep = 1.0f / std::max (1.0f, p (iSmooth) * 0.001f * (float) sr);
+        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        auto* rl = ring.getWritePointer (0); auto* rr = ring.getWritePointer (1);
+        for (int i = 0; i < n; ++i)
+        {
+            rl[w] = l[i]; rr[w] = r[i];
+            const double beat = beat0 + i / samplesPerBeat;
+            const long stepAbs = (long) std::floor (beat / sb + 1.0e-9);
+            if (stepAbs != lastStep) { lastStep = stepAbs; posInStep = 0; }
+            const int mode = (int) p ((int) (((stepAbs % 16) + 16) % 16));
             float target = 1.0f;
-            double readBack = 0.0; // samples behind write head
+            double readBack = 0.0;
             switch (mode)
             {
-                case Thru: break;
                 case Rep4: case Rep8: case Rep16: case Rep32: case Stutter3:
                 {
                     const double rb = mode == Stutter3 ? 1.0 / 3.0 : (mode == Rep4 ? 1.0 : mode == Rep8 ? 0.5 : mode == Rep16 ? 0.25 : 0.125);
@@ -556,7 +702,6 @@ public:
                 case TapeStop:
                 {
                     const double t = std::min (1.0, posInStep / stepSamples);
-                    readBack = posInStep - (posInStep - posInStep * t * 0.5);
                     readBack = posInStep * t * 0.5;
                     target = (float) (1.0 - t * t);
                     break;
@@ -564,23 +709,63 @@ public:
                 case Mute: target = 0.0f; break;
                 default: break;
             }
-            gate += (target - gate) * smoothStep * 4.0f;
-            const double rpos = std::fmod ((double) w - readBack + size, (double) size);
-            const int i0 = (int) rpos; const int i1 = (i0 + 1) % size; const float f = (float) (rpos - i0);
-            const float ol = (rl[i0] + f * (rl[i1] - rl[i0])) * gate;
-            const float orr = (rr[i0] + f * (rr[i1] - rr[i0])) * gate;
-            // de-click on mode jumps
-            const float m = mode == Thru ? 0.0f : 1.0f;
-            wetAmt += (m - wetAmt) * smoothStep;
-            l[i] = l[i] * (1.0f - wetAmt * mix) * (mode == Thru ? gate : 1.0f) + ol * wetAmt * mix;
-            r[i] = r[i] * (1.0f - wetAmt * mix) * (mode == Thru ? gate : 1.0f) + orr * wetAmt * mix;
+            if (std::abs (readBack - prevRb) > 3.0) { oldRb = prevRb; xf = 1.0; }
+            prevRb = readBack;
+            vs += (target - vs) * smoothStep * 4.0f;
+            float ol = readHead (rl, readBack), orr = readHead (rr, readBack);
+            if (xf > 0.0)
+            {
+                const float o = (float) xf;
+                ol = ol * (1.0f - o) + readHead (rl, oldRb) * o; orr = orr * (1.0f - o) + readHead (rr, oldRb) * o;
+                xf -= smoothStep;
+            }
+            l[i] += (ol * vs - l[i]) * mix;
+            r[i] += (orr * vs - r[i]) * mix;
             posInStep += 1.0;
             if (++w >= size) w = 0;
         }
     }
+    double sr = 44100, posInStep = 0, freeBeat = 0, prevRb = 0, oldRb = 0, xf = 0;
+    juce::AudioBuffer<float> ring; int size = 1, w = 0, holdN = 0; long lastStep = -1;
+    int lastFx = -1;
+    float lf = 9.903f, vs = 1, gl = 1, gr = 1, fcS = 20000, fg = 0, ic1[2] {}, ic2[2] {}, holdL = 0, holdR = 0;
+};
+
+// ------------------------------------------------------------ Hum House Master (RockGlue architecture, master-bus mode):
+// Anchor (mono-locked lows, grit) -> M/S Pocket -> parallel FET smash -> VCA glue. Zero latency.
+class HumHouseMaster : public BuiltinEffect
+{
+public:
+    HumHouseMaster() { initDefaults(); }
+    const char* typeId() const override { return "hhmaster"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "drive", "Smash Drive", 0, 30, 8 }, { "smashmix", "Parallel Mix", 0, 100, 50 },
+            { "monolock", "Mono Lock", 0, 1, 1, { "Off", "On" } }, { "grit", "Grit", 0, 100, 25 },
+            { "pocket", "Carve Pocket", 0, 100, 100 }, { "threshold", "Glue Threshold", -20, 10, -10 },
+            { "makeup", "Makeup", 0, 12, 2 }, { "autorel", "Auto Release", 0, 1, 1, { "Off", "On" } } };
+        return ps;
+    }
+    void prepare (double s, int) override { engine.prepare (s); engine.reset(); }
+    void reset() override { engine.reset(); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        engine.setDrumDriveDb (p (0));
+        engine.setDrumParallelMix (p (1) * 0.01f);
+        engine.setMonoLock (p (2) > 0.5f);
+        engine.setGrit (p (3) * 0.01f);
+        engine.setCarvePocket (p (4) * 0.01f);
+        engine.setGlueThresholdDb (p (5));
+        engine.setGlueMakeupDb (p (6));
+        engine.setGlueAutoRelease (p (7) > 0.5f);
+        engine.processMaster ({ b.getWritePointer (0), b.getWritePointer (1) }, n);
+        gr.store (-engine.getMeterFrame().glueGrDb, std::memory_order_relaxed);
+    }
+    float meter (int) const override { return gr.load (std::memory_order_relaxed); }
 private:
-    double sr = 44100, posInStep = 0; juce::AudioBuffer<float> ring; int size = 1, w = 0, stepStart = 0; long lastStep = -1;
-    float gate = 1, wetAmt = 0;
+    rockglue::RockGlueEngine engine;
+    std::atomic<float> gr { 0.0f };
 };
 
 // ------------------------------------------------------------ small utilities
@@ -818,10 +1003,68 @@ void SpliceShifter::process (float& l, float& r, double ratio, double period)
     l = yl; r = yr;
 }
 
-float detectPitchYin (const float* x, int n, double sr, float thresh)
+void PsolaShifter::prepare (double s)
 {
-    const int maxTau = std::min (n / 2, (int) (sr / 70.0));
-    const int minTau = (int) (sr / 1100.0);
+    sr = s;
+    int sz = 1; while (sz < (int) (s * 0.5)) sz <<= 1;
+    for (auto* v : { &inL, &inR, &outL, &outR, &wsum }) v->assign ((size_t) sz, 0.0f);
+    mask = sz - 1; n = 0; ts = 0; mark = 0; lastP = 1; lat = latS = 0.006 * s; dryL = dryR = 0;
+}
+
+float PsolaShifter::read (const std::vector<float>& b, double pos) const
+{
+    const double fl = std::floor (pos);
+    const long long i = (long long) fl; const float t = (float) (pos - fl);
+    const float y0 = b[(size_t) ((i - 1) & mask)], y1 = b[(size_t) (i & mask)], y2 = b[(size_t) ((i + 1) & mask)], y3 = b[(size_t) ((i + 2) & mask)];
+    const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+    return ((c3 * t + c2) * t + c1) * t + y1;
+}
+
+void PsolaShifter::process (float& l, float& r, double ratio, double period)
+{
+    inL[(size_t) (n & mask)] = l; inR[(size_t) (n & mask)] = r;
+    const double P = juce::jlimit (0.0015 * sr, 0.02 * sr, period > 8.0 ? period : 0.006 * sr);
+    ratio = juce::jlimit (0.25, 4.0, ratio);
+    if (ts < (double) n) ts = (double) n;
+    // the cycle got longer (a lower note): the next grain would start in the past and fade in at half
+    // weight = a step in the output (the squeak on low note starts). Start it now from zero weight instead.
+    if (ts - P < (double) n - 1.0) ts = (double) n + P;
+    while (ts - P <= (double) n)   // next grain starts now: lay it out centred on ts
+    {
+        lat += juce::jlimit (-0.05 * P, 0.05 * P, 2.3 * P - lat);              // latency follows the voice slowly (no skips)
+        const double want = ts - lat;
+        double c = mark + P * std::round ((want - mark) / P);                   // stay on the voice's cycle grid
+        // a new note with a different cycle length (or the first grain): restart the grid right where the voice
+        // is, so the new grains line up with the last ones (a snapped grid here was the squeak on low note starts)
+        if (std::abs (c - want) > P || std::abs (P - lastP) > 0.15 * lastP) c = want;
+        lastP = P;
+        while (c + P > (double) n - 1.0) c -= P;                                // only use input we already have
+        mark = c;
+        for (long long j = (long long) std::ceil (ts - P); j <= (long long) std::floor (ts + P); ++j)
+        {
+            if (j < n) continue;
+            const double off = (double) j - ts;
+            const float w = 0.5f + 0.5f * std::cos (kPi * (float) (off / P));
+            const size_t o = (size_t) (j & mask);
+            outL[o] += w * read (inL, c + off); outR[o] += w * read (inR, c + off); wsum[o] += w;
+        }
+        ts += P / ratio;
+    }
+    const size_t o = (size_t) (n & mask);
+    const float g = 1.0f / std::max (0.5f, wsum[o]);
+    l = outL[o] * g; r = outR[o] * g;
+    outL[o] = outR[o] = wsum[o] = 0.0f;
+    latS += juce::jlimit (-0.04, 0.04, lat - latS);   // dry delay glides (lat steps per grain = clicks in the dry path)
+    dryL = read (inL, (double) n - latS); dryR = read (inR, (double) n - latS);
+    ++n;
+}
+
+float detectPitchYin (const float* x, int n, double sr, float thresh, float fallback, float loHz, float hiHz, bool* rough, float* aperiodic)
+{
+    if (rough != nullptr) *rough = false;
+    if (aperiodic != nullptr) *aperiodic = 1.0f;
+    const int maxTau = std::min (n / 2, (int) (sr / loHz));
+    const int minTau = std::max (2, (int) (sr / hiHz));
     if (maxTau <= minTau + 2) return 0.0f;
     float energy = 0; for (int i = 0; i < n; ++i) energy += x[i] * x[i];
     if (energy / (float) n < 1.0e-6f) return 0.0f;
@@ -829,23 +1072,51 @@ float detectPitchYin (const float* x, int n, double sr, float thresh)
     const int W = n - maxTau;
     float running = 0;
     d[0] = 1;
-    for (int tau = 1; tau < maxTau && tau < (int) d.size(); ++tau)
+    // difference function computed lag by lag, stopping at the first dip under the threshold (same answer as
+    // computing every lag, but high and mid voices only need a fraction of the lags = much less CPU)
+    const int lim = std::min (maxTau, (int) d.size());
+    for (int tau = 1; tau < lim; ++tau)
     {
-        float s = 0;
-        for (int i = 0; i < W; ++i) { const float df = x[i] - x[i + tau]; s += df * df; }
+        float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+        const float* a = x; const float* b = x + tau;
+        int i = 0;
+        for (; i + 4 <= W; i += 4)
+        {
+            const float d0 = a[i] - b[i], d1 = a[i + 1] - b[i + 1], d2 = a[i + 2] - b[i + 2], d3 = a[i + 3] - b[i + 3];
+            s0 += d0 * d0; s1 += d1 * d1; s2 += d2 * d2; s3 += d3 * d3;
+        }
+        for (; i < W; ++i) { const float df = a[i] - b[i]; s0 += df * df; }
+        const float s = (s0 + s1) + (s2 + s3);
         running += s;
         d[(size_t) tau] = running > 0 ? s * (float) tau / running : 1.0f;
-    }
-    for (int tau = minTau; tau < maxTau - 1 && tau < (int) d.size() - 1; ++tau)
-    {
-        if (d[(size_t) tau] < thresh)
+        const int c = tau - 1;   // first local minimum below the threshold
+        if (c >= minTau && c >= 1 && d[(size_t) c] < thresh && d[(size_t) tau] >= d[(size_t) c])
         {
-            while (tau + 1 < maxTau && d[(size_t) tau + 1] < d[(size_t) tau]) ++tau;
-            const float a = d[(size_t) tau - 1], b = d[(size_t) tau], c = d[(size_t) tau + 1];
-            const float den = a + c - 2 * b;
-            const float t = (float) tau + (std::abs (den) > 1e-9f ? 0.5f * (a - c) / den : 0.0f);
+            const float pa = d[(size_t) c - 1], pb = d[(size_t) c], pc = d[(size_t) tau];
+            const float den = pa + pc - 2 * pb;
+            const float t = (float) c + (std::abs (den) > 1e-9f ? 0.5f * (pa - pc) / den : 0.0f);
+            if (aperiodic != nullptr) *aperiodic = pb;
             return (float) sr / t;
         }
+    }
+    if (fallback > thresh)
+    {
+        // breathy / short / mumbled sounds: take the first dip close to the best one (avoids picking an octave too low)
+        const int hi = std::min (maxTau - 1, (int) d.size() - 1);
+        float best = 1.0f;
+        for (int tau = minTau; tau < hi; ++tau) best = std::min (best, d[(size_t) tau]);
+        if (best < fallback)
+            for (int tau = minTau; tau < hi; ++tau)
+                if (d[(size_t) tau] <= best * 1.15f + 0.02f)
+                {
+                    while (tau + 1 < hi && d[(size_t) tau + 1] < d[(size_t) tau]) ++tau;
+                    const float a = d[(size_t) tau - 1], b = d[(size_t) tau], c = d[(size_t) tau + 1];
+                    const float den = a + c - 2 * b;
+                    const float t = (float) tau + (std::abs (den) > 1e-9f ? 0.5f * (a - c) / den : 0.0f);
+                    if (rough != nullptr) *rough = true;
+                    if (aperiodic != nullptr) *aperiodic = b;
+                    return (float) sr / t;
+                }
     }
     return 0.0f;
 }
@@ -862,20 +1133,22 @@ public:
             { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
             { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
-                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "voice", "Voice", 0, 2, 1, { "Low", "Mid", "High" } },
+                                               "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "natvib", "Natural Vibrato %", 0, 200, 0 },
             { "mix", "Mix", 0, 1, 1 },
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
-            { "tuning", "Tuning A4 (Hz)", 400, 500, 440 } };
+            { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
+            { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
+            { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 } };
         return ps;
     }
     int latencySamples() const override { return 0; }
     void prepare (double s, int) override
     {
         sr = s;
-        shifter.prepare (s); period = (float) (0.008 * s);
+        shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
-        currentRatio = 1.0f; targetRatio = 1.0f; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -883,16 +1156,24 @@ public:
     {
         const int style = (int) p (0);
         float speed = p (1);
-        if (style == 3) speed = 1.0f;                          // hard tune: instant
+        const float snap = juce::jlimit (0.0f, 3.0f, -p (12));   // MetaTune-style negative retune: 0 = instant, -3 = hardest step
+        const bool hard = style == 3 || snap > 0.0f;
+        if (hard) speed = 1.0f;                                // hard tune: instant
         const int root = p (3) < 0 ? ctx.keyRoot : (int) p (3) - 0;
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = juce::jmap (speed, 400.0f, 1.0f);   // retune glide time
+        const float timeMs = 1.0f - 0.3f * snap + 200.0f * (1.0f - speed) * (1.0f - speed);   // retune glide: 0.75 = ~13 ms, so it lands and holds
         const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
-        const float humanize = style == 3 ? 0.0f : p (2);
+        const float humanize = hard ? 0.0f : p (2);
         const float offset = std::pow (2.0f, (std::round (p (7)) + p (8) / 100.0f) / 12.0f);   // Pitch (semitones) + Detune (cents)
+        const float natVib = p (5) / 100.0f;                    // 0 = vibrato killed (dead flat), 1 = as sung, 2 = enhanced
+        const float vibDepth = p (10) / 1200.0f, vibInc = juce::MathConstants<float>::twoPi * p (11) / (float) sr;
+        // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
+        // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
+        const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
+        const float wetRel = 1.0f - std::exp (-1.0f / (0.018f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -900,44 +1181,249 @@ public:
             if ((dsCount++ % dsFactor) == 0)
             {
                 analysis[(size_t) aw] = mono; aw = (aw + 1) % (int) analysis.size();
-                if (++hopCount >= 128)
+                const int hop = hard ? (snap >= 2.0f ? 32 : snap >= 1.0f ? 48 : 64) : 128;   // Hard Tune (Antares retune 0): track faster
+                if (++hopCount >= hop)
                 {
                     hopCount = 0;
-                    std::array<float, 1024> win {};
-                    for (int k = 0; k < 1024; ++k) win[(size_t) k] = analysis[(size_t) ((aw - 1024 + k + (int) analysis.size()) % (int) analysis.size())];
-                    const float hz = detectPitchYin (win.data(), 1024, dsr, style == 0 ? 0.12f : 0.18f);
-                    const float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    // one full-range detector for every register: the window follows the voice (~3 cycles of the sung
+                    // note = low lag, so vibrato isn't smeared into a wave); at a word start or on a miss try short, then long
+                    const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
+                    bool rough = false; int wn = 512; float hz = 0, aper = 1;
+                    auto detect = [&] (int len) {
+                        len = juce::jlimit (256, 1024, len);
+                        std::array<float, 1024> win {};
+                        for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
+                        wn = len;
+                        return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough, &aper);
+                    };
+                    if (lastMidi > 0) hz = detect ((int) ((3.2 - 0.3 * snap) * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
+                    if (hz <= 0) hz = detect (512);
+                    if (hz <= 0) hz = detect (1024);
+                    float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
+                    float lvl = 0;
+                    for (int k = 0; k < wn; ++k) { const float a = analysis[(size_t) ((aw - wn + k + (int) analysis.size()) % (int) analysis.size())]; lvl += a * a; }
+                    lvl = std::sqrt (lvl / (float) wn);
+                    // breaths, room noise and hiss: too quiet next to the voice, or not clearly pitched - leave them untuned
+                    const float hopSec = (float) hop / (float) dsr;
+                    voiceLvl *= std::exp (-hopSec / 0.5f);
+                    if (lvl < 0.1f * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;
+                    // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
+                    if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
+                    // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
+                    if (rough && midi > 0 && heldNote > 0) { missHops = 0; midi = -1.0f; }
+                    // the voice coming back after a gap on another note is a fresh start, not a slip of the old note
+                    if (midi > 0 && lastMidi > 0 && missHops >= 2 && std::abs (midi - lastMidi) > 1.0f) { heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    if (midi > 0 && lastMidi > 0)
+                    {
+                        // octave error guard: a sudden exact octave jump inside a note is a detector slip - fold it back
+                        const float dj = midi - lastMidi;
+                        if (std::abs (dj - 12.0f) < 0.7f && octSlip < 8) { midi -= 12.0f; ++octSlip; }
+                        else if (std::abs (dj + 12.0f) < 0.7f && octSlip < 8) { midi += 12.0f; ++octSlip; }
+                        else octSlip = 0;
+                    }
+                    // a new note (word start or a leap) must read the same twice in a row before it's tuned to: one-off
+                    // misreads from noise or consonants were the chirps / squeaks (a wrong ratio for a few ms)
+                    if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
+                    {
+                        const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < (rough || pendingRough ? 0.35f : 0.6f);
+                        if (same) pendingMidi = 0;
+                        else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
+                    }
+                    else if (midi != -1.0f) pendingMidi = 0;
+                    // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
+                    // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
+                    wetTarget = midi > 0 && (hard || ! rough) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : (wetTarget > 0.5f ? 0.3f : 0.2f)) ? 1.0f : 0.0f;   // Hard Tune tunes the rough edges too: no natural voice
+                    // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
+                    // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
+                    if (hard && midi == -1.0f && heldNote > 0) wetTarget = 1.0f;
+                    consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
+                    // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
+                    // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
+                    if (midi > 0) tailHops = 0;
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.14f : 0.07f)) wetTarget = 1.0f;
                     if (midi > 0)
                     {
+                        const bool onset = heldNote == 0;
+                        voiceLvl = std::max (voiceLvl, lvl);
+                        // the analysis window lags the voice by half its length: extrapolate the pitch slope so vibrato
+                        // and inflections are corrected where the voice is now (this lag was the leftover "wave")
+                        slope = onset || std::abs (midi - lastMidi) > 1.0f ? 0.0f : 0.6f * slope + 0.4f * (midi - lastMidi);
+                        const float now = midi + juce::jlimit (-0.5f, 0.5f, slope * 0.5f * (float) wn / (float) hop);
+                        missHops = 0; lastMidi = midi; releasing = false;
                         period = (float) (sr / hz);
-                        const int target = snapToScale ((int) std::round (midi), root, scale);
-                        float semis = (float) target - midi;
-                        if (std::abs (semis) < humanize * 0.6f) semis *= (1.0f - humanize);   // let small natural drift through
-                        if (style == 0) semis *= 0.8f;
+                        // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
+                        centre = onset ? now : centre + (now - centre) * (1.0f - std::exp (-hopSec / 0.12f));
+                        int target = snapToScale ((int) std::round (centre), root, scale);
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.55f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        // a real jump to another note is taken within ~20 ms
+                        const int fast = snapToScale ((int) std::round (now), root, scale);
+                        if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
+                        {
+                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
+                        }
+                        else jumpHops = 0;
+                        heldNote = target;
+                        float semis = juce::jlimit (-3.0f, 3.0f, (float) target - now + natVib * (now - centre));
+                        if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
+                        if (onset && (hard || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
-                    else targetRatio = 1.0f;
+                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.18 : 0.12) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
-            const float ratio = currentRatio * offset;
-            float wl = l[i], wr = r[i];
-            shifter.process (wl, wr, ratio, period);
+            float ratio = currentRatio * offset;
+            if (vibDepth > 0 && heldNote > 0) { ratio *= std::exp2 (vibDepth * std::sin (vibPhase)); vibPhase = std::fmod (vibPhase + vibInc, juce::MathConstants<float>::twoPi); }
+            wetS1 += (wetTarget - wetS1) * (wetTarget > wetS1 || consonant ? wetCoef : wetRel);
+            wetG += (wetS1 - wetG) * (wetS1 > wetG || consonant ? wetCoef : wetRel);
+            if (releasing && wetG < 0.01f) { targetRatio = currentRatio = 1.0f; releasing = false; }   // the note fades out still on pitch
+            float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
+            // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
+            // only the shifter in use runs (half the CPU)
+            if (style == 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            else
+            {
+                psola.process (pl, pr, ratio, period);
+                l[i] = psola.dryL; r[i] = psola.dryR;
+                wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
+            }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
     }
 private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
-    std::vector<float> analysis; SpliceShifter shifter;
+    std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     float currentRatio = 1, targetRatio = 1;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
+    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 
+// ------------------------------------------------------------ Key Finder
+juce::String KeyGuess::describe() const
+{
+    static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    juce::String c = (cents >= 0 ? "+" : "") + juce::String (juce::roundToInt (cents)) + " cents";
+    return juce::String (names[(root % 12 + 12) % 12]) + (scaleIndex == 1 ? " minor" : " major")
+         + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
+}
+
+KeyGuess findKey (const float* x, int n, double sr)
+{
+    KeyGuess g;
+    constexpr int order = 13, N = 1 << order;
+    if (x == nullptr || n < N) return g;
+    juce::dsp::FFT fft (order);
+    std::vector<float> buf ((size_t) N * 2), win ((size_t) N);
+    for (int i = 0; i < N; ++i) win[(size_t) i] = 0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) (N - 1));
+    struct Pk { float midi, w; };
+    std::vector<Pk> peaks;
+    const int kLo = (int) std::ceil (55.0 * N / sr), kHi = juce::jmin (N / 2 - 2, (int) (5000.0 * N / sr));
+    for (int at = 0; at + N <= n; at += N / 2)
+    {
+        std::fill (buf.begin(), buf.end(), 0.0f);
+        for (int i = 0; i < N; ++i) buf[(size_t) i] = x[at + i] * win[(size_t) i];
+        fft.performFrequencyOnlyForwardTransform (buf.data());
+        float mx = 0; for (int k = kLo; k <= kHi; ++k) mx = std::max (mx, buf[(size_t) k]);
+        if (mx < 1.0e-3f) continue;
+        for (int k = juce::jmax (kLo, 2); k <= kHi; ++k)
+        {
+            const float m = buf[(size_t) k];
+            if (m < 0.05f * mx || m <= buf[(size_t) k - 1] || m < buf[(size_t) k + 1]) continue;
+            const float a = std::log (buf[(size_t) k - 1] + 1e-9f), b = std::log (m + 1e-9f), c = std::log (buf[(size_t) k + 1] + 1e-9f);
+            const float den = a - 2 * b + c;
+            const float d = std::abs (den) > 1e-9f ? juce::jlimit (-0.5f, 0.5f, 0.5f * (a - c) / den) : 0.0f;
+            const double hz = (k + d) * sr / N;
+            peaks.push_back ({ (float) (69.0 + 12.0 * std::log2 (hz / 440.0)), m / mx });
+        }
+    }
+    if (peaks.empty()) return g;
+    // tuning: weighted circular mean of how far the partials sit from equal temperament (above ~250 Hz, where bins are fine)
+    double sx = 0, sy = 0;
+    for (auto& p : peaks)
+        if (p.midi > 59.0f)
+        {
+            const double dev = p.midi - std::round (p.midi), ang = juce::MathConstants<double>::twoPi * dev;
+            sx += p.w * std::cos (ang); sy += p.w * std::sin (ang);
+        }
+    g.cents = (float) (std::atan2 (sy, sx) / juce::MathConstants<double>::twoPi * 100.0);
+    // key: chroma against the Krumhansl major / minor profiles
+    double chroma[12] {};
+    for (auto& p : peaks)
+    {
+        const int pc = (((int) std::lround (p.midi - g.cents / 100.0f)) % 12 + 12) % 12;
+        chroma[pc] += std::sqrt (p.w);
+    }
+    static const double maj[12] { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
+    static const double mnr[12] { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
+    auto corr = [&] (const double* prof, int root) {
+        double mx = 0, my = 0; for (int i = 0; i < 12; ++i) { mx += chroma[(i + root) % 12]; my += prof[i]; }
+        mx /= 12; my /= 12;
+        double sxy = 0, sxx = 0, syy = 0;
+        for (int i = 0; i < 12; ++i) { const double a = chroma[(i + root) % 12] - mx, b = prof[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
+        return sxx > 0 ? sxy / std::sqrt (sxx * syy) : 0.0;
+    };
+    double best = -2, second = -2;
+    for (int mode = 0; mode < 2; ++mode)
+        for (int r = 0; r < 12; ++r)
+        {
+            const double c = corr (mode == 0 ? maj : mnr, r);
+            if (c > best) { second = best; best = c; g.root = r; g.scaleIndex = mode; }
+            else if (c > second) second = c;
+        }
+    g.confidence = (float) juce::jlimit (0.0, 1.0, (best - second) * 5.0);
+    // tempo: spectral-flux onsets, autocorrelation scored over 4 beat multiples
+    constexpr int o2 = 10, N2 = 1 << o2, hop = 512;
+    juce::dsp::FFT f2 (o2);
+    std::vector<float> b2 ((size_t) N2 * 2), prev ((size_t) N2 / 2, 0.0f), flux;
+    for (int at = 0; at + N2 <= n; at += hop)
+    {
+        std::fill (b2.begin(), b2.end(), 0.0f);
+        for (int i = 0; i < N2; ++i) b2[(size_t) i] = x[at + i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) (N2 - 1)));
+        f2.performFrequencyOnlyForwardTransform (b2.data());
+        float fl = 0;
+        for (int k = 1; k < N2 / 2; ++k) { const float m = std::log1p (100.0f * b2[(size_t) k]); fl += std::max (0.0f, m - prev[(size_t) k]); prev[(size_t) k] = m; }
+        flux.push_back (fl);
+    }
+    const double fr = sr / hop;
+    const int F = (int) flux.size();
+    if (F > (int) (fr * 4))
+    {
+        std::vector<double> on ((size_t) F), pre ((size_t) F + 1, 0.0);
+        for (int i = 0; i < F; ++i) pre[(size_t) i + 1] = pre[(size_t) i] + flux[(size_t) i];
+        const int w = juce::jmax (2, (int) (0.25 * fr / 2));
+        for (int i = 0; i < F; ++i)
+        {
+            const int a = juce::jmax (0, i - w), b = juce::jmin (F, i + w + 1);
+            on[(size_t) i] = std::max (0.0, flux[(size_t) i] - (pre[(size_t) b] - pre[(size_t) a]) / (b - a));
+        }
+        const int maxLag = juce::jmin (F - 1, (int) (fr * 60.0 / 70.0 * 4) + 2);
+        std::vector<double> ac ((size_t) maxLag + 1, 0.0);
+        for (int L = 1; L <= maxLag; ++L) for (int i = L; i < F; ++i) ac[(size_t) L] += on[(size_t) i] * on[(size_t) i - L];
+        auto at = [&] (double lag) { const int i = (int) lag; const double f = lag - i; return i + 1 > maxLag ? 0.0 : ac[(size_t) i] * (1 - f) + ac[(size_t) i + 1] * f; };
+        auto score = [&] (double bpm) { const double lag = fr * 60.0 / bpm; double sc = 0; for (int h = 1; h <= 4; ++h) sc += at (lag * h); return sc; };
+        double bestS = -1;
+        for (double bpm = 70.0; bpm <= 180.0; bpm += 0.1)
+            if (const double sc = score (bpm); sc > bestS) { bestS = sc; g.bpm = bpm; }
+        // half-time reads (71 for a 142 beat): take the double tempo when it is nearly as strong (FL / trap convention)
+        if (g.bpm < 90.0)
+        {
+            double b2 = g.bpm * 2, s2 = -1;
+            for (double bpm = g.bpm * 2 - 1.0; bpm <= g.bpm * 2 + 1.0; bpm += 0.1) if (const double sc = score (bpm); sc > s2) { s2 = sc; b2 = bpm; }
+            if (s2 > 0.6 * bestS) g.bpm = b2;
+        }
+        g.bpm = std::round (g.bpm);
+    }
+    return g;
+}
+
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
+std::unique_ptr<BuiltinEffect> createPurify();
 
 ScopeTap& masterScope() { static ScopeTap t; return t; }
 
@@ -945,9 +1431,11 @@ const std::vector<EffectInfo>& builtinEffects()
 {
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
-        { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" },
-        { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
-        { "autopitch", "AutoPitch", "Vocal" }, { "deess", "De-Esser", "Vocal" },
+        { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
+        { "hhmaster", "Hum House Master", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
+        { "autopitch", "AutoPitch", "Vocal" },
+        { "vroom", "HumHouse Vocal Room", "Vocal" },
+        { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
         { "pump", "Pump (Sidechain)", "Dynamics" }, { "clip", "Soft Clipper", "Dynamics" },
@@ -961,6 +1449,7 @@ const std::vector<EffectInfo>& builtinEffects()
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
     if (auto s = createStudioEffect (id)) return s;
+    if (id == "purify") { auto f = createPurify(); f->initDefaults(); return f; }
     if (id == "scope") return std::make_unique<ScopeFx>();
     if (id == "eq") return std::make_unique<ParaEQ>();
     if (id == "comp") return std::make_unique<Compressor>();
@@ -974,6 +1463,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();
     if (id == "glitch") return std::make_unique<GlitchGate>();
+    if (id == "hhmaster") return std::make_unique<HumHouseMaster>();
     if (id == "wide") return std::make_unique<StereoWide>();
     if (id == "clip") return std::make_unique<SoftClip>();
     if (id == "crush") return std::make_unique<BitCrush>();

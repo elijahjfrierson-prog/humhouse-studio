@@ -83,6 +83,10 @@ struct Strip : public juce::Component
         if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
         g.drawText (index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
+        if (index < (int) p.mixer.size() && p.mixer[(size_t) index].colour != juce::Colour (0xff2a2f36))
+        {
+            g.setColour (p.mixer[(size_t) index].colour); g.fillRoundedRectangle (6.0f, 2.0f, (float) getWidth() - 12.0f, 3.0f, 1.5f);
+        }
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].frozen)
         {
             g.setColour (col::accent2); g.drawText ("FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
@@ -93,7 +97,7 @@ struct Strip : public juce::Component
         g.setColour (col::bg); g.fillRect (m);
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
-        g.setGradientFill (juce::ColourGradient (col::rec, (float) m.getX(), (float) m.getY(), col::good, (float) m.getX(), (float) m.getBottom(), false));
+        g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].fx.size() > 0)
         {
@@ -117,8 +121,8 @@ struct Strip : public juce::Component
             const float x = a.getX() + a.getWidth() * (float) i / 511.0f, y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
             if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
         }
-        g.setColour (col::accent.withAlpha (0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
-        g.setColour (col::accent); g.strokePath (p, juce::PathStrokeType (1.0f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh, 0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh)); g.strokePath (p, juce::PathStrokeType (1.0f));
     }
     void scMenu()
     {
@@ -184,6 +188,7 @@ struct Strip : public juce::Component
             m.addSeparator();
             m.addItem (4, "Clear all FX");
             m.addSubMenu ("Presets", trackPresetMenu (s, index));
+            m.addSubMenu ("Color", colourMenu (30));
             m.showMenuAsync ({}, [this] (int r) {
                 if (r == 1)
                 {
@@ -192,7 +197,8 @@ struct Strip : public juce::Component
                 }
                 else if (r == 2) name.showEditor();
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
-                else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export selected mixer track.");
+                else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
+                else if (r >= 30 && r <= 42) { const auto c = pickedColour (r - 30); s.edit ("Insert color", [this, c] (Project& p) { p.mixer[(size_t) index].colour = c; }); }
             });
         }
     }

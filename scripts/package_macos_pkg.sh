@@ -4,17 +4,18 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
-VERSION="${VERSION:-1.2.5}"
-BUNDLE_ID="com.humhouse.studio.installer"
+VERSION="${VERSION:-1.3.3}"
+BUNDLE_ID="${PKG_ID:-com.humhouse.studio.installer}"
 PKG_OUT="${PKG_OUT:-HumHouse-Studio-macOS.pkg}"
-NAME="HumHouse Studio"
-APP_SRC="$REPO/build/HumHouseStudio_artefacts/Release/$NAME.app"
+NAME="${APP_NAME:-HumHouse Studio}"
+APP_SRC="$REPO/build/${APP_TARGET:-HumHouseStudio}_artefacts/Release/$NAME.app"
 [[ -d "$APP_SRC" ]] || { echo "ERROR: $APP_SRC not found" >&2; exit 1; }
 
 STAGE="$(mktemp -d)"
 ROOT="$STAGE/root/Applications"
 mkdir -p "$ROOT" "$STAGE/pkgs" "$STAGE/scripts" "$STAGE/resources"
 cp -R "$APP_SRC" "$ROOT/"
+mkdir -p "$ROOT/$NAME.app/Contents/Resources" && cp -R "$REPO/Sounds" "$ROOT/$NAME.app/Contents/Resources/Sounds"
 codesign --force --deep --sign "${APPLE_DEVELOPER_ID:--}" "$ROOT/$NAME.app" || true
 
 cat > "$STAGE/scripts/preinstall" <<PRE

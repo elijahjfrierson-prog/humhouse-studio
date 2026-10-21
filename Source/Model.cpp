@@ -163,7 +163,25 @@ const Channel* Project::findChannel (int id) const
 int Project::addChannel (Channel c)
 {
     c.id = nextChannelId++;
-    if (c.mixerTrack < 0) c.mixerTrack = addMixerTrack (c.name);
+    if (c.mixerTrack < 0)
+    {
+        // FL: channels fill inserts 1, 2, 3 ... in order. An empty insert a track owns by default is taken over
+        // (the track moves to a fresh insert); inserts holding effects or recorded audio are skipped.
+        auto usedByChannel = [this] (int i) { for (auto& o : channels) if (o.mixerTrack == i) return true; return false; };
+        auto holdsAudio = [this] (int i) { for (auto& cl : clips) if (cl.isAudio() && clipInsert (cl) == i) return true; return false; };
+        for (int i = 1; i < (int) mixer.size() && c.mixerTrack < 0; ++i)
+        {
+            if (usedByChannel (i) || ! mixer[(size_t) i].fx.empty() || holdsAudio (i)) continue;
+            bool sentTo = false;
+            for (auto& m : mixer) for (auto& snd : m.sends) sentTo |= snd.target == i;
+            if (sentTo) continue;
+            for (auto& l : lanes) if (l.mixerTrack == i) l.mixerTrack = -1;
+            c.mixerTrack = i;
+            mixer[(size_t) i].name = c.name;
+        }
+        if (c.mixerTrack < 0) c.mixerTrack = addMixerTrack (c.name);
+        for (auto& l : lanes) if (l.mixerTrack == -1) l.mixerTrack = addMixerTrack (l.name);
+    }
     channels.push_back (c);
     return c.id;
 }
@@ -199,9 +217,10 @@ double Project::songLengthBeats() const
 
 juce::File Project::recordingsFolder() const
 {
-    auto base = projectFile.existsAsFile() ? projectFile.getParentDirectory()
-                                           : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio");
-    return base.getChildFile ("Recordings");
+    if (projectFile.existsAsFile()) return projectFile.getParentDirectory().getChildFile ("Recordings");
+    // not saved yet: the song still gets its own session folder (never a shared one); the first save copies it into the song folder
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sessions")
+               .getChildFile (juce::File::createLegalFileName (title.isEmpty() ? juce::String ("Untitled") : title)).getChildFile ("Recordings");
 }
 
 std::vector<int> Project::outputsOf (int track) const
@@ -267,5 +286,76 @@ std::vector<int> Project::processingOrder() const
     std::vector<int> order;
     for (auto& l : processingLevels()) order.insert (order.end(), l.begin(), l.end());
     return order;
+}
+
+int Project::insertPatternAfter (int after, Pattern pt)
+{
+    const int at = juce::jlimit (0, (int) patterns.size(), after + 1);
+    patterns.insert (patterns.begin() + at, std::move (pt));
+    for (auto& c : clips) if (c.patternIndex >= at) ++c.patternIndex;
+    if (currentPattern >= at) ++currentPattern;
+    return at;
+}
+
+void Project::removePatterns (const std::function<bool (int)>& drop)
+{
+    const int n = (int) patterns.size();
+    std::vector<int> remap ((size_t) n, -1);
+    std::vector<Pattern> kept;
+    for (int i = 0; i < n; ++i) if (! drop (i)) { remap[(size_t) i] = (int) kept.size(); kept.push_back (patterns[(size_t) i]); }
+    clips.erase (std::remove_if (clips.begin(), clips.end(), [&] (const Clip& c) {
+        return c.patternIndex >= 0 && (c.patternIndex >= n || remap[(size_t) c.patternIndex] < 0); }), clips.end());
+    for (auto& c : clips) if (c.patternIndex >= 0) c.patternIndex = remap[(size_t) c.patternIndex];
+    const int cur = currentPattern >= 0 && currentPattern < n ? remap[(size_t) currentPattern] : -1;
+    patterns = std::move (kept);
+    if (patterns.empty()) { Pattern pt; pt.name = "Pattern 1"; patterns.push_back (pt); }
+    currentPattern = juce::jlimit (0, (int) patterns.size() - 1, cur < 0 ? 0 : cur);
+}
+}
+
+namespace hhs
+{
+int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA, double rangeB)
+{
+    if (div <= 0) return 0;
+    const double fade = secondsToBeats (0.002, p.bpm);
+    int g = 0; for (auto& o : p.clips) g = juce::jmax (g, o.group);
+    std::vector<Clip> made; int rolled = 0;
+    for (int uid : uids)
+    {
+        auto it = std::find_if (p.clips.begin(), p.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
+        if (it == p.clips.end() || ! it->isAudio()) continue;
+        const Clip src = *it;
+        const double end = src.start + src.length;
+        const bool ranged = rangeB > rangeA;
+        const double a = ranged ? juce::jmax (src.start, rangeA) : src.start;
+        const double b = ranged ? juce::jmin (end, rangeB) : end;
+        if (b - a < div * 1.5 - 1e-9) continue;
+        p.clips.erase (it); ++g; ++rolled;
+        auto piece = [&] (double s0, double len, double srcBeat)
+        {
+            Clip c = src; c.uid = p.newUid(); c.start = s0; c.length = len;
+            c.sourceOffset = src.sourceOffset + beatsToSeconds (srcBeat - src.start, p.bpm);
+            c.group = g; c.takeGroup = 0; c.selected = true;
+            return c;
+        };
+        if (a > src.start + 1e-9)   // audio before the roll stays
+        {
+            Clip c = piece (src.start, a - src.start, src.start); c.fadeOut = fade; made.push_back (c);
+        }
+        for (double s0 = a; s0 < b - 1e-9; s0 += div)
+        {
+            Clip c = piece (s0, juce::jmin (div, b - s0), a);   // every hit replays the audio at the roll start
+            c.fadeIn = (s0 == src.start) ? src.fadeIn : fade;
+            c.fadeOut = juce::jmin (fade, c.length * 0.5);
+            made.push_back (c);
+        }
+        if (b < end - 1e-9)        // audio after the roll stays
+        {
+            Clip c = piece (b, end - b, b); c.fadeIn = fade; made.push_back (c);
+        }
+    }
+    p.clips.insert (p.clips.end(), made.begin(), made.end());
+    return rolled;
 }
 }

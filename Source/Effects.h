@@ -122,5 +122,30 @@ private:
     double sr = 44100, d = 64, d2 = 64;
 };
 
-float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f); // Hz or 0
+// PSOLA shifter: pitch-synchronous grains (2 periods, Hann) taken from the input and laid out at the new
+// period, never resampled, so the voice keeps its own tone (formants) at any ratio - no chipmunk
+class PsolaShifter
+{
+public:
+    void prepare (double sr);
+    void process (float& l, float& r, double ratio, double period);   // l/r become the shifted signal
+    float dryL = 0, dryR = 0;                                         // input delayed to line up with the output
+    double delaySamples() const { return lat; }
+private:
+    float read (const std::vector<float>& b, double pos) const;
+    std::vector<float> inL, inR, outL, outR, wsum;
+    int mask = 0;
+    long long n = 0;
+    double sr = 44100, ts = 0, mark = 0, lat = 0, latS = 0, lastP = 1;
+};
+
+// Key Finder: key / scale (0 = Major, 1 = Natural Minor), tempo and tuning offset of a piece of audio
+struct KeyGuess
+{
+    int root = 0, scaleIndex = 0; double bpm = 0; float cents = 0, confidence = 0;
+    juce::String describe() const;
+};
+KeyGuess findKey (const float* mono, int n, double sr);
+
+float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr, float* aperiodic = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
 }
