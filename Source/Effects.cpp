@@ -192,17 +192,19 @@ private:
 };
 
 // ------------------------------------------------------------ Room Verb
-class RoomVerb : public BuiltinEffect
+class RoomVerb : public BuiltinEffect, private juce::Thread
 {
 public:
-    RoomVerb() { initDefaults(); }
+    RoomVerb() : juce::Thread ("HHS Reverse Room") { initDefaults(); }
+    ~RoomVerb() override { stopThread (3000); }
     const char* typeId() const override { return "verb"; }
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<ParamDef> ps { { "size", "Size", 0, 1, 0.6f }, { "damp", "Damping", 0, 1, 0.45f }, { "width", "Width", 0, 1, 1 },
                                                  { "mix", "Mix", 0, 1, 0.25f }, { "lowcut", "Low Cut", 20, 1000, 200 },
                                                  { "reverse", "Reverse", 0, 1, 0, { "Off", "On" } },
-                                                 { "revlen", "Rev Length", 0, 3, 1, { "1/4", "1/2", "1 Bar", "2 Bars" } } };
+                                                 { "revlen", "Rev Length", 0, 3, 1, { "1/4", "1/2", "1 Bar", "2 Bars" } },
+                                                 { "revroom", "Rev Room", 0, 5, 4, { "Classic", "Room", "Chamber", "Plate", "Hall", "Cathedral" } } };
         return ps;
     }
     double tailSeconds() const override { return p (5) > 0.5f ? 14.0 : 6.0; }
@@ -211,9 +213,22 @@ public:
         sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear();
         revReady.store (false); prepared = true;
         if (p (5) > 0.5f) allocRev();
+        // the reverse room is built here, before the convolver is prepared, so it's ready on the first block
+        {
+            const std::lock_guard<std::mutex> lk (irLock);
+            convReady.store (false);
+            if (roomMode()) buildIR (120.0);
+            conv.prepare ({ s, (juce::uint32) juce::jmax (1, maxBlock), 2 });
+            conv.reset();
+        }
+        if (roomMode()) startThread();
     }
     // Reverse memory is only made when Reverse is on, and never on the audio thread
-    void paramChanged (int i) override { if (i == 5 && prepared && p (5) > 0.5f) allocRev(); }
+    void paramChanged (int i) override
+    {
+        if (i == 5 && prepared && p (5) > 0.5f) allocRev();
+        if ((i == 5 || i == 7) && prepared && roomMode() && ! isThreadRunning()) startThread();
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         juce::Reverb::Parameters rp; rp.roomSize = p (0); rp.damping = p (1); rp.width = p (2); rp.wetLevel = 1; rp.dryLevel = 0;
@@ -225,8 +240,12 @@ public:
             auto* s = b.getReadPointer (ch); auto* w = wet.getWritePointer (ch);
             for (int i = 0; i < n; ++i) w[i] = hp.tick (s[i], ch);
         }
-        verb.processStereo (wet.getWritePointer (0), wet.getWritePointer (1), n);
-        if (p (5) > 0.5f && revReady.load (std::memory_order_acquire)) reverse (n, ctx);
+        if (roomMode()) roomReverse (n, ctx);
+        else
+        {
+            verb.processStereo (wet.getWritePointer (0), wet.getWritePointer (1), n);
+            if (p (5) > 0.5f && revReady.load (std::memory_order_acquire)) reverse (n, ctx);
+        }
         const float m = p (3);
         for (int ch = 0; ch < 2; ++ch)
         {
@@ -235,6 +254,90 @@ public:
         }
     }
 private:
+    bool roomMode() const { return p (5) > 0.5f && (int) p (7) > 0; }
+    int revLength (double bpm) const
+    {
+        static constexpr double beatsOf[] { 1.0, 2.0, 4.0, 8.0 };
+        return juce::jlimit ((int) (0.05 * sr), (int) (8.0 * sr), (int) (beatsOf[juce::jlimit (0, 3, (int) p (6))] * 60.0 / juce::jmax (20.0, bpm) * sr));
+    }
+    juce::int64 irKey (double bpm) const
+    {
+        return (juce::int64) juce::jlimit (0, 7, (int) p (7)) | ((juce::int64) juce::roundToInt (p (0) * 100) << 3) | ((juce::int64) juce::roundToInt (p (1) * 100) << 10)
+             | ((juce::int64) juce::roundToInt (p (2) * 100) << 17) | ((juce::int64) revLength (bpm) << 24);
+    }
+    // FL Convolver-style reverse: the input runs through the room's impulse response played backwards, so every
+    // hit grows a dense, full-bodied ghost swell that sucks up into the next beat (the room sets its colour)
+    void roomReverse (int n, const PlayContext& ctx)
+    {
+        const juce::int64 key = irKey (ctx.bpm);
+        if (key != builtKey.load() && key != wantKey.load() && isThreadRunning()) { wantBpm.store (ctx.bpm); wantKey.store (key); notify(); }
+        if (! convReady.load (std::memory_order_acquire)) { wet.clear (0, n); return; }
+        juce::dsp::AudioBlock<float> blk (wet.getArrayOfWritePointers(), 2, (size_t) n);
+        conv.process (juce::dsp::ProcessContextReplacing<float> (blk));
+    }
+    void run() override
+    {
+        while (! threadShouldExit())
+        {
+            wait (-1);
+            if (threadShouldExit()) break;
+            const std::lock_guard<std::mutex> lk (irLock);
+            if (roomMode() && wantKey.load() != builtKey.load()) buildIR (wantBpm.load());
+        }
+    }
+    // a synthetic room: dense decorrelated noise, darker as it decays, a low-mid "body" bed and (small rooms)
+    // early reflections; cut to the tempo length, then reversed so it swells up and stops on the beat
+    void buildIR (double bpm)
+    {
+        static const float t60Of[] { 0, 0.9f, 1.5f, 2.4f, 3.2f, 6.0f }, bodyOf[] { 0, 0.5f, 0.6f, 0.25f, 0.7f, 0.8f }, darkOf[] { 0, 0.12f, 0.1f, 0.3f, 0.08f, 0.06f };
+        const int room = juce::jlimit (1, 5, (int) p (7)), L = revLength (bpm);
+        const float T = t60Of[room] * (0.5f + p (0)), damp = p (1), width = p (2);
+        juce::AudioBuffer<float> h (2, L);
+        juce::Random rng (0x5eed + room);
+        const double k = std::exp (-6.9078 / (T * sr)), kb = std::exp (-6.9078 / (1.25 * T * sr));
+        const float fHi = (room == 3 ? 15000.0f : 11000.0f) * (1.0f - 0.55f * damp), fLo = fHi * darkOf[room];
+        const float cb = 1.0f - std::exp (-2.0f * kPi * 380.0f / (float) sr);
+        double env = 1.0, envB = 1.0; float c = 0, lp[2] {}, bd[2] {};
+        auto* hl = h.getWritePointer (0); auto* hr = h.getWritePointer (1);
+        for (int t = 0; t < L; ++t)
+        {
+            if ((t & 63) == 0)
+            {
+                const float fc = fHi * std::pow (fLo / fHi, juce::jmin (1.0f, (float) t / (float) (T * sr)));
+                c = 1.0f - std::exp (-2.0f * kPi * fc / (float) sr);
+            }
+            const float a = rng.nextFloat() * 2.0f - 1.0f, b = rng.nextFloat() * 2.0f - 1.0f;
+            const float nz[2] { a, width * b + (1.0f - width) * a };
+            float* o[2] { hl, hr };
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                lp[ch] += c * (nz[ch] - lp[ch]);
+                bd[ch] += cb * (nz[ch] - bd[ch]);
+                o[ch][t] = (float) (env * lp[ch] + envB * bodyOf[room] * 3.0f * bd[ch]);
+            }
+            env *= k; envB *= kb;
+        }
+        if (room <= 2)   // small rooms: a few distinct early reflections
+            for (int e = 0; e < 8; ++e)
+            {
+                const int at = (int) ((0.006 + rng.nextFloat() * (room == 1 ? 0.06 : 0.1)) * sr), sh = (int) (rng.nextFloat() * 0.002 * sr);
+                const float g = (e & 1 ? -1.0f : 1.0f) * (0.9f - 0.08f * (float) e) * 0.6f;
+                if (at + sh < L) { hl[at] += g; hr[at + sh] += g * 0.9f; }
+            }
+        const int fo = juce::jmax (1, juce::jmin (L / 8, (int) (0.06 * sr))), fi = juce::jmax (1, (int) (0.003 * sr));
+        for (int t = 0; t < L; ++t)
+        {
+            float g = 1.0f;
+            if (t >= L - fo) g *= (float) (L - t) / (float) fo;   // becomes the soft start of the swell
+            if (t < fi) g *= (float) (t + 1) / (float) fi;        // becomes a click-free stop on the beat
+            hl[t] *= g; hr[t] *= g;
+        }
+        double e = 0;
+        for (int ch = 0; ch < 2; ++ch) { auto* x = h.getWritePointer (ch); std::reverse (x, x + L); for (int t = 0; t < L; ++t) e += (double) x[t] * x[t]; }
+        h.applyGain ((float) (irGain / std::sqrt (juce::jmax (1.0e-12, e * 0.5))));
+        conv.loadImpulseResponse (std::move (h), sr, juce::dsp::Convolution::Stereo::yes, juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no);
+        builtKey.store (irKey (bpm)); convReady.store (true, std::memory_order_release);
+    }
     void allocRev()
     {
         if (revReady.load()) return;
@@ -276,6 +379,10 @@ private:
     double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp;
     juce::AudioBuffer<float> rev; std::atomic<bool> revReady { false }; bool prepared = false;
     int revCap = 0, segLen = 0, segPos = 0, half = 0, silent = 0;
+    static constexpr double irGain = 2.2;
+    juce::dsp::Convolution conv { juce::dsp::Convolution::NonUniform { 512 } };
+    std::mutex irLock; std::atomic<bool> convReady { false };
+    std::atomic<juce::int64> builtKey { -1 }, wantKey { -1 }; std::atomic<double> wantBpm { 120.0 };
 };
 
 // ------------------------------------------------------------ Echo Tape (tempo-synced delay)
@@ -1308,7 +1415,7 @@ public:
                     const float hopSec = (float) hop / (float) dsr;
                     voiceLvl *= std::exp (-hopSec / 0.5f);
                     const float tailMidi = midi;   // the reading before the gate: a quiet / breathy tail still says where the voice is
-                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
+                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
@@ -1345,7 +1452,7 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time

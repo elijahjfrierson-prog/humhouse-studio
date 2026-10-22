@@ -1972,7 +1972,7 @@ int main()
         {
             // Room Verb Reverse: the reversed tail swells up into the next beat, clean and finite
             auto rv = createBuiltinEffect ("verb");
-            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f);
+            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", 0.0f);
             rv->prepare (48000, 512);
             rv->setParam ("reverse", 1.0f);
             PlayContext pc; pc.bpm = 120.0;
@@ -1991,6 +1991,56 @@ int main()
             const double early = en (24000 + 500, 24000 + 6000), late = en (48000 - 6000, 48000 - 500);
             std::printf ("reverse verb: early %.3g late %.3g peak %.3f\n", early, late, pk);
             CHECK (fin && pk < 4.0f && late > early * 3.0 && late > 1.0e-6);
+        }
+        {
+            // Reverse rooms (FL Convolver style): a hit swells up over the 1/4 (0.5 s at 120) and stops on the beat;
+            // each room has its own swell, all clean, finite and about as loud as the classic reverse
+            std::vector<double> rise;
+            for (int room = 1; room <= 5; ++room)
+            {
+                auto rv = createBuiltinEffect ("verb");
+                rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", (float) room);
+                rv->prepare (48000, 512);
+                PlayContext pc; pc.bpm = 120.0;
+                std::vector<float> out; juce::AudioBuffer<float> blk (2, 512);
+                for (int k = 0; k < 80; ++k)
+                {
+                    blk.clear();
+                    if (k == 0) { blk.setSample (0, 0, 1.0f); blk.setSample (1, 0, 1.0f); }
+                    rv->process (blk, 512, pc);
+                    for (int i = 0; i < 512; ++i) out.push_back (blk.getSample (0, i));
+                }
+                bool fin = true; float pk = 0.0f; size_t at = 0;
+                for (size_t i = 600; i < out.size(); ++i) { fin = fin && std::isfinite (out[i]); if (std::abs (out[i]) > pk) { pk = std::abs (out[i]); at = i; } }
+                const auto en = [&out] (int a0, int a1) { double e = 0; for (int i = a0; i < a1; ++i) e += out[(size_t) i] * out[(size_t) i]; return e; };
+                const double early = en (600, 6000), late = en (24000 - 6000, 24000 - 300), after = en (24600, 40000), total = en (600, 24000);
+                rise.push_back (late / juce::jmax (1.0e-12, early));
+                std::printf ("reverse room %d: swell x%.1f, peak %.3f at %.3f s, after the beat %.2g, energy %.3g\n", room, late / juce::jmax (1.0e-12, early), pk, at / 48000.0, after, total);
+                CHECK (fin && pk < 2.0f && late > early * 2.0 && at > 16000 && at < 24300 && after < total * 0.01 && total > 0.05 && total < 20.0);
+            }
+            CHECK (*std::max_element (rise.begin(), rise.end()) > *std::min_element (rise.begin(), rise.end()) * 2.0);   // the rooms differ
+        }
+        {
+            // reverse rooms sit at about the level of the classic reverse on a real sound (a 0.1 s noise hit)
+            std::vector<double> lv;
+            for (int room = 0; room <= 5; ++room)
+            {
+                auto rv = createBuiltinEffect ("verb");
+                rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", (float) room);
+                rv->prepare (48000, 512);
+                PlayContext pc; pc.bpm = 120.0; pc.playing = false;
+                juce::Random rnd (7); double e = 0; juce::AudioBuffer<float> blk (2, 512);
+                for (int k = 0; k < 200; ++k)
+                {
+                    blk.clear();
+                    if (k < 10) for (int i = 0; i < 512; ++i) { const float v = 0.5f * (rnd.nextFloat() * 2 - 1); blk.setSample (0, i, v); blk.setSample (1, i, v); }
+                    rv->process (blk, 512, pc);
+                    if (k >= 10) for (int i = 0; i < 512; ++i) e += (double) blk.getSample (0, i) * blk.getSample (0, i);
+                }
+                lv.push_back (10.0 * std::log10 (juce::jmax (1.0e-12, e)));
+            }
+            std::printf ("reverse levels dB vs classic:"); for (size_t i = 1; i < lv.size(); ++i) std::printf (" %+.1f", lv[i] - lv[0]); std::printf ("\n");
+            for (size_t i = 1; i < lv.size(); ++i) CHECK (std::abs (lv[i] - lv[0]) < 6.0);
         }
         DrummerParams dv; dv.sectionVel = { 40, 100 };
             CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);
