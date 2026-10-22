@@ -2,6 +2,7 @@
 #include <set>
 #include "../Source/Engine.h"
 #include "../Source/Drummer/DrummerCore.h"
+#include "../Source/Drummer/KitEngine.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
@@ -1422,6 +1423,101 @@ int main()
         fx->prepare (48000, 128);
         if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
         CHECK (fx->latencySamples() == 0);
+    }
+    // Pitch Shifter: moves the pitch, keeps the formants (the tone's spectral envelope stays put)
+    {
+        const double sr = 48000.0; const int len = (int) sr;
+        auto tone = [&] (juce::AudioBuffer<float>& x) {
+            x.setSize (2, len); x.clear();
+            for (int h = 1; h <= 30; ++h)
+            {
+                const double f = 200.0 * h, a = std::exp (-0.5 * std::pow (std::log2 (f / 1000.0) / 0.35, 2.0)) / h + 0.002;
+                for (int i = 0; i < len; ++i) { const float v = (float) (0.3 * a * std::sin (2.0 * juce::MathConstants<double>::pi * f * i / sr)); x.addSample (0, i, v); x.addSample (1, i, v); }
+            }
+        };
+        auto centroid = [&] (const juce::AudioBuffer<float>& x) {
+            const int n = 4096, at = len - n - 100; double num = 0, den = 0;
+            for (int k = 4; k < 400; ++k)
+            {
+                double re = 0, im = 0;
+                for (int i = 0; i < n; ++i) { const double w = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi * i / n), v = w * x.getSample (0, at + i);
+                                              re += v * std::cos (2.0 * juce::MathConstants<double>::pi * k * i / n); im -= v * std::sin (2.0 * juce::MathConstants<double>::pi * k * i / n); }
+                const double m = re * re + im * im; num += m * k * sr / n; den += m;
+            }
+            return num / std::max (den, 1e-12);
+        };
+        juce::AudioBuffer<float> in; tone (in);
+        const double c0 = centroid (in);
+        for (float semis : { 0.0f, 7.0f, 12.0f, -12.0f })
+        {
+            auto fx = createBuiltinEffect ("pitchshift");
+            CHECK (fx != nullptr);
+            if (! fx) break;
+            fx->setParam ("semis", semis); fx->prepare (sr, 256);
+            juce::AudioBuffer<float> x; tone (x); PlayContext ctx;
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            const float hz = detectPitchYin (x.getReadPointer (0, len - 2400), 2048, sr, 0.15f, 0.0f, 70.0f, 1100.0f);
+            const double want = 200.0 * std::pow (2.0, semis / 12.0), c1 = centroid (x);
+            bool finite = true; for (int i = 0; i < len; ++i) finite = finite && std::isfinite (x.getSample (0, i));
+            std::printf ("pitch shifter %+3.0f st: %.1f Hz (want %.1f), formant centroid %.0f -> %.0f Hz, rms %.3f -> %.3f\n",
+                         semis, hz, want, c0, c1, in.getRMSLevel (0, len / 2, len / 2), x.getRMSLevel (0, len / 2, len / 2));
+            CHECK (finite);
+            CHECK (std::abs (hz - want) < want * 0.02);
+            CHECK (c1 > c0 * 0.8 && c1 < c0 * 1.25);   // resampling would move it with the pitch (x1.5 at +7)
+            CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 3.0f);
+        }
+    }
+    // Drummer rock fills sit on the straight grid: no triplet pickups, no gallops; the backbeat is dead on
+    for (int st : { 1, 2, 3, 4, 9 })
+    {
+        DrummerParams d; d.character = st; d.fills = 1.0f;
+        auto hv = drummerHits (d, 120, 64);
+        int tripF = 0, galF = 0; double snOff = 0; int sn = 0;
+        std::map<int, std::vector<double>> fillHands;
+        for (auto& h : *hv)
+        {
+            const double b = h.beat, q = b * 4, t = b * 3;
+            const bool fillZone = std::fmod (b, 8.0) >= 4.0;
+            if (fillZone && std::abs (t - std::round (t)) < 0.03 && std::abs (q - std::round (q)) > 0.25) ++tripF;
+            if (h.lane == 1 && std::abs (std::fmod (b, 2.0) - 1.0) < 0.1) { snOff += std::abs (q - std::round (q)) / 4.0 * 500.0; ++sn; }
+            const bool hand = (h.lane >= 1 && h.lane <= 6) || (h.lane >= 27 && h.lane <= 30);
+            if (hand && fillZone) fillHands[(int) std::floor (b / 8.0)].push_back (b);
+        }
+        for (auto& [k, v] : fillHands)
+        {
+            std::sort (v.begin(), v.end());
+            for (size_t i = 2; i < v.size(); ++i)
+            {
+                const double a1 = v[i - 1] - v[i - 2], a2 = v[i] - v[i - 1];
+                if (a1 > 0.03 && a2 > 0.03 && a1 < 0.4 && a2 < 0.4 && (a1 / a2 > 1.45 || a2 / a1 > 1.45)) ++galF;
+            }
+        }
+        std::printf ("drummer rock fills style %d: %d triplet pickups, %d gallops, backbeat %.1f ms off\n", st, tripF, galF, sn ? snOff / sn : 0.0);
+        CHECK (tripF == 0 && galF == 0);
+        CHECK (sn > 0 && snOff / sn < 4.0);
+    }
+    // Kit levelled on load: at default the snare peaks ~2 dB over the kick, hats and cymbals sit well under
+    for (auto& kitDir : drumKits())
+    {
+        if (! kitDir.getFileName().containsIgnoreCase ("Naked")) continue;
+        const double sr = 48000.0; const int len = (int) (sr * 1.0);
+        hhx::KitEngine k; k.prepare (sr, 4096); k.loadKitFolder (kitDir);
+        k.setMixVoicing (1); k.setPunch (0.55f); k.setGlue (0.45f); k.setDrive (0.2f);
+        k.setMicBlend (0.45f); k.setRoomSpace (1); k.setRoom (k.getRoomSize(), k.getRoomDamping(), 0.22f);
+        auto peakOf = [&] (int lane) {
+            juce::AudioBuffer<float> out (2, len); out.clear();
+            for (int pos = 0; pos < len; pos += 64)
+            {
+                if (pos == 0) k.noteOn (lane, 0.8f, 0);
+                juce::AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, 64); b.clear(); k.renderNextBlock (b, 0, 64);
+            }
+            return juce::Decibels::gainToDecibels (out.getMagnitude (0, len));
+        };
+        const float kick = peakOf (hhx::LaneKick), snare = peakOf (hhx::LaneSnare), hat = peakOf (hhx::LaneHatClosed), crash = peakOf (hhx::LaneCrashL);
+        std::printf ("kit levels %s: kick %.1f snare %.1f hat %.1f crash %.1f dBFS\n", kitDir.getFileName().toRawUTF8(), kick, snare, hat, crash);
+        CHECK (snare - kick > 0.5f && snare - kick < 4.0f);
+        CHECK (hat < kick - 3.0f && crash < kick - 3.0f);
+        CHECK (kick < -3.0f && snare < -3.0f);
     }
     // 40 plug-ins on one session at a 128-sample buffer: no block may miss the audio deadline (= no crackles)
     {

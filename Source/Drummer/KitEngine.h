@@ -188,6 +188,7 @@ namespace hhx
             int    numFrames   = 0;
             double sourceRate  = 44100.0;
             float  peak        = 0.0f;
+            float  loudness    = 0.0f;   // weighted RMS of the stroke's loudest 50 ms
         };
 
         struct Variant
@@ -205,6 +206,7 @@ namespace hhx
             std::vector<Layer> layers;               // softest first
             std::atomic<int>   sampleSwitch { 0 };
             std::atomic<float> gainDb { 0.0f };
+            std::atomic<float> normDb { 0.0f };   // the load-time level match, see normaliseKit
             std::atomic<float> pan    { 0.0f };
             std::atomic<float> tune   { 0.0f };   // semitones
             std::atomic<float> damp   { 0.0f };   // 0 = open, 1 = heavily muted
@@ -289,6 +291,11 @@ namespace hhx
             layers keep the order they declared; kits that do not (loose files)
             are ordered by how loud they are. */
         void finaliseKit (bool sortByLoudness);
+
+        /** Levels every piece to the same loudness so a kit is balanced at its
+            defaults whoever recorded it, with the snare sitting on top. */
+        void normaliseKit();
+        float laneLoudnessDb (int lane) const;
 
         /** How much of a lane's loudest recording is ring rather than stroke:
             the energy left after the attack against the attack's own. */

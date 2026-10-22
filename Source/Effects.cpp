@@ -561,6 +561,72 @@ private:
     double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
 };
 
+// Pitch Shifter (Logic-style, simple): moves the pitch only. Grains are laid out at the new spacing and never
+// resampled, so the voice keeps its own formants - no chipmunk, no monster. Vocal follows the sung cycle.
+class PitchShifter : public BuiltinEffect
+{
+public:
+    PitchShifter() { initDefaults(); }
+    const char* typeId() const override { return "pitchshift"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "semis", "Semitones", -24, 24, 0 }, { "cents", "Cents", -100, 100, 0 },
+                                                 { "mix", "Mix", 0, 1, 1 }, { "mode", "Mode", 0, 2, 0, { "Vocal", "Drums", "Instrument" } } };
+        return ps;
+    }
+    void prepare (double s, int) override
+    {
+        sr = s; psola.prepare (s); period = 0.008 * s;
+        hist.assign (2048, 0.0f); hw = 0; hop = 0; ratioS = 1.0;
+        lvlCoef = (float) (1.0 - std::exp (-1.0 / (0.15 * s))); eDry = eWet = 0.0f; wetGain = 1.0f;
+    }
+    void reset() override { prepare (sr, 0); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const double target = std::pow (2.0, (std::round (p (0)) + p (1) / 100.0) / 12.0);
+        const float mix = p (2);
+        const int mode = juce::jlimit (0, 2, (int) std::round (p (3)));
+        const bool st = b.getNumChannels() > 1;
+        auto* L = b.getWritePointer (0); auto* R = st ? b.getWritePointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = R[i];
+            hist[(size_t) hw] = 0.5f * (inL + inR); hw = (hw + 1) & 2047;
+            if (mode != 1 && ++hop >= 384)
+            {
+                hop = 0;
+                // half-rate window: cheap, and still ~3 cycles of a low voice
+                std::array<float, 768> w {};
+                for (int k = 0; k < 768; ++k)
+                {
+                    const int a = (hw - 1536 + 2 * k) & 2047;
+                    w[(size_t) k] = 0.5f * (hist[(size_t) a] + hist[(size_t) ((a + 1) & 2047)]);
+                }
+                const float hz = detectPitchYin (w.data(), 768, sr * 0.5, 0.15f, 0.0f, 70.0f, 1000.0f);
+                if (hz > 0.0f) period = sr / hz;
+                else if (mode == 2) period = 0.012 * sr;
+            }
+            const double P = mode == 1 ? 0.006 * sr : period;
+            ratioS += 0.002 * (target - ratioS);   // a knob move glides, no zipper
+            float l = inL, r = inR;
+            psola.process (l, r, ratioS, P);
+            // grains overlapping closer than a cycle (shifting up) partly cancel: level the wet to the dry, slowly
+            eDry += lvlCoef * (psola.dryL * psola.dryL + psola.dryR * psola.dryR - eDry);
+            eWet += lvlCoef * (l * l + r * r - eWet);
+            const float want = eWet > 1e-9f ? juce::jlimit (0.7f, 2.0f, std::sqrt (eDry / eWet)) : wetGain;
+            wetGain += 0.0005f * (want - wetGain);
+            l *= wetGain; r *= wetGain;
+            L[i] = psola.dryL * (1.0f - mix) + l * mix;
+            if (st) R[i] = psola.dryR * (1.0f - mix) + r * mix;
+        }
+    }
+    // like AutoPitch: reported as 0 so the track is never held back (the rule here is no added latency)
+private:
+    PsolaShifter psola; std::vector<float> hist; int hw = 0, hop = 0;
+    double sr = 44100, period = 350, ratioS = 1.0;
+    float lvlCoef = 0.0002f, eDry = 0, eWet = 0, wetGain = 1.0f;
+};
+
 class PhaseSwirl : public BuiltinEffect
 {
 public:
@@ -1734,7 +1800,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
         { "hhmaster", "Hum House Master", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
-        { "autopitch", "AutoPitch", "Vocal" },
+        { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" },
         { "vroom", "HumHouse Vocal Room", "Vocal" },
         { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
@@ -1760,6 +1826,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "chorus") return std::make_unique<Chorus>();
     if (id == "flanger") return std::make_unique<Flanger>();
     if (id == "flangus") return std::make_unique<Flangus>();
+    if (id == "pitchshift") return std::make_unique<PitchShifter>();
     if (id == "phaser") return std::make_unique<PhaseSwirl>();
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();

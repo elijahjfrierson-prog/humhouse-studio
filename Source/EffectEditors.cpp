@@ -1025,6 +1025,16 @@ struct ChannelTabs : juce::Component
 };
 
 // Logic-style drummer pad: across = simple -> complex, up = soft -> loud; dragging rewrites the region live
+struct PopOutBar : juce::Component
+{
+    juce::TextButton b;
+    PopOutBar (const juce::String& text, std::function<void()> f)
+    {
+        b.setButtonText (text); b.onClick = std::move (f); addAndMakeVisible (b); setSize (560, 34);
+    }
+    void resized() override { b.setBounds (getLocalBounds().reduced (14, 4).removeFromRight (220)); }
+};
+
 struct DrummerPad : juce::Component, juce::Timer
 {
     DrummerPad (Studio& st, int id) : s (st), channelId (id) { setSize (560, 250); startTimerHz (10); }
@@ -1288,6 +1298,11 @@ void openChannelEditor (Studio& s, int channelId)
         std::vector<ParamGrid::P> perf, mix;
         if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
         perf.push_back ({ "character", "Style (genre)", 0, 9, 1, (float) d.character, { "Pop Rock", "Rock", "Hard Rock", "Punk", "Metal", "Shuffle", "Half Time", "Roots Rock", "Prog", "Metal 2x Kick" } });
+        perf.push_back ({ "kickPat", "Kick pattern", 0, 5, 0, (float) d.kickPattern, { "Auto (take)", "1 & 3", "Rock push 1, 2&, 3", "Driving 8ths", "Four on the floor", "1, 3, 3&" } });
+        perf.push_back ({ "snarePat", "Snare pattern", 0, 5, 0, (float) d.snarePattern, { "Auto (take)", "2 & 4", "2 & 4 + ghosts", "Half time (3)", "Every beat", "2 & 4 + 4&" } });
+        perf.push_back ({ "hatPat", "Hats/Ride pattern", 0, 5, 0, (float) d.hatPattern, { "Auto (take)", "8ths", "16ths", "Quarters", "Open on the &s", "Off" } });
+        perf.push_back ({ "tomPat", "Toms pattern", 0, 3, 0, (float) d.tomPattern, { "Auto (take)", "Off (fills only)", "Floor tom 8ths", "Floor tom 1 & 3" } });
+        perf.push_back ({ "crashPat", "Crash pattern", 0, 7, 0, (float) d.crashPattern, { "Auto (take)", "1-2-3-4 L / L+R / L / L+R", "L, L, R", "Alternate L / R", "Both every beat", "8ths left, both on 2 & 4", "Half notes", "Just the 1" } });
         static std::vector<std::string> mixNames; mixNames.clear();
         for (size_t i = 0; i < s.p().mixer.size(); ++i) mixNames.push_back (i == 0 ? std::string ("Master") : std::to_string (i) + " " + s.p().mixer[i].name.toStdString());
         std::vector<const char*> mixChoices; for (auto& n : mixNames) mixChoices.push_back (n.c_str());
@@ -1336,6 +1351,9 @@ void openChannelEditor (Studio& s, int channelId)
                 if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
                 else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
                 else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "kickPat") d.kickPattern = (int) std::lround (v); else if (id == "snarePat") d.snarePattern = (int) std::lround (v);
+                else if (id == "hatPat") d.hatPattern = (int) std::lround (v); else if (id == "tomPat") d.tomPattern = (int) std::lround (v);
+                else if (id == "crashPat") d.crashPattern = (int) std::lround (v);
                 else if (id == "ghost") d.ghost = v; else if (id == "hatOpen") d.hatOpen = v; else if (id == "ride") d.ride = v > 0.5f;
                 else if (id == "halfTime") d.halfTime = v > 0.5f; else if (id == "seed") d.seed = juce::roundToInt (v);
                 else if (id == "voicing") d.voicing = (int) v; else if (id == "punch") d.punch = v; else if (id == "glue") d.glue = v;
@@ -1344,6 +1362,11 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "volume") c->volume = v;
                 else if (id == "character") { d.character = juce::jlimit (0, 9, juce::roundToInt (v)); if (d.character == 6) d.halfTime = true; }
                 else if (id == "mixer") c->mixerTrack = juce::roundToInt (v);
+                else if (id.startsWith ("pd"))
+                {
+                    const int k = id.substring (2).getIntValue();
+                    if (k >= 0 && k < NumKitPieces) d.partDb[(size_t) k] = v;
+                }
                 else if (id.startsWith ("pc") && id.length() == 4)
                 {
                     const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
@@ -1353,9 +1376,31 @@ void openChannelEditor (Studio& s, int channelId)
             });
         };
         auto commit = [&s] { s.commit ("Drummer settings"); };
+        // one dB knob per kit piece; the kit is levelled when it loads, so 0 dB everywhere is a balanced kit
+        auto levels = [&s, channelId, setter, commit] () -> juce::Component*
+        {
+            static std::vector<std::string> ids, labels;
+            if (ids.empty())
+                for (int k = 0; k < NumKitPieces; ++k) { ids.push_back ("pd" + std::to_string (k)); labels.push_back (std::string (kitPieceName (k)) + " dB"); }
+            std::vector<ParamGrid::P> lv;
+            const auto* c = s.channel (channelId);
+            for (int k = 0; k < NumKitPieces; ++k)
+                lv.push_back ({ ids[(size_t) k].c_str(), labels[(size_t) k].c_str(), -24, 12, 0, c != nullptr ? c->drum.partDb[(size_t) k] : 0.0f, {} });
+            return new ParamGrid ((c != nullptr ? c->name : juce::String ("Drummer")) + "  |  Kit levels (each piece)", lv, setter, commit, "Drummer Levels");
+        };
+        auto popKey = key + "|pad";
+        auto* popOut = new PopOutBar ("Pop out pad + kit levels", [&s, channelId, levels, popKey]
+        {
+            if (focusExisting (popKey)) return;
+            const auto* c = s.channel (channelId);
+            if (c == nullptr) return;
+            EditorWindow::windows().add (new EditorWindow (c->name + "  |  Drummer pad", new StackPage ({ new DrummerPad (s, channelId), levels() }),
+                                                           popKey, [&s, channelId] { return s.channel (channelId) != nullptr; }));
+        });
         auto* tabs = new ChannelTabs();
-        tabs->add ("DRUMMER", new StackPage ({ new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
+        tabs->add ("DRUMMER", new StackPage ({ popOut, new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
         tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
+        tabs->add ("LEVELS", levels());
         tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
         tabs->add ("SECTIONS", new DrumSections (s, channelId));
         tabs->finish();

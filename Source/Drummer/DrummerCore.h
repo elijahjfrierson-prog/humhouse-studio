@@ -10,6 +10,9 @@ struct DrumHit { double beat; int lane; float vel; int variant; };
 enum DrumGroup { GroupKick = 0, GroupSnare, GroupHats, GroupToms, GroupCymbals, NumDrumGroups };
 const char* drumGroupName (int g);
 int drumGroupOf (int lane);
+constexpr int NumKitPieces = 17;
+int kitPieceOf (int lane);              // the per-piece level knob a lane follows
+const char* kitPieceName (int piece);
 float drummerDynamics (const DrummerParams&, double songBeat);
 int drumGroupLane (int group);
 std::array<int, 5> drummerSeedSteps (const DrummerParams&, double bpm, int section);   // velocity scale from the per-section dynamics %, ramped over the last 2 bars   // kit lane -> DrumGroup

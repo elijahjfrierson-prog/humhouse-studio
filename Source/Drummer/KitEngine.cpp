@@ -279,6 +279,61 @@ namespace hhx
         }
 
         dropRinglessShutHat();
+        normaliseKit();
+    }
+
+    /** Where each piece is levelled to, as a stroke's loudness before the mix.
+        The offsets are what it takes for every piece to come out of the
+        default mix at the same level, and the snare 2 dB above them. */
+    static float kitTargetDb (int lane)
+    {
+        if (lane == LaneKick)                               return -7.2f;
+        if (lane >= LaneSnare && lane <= LaneSnareRoll)     return -5.6f;
+        if (lane >= LaneHatClosed && lane <= LaneHatBell)   return -9.4f;
+        if (lane >= LaneTom1 && lane <= LaneTom4)           return -9.0f;
+        return -11.4f;   // ride, crashes, china, splash, perc
+    }
+
+    float KitEngine::laneLoudnessDb (int lane) const
+    {
+        const auto& slot = lanes[(std::size_t) lane];
+        if (slot.layers.empty())
+            return -200.0f;
+        // Peak of a stroke at the default mic blend: mostly close, some overheads, a little room.
+        static constexpr float micWeight[NumMics] { 0.8f, 0.22f, 0.08f };
+        double sum = 0.0; int n = 0;
+        for (const auto& v : slot.layers.back().variants)
+        {
+            if (v.mics[MicClose] == nullptr) continue;
+            double e = 0.0;
+            for (int m = 0; m < NumMics; ++m)
+                if (const auto& s = v.mics[(std::size_t) m])
+                    e += (double) (micWeight[m] * s->peak);
+            sum += e / micWeight[MicClose]; ++n;
+        }
+        return n > 0 && sum > 0.0 ? juce::Decibels::gainToDecibels ((float) (sum / n)) : -200.0f;
+    }
+
+    void KitEngine::normaliseKit()
+    {
+        // Each piece is matched on its main stroke, and its other articulations
+        // follow it, so a rim shot or a ghost keeps its place under the snare
+        // and the open hats keep theirs over the shut one.
+        const auto source = [] (int lane) -> int
+        {
+            if (lane >= LaneSnare && lane <= LaneSnareRoll) return LaneSnare;
+            if (lane >= LaneHatClosed && lane <= LaneHatBell) return LaneHatClosed;
+            if (lane >= LaneRideBow && lane <= LaneRideCrash) return LaneRideBow;
+            return lane;
+        };
+        for (int lane = 0; lane < NumLanes; ++lane)
+        {
+            int from = source (lane);
+            float db = laneLoudnessDb (from);
+            if (db < -150.0f) { from = lane; db = laneLoudnessDb (lane); }
+            lanes[(std::size_t) lane].normDb.store (db < -150.0f ? 0.0f
+                : juce::jlimit (-24.0f, 24.0f, kitTargetDb (from) - db));
+        }
     }
 
     float KitEngine::laneRingRatio (int lane) const
@@ -353,6 +408,32 @@ namespace hhx
         sample->numChannels = channels;
         sample->numFrames   = frames;
         sample->peak        = scratch.getMagnitude (0, frames);
+        {
+            // Loudness of the stroke: high-passed so a kick's sub does not read
+            // as level the ear barely hears, over its loudest 50 ms.
+            const int win = juce::jmax (1, (int) (0.05 * sample->sourceRate));
+            const int span = juce::jmin (frames, (int) (0.25 * sample->sourceRate));
+            const float a = std::exp (-2.0f * juce::MathConstants<float>::pi * 100.0f / (float) sample->sourceRate);
+            std::vector<float> sq ((std::size_t) span, 0.0f);
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                const auto* src = scratch.getReadPointer (ch);
+                float x1 = 0.0f, y1 = 0.0f;
+                for (int i = 0; i < span; ++i)
+                {
+                    const float y = a * (y1 + src[i] - x1); x1 = src[i]; y1 = y;
+                    sq[(std::size_t) i] += y * y / (float) channels;
+                }
+            }
+            double run = 0.0, best = 0.0;
+            for (int i = 0; i < span; ++i)
+            {
+                run += sq[(std::size_t) i];
+                if (i >= win) run -= sq[(std::size_t) (i - win)];
+                best = std::max (best, run);
+            }
+            sample->loudness = (float) std::sqrt (best / win);
+        }
         sample->data.resize ((std::size_t) frames * (std::size_t) channels);
 
         for (int ch = 0; ch < channels; ++ch)
@@ -1213,6 +1294,7 @@ namespace hhx
                                : (ting ? -3.5f : 0.0f);
         const float gain = velGain * trim
                          * juce::Decibels::decibelsToGain (slot.gainDb.load()
+                                                           + slot.normDb.load()
                                                            + kv.gainDb.load()
                                                            + kitTrimDb.load()
                                                            + tingTrimDb);

@@ -129,10 +129,14 @@ juce::ValueTree projectToTree (const Project& p)
             for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
             t.setProperty ("drHt", d.halfTime, nullptr); t.setProperty ("drRi", d.ride, nullptr); t.setProperty ("drCh", d.character, nullptr);
             t.setProperty ("drSe", d.seed, nullptr); t.setProperty ("drVo", d.voicing, nullptr); t.setProperty ("drSp", d.space, nullptr); t.setProperty ("drGw", d.glow, nullptr);
+            for (auto [k, v] : { std::pair { "drKp", d.kickPattern }, { "drSnp", d.snarePattern }, { "drHp", d.hatPattern }, { "drTp", d.tomPattern }, { "drCp", d.crashPattern } })
+                t.setProperty (k, v, nullptr);
             {
                 juce::StringArray pc, sm;
                 for (int g = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) pc.add (juce::String ((*a)[(size_t) g], 3));
                 for (int m : d.sectionMute) sm.add (juce::String (m));
+                juce::StringArray pd; for (float v : d.partDb) pd.add (juce::String (v, 3));
+                t.setProperty ("drPd", pd.joinIntoString (","), nullptr);
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
                 t.setProperty ("drGM", d.groupMask, nullptr); t.setProperty ("drLk", c.drumLink, nullptr); t.setProperty ("mLk", c.midiLink, nullptr);
@@ -261,10 +265,15 @@ Project projectFromTree (const juce::ValueTree& root)
             for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
             d.halfTime = t.getProperty ("drHt", d.halfTime); d.ride = t.getProperty ("drRi", d.ride); d.character = t.getProperty ("drCh", d.character);
             d.seed = t.getProperty ("drSe", d.seed); d.voicing = t.getProperty ("drVo", d.voicing); d.space = t.getProperty ("drSp", d.space); d.glow = t.getProperty ("drGw", d.glow);
+            for (auto [k, v] : { std::pair { "drKp", &d.kickPattern }, { "drSnp", &d.snarePattern }, { "drHp", &d.hatPattern }, { "drTp", &d.tomPattern }, { "drCp", &d.crashPattern } })
+                *v = t.getProperty (k, *v);
             {
                 const auto pc = juce::StringArray::fromTokens (t["drPc"].toString(), ",", "");
                 if (pc.size() == 20)
                     for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
+                const auto pd = juce::StringArray::fromTokens (t["drPd"].toString(), ",", "");
+                if (pd.size() == (int) d.partDb.size())
+                    for (int k = 0; k < pd.size(); ++k) d.partDb[(size_t) k] = pd[k].getFloatValue();
                 d.sectionMute.clear();
                 for (auto& v : juce::StringArray::fromTokens (t["drSM"].toString(), ",", "")) if (v.isNotEmpty()) d.sectionMute.push_back (v.getIntValue());
                 d.sectionVel.clear();
