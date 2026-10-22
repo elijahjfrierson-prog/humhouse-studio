@@ -528,6 +528,16 @@ void Engine::sync()
         if (it != clipRt.end() && it->second->file == c.audioFile) continue;
         auto rt = std::make_unique<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
+        // a take you just recorded (punch / loop) is loaded into RAM, so it plays the moment the loop comes back round
+        if (freshTakes.count (c.audioFile.getFullPathName()) > 0)
+            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * 1200))
+            {
+                rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
+                rt->reader = std::make_unique<MemoryClipReader> (*r);
+                rt->tmp.setSize (2, maxBlock * 4 + 8);
+                newClips[c.uid] = std::move (rt);
+                continue;
+            }
         if (auto* r = fm.createReaderFor (c.audioFile))   // every clip streams from its file on disk (as before 1.2.7)
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
@@ -940,6 +950,7 @@ void Engine::finishRecordingWriters()
     {
         const juce::int64 written = t->samplesWritten;
         t->writer.reset();       // flushes
+        freshTakes.insert (t->file.getFullPathName());
         if (written <= 0) { t->file.deleteFile(); continue; }   // nothing was recorded at all
         if (! t->started) continue;                             // never delete a take that holds audio
         if (t->lane < 0 || t->lane >= (int) proj.lanes.size()) continue;   // lane deleted while recording: keep the WAV

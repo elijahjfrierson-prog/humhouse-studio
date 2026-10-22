@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
@@ -164,6 +165,7 @@ private:
     std::map<int, std::unique_ptr<ClipRuntime>> clipRt;
     std::map<int, std::shared_ptr<const std::vector<DrumHit>>> drumHits;   // Drummer region uid -> what it plays
     std::map<juce::String, SharedSample> sampleCache;
+    std::set<juce::String> freshTakes;   // takes recorded this session: played from RAM
     std::vector<std::vector<int>> levels;
     std::vector<std::vector<std::pair<int, float>>> sources; // per track: (source track, gain)
     std::vector<char> soloMuted;
