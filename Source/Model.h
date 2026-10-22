@@ -175,6 +175,7 @@ struct Lane
     int  mixerTrack = 0;
     bool armed = false, muted = false;
     bool monitor = true;
+    int  compLane = -1;            // take lane made by Comp takes: the comp track it feeds
     float height = 56.0f;
     juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
     juce::Colour nameColour {};    // track name color (transparent = automatic, opposite of what it sits on)

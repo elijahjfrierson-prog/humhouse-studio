@@ -644,7 +644,7 @@ int main()
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
         if (! stereo) CHECK (std::abs (pl - 0.3f) < 0.03f);   // default insert + master faders = unity gain (0 dB)
     }
-    // a second take over the same spot drops to the next lane instead of covering the first
+    // Pro Tools style: a second take over the same spot covers the first on the same track; the first is kept hidden
     {
         Engine e;
         e.prepare (44100, 512);
@@ -662,9 +662,17 @@ int main()
             e.stop(); e.setRecording (false);
         };
         take(); take();
-        int onLane1 = 0, onLane2 = 0;
-        for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { onLane1 += c.lane == 1; onLane2 += c.lane == 2; }
-        CHECK (onLane1 == 1 && onLane2 == 1);
+        int onLane1 = 0, onLane2 = 0, hidden = 0;
+        for (auto& c : p.clips) if (c.isAudio()) { if (c.hidden) hidden += c.lane == 1; else { onLane1 += c.lane == 1; onLane2 += c.lane == 2; } }
+        CHECK (onLane1 == 1 && onLane2 == 0 && hidden >= 1);
+        // surprise take: armed + playing with record off is captured as a hidden take
+        const auto before = p.clips.size();
+        e.setPositionBeats (0.0); e.play();
+        for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
+        e.stop();
+        int surprise = 0;
+        for (size_t i = before; i < p.clips.size(); ++i) surprise += p.clips[i].hidden && p.clips[i].audioFile.getFileName().contains ("_surprise");
+        CHECK (surprise == 1);
     }
     // recording latency: a take moves earlier by the device's in+out latency, so its first sound lands on the beat
     {

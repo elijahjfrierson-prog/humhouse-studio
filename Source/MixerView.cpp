@@ -604,6 +604,9 @@ public:
         setupButton (clear, "CLEAR", "Remove every effect in this patch");
         clear.onClick = [this] { s.edit ("Patch Method clear", [&] (Project& p) { p.mixer[(size_t) fx.track()].fx.clear(); }); };
         addAndMakeVisible (clear);
+        setupButton (closeBtn, "X  CLOSE", "Close Patch Method (your effects stay on this sound)");
+        closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
+        addAndMakeVisible (closeBtn);
         addAndMakeVisible (fx);
         s.addChangeListener (this);
         setSize (320, 700);
@@ -617,7 +620,7 @@ public:
         auto r = getLocalBounds().reduced (6);
         title.setBounds (r.removeFromTop (24));
         auto b = r.removeFromTop (28);
-        chains.setBounds (b.removeFromLeft (100)); b.removeFromLeft (6); clear.setBounds (b.removeFromLeft (70));
+        chains.setBounds (b.removeFromLeft (100)); b.removeFromLeft (6); clear.setBounds (b.removeFromLeft (70)); closeBtn.setBounds (b.removeFromRight (90));
         fx.setBounds (r);
     }
     bool valid() const { auto* c = const_cast<Studio&> (s).channel (chId); return c != nullptr && c->mixerTrack == fx.fixedTrack; }
@@ -626,7 +629,7 @@ private:
     FxPanel fx;
     int chId;
     juce::Label title;
-    juce::TextButton chains, clear;
+    juce::TextButton chains, clear, closeBtn;
     void refresh()
     {
         auto* c = s.channel (chId);

@@ -771,7 +771,7 @@ void Engine::forEachLiveTake (const std::function<void (int, double, const float
     {
         const juce::SpinLock::ScopedTryLockType tl (takeLock);   // brief: copy, then draw outside the lock
         if (! tl.isLocked()) return;
-        for (auto& tk : takes) if (tk->started) live.push_back ({ tk->lane, tk->startBeat, tk->peaks.data(), tk->numPeaks.load() });
+        for (auto& tk : takes) if (tk->started && ! tk->surprise) live.push_back ({ tk->lane, tk->startBeat, tk->peaks.data(), tk->numPeaks.load() });
     }
     const double beatsPerPeak = 256.0 / sampleRate * proj.bpm / 60.0;
     for (auto& i : live) fn (i.lane, i.start, i.pk, i.num, beatsPerPeak);
@@ -860,7 +860,8 @@ void Engine::play()
     const bool loopSel = ! rec && proj.songMode && proj.hasPunch();   // FL: a highlighted range always plays from its start
     const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : loopSel ? proj.punchIn : here;
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
-    if (rec) startRecordingWriters();     // create take files outside the audio lock, so nothing drops out as recording starts
+    const bool capture = ! rec && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed; });
+    if (rec || capture) startRecordingWriters (capture);     // create take files outside the audio lock, so nothing drops out as recording starts
     const juce::ScopedLock sl (lock);
     if (playing) return;
     if (loopSel) position = from;
@@ -904,12 +905,13 @@ void Engine::setRecording (bool r)
 {
     if (r == recording.load()) return;
     recording = r;
-    if (! r && playing) finishRecordingWriters();
-    else if (r && playing) startRecordingWriters();   // punch in on the fly
+    if (! playing) return;
+    finishRecordingWriters();            // punch out (or end the surprise capture that ran before the punch in)
+    startRecordingWriters (! r);         // punch in on the fly / after punch out keep capturing surprise takes
 }
 
 // =============================================================== recording
-void Engine::startRecordingWriters()
+void Engine::startRecordingWriters (bool surprise)
 {
     std::vector<std::unique_ptr<Take>> newTakes;
     recordingFolder = proj.recordingsFolder();
@@ -922,7 +924,8 @@ void Engine::startRecordingWriters()
         recordingFolder.createDirectory();
         const auto song = juce::File::createLegalFileName (proj.projectFile.existsAsFile() ? proj.projectFile.getFileNameWithoutExtension() : proj.title).replaceCharacter (' ', '_');
         t->file = recordingFolder.getNonexistentChildFile (proj.lanes[(size_t) l].name.replaceCharacters (" /\\", "___") + "_" + song + "_"
-                                                           + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + "_take", ".wav");
+                                                           + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + (surprise ? "_surprise" : "_take"), ".wav");
+        t->surprise = surprise;
         juce::WavAudioFormat wav;
         if (auto* os = t->file.createOutputStream().release())
         {
@@ -980,31 +983,22 @@ void Engine::finishRecordingWriters()
             if (b1 - b0 < 0.05) continue;
             Clip c; c.uid = proj.newUid(); c.lane = t->lane; c.start = b0; c.length = b1 - b0; c.audioFile = t->file;
             c.sourceOffset = srcOff; c.mixerTrack = insert; c.takeGroup = group;
-            c.fadeIn = c.fadeOut = proj.hasPunch() ? 0.02 : 0.0;
+            c.fadeIn = c.fadeOut = 0.02;
             newClips.push_back (c);
         }
         if (newClips.empty()) continue;
-        if (! proj.hasPunch())
+        if (t->surprise)
         {
-            // FL-style: a new take never covers an earlier one - it drops to the next free lane (same vocal insert)
-            const double a0 = newClips.front().start, a1 = a0 + newClips.front().length;
-            auto overlaps = [&] (int ln) {
-                for (auto& c : proj.clips) if (c.lane == ln && c.isAudio() && ! c.hidden && c.start < a1 && c.start + c.length > a0) return true;
-                return false; };
-            int ln = t->lane;
-            while (overlaps (ln)) ++ln;
-            if (ln != t->lane)
-            {
-                while (ln >= (int) proj.lanes.size()) { Lane nl; nl.name = "Track " + juce::String ((int) proj.lanes.size() + 1); nl.mixerTrack = insert; proj.lanes.push_back (nl); }
-                for (size_t i = 0; i < newClips.size(); ++i)
-                {
-                    newClips[i].lane = ln;
-                    newClips[i].hidden = i + 1 < newClips.size();
-                    proj.clips.push_back (newClips[i]);
-                }
-                continue;
-            }
+            float pk = 0.0f;
+            for (int k = 0, nk = juce::jmin ((int) t->peaks.size(), t->numPeaks.load()); k < nk; ++k) pk = std::max (pk, t->peaks[(size_t) k]);
+            if (pk < 0.02f) { t->file.deleteFile(); continue; }   // nobody sang: no take
+            const juce::ScopedLock sl (lock);
+            for (auto& c : newClips) { c.hidden = true; proj.clips.push_back (c); }
+            added = true;
+            continue;
         }
+        // Pro Tools style: a new take lands on its own track over the old one; the old take is cut at the new take's
+        // edges (the rest keeps playing) and kept underneath as an alternate
         // punch: cut existing clips on this lane at the new take's range (5 ms crossfade via fades)
         const double r0 = newClips.front().start, r1 = newClips.front().start + newClips.front().length;
         std::vector<Clip> keep;

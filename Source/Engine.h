@@ -143,7 +143,7 @@ private:
     void renderSegment (double b0, double b1, int off, int n);
     void renderChannels (int n);
     void mixTracks (const float* const* in, int numIn, int n);
-    void startRecordingWriters();
+    void startRecordingWriters (bool surprise = false);
     void primeClipReaders (double beat);
     void finishRecordingWriters();
     void click (float* l, float* r, int n, double b0, double b1);
@@ -199,7 +199,7 @@ private:
     {
         int lane = 0; juce::File file; double startBeat = 0;
         std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> writer;
-        bool started = false;
+        bool started = false, surprise = false;   // surprise: armed + playing with record off (kept as a hidden take)
         juce::int64 samplesWritten = 0;
         std::array<std::pair<juce::int64, double>, 256> passes {}; int numPasses = 0; // loop-record pass boundaries
         std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform
