@@ -221,7 +221,23 @@ struct SlotButton : public juce::TextButton
 {
     std::function<void (bool popup)> onPress;
     float load = 0.0f;   // share of the audio block (CPU) this slot uses
-    void clicked (const juce::ModifierKeys& m) override { if (onPress) onPress (m.isPopupMenu()); }
+    std::function<void (juce::Point<int>)> onDragMove;   // parent coords
+    std::function<void (juce::Point<int>)> onDrop;
+    bool dragging = false;
+    void clicked (const juce::ModifierKeys& m) override { if (! dragging && onPress) onPress (m.isPopupMenu()); }
+    void mouseDown (const juce::MouseEvent& e) override { dragging = false; juce::TextButton::mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging && e.getDistanceFromDragStart() > 6 && ! e.mods.isPopupMenu() && onDragMove) dragging = true;
+        if (dragging) onDragMove (e.getEventRelativeTo (getParentComponent()).getPosition());
+        else juce::TextButton::mouseDrag (e);
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        juce::TextButton::mouseUp (e);
+        if (dragging && onDrop) onDrop (e.getEventRelativeTo (getParentComponent()).getPosition());
+        dragging = false;
+    }
     void paint (juce::Graphics& g) override
     {
         juce::TextButton::paint (g);
@@ -255,8 +271,10 @@ public:
         for (int i = 0; i < maxSlots; ++i)
         {
             auto* b = slots.add (new SlotButton());
-            b->setTooltip ("FX slot: click empty = open Plugin House, click = open editor, right-click = bypass / replace / move / remove");
+            b->setTooltip ("FX slot: click empty = open Plugin House, click = open editor, drag = move between slots (drop on an effect = replace it), right-click = bypass / replace / move / remove");
             b->onPress = [this, i] (bool popup) { slotPressed (i, popup); };
+            b->onDragMove = [this, i] (juce::Point<int> pt) { if (i < (int) s.p().mixer[(size_t) track()].fx.size()) { dragFrom = i; dropAt = dropTarget (pt.y); repaint(); } };
+            b->onDrop = [this, i] (juce::Point<int> pt) { const auto d = dropTarget (pt.y); dragFrom = -1; repaint(); dropEffect (i, d); };
             addAndMakeVisible (b);
             auto* byp = bypass.add (new juce::TextButton());
             setupButton (*byp, {}, "Slot on / bypass", true);
@@ -412,7 +430,56 @@ public:
         for (auto* k : sendKnobs) k->setBounds (r.removeFromTop (30).removeFromLeft (30));
     }
 
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (dragFrom < 0 || dropAt.first < 0) return;
+        g.setColour (col::accent);
+        if (dropAt.second)
+            g.drawRect (slots[dropAt.first]->getBounds().expanded (2), 2);
+        else
+        {
+            const int y = dropAt.first < slots.size() ? slots[dropAt.first]->getY() - 2 : slots.getLast()->getBottom() + 2;
+            g.fillRect (slots[0]->getX() - 16, y - 1, slots[0]->getWidth() + 48, 3);
+        }
+    }
+
 private:
+    int dragFrom = -1;
+    std::pair<int, bool> dropAt { -1, false };   // slot index, true = replace it, false = insert before it
+    // middle of a slot = replace that effect; near its edges = drop in the line between slots
+    std::pair<int, bool> dropTarget (int y) const
+    {
+        const int used = (int) s.p().mixer[(size_t) track()].fx.size();
+        for (int k = 0; k < slots.size(); ++k)
+        {
+            const auto b = slots[k]->getBounds();
+            if (y < b.getY() + b.getHeight() / 4) return { juce::jmin (k, used), false };
+            if (y < b.getBottom() - b.getHeight() / 4) return k < used ? std::pair<int, bool> { k, true } : std::pair<int, bool> { used, false };
+        }
+        return { used, false };
+    }
+    void dropEffect (int from, std::pair<int, bool> to)
+    {
+        if (to.first < 0 || (to.second && to.first == from) || (! to.second && (to.first == from || to.first == from + 1))) return;
+        const int t = track();
+        s.edit (to.second ? "Replace effect" : "Move effect", [t, from, to] (Project& p) {
+            auto& f = p.mixer[(size_t) t].fx;
+            if (from >= (int) f.size() || to.first > (int) f.size()) return;
+            const auto moved = f[(size_t) from];
+            if (to.second)
+            {
+                if (to.first >= (int) f.size()) return;
+                f[(size_t) to.first] = moved;
+                f.erase (f.begin() + from);
+            }
+            else
+            {
+                f.erase (f.begin() + from);
+                const int at = to.first > from ? to.first - 1 : to.first;
+                f.insert (f.begin() + juce::jlimit (0, (int) f.size(), at), moved);
+            }
+        });
+    }
     Studio& s;
     juce::Label title, sendsLabel, eqLabel;
     juce::OwnedArray<Knob> eqKnobs;   // band b: [b*3] freq, [b*3+1] gain, [b*3+2] Q
