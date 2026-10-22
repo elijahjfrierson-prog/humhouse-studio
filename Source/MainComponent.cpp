@@ -180,8 +180,7 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
 void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
 {
     const auto font = getTextButtonFont (b, b.getHeight());
-    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
-        return LookAndFeel_V4::drawButtonText (g, b, over, down);
+    juce::ignoreUnused (over, down);
     g.setFont (font);
     const int yIndent = juce::jmin (4, b.proportionOfHeight (0.3f)), cornerSize = juce::jmin (b.getHeight(), b.getWidth()) / 2;
     const int fontHeight = juce::roundToInt (font.getHeight() * 0.6f);
@@ -189,6 +188,16 @@ void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool
     const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
     const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
     if (area.getWidth() <= 0) return;
+    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
+    {
+        // plain text: never the same color as the button it sits on (custom on-colors, user font color, theme accents)
+        const auto bg = b.findColour (b.getToggleState() ? juce::TextButton::buttonOnColourId : juce::TextButton::buttonColourId);
+        const auto txt = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
+        g.setColour (col::readableOn (txt, bg).withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
+        g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+        return;
+    }
+    col::drawWithHalo (g, b.isEnabled() ? 1.0f : 0.5f, [&] (int dx, int dy) { g.drawFittedText (b.getButtonText(), area.translated (dx, dy), juce::Justification::centred, 2); });
     col::setFontGradientFill (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, b.isEnabled() ? 1.0f : 0.5f);
     g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
 }
@@ -197,11 +206,24 @@ void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
 {
     const auto font = getLabelFont (l);
     if (! col::fontGradient || l.isBeingEdited() || ! col::isHeadline (font) || l.findColour (juce::Label::textColourId) != col::text)
-        return LookAndFeel_V4::drawLabel (g, l);
+    {
+        const auto bg = l.findColour (juce::Label::backgroundColourId);
+        const auto txt = l.findColour (juce::Label::textColourId);
+        const auto fixedTxt = col::readableOn (txt, bg.getAlpha() >= 40 ? bg : col::panel);
+        if (l.isBeingEdited() || fixedTxt == txt) return LookAndFeel_V4::drawLabel (g, l);
+        g.fillAll (bg);
+        g.setFont (font);
+        g.setColour (fixedTxt.withMultipliedAlpha (l.isEnabled() ? 1.0f : 0.5f));
+        const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
+        g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+        return;
+    }
     g.fillAll (l.findColour (juce::Label::backgroundColourId));
     g.setFont (font);
     const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
     const float alpha = l.isEnabled() ? 1.0f : 0.5f;
+    const int lines = juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight()));
+    col::drawWithHalo (g, alpha, [&] (int dx, int dy) { g.drawFittedText (l.getText(), area.translated (dx, dy), l.getJustificationType(), lines, l.getMinimumHorizontalScale()); });
     col::setFontGradientFill (g, l.getText(), area.toFloat(), l.getJustificationType(), alpha);
     g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
     g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));

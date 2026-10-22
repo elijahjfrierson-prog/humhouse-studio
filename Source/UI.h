@@ -42,6 +42,12 @@ namespace col
     {
         return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
     }
+    // keep `text` unless it would blend into `bg` (similar brightness); then switch to a contrasting color
+    inline juce::Colour readableOn (juce::Colour text, juce::Colour bg)
+    {
+        if (bg.getAlpha() < 40 || std::abs (text.getPerceivedBrightness() - bg.getPerceivedBrightness()) >= 0.33f) return text;
+        return bg.getPerceivedBrightness() > 0.55f ? juce::Colour (0xff0d0f12).withAlpha (text.getFloatAlpha()) : juce::Colour (0xfff4f6fa).withAlpha (text.getFloatAlpha());
+    }
     // text sitting on a color: the opposite hue, dark on light colors and bright on dark ones
     inline juce::Colour contrastOn (juce::Colour bg)
     {
@@ -65,6 +71,18 @@ namespace col
         gr.addColour (0.5, fontStop (fontMid).withMultipliedAlpha (alpha));
         return gr;
     }
+    // outline behind gradient text, opposite in brightness to the gradient, so the text reads on any background
+    inline juce::Colour fontHalo (float alpha = 1.0f)
+    {
+        const float b = (fontStop (fontLo).getPerceivedBrightness() + fontStop (fontMid).getPerceivedBrightness() + fontStop (fontHi).getPerceivedBrightness()) / 3.0f;
+        return (b > 0.5f ? juce::Colours::black.withAlpha (0.85f) : juce::Colours::white.withAlpha (0.8f)).withMultipliedAlpha (alpha);
+    }
+    template <typename Draw> inline void drawWithHalo (juce::Graphics& g, float alpha, Draw&& draw)
+    {
+        g.saveState(); g.setColour (fontHalo (alpha));
+        for (auto [dx, dy] : { std::pair { -1, 0 }, std::pair { 1, 0 }, std::pair { 0, -1 }, std::pair { 0, 1 } }) draw (dx, dy);
+        g.restoreState();
+    }
     // fill for one line of text in `area`: the gradient spans just the glyphs, so short words still show all three colours
     inline void setFontGradientFill (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j, float alpha = 1.0f)
     {
@@ -78,7 +96,11 @@ namespace col
 // Panel titles / names drawn in paint(): gradient when Font = Gradient, otherwise the colour already set on g
 inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, juce::Justification j, bool fitted = false)
 {
-    if (col::fontGradient && col::isHeadline (g.getCurrentFont())) col::setFontGradientFill (g, text, area.toFloat(), j);
+    if (col::fontGradient && col::isHeadline (g.getCurrentFont()))
+    {
+        col::drawWithHalo (g, 1.0f, [&] (int dx, int dy) { if (fitted) g.drawFittedText (text, area.translated (dx, dy), j, 1); else g.drawText (text, area.translated (dx, dy), j, true); });
+        col::setFontGradientFill (g, text, area.toFloat(), j);
+    }
     if (fitted) g.drawFittedText (text, area, j, 1);
     else g.drawText (text, area, j, true);
 }

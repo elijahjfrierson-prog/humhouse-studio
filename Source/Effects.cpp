@@ -1543,6 +1543,9 @@ public:
                         // and inflections are corrected where the voice is now (this lag was the leftover "wave")
                         slope = onset || std::abs (midi - lastMidi) > 1.0f ? 0.0f : 0.6f * slope + 0.4f * (midi - lastMidi);
                         const float now = midi + juce::jlimit (-0.5f, 0.5f, slope * 0.5f * (float) wn / (float) hop);
+                        // Hard Tune: the correction leans on the slope less than the note choice: full extrapolation chased
+                        // detector noise and shook the tuned voice rough (cleaner and better locked on both reference takes)
+                        const float nowC = midi + juce::jlimit (-0.5f, 0.5f, (hard ? 0.7f : 1.0f) * slope * 0.5f * (float) wn / (float) hop);
                         missHops = 0; lastMidi = midi; releasing = false;
                         period = (float) (sr / hz);
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
@@ -1567,7 +1570,7 @@ public:
                         if (restart) youngHops = 0;
                         else if (young && target != prevHeld) youngHops = 1 << 20;
                         heldNote = target;
-                        float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
+                        float semis = juce::jlimit (-1.5f, 1.5f, (float) target - nowC + natVib * (nowC - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (hard || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
@@ -1598,7 +1601,7 @@ public:
             {
                 // Antares-clean: on a settled held note (and its breathy stretches), blend each tuned cycle with the one
                 // before, so rasp / breath noise cancels and the note rings clean; never on hard consonants or glides
-                constexpr float ca = 0.4f;
+                constexpr float ca = 0.7f;
                 const double po = juce::jlimit (16.0, 2000.0, (double) period / juce::jmax (0.25, (double) (1.0f + (ratio - 1.0f) * wetG)));
                 poS = poS <= 0.0 ? po : poS + 0.002 * (po - poS);   // the blend delay glides (a jumping delay = clicks)
                 const double rp = (double) cbW - poS; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
