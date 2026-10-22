@@ -1238,7 +1238,7 @@ public:
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
         // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
         const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
-        const float wetRel = 1.0f - std::exp (-1.0f / (0.018f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
+        const float wetRel = 1.0f - std::exp (-1.0f / (0.035f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -1271,7 +1271,7 @@ public:
                     // breaths, room noise and hiss: too quiet next to the voice, or not clearly pitched - leave them untuned
                     const float hopSec = (float) hop / (float) dsr;
                     voiceLvl *= std::exp (-hopSec / 0.5f);
-                    if (lvl < 0.1f * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;
+                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
@@ -1315,7 +1315,7 @@ public:
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.14f : 0.07f)) wetTarget = 1.0f;
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f)) wetTarget = 1.0f;
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1356,7 +1356,7 @@ public:
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.18 : 0.12) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.32 : 0.22) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
