@@ -1690,6 +1690,44 @@ int main()
         wav.deleteFile();
     }
 
+    // built-in 808 / synth slide chains (Channel Rack "808 (glide bass)"): the glide never dies after 5-6 notes
+    for (int cfg = 0; cfg < 4; ++cfg)
+    {
+        const bool gaps = cfg & 1; const int wave = cfg < 2 ? 4 : 0;
+        auto pr = Project::createDefault();
+        Channel c; c.id = 1; c.name = "808"; c.type = ChannelType::Synth; c.synth.wave = wave; c.glide = 0.08f; c.mono = true; c.rootKey = 36;
+        if (wave == 0) c.synth.sustain = 0.0f;
+        pr.channels = { c };
+        NoteList nl;
+        const int keys[] { 36, 39, 41, 43, 46, 43, 41, 39 };
+        const int NN = 100;
+        for (int k = 0; k < NN; ++k) { Note n; n.key = keys[k % 8]; n.start = k * 0.5; n.slide = k > 0; n.length = gaps ? 0.3 : 0.5; nl.push_back (n); }
+        pr.patterns[0].notes[1] = nl;
+        pr.bpm = 140;
+        Engine e; e.prepare (48000, 512); e.newProject (pr); e.sync(); e.play();
+        std::vector<float> outL; juce::AudioBuffer<float> out (2, 512);
+        const int noteLen = (int) (0.5 * 60.0 / 140.0 * 48000.0);
+        for (int blk = 0; blk * 512 < noteLen * NN + 1024; ++blk)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+        }
+        e.stop();
+        float lo = 1, first = 0; int firstDead = -1;
+        for (int k = 0; k < NN; ++k)
+        {
+            double sum = 0; const int a0 = k * noteLen + noteLen / 4, b0 = a0 + noteLen / 4;
+            for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
+            const float rms = (float) std::sqrt (sum / (b0 - a0));
+            if (k == 0) first = rms;
+            if (rms <= 0.03f && firstDead < 0) firstDead = k;
+            if (k > 0) lo = std::min (lo, rms);
+        }
+        std::printf ("synth slide chain (wave %d, %s): first %.3f, lowest after %.3f, first dead %d\n", wave, gaps ? "gaps" : "legato", first, lo, firstDead);
+        CHECK (lo > 0.03f);
+    }
+
     // rock session: HumHouse Drummer + 64 tracks with 3 inserts each + 24 instruments, song mode
     {
         Engine e; e.prepare (48000, 256);

@@ -1324,7 +1324,7 @@ public:
                     else if (midi > 0) { hist[0] = midi; histN = 1; }
                     // a new note (word start or a leap) must read the same twice in a row before it's tuned to: one-off
                     // misreads from noise or consonants were the chirps / squeaks (a wrong ratio for a few ms)
-                    if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
+                    if (midi > 0 && (lastMidi == 0 || (std::abs (midi - lastMidi) > 1.0f && (rough || aper > 0.2f))))   // a clean leap inside a phrase (slide / run) is taken at once, like Antares
                     {
                         const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < (rough || pendingRough ? 0.35f : 0.6f);
                         if (same) pendingMidi = 0;
@@ -1368,7 +1368,7 @@ public:
                         const int fast = snapToScale ((int) std::round (now), root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
-                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
+                            if (++jumpHops * hopSec >= (hard ? 0.004f : 0.006f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
                         // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or

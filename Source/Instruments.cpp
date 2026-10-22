@@ -214,7 +214,7 @@ public:
         {
             for (auto& v : voices) if (v.active && v.stage == 3 && v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate) v.stage = v.prevStage;   // legato (see sampler)
             for (auto& v : voices) if (v.active && v.stage < 3)
-            { v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); lastKey = k; return; }
+            { v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); v.slid = true; lastKey = k; return; }
         }
         if (mono) for (auto& v : voices) if (v.active) v.stage = 3;
         Voice* v = nullptr;
@@ -225,6 +225,7 @@ public:
         v->active = true; v->key = key; v->velocity = vel; v->target = k;
         v->current = (glide > 0.0f && lastKey > 0 && (mono || slide)) ? lastKey : k;
         v->glideStep = glideStepFor (k - v->current);
+        v->slid = v->current != k;
         lastKey = k;
     }
     double glideStepFor (double semis) const { return glide > 0.0f ? juce::jmax (1.0e-9, std::abs (semis) / (glide * sampleRate)) : 1.0e9; }
@@ -240,6 +241,7 @@ public:
         const float aInc = 1.0f / std::max (1.0f, p.attack * sr);
         const float dCoef = std::exp (-1.0f / std::max (1.0f, p.decay * sr * 0.3f));
         const float rCoef = std::exp (-1.0f / std::max (1.0f, p.release * sr * 0.3f));
+        const float swell = 1.0f - std::exp (-1.0f / (0.015f * (float) sr));
         const float g = std::tan (juce::MathConstants<float>::pi * juce::jlimit (20.0f, sr * 0.45f, p.cutoff) / sr);
         const float kq = 2.0f - 2.0f * juce::jlimit (0.0f, 0.97f, p.resonance);
         const float a1 = 1.0f / (1.0f + g * (g + kq)), a2 = g * a1, a3 = g * a2;
@@ -259,7 +261,16 @@ public:
                 switch (v.stage)
                 {
                     case 0: v.env += aInc; if (v.env >= 1.0f) { v.env = 1.0f; v.stage = 1; } break;
-                    case 1: v.env = p.sustain + (v.env - p.sustain) * dCoef; if (p.wave == 4 && v.env < 0.001f) v.active = false; break;
+                    case 1:
+                    {
+                        // a slid note keeps sounding while it's held (FL 808 slides): the decay parks at half level
+                        // instead of dying by the 5th-6th note of a chain, and swells back up if it had faded
+                        const float floor = v.slid ? std::max (p.sustain, 0.5f) : p.sustain;
+                        if (v.slid && v.env < floor) v.env += (floor - v.env) * swell;
+                        else v.env = floor + (v.env - floor) * dCoef;
+                        if (p.wave == 4 && v.env < 0.001f) v.active = false;
+                        break;
+                    }
                     case 2: break;
                     default: v.env *= rCoef; if (v.env < 0.0005f) v.active = false; break;
                 }
@@ -285,7 +296,7 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1;
+    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1;
                    float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
                    uint32_t rng = 0x9e3779b9u; };
