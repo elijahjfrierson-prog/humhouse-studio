@@ -1196,7 +1196,7 @@ public:
         static const std::vector<ParamDef> ps {
             { "style", "Style", 0, 3, 1, { "Natural", "Classic", "Modern", "Hard Tune" } },
             { "retune", "Retune Speed (0 = fastest)", 0, 1, 0.25f }, { "humanize", "Humanize", 0, 1, 0.2f },
-            { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
+            { "key", "Key", -1, 11, -1, { "Project", "C", "C# / Db", "D", "D# / Eb", "E", "F", "F# / Gb", "G", "G# / Ab", "A", "A# / Bb", "B" } },
             { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
                                                "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "natvib", "Natural Vibrato %", 0, 200, 0 },
             { "mix", "Mix", 0, 1, 1 },
@@ -1426,12 +1426,28 @@ private:
 };
 
 // ------------------------------------------------------------ Key Finder
+juce::String KeyGuess::keyName (int root, int scaleIndex)
+{
+    static const char* sharp[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    static const char* flat[]  { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
+    const int pc = (root % 12 + 12) % 12;
+    juce::String n (sharp[pc]);
+    if (juce::String (flat[pc]) != n) n << " / " << flat[pc];
+    return n + (scaleIndex == 1 ? " minor" : " major");
+}
+
 juce::String KeyGuess::describe() const
 {
-    static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
     juce::String c = (cents >= 0 ? "+" : "") + juce::String (juce::roundToInt (cents)) + " cents";
-    return juce::String (names[(root % 12 + 12) % 12]) + (scaleIndex == 1 ? " minor" : " major")
-         + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
+    juce::String s = keyName (root, scaleIndex) + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
+    // the relative key uses the same notes: a beat in A minor is just as much C major
+    s << "\nRelative: " << (scaleIndex == 1 ? keyName (root + 3, 0) : keyName (root + 9, 1));
+    juce::StringArray also;
+    for (const auto& a : alts)
+        if ((a.root != root || a.scaleIndex != scaleIndex) && also.size() < 5)
+            also.add (keyName (a.root, a.scaleIndex) + " " + juce::String (juce::roundToInt (juce::jmax (0.0f, a.match) * 100)) + "%");
+    if (! also.isEmpty()) s << "\nAlso fits: " << also.joinIntoString (",  ");
+    return s;
 }
 
 std::vector<double> detectOnsets (const float* x, int n, double sr, double minGap)
@@ -1527,6 +1543,9 @@ KeyGuess findKey (const float* x, int n, double sr)
             else if (c > second) second = c;
         }
     g.confidence = (float) juce::jlimit (0.0, 1.0, (best - second) * 5.0);
+    for (int mode = 0; mode < 2; ++mode)
+        for (int r = 0; r < 12; ++r) g.alts.push_back ({ r, mode, (float) corr (mode == 0 ? maj : mnr, r) });
+    std::stable_sort (g.alts.begin(), g.alts.end(), [] (const KeyGuess::Alt& a, const KeyGuess::Alt& b) { return a.match > b.match; });
     // tempo: spectral-flux onsets, autocorrelation scored over 4 beat multiples
     constexpr int o2 = 10, N2 = 1 << o2, hop = 512;
     juce::dsp::FFT f2 (o2);

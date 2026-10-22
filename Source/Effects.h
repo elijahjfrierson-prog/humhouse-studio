@@ -147,7 +147,11 @@ private:
 struct KeyGuess
 {
     int root = 0, scaleIndex = 0; double bpm = 0; float cents = 0, confidence = 0;
+    struct Alt { int root = 0, scaleIndex = 0; float match = 0; };
+    std::vector<Alt> alts;   // all 24 major / minor keys, best fit first
     juce::String describe() const;
+    static juce::String keyName (int root, int scaleIndex);   // "C# / Db minor"
+
 };
 KeyGuess findKey (const float* mono, int n, double sr);
 // hit (transient) times in seconds, a few ms before each attack, at least minGapSec apart

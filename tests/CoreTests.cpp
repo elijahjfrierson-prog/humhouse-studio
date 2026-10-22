@@ -1908,6 +1908,8 @@ int main()
         const auto g = findKey (x.data(), len, fs);
         std::printf ("key finder: %s (expected A minor 142 BPM +18 cents)\n", g.describe().toRawUTF8());
         CHECK (g.root == 9 && g.scaleIndex == 1);
+        CHECK (g.alts.size() == 24 && g.alts[0].root == 9 && g.describe().contains ("Relative: C major"));
+        CHECK (KeyGuess::keyName (1, 1) == "C# / Db minor" && KeyGuess::keyName (10, 0) == "A# / Bb major");
         CHECK (std::abs (g.bpm - 142.0) <= 1.0);
         CHECK (std::abs (g.cents - 18.0f) < 6.0f);
     }

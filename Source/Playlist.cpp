@@ -1451,10 +1451,25 @@ private:
         const juce::String msg = g.describe() + "\n\nAutoPitch: set Tuning A4 to " + juce::String (a4, 1) + " Hz to tune to this audio.";
         juce::Component::SafePointer<Playlist> safe (this);
         juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Key Finder").withMessage (msg)
-                                        .withButton ("Set project key + BPM").withButton ("Set key only").withButton ("Close"),
+                                        .withButton ("Set project key + BPM").withButton ("Set key only").withButton ("Other keys...").withButton ("Close"),
             [safe, g] (int r) {
                 auto* pl = safe.getComponent();
                 if (pl == nullptr || r == 0) return;
+                if (r == 3)   // every key that fits, ranked (relative, flat spellings): the project key drives AutoPitch's "Project" key
+                {
+                    juce::PopupMenu m;
+                    m.addSectionHeader ("Pick the key (sets the project key; AutoPitch on Project follows)");
+                    for (size_t i = 0; i < g.alts.size() && i < 10; ++i)
+                        m.addItem ((int) i + 1, KeyGuess::keyName (g.alts[i].root, g.alts[i].scaleIndex) + "   "
+                                       + juce::String (juce::roundToInt (juce::jmax (0.0f, g.alts[i].match) * 100)) + "% fit", true, i == 0);
+                    m.showMenuAsync ({}, [safe, g] (int k) {
+                        auto* p2 = safe.getComponent();
+                        if (p2 == nullptr || k <= 0 || k > (int) g.alts.size()) return;
+                        const auto a = g.alts[(size_t) k - 1];
+                        p2->s.edit ("Key Finder", [a] (Project& p) { p.keyRoot = a.root; p.scaleIndex = a.scaleIndex; });
+                    });
+                    return;
+                }
                 pl->s.edit ("Key Finder", [g, r] (Project& p) { p.keyRoot = g.root; p.scaleIndex = g.scaleIndex; if (r == 1 && g.bpm > 0) p.bpm = g.bpm; });
             });
     }
