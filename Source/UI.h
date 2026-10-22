@@ -40,7 +40,9 @@ namespace col
     // White theme: darken the stops so they read on white backgrounds
     inline juce::Colour fontStop (juce::Colour c)
     {
-        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
+        // every stop stays far from the background: deep on the white theme, bright on the dark one
+        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.2f), 0.08f + c.getBrightness() * 0.2f, c.getFloatAlpha())
+                         : juce::Colour::fromHSV (c.getHue(), c.getSaturation(), juce::jmax (0.8f, c.getBrightness()), c.getFloatAlpha());
     }
     // keep `text` unless it would blend into `bg` (similar brightness); then switch to a contrasting color
     inline juce::Colour readableOn (juce::Colour text, juce::Colour bg)
@@ -71,11 +73,10 @@ namespace col
         gr.addColour (0.5, fontStop (fontMid).withMultipliedAlpha (alpha));
         return gr;
     }
-    // outline behind gradient text, opposite in brightness to the gradient, so the text reads on any background
+    // outline behind gradient text in the theme's background tone, so it still reads where it sits on a colored bar
     inline juce::Colour fontHalo (float alpha = 1.0f)
     {
-        const float b = (fontStop (fontLo).getPerceivedBrightness() + fontStop (fontMid).getPerceivedBrightness() + fontStop (fontHi).getPerceivedBrightness()) / 3.0f;
-        return (b > 0.5f ? juce::Colours::black.withAlpha (0.85f) : juce::Colours::white.withAlpha (0.8f)).withMultipliedAlpha (alpha);
+        return (lightMode ? juce::Colours::white.withAlpha (0.85f) : juce::Colours::black.withAlpha (0.85f)).withMultipliedAlpha (alpha);
     }
     template <typename Draw> inline void drawWithHalo (juce::Graphics& g, float alpha, Draw&& draw)
     {
