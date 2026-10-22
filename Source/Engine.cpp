@@ -3,6 +3,7 @@
 #include "DrumSynth.h"
 #include "AudioEncode.h"
 #include <algorithm>
+#include <set>
 
 namespace hhs
 {
@@ -1854,7 +1855,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const double sr = sampleRate; const int block = 512;
     const bool oldSong = proj.songMode;
     proj.songMode = song;
-    const double lenBeats = song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
+    const double lenBeats = renderLenBeats > 0 ? renderLenBeats : song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
     const double tail = 2.0;
     const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
     const double outRate = format != 0 ? compressedRate (rate > 0 ? rate : sr) : rate > 0 ? rate : sr;
@@ -1875,7 +1876,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     {
         const juce::ScopedLock sl (lock);
         for (auto& t : trackRt) { t->silentSamples = 0; }
-        position = 0.0; playing = true; countingIn = false;
+        position = renderLenBeats > 0 ? renderFromBeats : 0.0; playing = true; countingIn = false;
     }
     // export plays the whole song from bar 1 (no selection loop) and waits for every disk read (no silent gaps)
     auto setTimeouts = [this] (int ms) {
@@ -1915,6 +1916,31 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         for (auto* c : channelOrder) { if (c->inst) c->inst->allNotesOff(); c->numActive = 0; }
     }
     deviceManager.addAudioCallback (this);
+    return ok;
+}
+
+bool Engine::consolidateClips (const std::vector<int>& uids, const juce::File& file, double& fromBeat, double& lenBeats)
+{
+    const std::set<int> want (uids.begin(), uids.end());
+    double lo = 1.0e12, hi = -1.0e12;
+    for (auto& c : proj.clips)
+        if (want.count (c.uid) && ! c.isAuto() && ! c.hidden) { lo = std::min (lo, c.start); hi = std::max (hi, c.start + c.length); }
+    if (hi <= lo) return false;
+    std::vector<bool> wasMuted;
+    for (auto& c : proj.clips) { wasMuted.push_back (c.muted); if (! c.isAuto() && ! want.count (c.uid)) c.muted = true; }
+    auto& m = proj.mixer[0];
+    const float v = m.volume, pn = m.pan; const bool mu = m.muted;
+    std::vector<bool> wasBypassed;
+    for (auto& f : m.fx) { wasBypassed.push_back (f.bypass); f.bypass = true; }
+    m.volume = std::sqrt (1.0f / 1.5f); m.pan = 0; m.muted = false;
+    file.getParentDirectory().createDirectory();
+    renderFromBeats = lo; renderLenBeats = hi - lo;
+    const bool ok = renderToWav (file, true, {});
+    renderFromBeats = 0.0; renderLenBeats = -1.0;
+    m.volume = v; m.pan = pn; m.muted = mu;
+    for (size_t i = 0; i < m.fx.size() && i < wasBypassed.size(); ++i) m.fx[i].bypass = wasBypassed[i];
+    for (size_t i = 0; i < proj.clips.size() && i < wasMuted.size(); ++i) proj.clips[i].muted = wasMuted[i];
+    fromBeat = lo; lenBeats = hi - lo;
     return ok;
 }
 

@@ -107,6 +107,9 @@ public:
     int exportBits = 24; double exportRate = 0; int exportFormat = 0;
     float lastRenderPeak = 0;   // peak of the last render (stems: silent tracks are skipped)
     bool freezeTrack (int track);
+    // FL-style consolidate: renders just these clips (audio, pattern, Drummer) through their inserts, from the
+    // first one's start, into one WAV; master FX are left out so the new clip can play on the master
+    bool consolidateClips (const std::vector<int>& clipUids, const juce::File& out, double& fromBeat, double& lenBeats);
 
     // headless processing (tests / offline)
     void prepare (double sampleRate, int maxBlock);
@@ -209,6 +212,7 @@ private:
     PlayContext ctx;
     std::atomic<bool> offline { false };
     int renderTrackOnly = -1;
+    double renderFromBeats = 0.0, renderLenBeats = -1.0;   // consolidate: one range instead of the whole song
     friend struct EngineJobs;
 };
 // Plugin scanning runs in a child copy of the app so a crashing plugin can't take the DAW down.

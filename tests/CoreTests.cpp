@@ -1424,6 +1424,36 @@ int main()
         if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
         CHECK (fx->latencySamples() == 0);
     }
+    // Consolidate: only the chosen clips render, from the first one's start, and every clip's mute comes back
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = true; p.clips.clear();
+        Channel c; c.type = ChannelType::Synth; c.name = "Lead"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        Note nt; nt.key = 60; nt.start = 0.0; nt.length = 1.0; nt.velocity = 0.9f;
+        p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+        Clip a; a.uid = p.newUid(); a.lane = 0; a.start = 8.0; a.length = 4.0; a.patternIndex = p.currentPattern; p.clips.push_back (a);
+        Clip b = a; b.uid = p.newUid(); b.start = 16.0; b.muted = false; p.clips.push_back (b);
+        e.sync();
+        const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_consolidate_test.wav");
+        double from = -1, len = -1;
+        CHECK (e.consolidateClips ({ a.uid }, f, from, len));
+        CHECK (std::abs (from - 8.0) < 1e-9 && std::abs (len - 4.0) < 1e-9);
+        CHECK (! p.clips[0].muted && ! p.clips[1].muted);
+        juce::WavAudioFormat wav;
+        if (std::unique_ptr<juce::AudioFormatReader> r { wav.createReaderFor (new juce::FileInputStream (f), true) })
+        {
+            juce::AudioBuffer<float> x (2, (int) r->lengthInSamples); r->read (&x, 0, x.getNumSamples(), 0, true, true);
+            const int beat = (int) (44100 * 60.0 / p.bpm);
+            const float head = x.getMagnitude (0, 0, beat / 2), late = x.getMagnitude (0, 2 * beat, std::min (x.getNumSamples() - 2 * beat, 6 * beat));
+            std::printf ("consolidate: %.2f s, note at the start %.3f, after it %.4f\n", x.getNumSamples() / 44100.0, head, late);
+            CHECK (head > 0.05f);       // the note is right at the start of the new clip
+            CHECK (late < head * 0.1f); // the clip at beat 16 (not chosen) is not in it
+            CHECK (std::abs (x.getNumSamples() / 44100.0 - (4 * 60.0 / p.bpm + 2.0)) < 0.05);
+        }
+        else CHECK (false);
+        f.deleteFile();
+    }
     // Pitch Shifter: moves the pitch, keeps the formants (the tone's spectral envelope stays put)
     {
         const double sr = 48000.0; const int len = (int) sr;

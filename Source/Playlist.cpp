@@ -1383,6 +1383,39 @@ private:
         }
     }
     // HumHouse Stem Splitter: runs in the background; the stems land on 4 new tracks under the clip, the original is muted (kept)
+    // FL-style consolidate: the selected clips (audio, patterns, Drummer) render to one audio clip on a free
+    // track below; the originals are muted, not deleted, so the edit stays undoable and re-editable
+    void consolidate (int uid)
+    {
+        std::vector<int> u; int maxLane = 0;
+        for (auto& o : s.p().clips)
+            if ((o.selected || o.uid == uid) && ! o.isAuto() && ! o.hidden && ! o.muted) { u.push_back (o.uid); maxLane = juce::jmax (maxLane, o.lane); }
+        if (u.empty()) return;
+        s.engine.stop();
+        const auto f = s.p().recordingsFolder().getChildFile ("Consolidated").getNonexistentChildFile ("Consolidated", ".wav");
+        double from = 0, len = 0;
+        if (! s.engine.consolidateClips (u, f, from, len))
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Consolidate", "Couldn't render the selected clips.");
+            return;
+        }
+        s.edit ("Consolidate", [u, f, from, len, maxLane] (Project& pr) {
+            const std::set<int> us (u.begin(), u.end());
+            int lane = -1;
+            for (int li = maxLane + 1; li < (int) pr.lanes.size() && lane < 0; ++li)
+            {
+                if (pr.lanes[(size_t) li].muted || pr.lanes[(size_t) li].armed) continue;
+                const bool busy = std::any_of (pr.clips.begin(), pr.clips.end(), [&] (const Clip& o) { return o.lane == li && o.start < from + len && o.start + o.length > from; });
+                if (! busy) lane = li;
+            }
+            if (lane < 0) { Lane l; l.name = "Consolidated"; l.mixerTrack = 0; pr.lanes.push_back (l); lane = (int) pr.lanes.size() - 1; }
+            for (auto& o : pr.clips) { o.selected = false; if (us.count (o.uid)) o.muted = true; }
+            Clip c; c.uid = pr.newUid(); c.lane = lane; c.start = from; c.length = len; c.audioFile = f;
+            c.mixerTrack = 0; c.selected = true;   // rendered through its inserts already: plays straight on the master
+            pr.clips.push_back (c);
+        });
+    }
+
     void splitClipStems (int uid)
     {
         const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
@@ -1550,6 +1583,7 @@ private:
         }
         m.addItem (5, "Split by channel (one clip per instrument)", clip.patternIndex >= 0);
         m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
+        m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         {
             auto cm = colourMenu (30);
@@ -1608,6 +1642,7 @@ private:
                 for (int q : u) quantizeAudioClip (q, divs[r - 320]);
                 return;
             }
+            if (r == 15) { consolidate (uid); return; }
             if (r == 11) { splitClipStems (uid); return; }
             if (r == 12 || r == 13) { stretchMode = r - 12; return; }
             if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
