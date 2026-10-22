@@ -1457,6 +1457,7 @@ public:
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
                     consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
+                    breathy = midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 0.75f;   // breath / rasp still on the sung note (not a t, k, s)
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
@@ -1520,6 +1521,22 @@ public:
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
             if (style == 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            if (style == 3)
+            {
+                // Antares-clean: on a settled held note (and its breathy stretches), blend each tuned cycle with the one
+                // before, so rasp / breath noise cancels and the note rings clean; never on hard consonants or glides
+                constexpr float ca = 0.4f;
+                const double po = juce::jlimit (16.0, 2000.0, (double) period / juce::jmax (0.25, (double) (1.0f + (ratio - 1.0f) * wetG)));
+                poS = poS <= 0.0 ? po : poS + 0.002 * (po - poS);   // the blend delay glides (a jumping delay = clicks)
+                const double rp = (double) cbW - poS; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
+                auto rd = [&] (const std::vector<float>& b) { return b[(size_t) (i0 & 4095)] * (1 - t) + b[(size_t) ((i0 + 1) & 4095)] * t; };
+                const float dl = rd (cbL), dr = rd (cbR);
+                cbL[(size_t) (cbW & 4095)] = wl; cbR[(size_t) (cbW & 4095)] = wr; ++cbW;
+                const bool steady = std::abs (po - poS) < 0.01 * po;
+                const float want = steady && (! consonant || breathy) && heldNote > 0 ? ca * wetG : 0.0f;
+                combG += (want - combG) * (want > combG ? (float) (1.0 / (0.03 * sr)) : 0.02f);
+                wl += combG * (dl - wl); wr += combG * (dr - wr);
+            }
             else
             {
                 psola.process (pl, pr, ratio, period);
@@ -1534,6 +1551,7 @@ public:
 private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
+    std::vector<float> cbL = std::vector<float> (4096, 0.0f), cbR = std::vector<float> (4096, 0.0f); int cbW = 0; double poS = 0.0; float combG = 0.0f; bool breathy = false;
     float currentRatio = 1, targetRatio = 1, roughMidi = 0;
     std::array<float, 3> hist {}; int histN = 0;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
