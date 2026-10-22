@@ -1463,6 +1463,32 @@ int main()
         f.deleteFile();
     }
     // Pitch Shifter: moves the pitch, keeps the formants (the tone's spectral envelope stays put)
+    {   // Noise Gate, earbud settings: hiss / hi-hat bleed above the key band stays down, a voice opens it
+        auto gate = createBuiltinEffect ("gate");
+        gate->prepare (48000.0, 512);
+        for (auto [id, v] : std::initializer_list<std::pair<const char*, float>> { { "threshold", -48.0f }, { "attack", 0.5f }, { "release", 150.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 150.0f }, { "keyhi", 4000.0f }, { "tame", 12.0f } })
+            gate->setParam (id, v);
+        juce::Random rng (7);
+        auto runGate = [&] (bool voice) {
+            juce::AudioBuffer<float> b (2, 48000); double e = 0, ein = 0; float hp = 0, prev = 0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                const float w = rng.nextFloat() * 2.0f - 1.0f; hp = 0.5f * (w - prev); prev = w;   // bright hiss
+                const float x = 0.012f * hp + (voice ? 0.2f * std::sin (juce::MathConstants<float>::twoPi * 300.0f * i / 48000.0f) : 0.0f);
+                b.setSample (0, i, x); b.setSample (1, i, x);
+            }
+            for (int i = 0; i < 48000; ++i) ein += b.getSample (0, i) * b.getSample (0, i);
+            const PlayContext ctx;
+            for (int at = 0; at < 48000; at += 512) { juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, at, juce::jmin (512, 48000 - at)); gate->process (blk, blk.getNumSamples(), ctx); }
+            for (int i = 24000; i < 48000; ++i) e += b.getSample (0, i) * b.getSample (0, i);
+            return 10.0 * std::log10 ((e / 24000.0 + 1e-12) / (ein / 48000.0 + 1e-12));
+        };
+        const double hissDb = runGate (false), voiceDb = runGate (true);
+        CHECK (hissDb < -25.0);
+        CHECK (voiceDb > -1.5);
+        std::printf ("  noise gate (earbuds): hiss %.1f dB, voice %.1f dB\n", hissDb, voiceDb);
+    }
+
     {
         const double sr = 48000.0; const int len = (int) sr;
         auto tone = [&] (juce::AudioBuffer<float>& x) {

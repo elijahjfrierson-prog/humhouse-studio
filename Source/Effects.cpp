@@ -1069,25 +1069,51 @@ class NoiseGate : public BuiltinEffect
 public:
     NoiseGate() { initDefaults(); }
     const char* typeId() const override { return "gate"; }
+    // Key Low/High: the gate listens only to this band (earbud mics pick up hiss + hi-hat bleed that must not open it);
+    // High Tame: extra cut above ~5 kHz while closed. Defaults = the old gate exactly.
     const std::vector<ParamDef>& params() const override
-    { static const std::vector<ParamDef> ps { { "threshold", "Threshold", -80, 0, -45 }, { "attack", "Attack ms", 0.1f, 20, 1 }, { "release", "Release ms", 5, 500, 80 }, { "range", "Range", -80, 0, -60 } }; return ps; }
-    void prepare (double s, int) override { sr = s; env = 0; g = 0; }
+    { static const std::vector<ParamDef> ps { { "threshold", "Threshold", -80, 0, -45 }, { "attack", "Attack ms", 0.1f, 20, 1 }, { "release", "Release ms", 5, 500, 80 }, { "range", "Range", -80, 0, -60 },
+                                               { "hold", "Hold ms", 0, 500, 0 }, { "keylo", "Key Low Hz", 20, 1000, 20 }, { "keyhi", "Key High Hz", 1000, 20000, 20000 }, { "tame", "High Tame dB", 0, 24, 0 } }; return ps; }
+    void prepare (double s, int) override { sr = s; env = 0; g = 0; hold = 0; kLo = kHi = kHi2 = 0; tL = tR = 0; }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float th = dbToGain (p (0)), floorG = dbToGain (p (3));
         const float att = std::exp (-1.0f / (0.001f * p (1) * (float) sr)), rel = std::exp (-1.0f / (0.001f * p (2) * (float) sr));
-        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        const int holdN = (int) (0.001f * p (4) * (float) sr);
+        const bool keyed = p (5) > 20.5f || p (6) < 19999.0f;
+        const float cLo = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * p (5) / (float) sr);
+        const float cHi = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * juce::jmin (p (6), 0.45f * (float) sr) / (float) sr);
+        const float tameG = dbToGain (-p (7)), cT = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 5000.0f / (float) sr);
+        const bool st = b.getNumChannels() > 1;
+        auto* l = b.getWritePointer (0); auto* r = st ? b.getWritePointer (1) : l;
         for (int i = 0; i < n; ++i)
         {
-            const float a = std::max (std::abs (l[i]), std::abs (r[i]));
+            float a;
+            if (keyed)
+            {
+                const float k = 0.5f * (l[i] + r[i]);
+                kLo += cLo * (k - kLo);
+                kHi += cHi * ((k - kLo) - kHi);
+                kHi2 += cHi * (kHi - kHi2);   // 2 poles: bright hiss / hats fall off fast
+                a = std::abs (p (6) < 19999.0f ? kHi2 : k - kLo);
+            }
+            else a = std::max (std::abs (l[i]), std::abs (r[i]));
             env = std::max (a, env * 0.9995f);
-            const float t = env > th ? 1.0f : floorG;
+            if (env > th) hold = holdN; else if (hold > 0) --hold;
+            const float t = (env > th || hold > 0) ? 1.0f : floorG;
             g = t > g ? att * g + (1 - att) * t : rel * g + (1 - rel) * t;
-            l[i] *= g; r[i] *= g;
+            if (p (7) > 0.0f)
+            {
+                const float open = floorG < 0.999f ? juce::jlimit (0.0f, 1.0f, (g - floorG) / (1.0f - floorG)) : 1.0f;
+                const float hg = tameG + (1.0f - tameG) * open;
+                tL += cT * (l[i] - tL); l[i] = tL + (l[i] - tL) * hg;
+                if (st) { tR += cT * (r[i] - tR); r[i] = tR + (r[i] - tR) * hg; }
+            }
+            l[i] *= g; if (st) r[i] *= g;
         }
     }
 private:
-    double sr = 44100; float env = 0, g = 0;
+    double sr = 44100; float env = 0, g = 0, kLo = 0, kHi = 0, kHi2 = 0, tL = 0, tR = 0; int hold = 0;
 };
 
 class Pump : public BuiltinEffect
