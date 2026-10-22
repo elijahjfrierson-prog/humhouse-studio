@@ -391,8 +391,19 @@ private:
         juce::PopupMenu m;
         m.addItem (1, "Open editor"); m.addItem (2, fx[(size_t) i].bypass ? "Turn on" : "Bypass");
         m.addItem (3, "Replace (Plugin House)..."); m.addItem (4, "Move up", i > 0); m.addItem (5, "Move down", i + 1 < (int) fx.size());
+        std::vector<AutoTarget> targets;
+        m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
         m.addSeparator(); m.addItem (6, "Remove");
-        m.showMenuAsync ({}, [this, t, i, uid] (int r) {
+        m.showMenuAsync ({}, [this, t, i, uid, targets] (int r) {
+            if (r >= 100)
+            {
+                if (r - 100 >= (int) targets.size()) return;
+                const auto& ln = s.p().lanes;
+                int below = (int) ln.size() - 1;
+                for (int k = 0; k < (int) ln.size(); ++k) if (ln[(size_t) k].mixerTrack == t) { below = k; break; }
+                createAutomationClip (s, targets[(size_t) (r - 100)], below);
+                return;
+            }
             if (r == 1) openEffectEditor (s, t, uid);
             else if (r == 3) showPluginHouseMenu (s, t, uid);
             else if (r == 2 || r >= 4)

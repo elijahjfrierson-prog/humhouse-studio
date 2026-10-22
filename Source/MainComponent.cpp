@@ -344,7 +344,7 @@ struct BpmSlider : public juce::Slider   // drag / wheel in whole BPM, Shift for
 };
 struct TransportButton : public juce::TextButton   // drawn icons: font glyphs can be missing in the tattoo fonts
 {
-    int kind = 0;   // 0 play/pause, 1 stop, 2 record, 3 back to start
+    int kind = 0;   // 0 play/pause, 1 stop, 2 record, 3 back to start, 4 mixer (3 fader lines)
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         getLookAndFeel().drawButtonBackground (g, *this, findColour (getToggleState() ? buttonOnColourId : buttonColourId), over, down);
@@ -355,6 +355,16 @@ struct TransportButton : public juce::TextButton   // drawn icons: font glyphs c
         else if (kind == 0) { juce::Path p; p.addTriangle (r.getX() + 1, r.getY(), r.getX() + 1, r.getBottom(), r.getRight(), r.getCentreY()); g.fillPath (p); }
         else if (kind == 1) g.fillRect (r.reduced (1.0f));
         else if (kind == 3) { r = r.reduced (1.0f); g.fillRect (r.removeFromLeft (2.5f)); juce::Path p; p.addTriangle (r.getRight(), r.getY(), r.getRight(), r.getBottom(), r.getX() + 0.5f, r.getCentreY()); g.fillPath (p); }
+        else if (kind == 4)   // the HumHouse logo waveform (4 bars)
+        {
+            static const float bh[] { 0.5f, 1.0f, 0.71f, 0.33f };
+            const float step = r.getWidth() / 4.0f, w = juce::jmax (2.0f, step * 0.62f);
+            for (int k = 0; k < 4; ++k)
+            {
+                const float h = r.getHeight() * bh[k];
+                g.fillRoundedRectangle (r.getX() + step * (float) k + (step - w) * 0.5f, r.getCentreY() - h * 0.5f, w, h, w * 0.5f);
+            }
+        }
         else g.fillEllipse (r);
     }
 };
@@ -509,7 +519,7 @@ public:
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
-        setupButton (mixPopBtn, "POP MIXER", "Pop the Mixer out into its own window so it stays visible on Beat and Rec (click again to dock it)", true);
+        setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
         mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
@@ -611,7 +621,7 @@ public:
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
-        mixPopBtn.setBounds (t.removeFromRight (96)); t.removeFromRight (6);
+        mixPopBtn.setBounds (t.removeFromRight (40)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
@@ -714,10 +724,16 @@ public:
 
     void liveNote (int key, float vel, bool on)
     {
-        int ch = studio.selectedChannel;
-        if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
-        if (studio.channel (ch) == nullptr) return;
-        engine.previewNote (ch, key, vel, on);
+        std::vector<int> chans;
+        for (auto& c : studio.p().channels) if (c.midiLink) chans.push_back (c.id);
+        if (chans.empty())
+        {
+            int ch = studio.selectedChannel;
+            if (studio.channel (ch) == nullptr && ! studio.p().channels.empty()) ch = studio.p().channels.front().id;
+            if (studio.channel (ch) == nullptr) return;
+            chans.push_back (ch);
+        }
+        for (int ch : chans) engine.previewNote (ch, key, vel, on);
         if (on)
         {
             heldNotes[key] = { engine.isPlaying() && engine.isRecording() ? engine.positionBeats() : -1.0, vel };
@@ -737,7 +753,7 @@ public:
             Note n; n.key = key; n.velocity = velocity;
             n.start = std::round (s0 * 16.0) / 16.0;
             n.length = juce::jmax (1.0 / 16.0, e0 - n.start);
-            pat.notes[ch].push_back (n);
+            for (int ch : chans) pat.notes[ch].push_back (n);
         });
     }
 
@@ -1000,8 +1016,8 @@ private:
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
-    TransportButton startBtn, playBtn, stopBtn, recBtn;
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, mixPopBtn, saveBtn;
+    TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {

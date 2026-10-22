@@ -77,14 +77,14 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "satur", { { "Tape Warmth", { { "drive", 6.0f }, { "char", 0.0f } } }, { "Tube Push", { { "drive", 10.0f }, { "char", 1.0f } } }, { "Transformer Grit", { { "drive", 14.0f }, { "char", 2.0f }, { "mix", 0.7f } } } } },
         { "strip", { { "Rap Vocal", { { "gateTh", -55.0f }, { "compTh", -20.0f }, { "compRatio", 4.0f }, { "makeup", 5.0f }, { "hpf", 100.0f }, { "mid", -2.0f }, { "midF", 400.0f }, { "high", 3.0f } } }, { "Singer", { { "compTh", -18.0f }, { "compRatio", 3.0f }, { "hpf", 80.0f }, { "high", 2.0f } } }, { "Podcast", { { "gateTh", -50.0f }, { "compTh", -22.0f }, { "compRatio", 3.0f }, { "hpf", 90.0f }, { "low", -2.0f }, { "high", 2.0f } } } } },
         { "purify", { { "A  Warm Glue", { { "mode", 0.0f }, { "amount", 0.5f } } }, { "B  Bright Air", { { "mode", 1.0f }, { "amount", 0.5f } } }, { "C  Punch", { { "mode", 2.0f }, { "amount", 0.55f } } }, { "D  Wide Polish", { { "mode", 3.0f }, { "amount", 0.5f } } }, { "E  Loud Master", { { "mode", 4.0f }, { "amount", 0.6f } } } } },
-        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "speed", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "speed", 0.8f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "speed", 1.0f } } }, { "Robot", { { "style", 3.0f }, { "speed", 1.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
+        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "retune", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "retune", 0.2f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "retune", 0.0f } } }, { "Robot", { { "style", 3.0f }, { "retune", 0.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
         { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
         { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
         { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
         { "gate", { { "Tight", { { "threshold", -40.0f }, { "release", 50.0f } } }, { "Soft", { { "threshold", -55.0f }, { "release", 200.0f }, { "range", -20.0f } } } } },
         { "pump", { { "Classic 1/4", { { "depth", 0.8f }, { "rate", 1.0f } } }, { "Subtle", { { "depth", 0.4f } } }, { "1/8 Pulse", { { "rate", 2.0f }, { "depth", 0.7f } } } } },
         { "clip", { { "Warm", { { "gain", 3.0f }, { "ceiling", -1.0f } } }, { "Loud", { { "gain", 9.0f }, { "ceiling", -0.5f } } } } },
-        { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } }, { "Reverse Swell", { { "size", 0.85f }, { "damp", 0.4f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 1.0f } } } } },
+        { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } }, { "Reverse Swell", { { "size", 0.85f }, { "damp", 0.4f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 1.0f } } }, { "Ghost Hall Reverse", { { "size", 0.6f }, { "damp", 0.35f }, { "width", 1.0f }, { "mix", 0.45f }, { "lowcut", 200.0f }, { "reverse", 1.0f }, { "revlen", 1.0f }, { "revroom", 4.0f } } }, { "Cathedral Reverse", { { "size", 0.7f }, { "damp", 0.3f }, { "width", 1.0f }, { "mix", 0.5f }, { "lowcut", 180.0f }, { "reverse", 1.0f }, { "revlen", 2.0f }, { "revroom", 5.0f } } }, { "Plate Reverse", { { "size", 0.5f }, { "damp", 0.2f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 0.0f }, { "revroom", 3.0f } } } } },
         { "delay", { { "1/4 Echo", { { "time", 4.0f }, { "feedback", 0.3f }, { "mix", 0.2f } } }, { "1/8 Ping Pong", { { "time", 2.0f }, { "pingpong", 1.0f }, { "feedback", 0.4f } } }, { "Dotted 1/8", { { "time", 3.0f }, { "feedback", 0.45f } } }, { "Dub Throw", { { "time", 5.0f }, { "feedback", 0.7f }, { "tone", 3000.0f }, { "mix", 0.35f } } } } },
         { "flanger", { { "Jet Plane", { { "rate", 0.1f }, { "depth", 0.9f }, { "delay", 3.0f }, { "feedback", 0.8f } } }, { "Classic Flange", { { "rate", 0.3f }, { "depth", 0.7f }, { "delay", 1.5f }, { "feedback", 0.5f } } }, { "Zero Flange", { { "rate", 0.2f }, { "depth", 1.0f }, { "delay", 0.6f }, { "feedback", -0.7f }, { "invert", 1.0f } } }, { "Subtle Vocal", { { "rate", 0.2f }, { "depth", 0.4f }, { "delay", 2.0f }, { "feedback", 0.2f }, { "mix", 0.25f } } }, { "Metal Comb", { { "rate", 0.05f }, { "depth", 0.2f }, { "delay", 5.0f }, { "feedback", 0.9f } } }, { "Wobble 808", { { "rate", 2.0f }, { "depth", 0.5f }, { "delay", 1.0f }, { "feedback", 0.3f }, { "mix", 0.35f } } } } },
         { "flangus", { { "Dreamy Choir", { { "voices", 4.0f }, { "spread", 1.0f }, { "depth", 0.6f }, { "speed", 0.2f }, { "delay", 12.0f }, { "feedback", 0.1f } } }, { "Psychedelic Swirl", { { "voices", 3.0f }, { "speed", 0.8f }, { "feedback", 0.6f }, { "cross", 0.6f }, { "delay", 3.0f } } }, { "Wide Guitar", { { "voices", 2.0f }, { "delay", 8.0f }, { "spread", 1.0f }, { "mix", 0.4f } } }, { "Liquid Hats", { { "voices", 2.0f }, { "speed", 1.5f }, { "delay", 1.5f }, { "feedback", 0.7f } } }, { "Subtle Thick", { { "voices", 2.0f }, { "depth", 0.25f }, { "mix", 0.25f } } }, { "Space Flange", { { "voices", 6.0f }, { "depth", 0.9f }, { "delay", 5.0f }, { "feedback", 0.5f }, { "cross", 0.8f } } } } },
@@ -282,11 +282,13 @@ private:
         if (x == nullptr) return;
         for (auto* e : x->getChildWithTagNameIterator ("P"))
         {
-            const auto id = e->getStringAttribute ("id");
+            std::map<juce::String, float> one { { e->getStringAttribute ("id"), (float) e->getDoubleAttribute ("v", 0.0) } };
+            migrateFxParams (kind, one);
+            const auto id = one.begin()->first;
             for (size_t i = 0; i < params.size(); ++i)
             {
                 if (params[i].id != id) continue;
-                const float v = juce::jlimit (params[i].mn, params[i].mx, (float) e->getDoubleAttribute ("v", params[i].value));
+                const float v = juce::jlimit (params[i].mn, params[i].mx, e->hasAttribute ("v") ? one.begin()->second : params[i].value);
                 if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) std::round (v - params[i].mn), juce::dontSendNotification);
                 else if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) k->setValue (v, juce::dontSendNotification);
                 set (id, v);
@@ -334,6 +336,14 @@ public:
                                    grid.setExternal (pid (sel, "F"), juce::jlimit (20.0f, 20000.0f, v)); grid.commitNow(); repaint(); };
         gL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "G"), juce::jlimit (-18.0f, 18.0f, gL.getText().getFloatValue())); grid.commitNow(); repaint(); };
         qL.onTextChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "Q"), juce::jlimit (0.1f, 18.0f, qL.getText().getFloatValue())); grid.commitNow(); repaint(); };
+        qS.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        qS.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        qS.setRange (0.1, 18.0); qS.setSkewFactorFromMidPoint (1.0); qS.setDoubleClickReturnValue (true, 1.0);
+        qS.setTooltip ("Q knob: turn up = skinny (narrow) band, down = wide band. Double-click = 1.0");
+        qS.onValueChange = [this] { if (sel < 0) return; grid.setExternal (pid (sel, "Q"), (float) qS.getValue());
+                                    if (! qL.isBeingEdited()) qL.setText ("Q " + juce::String (qS.getValue(), 2), juce::dontSendNotification); repaint(); };
+        qS.onDragEnd = [this] { grid.commitNow(); };
+        addAndMakeVisible (qS);
         dynB.setClickingTogglesState (true); listenB.setClickingTogglesState (true);
         dynB.setTooltip ("Dynamic EQ for this band"); listenB.setTooltip ("Listen: hear only this band (or Alt+drag a dot)"); delB.setTooltip ("Delete band");
         dynB.onClick = [this] { if (sel >= 0) { grid.setExternal (pid (sel, "Dyn"), dynB.getToggleState() ? 1.0f : 0.0f); grid.commitNow(); repaint(); } };
@@ -453,6 +463,7 @@ public:
         auto b = getLocalBounds().removeFromBottom (barH + 4).reduced (6, 4).withTrimmedLeft (110);
         typeBox.setBounds (b.removeFromLeft (110)); b.removeFromLeft (6);
         for (auto* l : { &fL, &gL, &qL }) { l->setBounds (b.removeFromLeft (84)); b.removeFromLeft (6); }
+        qS.setBounds (b.removeFromLeft (34).withSizeKeepingCentre (34, juce::jmin (34, b.getHeight() + 6))); b.removeFromLeft (6);
         dynB.setBounds (b.removeFromLeft (50)); b.removeFromLeft (4);
         listenB.setBounds (b.removeFromLeft (64)); b.removeFromLeft (4);
         delB.setBounds (b.removeFromLeft (28));
@@ -529,13 +540,14 @@ private:
     void syncBar()
     {
         const bool on = sel >= 0 && isOn (sel);
-        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &fL, (juce::Component*) &gL, (juce::Component*) &qL,
+        for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &fL, (juce::Component*) &gL, (juce::Component*) &qL, (juce::Component*) &qS,
                                     (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) c->setVisible (on);
         if (! on) return;
         typeBox.setSelectedItemIndex (typeOf (sel), juce::dontSendNotification);
         if (! fL.isBeingEdited()) fL.setText (hzText (grid.valueOf (pid (sel, "F"))), juce::dontSendNotification);
         if (! gL.isBeingEdited()) gL.setText (hasGain (sel) ? juce::String (grid.valueOf (pid (sel, "G")), 1) + " dB" : "--", juce::dontSendNotification);
         if (! qL.isBeingEdited()) qL.setText ("Q " + juce::String (grid.valueOf (pid (sel, "Q")), 2), juce::dontSendNotification);
+        if (! qS.isMouseButtonDown()) qS.setValue (grid.valueOf (pid (sel, "Q")), juce::dontSendNotification);
         gL.setEnabled (hasGain (sel)); dynB.setEnabled (hasGain (sel));
         dynB.setToggleState (grid.valueOf (pid (sel, "Dyn")) > 0.5f, juce::dontSendNotification);
         listenB.setToggleState ((int) std::round (grid.valueOf ("solo")) == sel + 1, juce::dontSendNotification);
@@ -629,6 +641,7 @@ private:
     juce::Point<float> hover { -1, -1 }, drag0;
     juce::ComboBox typeBox;
     juce::Label fL, gL, qL;
+    juce::Slider qS;
     juce::TextButton dynB { "DYN" }, listenB { "LISTEN" }, delB { "X" };
 };
 
@@ -1523,6 +1536,7 @@ static void loadChainPreset (Studio& s, int track, const juce::File& file, bool 
             f.mix = (float) fe->getDoubleAttribute ("mix", 1.0);
             if (fe->hasAttribute ("state")) f.pluginState.fromBase64Encoding (fe->getStringAttribute ("state"));
             for (auto* pe : fe->getChildWithTagNameIterator ("P")) f.params[pe->getStringAttribute ("id")] = (float) pe->getDoubleAttribute ("v");
+            migrateFxParams (f.type, f.params);
         }
     });
 }

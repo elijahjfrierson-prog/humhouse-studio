@@ -2,6 +2,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -43,6 +44,7 @@ public:
     int   paramIndex (const juce::String& id) const;
     void  setParam (const juce::String& id, float v);
     float getParam (const juce::String& id) const;
+    void  setParamQuiet (int i, float v) { if (i >= 0 && i < maxParams) values[(size_t) i].store (v, std::memory_order_relaxed); }   // audio thread (automation)
     float p (int i) const { return values[(size_t) i].load (std::memory_order_relaxed); }
     void  initDefaults();
 
@@ -53,6 +55,7 @@ protected:
 struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
+void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 
 // lock-free audio tap for the Scope (written on the audio thread, read by the UI)
 struct ScopeTap
@@ -144,9 +147,15 @@ private:
 struct KeyGuess
 {
     int root = 0, scaleIndex = 0; double bpm = 0; float cents = 0, confidence = 0;
+    struct Alt { int root = 0, scaleIndex = 0; float match = 0; };
+    std::vector<Alt> alts;   // all 24 major / minor keys, best fit first
     juce::String describe() const;
+    static juce::String keyName (int root, int scaleIndex);   // "C# / Db minor"
+
 };
 KeyGuess findKey (const float* mono, int n, double sr);
+// hit (transient) times in seconds, a few ms before each attack, at least minGapSec apart
+std::vector<double> detectOnsets (const float* mono, int n, double sr, double minGapSec);
 
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr, float* aperiodic = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
 }

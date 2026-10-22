@@ -502,7 +502,7 @@ private:
             });
         else
             s.edit (all ? "Clear all audio" : "Clear unused audio", [all] (Project& p) {
-                if (all) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.patternIndex < 0; }), p.clips.end()); p.audioPool.clear(); return; }
+                if (all) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.isAudio(); }), p.clips.end()); p.audioPool.clear(); return; }
                 p.audioPool.erase (std::remove_if (p.audioPool.begin(), p.audioPool.end(), [&] (const juce::File& f) {
                     return std::none_of (p.clips.begin(), p.clips.end(), [&] (const Clip& c) { return c.patternIndex < 0 && c.audioFile == f; }); }), p.audioPool.end());
             });

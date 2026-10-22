@@ -11,7 +11,7 @@ static inline double keyToHz (double key) { return 440.0 * std::pow (2.0, (key -
 class SamplerInstrument : public ChannelInstrument
 {
 public:
-    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) { sustainPos = findSustain(); }
+    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) { sustainPos = findSustain(); findBody(); }
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
@@ -24,7 +24,26 @@ public:
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
         if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
-        if (mono || slide)
+        if (! mono && slide && glide > 0.0f)
+        {
+            // poly portamento / sliding chords (FL): every note of the chord glides the nearest held voice that no
+            // other note of this chord took yet - a chord slides as a chord instead of collapsing onto one voice
+            Voice* best = nullptr; double bestD = 1.0e9;
+            for (auto& v : voices)
+                if (v.active && v.claim != clock && (! v.releasing || (v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate)))
+                    if (const double d = std::abs (v.targetSemis - target); d < bestD) { bestD = d; best = &v; }
+            if (best != nullptr)
+            {
+                auto& v = *best;
+                v.releasing = false; v.rel = 1.0f; v.claim = clock;
+                v.targetSemis = target; v.key = key; v.holdFrom = v.age;
+                v.glideStep = glideStepFor (target - v.semis);
+                if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; if (v.pos > sustainPos) v.pos = sustainPos; }
+                lastSemis = target;
+                return;
+            }
+        }
+        else if (mono || slide)
         {
             // legato: the previous note's note-off lands on the same sample as this note-on, so a voice released
             // right now is still the held note - keep it playing and glide it instead of cutting it off
@@ -35,7 +54,13 @@ public:
                 {
                     v.targetSemis = target; v.key = key; v.holdFrom = v.age;
                     v.glideStep = glideStepFor (target - v.semis);
-                    if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; }   // a slid note sustains to the end of the note
+                    if (! v.slid)   // a slid note sustains to the end of the note
+                    {
+                        v.slid = true; v.headA = v.headB = v.pos; v.phase = 0;
+                        // a one-shot that already played into its tail goes back to the body: the heads realign there
+                        // over the next crossfade, so the slide comes back up instead of gliding on a faded tail
+                        if (v.pos > sustainPos) v.pos = sustainPos;
+                    }
                     lastSemis = target;
                     return;
                 }
@@ -47,11 +72,12 @@ public:
         if (v == nullptr) for (auto& c : voices) if (c.releasing) { v = &c; break; }   // steal a fading voice before a held one
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
-        v->active = true; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
+        v->active = true; v->dir = 1; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
         if (v->semis != target) v->slid = true;   // a fresh voice that glides in sustains like a legato slide (no dying 808 chains)
+        if (! mono && slide) v->claim = clock;
         lastSemis = target;
     }
     // Glide = the time the slide takes, whatever the interval (FL): a 1 s glide reaches the note after 1 s
@@ -72,7 +98,9 @@ public:
     }
     void noteOff (int key) override
     {
-        for (auto& v : voices) if (v.active && ! v.releasing && v.key == key && (mono || ! oneShot)) { v.releasing = true; v.relAge = v.age; }
+        // a slid one-shot is a held note (it parks on its body), so it ends with its note; a chord note that just
+        // took this voice can't be ended by the old chord's note-off landing on the same sample
+        for (auto& v : voices) if (v.active && ! v.releasing && v.key == key && (mono || ! oneShot || v.slid) && v.claim != clock) { v.releasing = true; v.relAge = v.age; }
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
     void choke() override   // 6 ms: an 808 sub cut any faster clicks; voices already in a long release get cut too
@@ -132,16 +160,28 @@ public:
                 // lines up with the other one, and they crossfade - so slides fill the note instead of running out.
                 const int G = juce::jmax (64, (int) (0.06 * sampleRate)) & ~1;
                 const float wA = (float) std::pow (std::sin (juce::MathConstants<double>::pi * v.phase / G), 2.0);
-                oL[i] += (wA * readAt (l, len, v.headA) + (1.0f - wA) * readAt (l, len, v.headB)) * g;
-                oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * g;
+                const float hg = v.slid && bodyLen > 0.0 && v.pos >= sustainPos ? g * bodyGain (v.pos) : g;
+                oL[i] += (wA * readAt (l, len, v.headA) + (1.0f - wA) * readAt (l, len, v.headB)) * hg;
+                oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * hg;
                 // a slid note keeps sounding for as long as it's held (an 808 slide never "gives up" half way):
-                // past the middle of the sample the time stops and the heads keep cycling the body of the sound
-                if (! (v.slid && ! v.releasing && v.pos >= sustainPos)) v.pos += 1.0;
+                // past the body point the time sweeps slowly back and forth over a long stretch of the body
+                // (never one short piece repeated = the stutter), level-matched so the envelope never runs out
+                // (the sweep stops short of the end by what the heads read ahead at this pitch)
+                const double sweepEnd = juce::jmin (sustainPos + bodyLen, (double) len - 2.0 - G * (rate + 1.0) - 400.0);
+                if (v.slid && v.pos >= sustainPos && sweepEnd > sustainPos + 0.02 * sampleRate)
+                {
+                    v.pos += 0.5 * v.dir;
+                    if (v.pos >= sweepEnd) { v.pos = sweepEnd; v.dir = -1; }
+                    else if (v.pos <= sustainPos) { v.pos = sustainPos; v.dir = 1; }
+                }
+                else if (v.slid && ! v.releasing && v.pos >= sustainPos) v.pos = sustainPos;
+                else v.pos += 1.0;
                 v.headA += rate; v.headB += rate;
                 if (++v.phase >= G) { v.phase = 0; v.headA = alignHead (l, len, v.pos, v.headB, rate); }
                 else if (v.phase == G / 2) v.headB = alignHead (l, len, v.pos, v.headA, rate);
             }
         }
+        clock += num;
     }
 private:
     // where a held slide parks: the first point after the peak where the sound has dropped to half (-6 dB),
@@ -163,6 +203,33 @@ private:
         for (size_t w = peak + 1; w < rms.size(); ++w)
             if (rms[w] < 0.5f * *peakIt) return juce::jmin (0.5 * len, (double) (w * win));
         return 0.5 * len;
+    }
+    // the stretch of body a held slide sweeps over (up to 0.4 s after the body point, while it's still above
+    // -24 dB of it), and the level of the body there so the sweep holds the body point's level the whole time
+    void findBody()
+    {
+        bodyLen = 0.0; bodyRms.clear();
+        if (! sample || sample->getNumSamples() < 4096) return;
+        const int len = sample->getNumSamples(), s0 = (int) sustainPos;
+        const float* x = sample->getReadPointer (0);
+        for (int a = s0; a + bodyWin <= len; a += bodyWin)
+        {
+            double sum = 0; for (int i = a; i < a + bodyWin; ++i) sum += (double) x[i] * x[i];
+            bodyRms.push_back ((float) std::sqrt (sum / bodyWin) + 1.0e-9f);
+        }
+        if (bodyRms.empty()) return;
+        size_t n = 1;
+        while (n < bodyRms.size() && (double) n * bodyWin < 0.4 * sampleRateHint && bodyRms[n] > bodyRms[0] * 0.063f) ++n;
+        bodyLen = (double) (n - 1) * bodyWin;
+        if (bodyLen < 0.05 * sampleRateHint) bodyLen = 0.0;   // too short to sweep: parks as before
+    }
+    float bodyGain (double pos) const
+    {
+        const double w = (pos - sustainPos) / bodyWin;
+        const int k = juce::jlimit (0, (int) bodyRms.size() - 1, (int) w);
+        const int k1 = juce::jmin ((int) bodyRms.size() - 1, k + 1);
+        const float f = (float) juce::jlimit (0.0, 1.0, w - k), lv = bodyRms[(size_t) k] + f * (bodyRms[(size_t) k1] - bodyRms[(size_t) k]);
+        return juce::jlimit (1.0f, 16.0f, bodyRms[0] / lv);
     }
     static float readAt (const float* x, int len, double pos)
     {
@@ -190,12 +257,13 @@ private:
         }
         return at;
     }
-    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
+    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0, claim = -1, dir = 1; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
     bool keyTrack = true;
-    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0;
+    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0, clock = 0.0, bodyLen = 0.0, sampleRateHint = 44100.0;
+    static constexpr int bodyWin = 256; std::vector<float> bodyRms;
     float pitch = 0, glide = 0; bool mono = false, keepTime = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };
@@ -210,11 +278,26 @@ public:
     void noteOn (int key, float vel, bool slide) override
     {
         const double k = key + pitch;
-        if ((mono || slide) && glide > 0.0f)
+        if (! mono && slide && glide > 0.0f)
+        {
+            // poly portamento / sliding chords: each chord note glides the nearest held voice not taken yet (see sampler)
+            Voice* best = nullptr; double bestD = 1.0e9;
+            for (auto& v : voices)
+                if (v.active && v.claim != clock && (v.stage < 3 || (v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate)))
+                    if (const double d = std::abs (v.target - k); d < bestD) { bestD = d; best = &v; }
+            if (best != nullptr)
+            {
+                auto& v = *best;
+                if (v.stage == 3) v.stage = v.prevStage;
+                v.claim = clock; v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); v.slid = true; lastKey = k;
+                return;
+            }
+        }
+        else if ((mono || slide) && glide > 0.0f)
         {
             for (auto& v : voices) if (v.active && v.stage == 3 && v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate) v.stage = v.prevStage;   // legato (see sampler)
             for (auto& v : voices) if (v.active && v.stage < 3)
-            { v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); lastKey = k; return; }
+            { v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); v.slid = true; lastKey = k; return; }
         }
         if (mono) for (auto& v : voices) if (v.active) v.stage = 3;
         Voice* v = nullptr;
@@ -225,10 +308,13 @@ public:
         v->active = true; v->key = key; v->velocity = vel; v->target = k;
         v->current = (glide > 0.0f && lastKey > 0 && (mono || slide)) ? lastKey : k;
         v->glideStep = glideStepFor (k - v->current);
+        v->slid = v->current != k;
+        if (! mono && slide) v->claim = clock;
         lastKey = k;
     }
+    double clock = 0.0;
     double glideStepFor (double semis) const { return glide > 0.0f ? juce::jmax (1.0e-9, std::abs (semis) / (glide * sampleRate)) : 1.0e9; }
-    void noteOff (int key) override { for (auto& v : voices) if (v.active && v.key == key && v.stage < 3) { v.prevStage = v.stage; v.stage = 3; v.relAge = v.age; } }
+    void noteOff (int key) override { for (auto& v : voices) if (v.active && v.key == key && v.stage < 3 && v.claim != clock) { v.prevStage = v.stage; v.stage = 3; v.relAge = v.age; } }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
@@ -236,10 +322,12 @@ public:
     {
         auto* oL = out.getWritePointer (0);
         auto* oR = out.getWritePointer (1);
+        clock += num;
         const float sr = (float) sampleRate;
         const float aInc = 1.0f / std::max (1.0f, p.attack * sr);
         const float dCoef = std::exp (-1.0f / std::max (1.0f, p.decay * sr * 0.3f));
         const float rCoef = std::exp (-1.0f / std::max (1.0f, p.release * sr * 0.3f));
+        const float swell = 1.0f - std::exp (-1.0f / (0.015f * (float) sr));
         const float g = std::tan (juce::MathConstants<float>::pi * juce::jlimit (20.0f, sr * 0.45f, p.cutoff) / sr);
         const float kq = 2.0f - 2.0f * juce::jlimit (0.0f, 0.97f, p.resonance);
         const float a1 = 1.0f / (1.0f + g * (g + kq)), a2 = g * a1, a3 = g * a2;
@@ -259,7 +347,16 @@ public:
                 switch (v.stage)
                 {
                     case 0: v.env += aInc; if (v.env >= 1.0f) { v.env = 1.0f; v.stage = 1; } break;
-                    case 1: v.env = p.sustain + (v.env - p.sustain) * dCoef; if (p.wave == 4 && v.env < 0.001f) v.active = false; break;
+                    case 1:
+                    {
+                        // a slid note keeps sounding while it's held (FL 808 slides): the decay parks at half level
+                        // instead of dying by the 5th-6th note of a chain, and swells back up if it had faded
+                        const float floor = v.slid ? std::max (p.sustain, 0.5f) : p.sustain;
+                        if (v.slid && v.env < floor) v.env += (floor - v.env) * swell;
+                        else v.env = floor + (v.env - floor) * dCoef;
+                        if (p.wave == 4 && v.env < 0.001f) v.active = false;
+                        break;
+                    }
                     case 2: break;
                     default: v.env *= rCoef; if (v.env < 0.0005f) v.active = false; break;
                 }
@@ -285,7 +382,7 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1;
+    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
                    float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
                    uint32_t rng = 0x9e3779b9u; };

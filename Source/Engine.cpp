@@ -103,6 +103,7 @@ struct Engine::ChannelRuntime
     struct Active { int key; double remaining; };
     std::array<Active, 128> active {}; int numActive = 0;
     int silentBlocks = 0;
+    float gainL = -1.0f, gainR = -1.0f;
     int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
@@ -269,6 +270,7 @@ struct Engine::TrackRuntime
     int ownLatency = 0, inputAlign = 0, arrival = 0;   // samples: this insert's FX, latest input, output
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     float duckGain = 1.0f;
+    float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
     std::vector<std::unique_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
     int silentSamples = 0;
@@ -527,12 +529,37 @@ void Engine::sync()
         {
             rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
             rt->reader = std::make_unique<juce::BufferingAudioReader> (r, diskThread, (int) (r->sampleRate * 3));
-            static_cast<juce::BufferingAudioReader*> (rt->reader.get())->setReadTimeout (0);
+            auto* br = static_cast<juce::BufferingAudioReader*> (rt->reader.get());
+            // a clip under (or just ahead of) the playhead - e.g. the take you just stopped - is buffered before it
+            // goes live, so it sounds at once instead of a second of silence while the disk thread catches up
+            const double pb = positionBeats();
+            if (! c.reversed && pb < c.start + c.length && pb > c.start - 2.0)
+            {
+                const auto at = (juce::int64) ((c.sourceOffset + std::max (0.0, pb - c.start) * 60.0 / proj.bpm) * r->sampleRate);
+                if (at >= 0 && at < r->lengthInSamples)
+                {
+                    juce::AudioBuffer<float> prime ((int) r->numChannels, 2048);
+                    br->setReadTimeout (300);
+                    br->read (&prime, 0, 2048, at, true, r->numChannels > 1);
+                }
+            }
+            br->setReadTimeout (0);
         }
         rt->tmp.setSize (2, maxBlock * 4 + 8);
         newClips[c.uid] = std::move (rt);
     }
 
+    {
+        // the one-knob duck keeps following the vocal after you stop recording / disarm, so the mix you heard
+        // while tracking is the mix you hear back (it used to only duck while a lane was armed)
+        int dsrc = -1;
+        for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { dsrc = ln.mixerTrack; break; }
+        if (dsrc < 0)
+            for (auto& c : proj.clips)
+                if (c.isAudio() && ! c.muted && c.lane >= 0 && c.lane < (int) proj.lanes.size() && proj.lanes[(size_t) c.lane].mixerTrack > 0)
+                { dsrc = proj.lanes[(size_t) c.lane].mixerTrack; break; }
+        duckAutoSrc = dsrc;
+    }
     std::vector<std::unique_ptr<juce::AudioFormatReader>> newFrozen (proj.mixer.size());
     for (size_t t = 0; t < proj.mixer.size(); ++t)
     {
@@ -817,7 +844,7 @@ void Engine::play()
     if (playing.load()) return;
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
     const double here = position.load();
-    const bool loopSel = ! rec && proj.songMode && proj.hasPunch() && (here < proj.punchIn || here >= proj.punchOut);   // FL: Space plays the selected range
+    const bool loopSel = ! rec && proj.songMode && proj.hasPunch();   // FL: a highlighted range always plays from its start
     const double from = punch ? std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar) : loopSel ? proj.punchIn : here;
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     if (rec) startRecordingWriters();     // create take files outside the audio lock, so nothing drops out as recording starts
@@ -1412,6 +1439,7 @@ void Engine::processTrack (int t)
     {
         int src = mt.duckSource;
         if (src < 0) for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { src = ln.mixerTrack; break; }
+        if (src < 0) src = duckAutoSrc.load();
         float target = 1.0f;
         if (src > 0 && src != t && src < (int) trackRt.size())
         {
@@ -1434,8 +1462,10 @@ void Engine::processTrack (int t)
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
     const float gl = vol * panGain (mt.pan, false), gr = vol * panGain (mt.pan, true);
-    tr.out.applyGain (0, 0, n, gl);
-    tr.out.applyGain (1, 0, n, gr);
+    if (tr.gainL < 0.0f) { tr.gainL = gl; tr.gainR = gr; }
+    tr.out.applyGainRamp (0, 0, n, tr.gainL, gl);
+    tr.out.applyGainRamp (1, 0, n, tr.gainR, gr);
+    tr.gainL = gl; tr.gainR = gr;
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
     tr.peak.store (std::max (pk, tr.peak.load() * 0.85f));
     if (auto* sc = trackScope (t)) { sc->rate = sampleRate; sc->push (tr.out.getReadPointer (0), tr.out.getReadPointer (1), n); }
@@ -1538,6 +1568,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         }
     }
 
+    if (ctx.playing) applyAutomation (ctx.beatPos);
     renderChannels (n);
 
     // channels -> inserts
@@ -1550,8 +1581,10 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
         const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * panGain (ch.pan, false), gr = v * panGain (ch.pan, true);
         auto& dest = trackRt[(size_t) t]->in;
-        dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
-        dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
+        if (rt->gainL < 0.0f) { rt->gainL = gl; rt->gainR = gr; }
+        dest.addFromWithRamp (0, 0, rt->buf.getReadPointer (0), n, rt->gainL, gl);
+        dest.addFromWithRamp (1, 0, rt->buf.getReadPointer (rt->buf.getNumChannels() > 1 ? 1 : 0), n, rt->gainR, gr);
+        rt->gainL = gl; rt->gainR = gr;
     }
 
     // live input: armed lanes monitor through their insert and record
@@ -1675,6 +1708,60 @@ void Engine::renderChannels (int n)
         std::sort (chanJobOrder.begin(), chanJobOrder.end(), [this] (int a, int b) { return chanCost[(size_t) a] > chanCost[(size_t) b]; });
     if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
     else for (int i = 0; i < count; ++i) EngineJobs::channel (this, i);
+}
+
+// automation clips (FL): every block, each clip under the playhead sets its knob; the value stays after the clip ends
+void Engine::applyAutomation (double beat)
+{
+    for (auto& c : proj.clips)
+    {
+        if (! c.isAuto() || c.muted || c.hidden || c.autoPts.empty() || beat < c.start || beat >= c.start + c.length) continue;
+        const float v = autoValueAt (c.autoPts, c.patOffset + beat - c.start);
+        const auto& at = c.autoTarget;
+        if (at.kind == AutoInsertVol || at.kind == AutoInsertPan)
+        {
+            if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
+            auto& mt = proj.mixer[(size_t) at.track];
+            (at.kind == AutoInsertVol ? mt.volume : mt.pan) = autoToValue (at.kind, v);
+        }
+        else if (at.kind == AutoChanVol || at.kind == AutoChanPan || at.kind == AutoChanPitch)
+        {
+            auto* ch = proj.findChannel (at.channel);
+            if (ch == nullptr) continue;
+            const float x = autoToValue (at.kind, v);
+            if (at.kind == AutoChanVol) ch->volume = x;
+            else if (at.kind == AutoChanPan) ch->pan = x;
+            else if (std::abs (ch->pitch - x) > 1.0e-4f)
+            {
+                ch->pitch = x;
+                auto it = channelRt.find (ch->id);
+                if (it != channelRt.end() && it->second->inst) it->second->inst->update (*ch);
+            }
+        }
+        else if (at.kind == AutoFxParam && at.track >= 0 && at.track < (int) trackRt.size())
+        {
+            for (auto& f : trackRt[(size_t) at.track]->fx)
+            {
+                if (f->uid != at.fxUid) continue;
+                if (f->builtin)
+                {
+                    const int i = f->builtin->paramIndex (at.param);
+                    if (i < 0) break;
+                    const auto& d = f->builtin->params()[(size_t) i];
+                    float x = d.min + v * (d.max - d.min);
+                    if (! d.choices.empty()) x = std::round (x);
+                    f->builtin->setParamQuiet (i, juce::jlimit (d.min, d.max, x));
+                }
+                else if (f->plugin && at.param.startsWithChar ('#'))
+                {
+                    const auto& ps = f->plugin->getParameters();
+                    const int i = at.param.substring (1).getIntValue();
+                    if (i >= 0 && i < ps.size() && std::abs (ps[i]->getValue() - v) > 1.0e-5f) ps[i]->setValue (v);
+                }
+                break;
+            }
+        }
+    }
 }
 
 void Engine::mixTracks (const float* const*, int, int)

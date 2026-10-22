@@ -82,7 +82,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     for (auto& s : in) s *= 0.5f / pk;
     auto ap = createBuiltinEffect ("autopitch");
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
-    ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
+    ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
     juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
@@ -168,7 +168,7 @@ static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0
     }
     auto ap = createBuiltinEffect ("autopitch");
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
-    ap->setParam ("style", (float) style); ap->setParam ("speed", speed);
+    ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
     juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
@@ -303,6 +303,35 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 int main()
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
+    // offline AutoPitch render for listening / analysis: HHS_AP_RENDER="in.wav;out.wav;style;key;scale;A4;speed"
+    if (const char* spec = std::getenv ("HHS_AP_RENDER"))
+    {
+        auto f = juce::StringArray::fromTokens (spec, ";", "");
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (f[0])));
+        if (rd == nullptr) { std::printf ("cannot read %s\n", f[0].toRawUTF8()); return 1; }
+        const int len = (int) rd->lengthInSamples;
+        juce::AudioBuffer<float> all (2, len); rd->read (&all, 0, len, 0, true, true);
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
+        ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
+        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());   // 0 = fastest
+        ap->prepare (rd->sampleRate, 512);
+        PlayContext ctx;
+        juce::AudioBuffer<float> b (2, 512);
+        for (int at = 0; at < len; at += 512)
+        {
+            const int n = std::min (512, len - at);
+            for (int c = 0; c < 2; ++c) b.copyFrom (c, 0, all, c, at, n);
+            ap->process (b, n, ctx);
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, 0 + c, 0, n);
+        }
+        juce::File out (f[1]); out.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> wr (wav.createWriterFor (new juce::FileOutputStream (out), rd->sampleRate, 2, 24, {}, 0));
+        wr->writeFromAudioSampleBuffer (all, 0, len);
+        return 0;
+    }
     if (std::getenv ("HHS_AP_PROBE2") != nullptr)
     {
         for (double m : { 57.6, 56.6, 64.3, 50.5 })
@@ -433,6 +462,50 @@ int main()
         const float pk = renderPeak (e, 200);
         CHECK (pk > 0.05f);
         e.stop();
+    }
+
+    // automation clips (FL): an insert volume envelope mutes then opens the beat, an FX knob follows its envelope, both survive save/load
+    {
+        CHECK (std::abs (autoValueAt ({ { 0.0, 0.0f }, { 4.0, 1.0f } }, 2.0) - 0.5f) < 1.0e-4f);
+        CHECK (std::abs (autoToValue (AutoChanPitch, autoFromValue (AutoChanPitch, 7.0f)) - 7.0f) < 0.02f);
+        auto pr = Project::createDemo();
+        FxSlot fx; fx.uid = pr.newUid(); fx.type = "filter"; pr.mixer[0].fx.push_back (fx);
+        Clip vol; vol.uid = pr.newUid(); vol.lane = 0; vol.start = 0; vol.length = 64;
+        vol.autoTarget.kind = AutoInsertVol; vol.autoTarget.track = 0; vol.autoTarget.name = "Master - Volume";
+        vol.autoPts = { { 0.0, 0.0f }, { 2.0, 0.0f }, { 2.01, 0.64f }, { 64.0, 0.64f } };
+        pr.clips.push_back (vol);
+        auto pdef = createBuiltinEffect ("filter");
+        CHECK (pdef != nullptr && ! pdef->params().empty());
+        juce::String pid = pdef->params().front().id;
+        for (auto& d : pdef->params()) if (d.choices.empty()) { pid = d.id; break; }
+        Clip fxc = vol; fxc.uid = pr.newUid(); fxc.autoTarget = {}; fxc.autoTarget.kind = AutoFxParam; fxc.autoTarget.track = 0; fxc.autoTarget.fxUid = fx.uid;
+        fxc.autoTarget.param = pid; fxc.autoTarget.name = "Filter"; fxc.autoPts = { { 0.0, 0.0f }, { 64.0, 1.0f } };
+        pr.clips.push_back (fxc);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_auto_test.hhs");
+        CHECK (saveProject (pr, f));
+        Project back; CHECK (loadProject (back, f)); f.deleteFile();
+        int autos = 0; for (auto& c : back.clips) if (c.isAuto()) { ++autos; CHECK (! c.isAudio()); }
+        CHECK (autos == 2);
+        Engine e; e.prepare (44100, 512); e.newProject (back); e.sync();
+        e.setPositionBeats (0.0); e.play();
+        const float quiet = renderPeak (e, 40);   // ~0.9 beats
+        e.stop(); e.setPositionBeats (3.0); e.play();
+        renderPeak (e, 4);
+        const float loud = renderPeak (e, 40);
+        const double at = e.positionBeats();
+        e.stop();
+        std::printf ("automation: muted peak %.5f, open peak %.3f\n", quiet, loud);
+        CHECK (quiet < 0.002f);
+        CHECK (loud > 0.05f);
+        auto* b = e.builtinFx (0, fx.uid);
+        CHECK (b != nullptr);
+        if (b != nullptr)
+        {
+            const auto& d = b->params()[(size_t) b->paramIndex (pid)];
+            const float want = d.min + (float) (at / 64.0) * (d.max - d.min);
+            std::printf ("automation: %s = %.3f (want ~%.3f)\n", pid.toRawUTF8(), b->getParam (pid), want);
+            CHECK (std::abs (b->getParam (pid) - want) < 0.03f * (d.max - d.min));
+        }
     }
 
     // slice tool on pattern clips (FL): cutting a pattern clip anywhere plays exactly like the uncut clip
@@ -935,6 +1008,188 @@ int main()
         std::printf ("autopitch 452 Hz -> %.1f Hz, level %.2f dB\n", hz, 10.0 * std::log10 (outE / inE));
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
+    }
+    // AutoPitch holds the note meant when it's sung flat on purpose: E4 / B4 sung 60 cents flat in C major
+    // land on E / B (nearest scale note to what was sung), not the note below
+    for (const double sung : { 329.63 * std::pow (2.0, -0.6 / 12.0), 493.88 * std::pow (2.0, -0.6 / 12.0) })
+        for (int style = 0; style < 4; ++style)
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f); ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0; int zc = 0, counted = 0; float prev = 0;
+            for (int k = 0; k < 300; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * sung / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                ap->process (b, 512, ctx);
+                if (k >= 150) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; ++counted; }
+            }
+            const double hz = zc * 48000.0 / counted, want = sung > 400 ? 493.88 : 329.63;
+            std::printf ("autopitch flat %.1f Hz (style %d) -> %.1f Hz (want %.1f)\n", sung, style, hz, want);
+            CHECK (std::abs (hz - want) < want * 0.006);
+        }
+    // AutoPitch follows the note being sung: a fast drop from A4 to E4 (clean and breathy/deep) lands on E4 at once,
+    // never held up on the old note (that big hold-over shift was the transposed / formanted sound)
+    for (float noise : { 0.0f, 0.03f })
+        for (int style : { 0, 3 })
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (7);
+            double ph = 0; int zc = 0, counted = 0; float prev = 0, lp = 0;
+            for (int k = 0; k < 260; ++k)
+            {
+                const double f = k < 120 ? 440.0 : 329.63;
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float v = 0.3f * (float) std::sin (ph) + 0.1f * (float) std::sin (2.0 * ph) + noise * (rnd.nextFloat() * 2.0f - 1.0f);
+                    ph += juce::MathConstants<double>::twoPi * f / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                ap->process (b, 512, ctx);
+                if (k >= 130)
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        // zero crossings of a low-passed copy (the added noise would add false crossings)
+                        lp += 0.08f * (b.getSample (0, i) - lp);
+                        if (prev <= 0 && lp > 0) ++zc; prev = lp; ++counted;
+                    }
+            }
+            const double hz = zc * 48000.0 / counted;
+            std::printf ("autopitch drop A4->E4 style %d noise %.2f -> %.1f Hz\n", style, noise, hz);
+            CHECK (std::abs (hz - 329.63) < 4.0);
+        }
+    // vowel / accent changes (o -> a, u -> uh, into ee) bend the sung pitch a little and reshape the spectrum:
+    // the tuned output must stay on A3 the whole time (oat must not dip, ee must not rise)
+    for (int style = 0; style < 4; ++style)
+    {
+        struct V { float f1, f2, f3, cents; };
+        const V vs[] { { 500, 850, 2500, -25 }, { 750, 1200, 2600, 0 }, { 320, 800, 2400, -20 }, { 600, 1150, 2500, 0 }, { 280, 2300, 3000, 30 }, { 750, 1200, 2600, 0 } };
+        const double sr = 48000; const int seg = (int) (0.35 * sr), mor = (int) (0.06 * sr), total = seg * 6;
+        std::vector<float> in ((size_t) total), out ((size_t) total);
+        double ph = 0;
+        for (int i = 0; i < total; ++i)
+        {
+            const int k = std::min (5, i / seg), pos = i - k * seg;
+            V v = vs[k];
+            if (k > 0 && pos < mor)
+            {
+                const float m = (float) pos / (float) mor; const V& u = vs[k - 1];
+                v = { u.f1 + (v.f1 - u.f1) * m, u.f2 + (v.f2 - u.f2) * m, u.f3 + (v.f3 - u.f3) * m, u.cents + (v.cents - u.cents) * m };
+            }
+            const double f0 = 220.0 * std::pow (2.0, v.cents / 1200.0);
+            ph += juce::MathConstants<double>::twoPi * f0 / sr;
+            double y = 0;
+            for (int h = 1; h <= 20; ++h)
+            {
+                const double fh = h * f0;
+                auto pk = [fh] (double F, double B) { const double q = (fh - F) / B; return 1.0 / (1.0 + q * q); };
+                y += (pk (v.f1, 80) + 0.7 * pk (v.f2, 100) + 0.3 * pk (v.f3, 150) + 0.05) / std::sqrt ((double) h) * std::sin (h * ph);
+            }
+            in[(size_t) i] = (float) (0.12 * y);
+        }
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", (float) style);
+        ap->prepare (sr, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        for (int o = 0; o + 512 <= total; o += 512)
+        {
+            for (int i = 0; i < 512; ++i) { b.setSample (0, i, in[(size_t) (o + i)]); b.setSample (1, i, in[(size_t) (o + i)]); }
+            ap->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) out[(size_t) (o + i)] = b.getSample (0, i);
+        }
+        float worst = 0; int off = 0, n = 0;
+        for (int o = (int) (0.3 * sr); o + 2048 <= total - 1024; o += 512)
+        {
+            const float hz = detectPitchYin (out.data() + o, 2048, sr, 0.15f, 0.0f, 100.0f, 600.0f);
+            if (hz <= 0) continue;
+            const float c = 1200.0f * std::log2 (hz / 220.0f);
+            worst = std::max (worst, std::abs (c)); if (std::abs (c) > 15.0f) ++off; ++n;
+        }
+        std::printf ("autopitch vowels o-a-u-uh-ee style %d: worst %.1f c, %d of %d windows off >15 c\n", style, worst, off, n);
+        CHECK (n > 50);
+        CHECK (off <= n / 50);
+    }
+    // a highlighted ruler range (bars 3-5) always starts playback at its start, wherever the playhead sits
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        e.project().songMode = true;
+        e.project().punchIn = 8.0; e.project().punchOut = 16.0;
+        for (double at : { 0.0, 10.0, 12.0, 20.0 })
+        {
+            e.setPositionBeats (at);
+            e.play();
+            std::printf ("range play from %.0f -> starts at %.2f\n", at, e.positionBeats());
+            CHECK (std::abs (e.positionBeats() - 8.0) < 1.0e-9);
+            e.stop();
+        }
+    }
+    // strict key lock: a raspy A4 sung 30 c sharp comes out on A 440 in every mode (no in-between pitch pokes out)
+    for (int style = 0; style < 4; ++style)
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", (float) style);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        juce::Random rnd (11);
+        const double f = 440.0 * std::pow (2.0, 30.0 / 1200.0);
+        double ph = 0; int zc = 0, counted = 0; float prev = 0, lp = 0;
+        for (int k = 0; k < 200; ++k)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                const float v = 0.3f * (float) std::sin (ph) + 0.1f * (float) std::sin (2.0 * ph) + 0.06f * (rnd.nextFloat() * 2.0f - 1.0f);
+                ph += juce::MathConstants<double>::twoPi * f / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            ap->process (b, 512, ctx);
+            if (k >= 60)
+                for (int i = 0; i < 512; ++i) { lp += 0.08f * (b.getSample (0, i) - lp); if (prev <= 0 && lp > 0) ++zc; prev = lp; ++counted; }
+        }
+        const double hz = zc * 48000.0 / counted;
+        std::printf ("autopitch strict raspy A4+30c style %d -> %.1f Hz\n", style, hz);
+        CHECK (std::abs (hz - 440.0) < 3.0);
+    }
+    // audio quantize: hits are found a few ms before each attack, none in the decays
+    {
+        const double sr = 48000; const int n = (int) (sr * 2.5);
+        std::vector<float> x ((size_t) n, 0.0f);
+        const double hits[] { 0.5, 1.0, 1.37, 2.0 };
+        juce::Random rnd (3);
+        for (double h : hits)
+            for (int i = 0; i < (int) (sr * 0.12); ++i)
+                x[(size_t) ((int) (h * sr) + i)] += 0.5f * std::exp (-i / (float) (sr * 0.02)) * (rnd.nextFloat() * 2.0f - 1.0f);
+        const auto on = detectOnsets (x.data(), n, sr, 0.05);
+        std::printf ("audio quantize onsets: %d found\n", (int) on.size());
+        CHECK (on.size() == 4);
+        for (size_t k = 0; k < on.size() && k < 4; ++k) CHECK (std::abs (on[k] - hits[k]) < 0.01);
+    }
+    // AutoPitch Retune is the Antares way (0 = fastest): old "speed" saves convert; Body + Character (turned up) add weight without jumping the level
+    {
+        std::map<juce::String, float> m { { "speed", 0.9f } };
+        migrateFxParams ("autopitch", m);
+        CHECK (m.count ("speed") == 0 && std::abs (m["retune"] - 0.1f) < 1.0e-6f);
+        std::map<juce::String, float> fl { { "speed", 0.9f } };
+        migrateFxParams ("flangus", fl);
+        CHECK (fl.count ("speed") == 1);
+        std::map<juce::String, float> oldVerb { { "size", 0.8f }, { "reverse", 1.0f } }, newVerb { { "reverse", 1.0f }, { "revroom", 5.0f } }, one { { "size", 0.5f } };
+        migrateFxParams ("verb", oldVerb); migrateFxParams ("verb", newVerb); migrateFxParams ("verb", one);
+        CHECK (oldVerb["revroom"] == 0.0f && newVerb["revroom"] == 5.0f && one.size() == 1);   // old projects keep the classic reverse
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 1.0f); ap->setParam ("body", 0.4f); ap->setParam ("character", 0.3f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0, inE = 0, outE = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.4 * std::sin (2 * ph)); ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); CHECK (std::isfinite (y)); outE += y * y; }
+        }
+        std::printf ("autopitch body/character level %+.2f dB\n", 10.0 * std::log10 (outE / inE));
+        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 3.0);
     }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {
@@ -1458,6 +1713,88 @@ int main()
         wav.deleteFile();
     }
 
+    // built-in 808 / synth slide chains (Channel Rack "808 (glide bass)"): the glide never dies after 5-6 notes
+    for (int cfg = 0; cfg < 4; ++cfg)
+    {
+        const bool gaps = cfg & 1; const int wave = cfg < 2 ? 4 : 0;
+        auto pr = Project::createDefault();
+        Channel c; c.id = 1; c.name = "808"; c.type = ChannelType::Synth; c.synth.wave = wave; c.glide = 0.08f; c.mono = true; c.rootKey = 36;
+        if (wave == 0) c.synth.sustain = 0.0f;
+        pr.channels = { c };
+        NoteList nl;
+        const int keys[] { 36, 39, 41, 43, 46, 43, 41, 39 };
+        const int NN = 100;
+        for (int k = 0; k < NN; ++k) { Note n; n.key = keys[k % 8]; n.start = k * 0.5; n.slide = k > 0; n.length = gaps ? 0.3 : 0.5; nl.push_back (n); }
+        pr.patterns[0].notes[1] = nl;
+        pr.bpm = 140;
+        Engine e; e.prepare (48000, 512); e.newProject (pr); e.sync(); e.play();
+        std::vector<float> outL; juce::AudioBuffer<float> out (2, 512);
+        const int noteLen = (int) (0.5 * 60.0 / 140.0 * 48000.0);
+        for (int blk = 0; blk * 512 < noteLen * NN + 1024; ++blk)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+        }
+        e.stop();
+        float lo = 1, first = 0; int firstDead = -1;
+        for (int k = 0; k < NN; ++k)
+        {
+            double sum = 0; const int a0 = k * noteLen + noteLen / 4, b0 = a0 + noteLen / 4;
+            for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
+            const float rms = (float) std::sqrt (sum / (b0 - a0));
+            if (k == 0) first = rms;
+            if (rms <= 0.03f && firstDead < 0) firstDead = k;
+            if (k > 0) lo = std::min (lo, rms);
+        }
+        std::printf ("synth slide chain (wave %d, %s): first %.3f, lowest after %.3f, first dead %d\n", wave, gaps ? "gaps" : "legato", first, lo, firstDead);
+        CHECK (lo > 0.03f);
+    }
+
+    // poly portamento: sliding chords on a one-shot sample and on the synth glide as chords (3 voices), not one
+    for (int inst = 0; inst < 2; ++inst)
+    {
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-chord-glide.wav");
+        if (inst == 0)
+        {
+            const int len = 192000; juce::AudioBuffer<float> b (1, len);
+            for (int i = 0; i < len; ++i) b.setSample (0, i, 0.3f * std::exp (-1.5f * i / (float) len) * (float) std::sin (juce::MathConstants<double>::twoPi * 261.63 * i / 48000.0));
+            wav.deleteFile(); juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (wav.createOutputStream().release(), 48000.0, 1, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, len);
+        }
+        float lvl[2] {};
+        for (int chord = 0; chord < 2; ++chord)
+        {
+            auto pr = Project::createDefault();
+            Channel c; c.id = 1; c.glide = 0.08f; c.mono = false; c.rootKey = 60;
+            if (inst == 0) { c.type = ChannelType::Sampler; c.sampleFile = wav; c.oneShot = true; c.keyTrack = true; } else { c.type = ChannelType::Synth; c.synth.sustain = 0.8f; }
+            pr.channels = { c };
+            NoteList nl;
+            const int A[] { 60, 64, 67 }, B[] { 62, 65, 69 };
+            for (int k = 0; k < 40; ++k)
+                for (int j = 0; j < (chord ? 3 : 1); ++j)
+                { Note n; n.key = (k & 1) ? B[j] : A[j]; n.start = k * 0.5; n.length = 0.5; n.slide = k > 0; nl.push_back (n); }
+            pr.patterns[0].notes[1] = nl; pr.bpm = 120;
+            Engine e; e.prepare (48000, 512); e.newProject (pr); e.sync(); e.play();
+            std::vector<float> outL; juce::AudioBuffer<float> out (2, 512);
+            const int noteLen = 12000;
+            for (int blk = 0; blk * 512 < noteLen * 40; ++blk)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (nullptr, 0, o, 2, 512);
+                outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+            }
+            e.stop();
+            double sum = 0; const int a0 = 30 * noteLen + noteLen / 4, b0 = a0 + noteLen / 2;
+            for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
+            lvl[chord] = (float) std::sqrt (sum / (b0 - a0));
+        }
+        std::printf ("poly glide chords (%s): one note %.3f, 3-note chord %.3f at note 30 (x%.2f, 3 voices ~x1.7)\n", inst ? "synth" : "one-shot", lvl[0], lvl[1], lvl[1] / juce::jmax (1.0e-6f, lvl[0]));
+        CHECK (lvl[0] > 0.01f && lvl[1] > 1.4f * lvl[0]);
+        wav.deleteFile();
+    }
+
     // rock session: HumHouse Drummer + 64 tracks with 3 inserts each + 24 instruments, song mode
     {
         Engine e; e.prepare (48000, 256);
@@ -1594,6 +1931,8 @@ int main()
         const auto g = findKey (x.data(), len, fs);
         std::printf ("key finder: %s (expected A minor 142 BPM +18 cents)\n", g.describe().toRawUTF8());
         CHECK (g.root == 9 && g.scaleIndex == 1);
+        CHECK (g.alts.size() == 24 && g.alts[0].root == 9 && g.describe().contains ("Relative: C major"));
+        CHECK (KeyGuess::keyName (1, 1) == "C# / Db minor" && KeyGuess::keyName (10, 0) == "A# / Bb major");
         CHECK (std::abs (g.bpm - 142.0) <= 1.0);
         CHECK (std::abs (g.cents - 18.0f) < 6.0f);
     }
@@ -1636,7 +1975,7 @@ int main()
         {
             // Room Verb Reverse: the reversed tail swells up into the next beat, clean and finite
             auto rv = createBuiltinEffect ("verb");
-            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f);
+            rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", 0.0f);
             rv->prepare (48000, 512);
             rv->setParam ("reverse", 1.0f);
             PlayContext pc; pc.bpm = 120.0;
@@ -1655,6 +1994,56 @@ int main()
             const double early = en (24000 + 500, 24000 + 6000), late = en (48000 - 6000, 48000 - 500);
             std::printf ("reverse verb: early %.3g late %.3g peak %.3f\n", early, late, pk);
             CHECK (fin && pk < 4.0f && late > early * 3.0 && late > 1.0e-6);
+        }
+        {
+            // Reverse rooms (FL Convolver style): a hit swells up over the 1/4 (0.5 s at 120) and stops on the beat;
+            // each room has its own swell, all clean, finite and about as loud as the classic reverse
+            std::vector<double> rise;
+            for (int room = 1; room <= 5; ++room)
+            {
+                auto rv = createBuiltinEffect ("verb");
+                rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", (float) room);
+                rv->prepare (48000, 512);
+                PlayContext pc; pc.bpm = 120.0;
+                std::vector<float> out; juce::AudioBuffer<float> blk (2, 512);
+                for (int k = 0; k < 80; ++k)
+                {
+                    blk.clear();
+                    if (k == 0) { blk.setSample (0, 0, 1.0f); blk.setSample (1, 0, 1.0f); }
+                    rv->process (blk, 512, pc);
+                    for (int i = 0; i < 512; ++i) out.push_back (blk.getSample (0, i));
+                }
+                bool fin = true; float pk = 0.0f; size_t at = 0;
+                for (size_t i = 600; i < out.size(); ++i) { fin = fin && std::isfinite (out[i]); if (std::abs (out[i]) > pk) { pk = std::abs (out[i]); at = i; } }
+                const auto en = [&out] (int a0, int a1) { double e = 0; for (int i = a0; i < a1; ++i) e += out[(size_t) i] * out[(size_t) i]; return e; };
+                const double early = en (600, 6000), late = en (24000 - 6000, 24000 - 300), after = en (24600, 40000), total = en (600, 24000);
+                rise.push_back (late / juce::jmax (1.0e-12, early));
+                std::printf ("reverse room %d: swell x%.1f, peak %.3f at %.3f s, after the beat %.2g, energy %.3g\n", room, late / juce::jmax (1.0e-12, early), pk, at / 48000.0, after, total);
+                CHECK (fin && pk < 2.0f && late > early * 2.0 && at > 16000 && at < 24300 && after < total * 0.01 && total > 0.05 && total < 20.0);
+            }
+            CHECK (*std::max_element (rise.begin(), rise.end()) > *std::min_element (rise.begin(), rise.end()) * 2.0);   // the rooms differ
+        }
+        {
+            // reverse rooms sit at about the level of the classic reverse on a real sound (a 0.1 s noise hit)
+            std::vector<double> lv;
+            for (int room = 0; room <= 5; ++room)
+            {
+                auto rv = createBuiltinEffect ("verb");
+                rv->setParam ("reverse", 1.0f); rv->setParam ("revlen", 0.0f); rv->setParam ("mix", 1.0f); rv->setParam ("revroom", (float) room);
+                rv->prepare (48000, 512);
+                PlayContext pc; pc.bpm = 120.0; pc.playing = false;
+                juce::Random rnd (7); double e = 0; juce::AudioBuffer<float> blk (2, 512);
+                for (int k = 0; k < 200; ++k)
+                {
+                    blk.clear();
+                    if (k < 10) for (int i = 0; i < 512; ++i) { const float v = 0.5f * (rnd.nextFloat() * 2 - 1); blk.setSample (0, i, v); blk.setSample (1, i, v); }
+                    rv->process (blk, 512, pc);
+                    if (k >= 10) for (int i = 0; i < 512; ++i) e += (double) blk.getSample (0, i) * blk.getSample (0, i);
+                }
+                lv.push_back (10.0 * std::log10 (juce::jmax (1.0e-12, e)));
+            }
+            std::printf ("reverse levels dB vs classic:"); for (size_t i = 1; i < lv.size(); ++i) std::printf (" %+.1f", lv[i] - lv[0]); std::printf ("\n");
+            for (size_t i = 1; i < lv.size(); ++i) CHECK (std::abs (lv[i] - lv[0]) < 6.0);
         }
         DrummerParams dv; dv.sectionVel = { 40, 100 };
             CHECK (std::abs (drummerDynamics (dv, 4) - 0.4f) < 1e-3f && std::abs (drummerDynamics (dv, 28) - 0.7f) < 1e-3f && std::abs (drummerDynamics (dv, 40) - 1.0f) < 1e-3f);
