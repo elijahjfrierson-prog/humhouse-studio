@@ -1933,11 +1933,13 @@ private:
         auto& p = s.p();
         const auto clip = p.clips[(size_t) index];
         juce::PopupMenu m, route, takes, fades;
-        m.addItem (1, "Delete");
-        m.addItem (2, "Split at playhead", clip.isAudio());
-        m.addItem (3, clip.muted ? "Unmute" : "Mute");
-        fades.addItem (10, "Short fades (click-free)"); fades.addItem (11, "Fade in 1 beat"); fades.addItem (12, "Fade out 1 beat");
-        fades.addItem (13, "Fade in + out 1 bar"); fades.addItem (14, "Clear fades");
+        int nSel = 0; for (auto& o : p.clips) if (o.selected || o.uid == clip.uid) ++nSel;
+        const juce::String sel = nSel > 1 ? " (" + juce::String (nSel) + " clips)" : juce::String();
+        m.addItem (1, "Delete" + sel);
+        m.addItem (2, "Split at playhead" + sel, clip.isAudio());
+        m.addItem (3, (clip.muted ? "Unmute" : "Mute") + sel);
+        fades.addItem (70, "Short fades (click-free)"); fades.addItem (71, "Fade in 1 beat"); fades.addItem (72, "Fade out 1 beat");
+        fades.addItem (73, "Fade in + out 1 bar"); fades.addItem (74, "Clear fades");
         m.addSubMenu ("Fades (selected clips)", fades, clip.isAudio());
         for (size_t i = 0; i < p.mixer.size(); ++i)
             route.addItem (100 + (int) i, i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name, true, p.clipInsert (clip) == (int) i);
@@ -1948,7 +1950,7 @@ private:
             for (auto& o : p.clips) if (o.takeGroup == clip.takeGroup) group.push_back (o.uid);
         for (size_t k = 0; k < group.size(); ++k) takes.addItem (1000 + group[k], "Take " + juce::String ((int) k + 1), true, group[k] == clip.uid);
         m.addSubMenu ("Takes", takes, group.size() > 1);
-        m.addItem (4, "Reverse", clip.isAudio(), clip.reversed);
+        m.addItem (4, "Reverse" + sel, clip.isAudio(), clip.reversed);
        #if ! HHS_LICENSED
         juce::PopupMenu roll; addRollItems (roll);
         m.addSubMenu ("Roll (hi-hat style)   Alt+A", roll, clip.isAudio());
@@ -2073,26 +2075,28 @@ private:
                 auto& c = *it;
                 auto forSel = [&] (std::function<void (Clip&)> f) { for (auto& o : pr.clips) if ((o.selected || o.uid == uid) && o.isAudio()) f (o); };
                 const double shortFade = secondsToBeats (0.005, pr.bpm);
-                if (r == 1) pr.clips.erase (it);
+                if (r == 1) { pr.clips.erase (std::remove_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& o) { return o.selected || o.uid == uid; }), pr.clips.end()); return; }
                 else if (r == 2)
                 {
                     const double at = s.engine.positionBeats();
-                    if (at > c.start && at < c.start + c.length)
-                    {
-                        Clip b = c; b.uid = pr.newUid();
-                        b.start = at; b.length = c.start + c.length - at; b.sourceOffset += beatsToSeconds (at - c.start, pr.bpm); b.patOffset += at - c.start;
-                        b.fadeIn = shortFade; c.length = at - c.start; c.fadeOut = shortFade; b.selected = false;
-                        pr.clips.push_back (b);
-                    }
+                    std::vector<Clip> made;
+                    forSel ([&] (Clip& o) {
+                        if (! (at > o.start && at < o.start + o.length)) return;
+                        Clip b = o; b.uid = pr.newUid();
+                        b.start = at; b.length = o.start + o.length - at; b.sourceOffset += beatsToSeconds (at - o.start, pr.bpm); b.patOffset += at - o.start;
+                        b.fadeIn = shortFade; o.length = at - o.start; o.fadeOut = shortFade; b.selected = false;
+                        made.push_back (b);
+                    });
+                    for (auto& b : made) pr.clips.push_back (b);
                 }
-                else if (r == 3) c.muted = ! c.muted;
+                else if (r == 3) { const bool m = ! c.muted; for (auto& o : pr.clips) if (o.selected || o.uid == uid) o.muted = m; }
                 else if (r == 8)
                 {
                     const int pat = c.patternIndex;
                     for (auto& o : pr.clips) o.selected = ! o.isAudio() && o.patternIndex == pat;
                     pr.currentPattern = pat;
                 }
-                else if (r == 4) c.reversed = ! c.reversed;
+                else if (r == 4) { const bool rv = ! c.reversed; forSel ([rv] (Clip& o) { o.reversed = rv; }); }
                 else if (r == 6 || r == 7)
                 {
                     int g = 0;
@@ -2129,11 +2133,11 @@ private:
                     else if (! made.empty()) pr.patterns.pop_back();
                     return;
                 }
-                else if (r == 10) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = shortFade; });
-                else if (r == 11) forSel ([] (Clip& o) { o.fadeIn = juce::jmin (1.0, o.length * 0.5); });
-                else if (r == 12) forSel ([] (Clip& o) { o.fadeOut = juce::jmin (1.0, o.length * 0.5); });
-                else if (r == 13) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = juce::jmin ((double) pr.beatsPerBar, o.length * 0.5); });
-                else if (r == 14) forSel ([] (Clip& o) { o.fadeIn = o.fadeOut = 0; });
+                else if (r == 70) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = shortFade; });
+                else if (r == 71) forSel ([] (Clip& o) { o.fadeIn = juce::jmin (1.0, o.length * 0.5); });
+                else if (r == 72) forSel ([] (Clip& o) { o.fadeOut = juce::jmin (1.0, o.length * 0.5); });
+                else if (r == 73) forSel ([&] (Clip& o) { o.fadeIn = o.fadeOut = juce::jmin ((double) pr.beatsPerBar, o.length * 0.5); });
+                else if (r == 74) forSel ([] (Clip& o) { o.fadeIn = o.fadeOut = 0; });
                 else if (r == 99) c.mixerTrack = -1;
                 else if (r >= 100 && r < 1000) forSel ([r] (Clip& o) { o.mixerTrack = r - 100; });
                 else if (r >= 1000) { const int keep = r - 1000; for (auto& o : pr.clips) if (o.takeGroup == c.takeGroup) o.hidden = o.uid != keep; }
