@@ -29,6 +29,8 @@ public:
         snapBox.onChange = [this] { const double v = snapValues[juce::jmax (0, snapBox.getSelectedItemIndex())]; s.live ([v] (Project& p) { p.snap = v; }); repaint(); };
         setupButton (toolsBtn, "TOOLS", "Piano roll tools: arp/rolls, strum, chop, flam, quantize, randomize, limit...");
         toolsBtn.onClick = [this] { toolsMenu(); };
+        setupButton (quantBtn, "QUANT", "Quantize the selected notes (or all notes) to a grid: snap grid, 1/4 ... 1/32, triplets (Ctrl+Q = snap grid)");
+        quantBtn.onClick = [this] { quantMenu(); };
         setupButton (slideBtn, "SLIDE", "Draw slide (glide) notes - the pitch glides from the previous note, great for 808s", true);
         setupButton (stampBtn, "STAMP", "Chord stamp (Alt/Opt+T): every note you draw lays down the chosen chord", true);
         stampBtn.onClick = [this] { stampBtn.setToggleState (stampChord >= 0, juce::dontSendNotification); stampMenu(); };
@@ -64,7 +66,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &quantBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -89,7 +91,7 @@ public:
         // flow layout: controls wrap onto as many rows as the width needs, so nothing is ever offscreen or hidden
         struct Item { juce::Component* c; int w, gap; };
         std::vector<Item> items { { &chLabel, 150, 6 }, { &rootBox, 60, 4 }, { &scaleBox, 150, 4 }, { &highlightBtn, 60, 10 },
-                                  { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
+                                  { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &quantBtn, 62, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
                                   { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
         for (auto* b : toolBtns) items.push_back ({ b, 46, 2 });
         const int avail = juce::jmax (100, getWidth() - 12);
@@ -557,7 +559,7 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
+    juce::TextButton highlightBtn, toolsBtn, quantBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
     int scaleKey (int k) const { int r = snapToScale (k, s.p().keyRoot, s.p().scaleIndex); if (r < 0) r += 12; if (r > 127) r -= 12; return r; }   // octave-wrap at the edges stays in scale
     int lockKey (int k) const { return lockBtn.getToggleState() ? scaleKey (k) : k; }
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };
@@ -624,6 +626,18 @@ private:
             }
         });
         repaint();
+    }
+    void quantMenu()
+    {
+        juce::PopupMenu m;
+        const char* names[] { "Snap grid", "1/4", "1/8", "1/16", "1/32", "1/8 triplet", "1/16 triplet" };
+        for (int i = 0; i < 7; ++i) m.addItem (1 + i, juce::String ("Quantize to ") + names[i]);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&quantBtn), [this] (int r) {
+            static const double divs[] { 0.0, 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
+            if (r < 1 || r > 7) return;
+            const double g = r == 1 ? (s.p().snap > 0 ? s.p().snap : 0.25) : divs[r - 1];
+            op ("Quantize", [g] (NoteList& n) { tools::QuantizeSettings q; q.grid = g; tools::quantize (n, q); });
+        });
     }
     bool op (const juce::String& name, std::function<void (NoteList&)> f)
     {

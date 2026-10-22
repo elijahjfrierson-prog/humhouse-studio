@@ -1204,6 +1204,65 @@ private:
         const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
         s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
     }
+    // audio quantize: cut the clip at each hit and snap every hit to the grid (the part before the first hit stays put)
+    void quantizeAudioClip (int uid, double div)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio() || cp->reversed || ! cp->audioFile.existsAsFile()) return;
+        const Clip c = *cp; const double bpm = s.p().bpm;
+        const double secs = beatsToSeconds (c.length, bpm), gap = juce::jmax (0.03, beatsToSeconds (div, bpm) * 0.5);
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::Thread::launch ([safe, c, div, bpm, secs, gap] {
+            std::vector<double> on;
+            juce::AudioFormatManager fm; fm.registerBasicFormats();
+            if (std::unique_ptr<juce::AudioFormatReader> rd { fm.createReaderFor (c.audioFile) })
+            {
+                const double sr = rd->sampleRate;
+                const auto a = (juce::int64) (c.sourceOffset * sr);
+                const int len = (int) juce::jmin ((juce::int64) (secs * sr), rd->lengthInSamples - a);
+                if (len > 0)
+                {
+                    juce::AudioBuffer<float> b (2, len);
+                    rd->read (&b, 0, len, a, true, true);
+                    b.addFrom (0, 0, b, 1, 0, len); b.applyGain (0, 0, len, 0.5f);
+                    on = detectOnsets (b.getReadPointer (0), len, sr, gap);
+                }
+            }
+            juce::MessageManager::callAsync ([safe, c, on, div, bpm, secs] {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr || on.empty()) return;
+                pl->s.edit ("Quantize audio", [&] (Project& p) {
+                    auto it = std::find_if (p.clips.begin(), p.clips.end(), [&] (const Clip& o) { return o.uid == c.uid; });
+                    if (it == p.clips.end()) return;
+                    const Clip src = *it;
+                    p.clips.erase (it);
+                    const bool firstHit = on.front() <= 0.01;
+                    std::vector<double> cuts { 0.0 };
+                    for (double t : on) if (t > 0.01 && t < secs) cuts.push_back (t);
+                    std::vector<double> starts;
+                    for (size_t k = 0; k < cuts.size(); ++k)
+                    {
+                        const double orig = src.start + secondsToBeats (cuts[k], bpm);
+                        double q = (k == 0 && ! firstHit) ? orig : std::round (orig / div) * div;
+                        if (! starts.empty()) q = std::max (q, starts.back() + 1.0 / 64.0);
+                        starts.push_back (std::max (0.0, q));
+                    }
+                    const double fade = secondsToBeats (0.004, bpm);
+                    for (size_t k = 0; k < cuts.size(); ++k)
+                    {
+                        Clip n = src; n.uid = p.newUid(); n.selected = false;
+                        n.start = starts[k]; n.sourceOffset = src.sourceOffset + cuts[k];
+                        const double stop = k + 1 < cuts.size() ? starts[k + 1] : starts[k] + secondsToBeats (secs - cuts[k], bpm);
+                        n.length = stop - n.start;
+                        if (n.length <= 0) continue;
+                        n.fadeIn = k == 0 ? src.fadeIn : fade;
+                        n.fadeOut = k + 1 == cuts.size() ? src.fadeOut : fade;
+                        p.clips.push_back (n);
+                    }
+                });
+            });
+        });
+    }
     // live "Splitting stems: NN%" badge (top-right of the Playlist) while a split runs
     struct SplitProgress : juce::Component, juce::Timer
     {
@@ -1357,6 +1416,12 @@ private:
         juce::PopupMenu roll; addRollItems (roll);
         m.addSubMenu ("Roll (hi-hat style)   Alt+A", roll, clip.isAudio());
        #endif
+        {
+            juce::PopupMenu qm;
+            const char* qn[] { "1/4", "1/8", "1/16", "1/32", "1/8 triplet", "1/16 triplet" };
+            for (int i = 0; i < 6; ++i) qm.addItem (320 + i, juce::String ("Quantize ") + qn[i]);
+            m.addSubMenu ("Quantize hits to grid (cuts at each hit)", qm, clip.isAudio() && ! clip.reversed);
+        }
         m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
         m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
@@ -1386,6 +1451,14 @@ private:
                 std::vector<int> u;
                 for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio()) u.push_back (o.uid);
                 applyRoll (u, r);
+                return;
+            }
+            if (r >= 320 && r <= 325)
+            {
+                std::vector<int> u;
+                for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio() && ! o.reversed) u.push_back (o.uid);
+                static const double divs[] { 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
+                for (int q : u) quantizeAudioClip (q, divs[r - 320]);
                 return;
             }
             if (r == 11) { splitClipStems (uid); return; }

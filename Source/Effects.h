@@ -147,6 +147,8 @@ struct KeyGuess
     juce::String describe() const;
 };
 KeyGuess findKey (const float* mono, int n, double sr);
+// hit (transient) times in seconds, a few ms before each attack, at least minGapSec apart
+std::vector<double> detectOnsets (const float* mono, int n, double sr, double minGapSec);
 
 float detectPitchYin (const float* x, int n, double sr, float threshold = 0.15f, float fallback = 0.0f, float loHz = 70.0f, float hiHz = 1100.0f, bool* rough = nullptr, float* aperiodic = nullptr); // Hz or 0; fallback > 0 also accepts rougher (breathy) pitch
 }

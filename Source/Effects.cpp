@@ -1377,6 +1377,35 @@ juce::String KeyGuess::describe() const
          + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
 }
 
+std::vector<double> detectOnsets (const float* x, int n, double sr, double minGap)
+{
+    std::vector<double> out;
+    const int hop = 128;
+    if (x == nullptr || n < hop * 4 || sr <= 0) return out;
+    const int hops = n / hop;
+    std::vector<float> db ((size_t) hops);
+    for (int h = 0; h < hops; ++h)
+    {
+        double e = 0;
+        for (int i = 0; i < hop; ++i) { const float v = x[h * hop + i]; e += v * v; }
+        db[(size_t) h] = (float) (10.0 * std::log10 (e / hop + 1e-12));
+    }
+    double last = -1e9;
+    for (int h = 1; h < hops; ++h)
+    {
+        float avg = 0; int k = 0;
+        for (int j = std::max (0, h - 4); j < h; ++j) { avg += db[(size_t) j]; ++k; }
+        avg /= (float) k;
+        const double t = h * hop / sr;
+        if (db[(size_t) h] > -45.0f && db[(size_t) h] - avg > 9.0f && t - last >= minGap)
+        {
+            out.push_back (std::max (0.0, t - 0.003));
+            last = t;
+        }
+    }
+    return out;
+}
+
 KeyGuess findKey (const float* x, int n, double sr)
 {
     KeyGuess g;

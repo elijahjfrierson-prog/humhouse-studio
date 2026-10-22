@@ -968,6 +968,20 @@ int main()
             std::printf ("autopitch drop A4->E4 style %d noise %.2f -> %.1f Hz\n", style, noise, hz);
             CHECK (std::abs (hz - 329.63) < 4.0);
         }
+    // audio quantize: hits are found a few ms before each attack, none in the decays
+    {
+        const double sr = 48000; const int n = (int) (sr * 2.5);
+        std::vector<float> x ((size_t) n, 0.0f);
+        const double hits[] { 0.5, 1.0, 1.37, 2.0 };
+        juce::Random rnd (3);
+        for (double h : hits)
+            for (int i = 0; i < (int) (sr * 0.12); ++i)
+                x[(size_t) ((int) (h * sr) + i)] += 0.5f * std::exp (-i / (float) (sr * 0.02)) * (rnd.nextFloat() * 2.0f - 1.0f);
+        const auto on = detectOnsets (x.data(), n, sr, 0.05);
+        std::printf ("audio quantize onsets: %d found\n", (int) on.size());
+        CHECK (on.size() == 4);
+        for (size_t k = 0; k < on.size() && k < 4; ++k) CHECK (std::abs (on[k] - hits[k]) < 0.01);
+    }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {
         auto run = [] (int scenario) {
