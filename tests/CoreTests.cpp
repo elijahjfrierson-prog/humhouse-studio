@@ -1582,6 +1582,18 @@ int main()
         CHECK (snare - kick > 0.5f && snare - kick < 4.0f);
         CHECK (hat < kick - 3.0f && crash < kick - 3.0f);
         CHECK (kick < -3.0f && snare < -3.0f);
+        // Two crash parts on one stroke are one cymbal, not two detuned copies swooshing together
+        {
+            juce::AudioBuffer<float> out (2, len); out.clear();
+            for (int pos = 0; pos < len; pos += 64)
+            {
+                if (pos == 0) { k.noteOn (hhx::LaneCrashL, 0.8f, 0); k.noteOn (hhx::LaneCrashL, 0.8f, 1); }
+                juce::AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, 64); b.clear(); k.renderNextBlock (b, 0, 64);
+            }
+            const float dbl = juce::Decibels::gainToDecibels (out.getMagnitude (0, len));
+            std::printf ("crash double-hit %.1f dBFS vs single %.1f\n", dbl, crash);
+            CHECK (dbl < crash + 1.5f);
+        }
     }
     // 40 plug-ins on one session at a 128-sample buffer: no block may miss the audio deadline (= no crackles)
     {

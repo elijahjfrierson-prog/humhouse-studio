@@ -1337,6 +1337,36 @@ namespace hhx
         const juce::ScopedLock sl (voiceLock);
         chokeArticulations (articulation);
 
+        // A crash is one plate: struck again it keeps ringing as one cymbal, so
+        // the old ring is let go instead of playing under the new stroke a few
+        // cents apart, which swooshed like a flanger. Two crash parts landing
+        // together on one sample (L + R falling back to one crash) are one
+        // stroke, not two detuned copies.
+        const bool crashLane = lane == LaneCrashL || lane == LaneCrashR || lane == LaneCrash3
+                            || lane == LaneRideCrash || lane == LaneChina || lane == LaneSplash;
+        if (crashLane)
+        {
+            const double together = 0.03 * currentRate;
+            bool merged = false;
+            for (auto& v : voices)
+                if (v.active && v.lane == lane && v.release >= 1.0f
+                    && v.increment > 0.0 && v.position / v.increment < together)
+                {
+                    v.gainL = juce::jmax (v.gainL, gl);
+                    v.gainR = juce::jmax (v.gainR, gr);
+                    merged = true;
+                }
+            if (merged)
+            {
+                slot.activity.store (1.0f);
+                return;
+            }
+            const float letGo = releaseCoefficient (0.12f);
+            for (auto& v : voices)
+                if (v.active && v.lane == lane)
+                    v.release = juce::jmin (v.release, letGo);
+        }
+
         // Where the stroke is heard from. A shut hat has almost no ring of its
         // own, so what makes it sound like a cymbal in a room instead of a
         // sampled tick is the overheads and the room, not more of the hat mic.
