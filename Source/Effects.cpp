@@ -1400,7 +1400,7 @@ public:
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         for (auto& f : tone) f.clear();
         dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; youngHops = 1 << 20; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1488,6 +1488,7 @@ public:
                     if (rough && midi > 0 && heldNote > 0) { missHops = 0; roughMidi = midi; midi = -1.0f; }
                     // the voice coming back after a gap on another note is a fresh start, not a slip of the old note
                     if (midi > 0 && lastMidi > 0 && missHops >= 2 && std::abs (midi - lastMidi) > 1.0f) { heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    youngHops = std::min (youngHops + 1, 1 << 20);
                     if (midi > 0 && lastMidi > 0)
                     {
                         // octave error guard: a sudden exact octave jump inside a note is a detector slip - fold it back
@@ -1546,19 +1547,25 @@ public:
                         period = (float) (sr / hz);
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
                         const float steer = med + (now - midi);
-                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / 0.12f));
+                        // a young note (first ~80 ms) re-reads quickly with no hold, once: word starts often scoop in from
+                        // above / below, and holding the note that first reading picked put short words a half step off
+                        const bool young = hard && (float) youngHops * hopSec < youngSec;
+                        const int prevHeld = heldNote; bool restart = onset;
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : 0.12f)));
                         int target = nearestScaleNote (centre, root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
                         const int fast = nearestScaleNote (now, root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
-                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
+                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; restart = true; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
                         // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or
                         // leap the hold hasn't caught yet) is never forced on it - that big shift was the transposed / formanted tone
-                        if (std::abs ((float) target - centre) > 1.0f) { target = nearestScaleNote (centre, root, scale); jumpHops = 0; }
+                        if (std::abs ((float) target - centre) > 1.0f) { target = nearestScaleNote (centre, root, scale); jumpHops = 0; restart = true; }
+                        if (restart) youngHops = 0;
+                        else if (young && target != prevHeld) youngHops = 1 << 20;
                         heldNote = target;
                         float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
@@ -1620,7 +1627,7 @@ private:
     std::vector<float> cbL = std::vector<float> (4096, 0.0f), cbR = std::vector<float> (4096, 0.0f); int cbW = 0; double poS = 0.0; float combG = 0.0f; bool breathy = false;
     float currentRatio = 1, targetRatio = 1, roughMidi = 0;
     std::array<float, 3> hist {}; int histN = 0;
-    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0, youngHops = 1 << 20; static constexpr float youngSec = 0.08f, yTau = 0.05f, yHys = 0.55f; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
     Biquad tone[3]; float dcX[2] {}, dcY[2] {};
