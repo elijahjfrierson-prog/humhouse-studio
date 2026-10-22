@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Instruments.h"
 #include "Drummer/DrummerCore.h"
 #include <complex>
 #include <map>
@@ -1493,7 +1494,25 @@ void openChannelEditor (Studio& s, int channelId)
     else
     {
         auto& sp = ch->synth;
-        ins.push_back ({ "wave", "Wave", 0, 8, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air" } });
+        ins.push_back ({ "wave", "Wave", 0, 10, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air", "3x Oscillation", "HumWave (wavetable)" } });
+        if (sp.wave == 10)
+        {
+            ins.push_back ({ "wtKind", sp.wt != nullptr ? "Table (now: " + sp.wtName + ")" : juce::String ("Table"), 0, 7, 0, (float) sp.wtKind,
+                             { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM" } });
+            ins.push_back ({ "wtPos", "Wavetable position", 0, 1, 0, sp.wtPos, {} });
+        }
+        if (sp.wave == 9)
+        {
+            const std::vector<const char*> shapes { "Saw", "Square", "Triangle", "Sine", "Noise" };
+            for (int o = 0; o < 3; ++o)
+            {
+                const auto n = "Osc " + juce::String (o + 1) + " ", k = juce::String (o + 1);
+                ins.push_back ({ "xw" + k, n + "shape", 0, 4, 0, (float) sp.xWave[(size_t) o], shapes });
+                ins.push_back ({ "xv" + k, n + "level", 0, 1, o == 0 ? 1.0f : 0.0f, sp.xVol[(size_t) o], {} });
+                ins.push_back ({ "xs" + k, n + "coarse (st)", -24, 24, 0, sp.xSemi[(size_t) o], {} });
+                ins.push_back ({ "xf" + k, n + "fine (cents)", -100, 100, 0, sp.xFine[(size_t) o], {} });
+            }
+        }
         ins.push_back ({ "attack", "Attack", 0.001f, 2, 0.002f, sp.attack, {} });
         ins.push_back ({ "decay", "Decay", 0.01f, 4, 0.3f, sp.decay, {} });
         ins.push_back ({ "sustain", "Sustain", 0, 1, 0.7f, sp.sustain, {} });
@@ -1515,7 +1534,7 @@ void openChannelEditor (Studio& s, int channelId)
     func.push_back ({ "glide", "Portamento / glide (s)", 0, 1, 0, ch->glide, {} });
     func.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
 
-    auto setter = [&s, channelId] (const juce::String& id, float v) {
+    std::function<void (const juce::String&, float)> setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
                 auto* c = s.channel (channelId);
                 if (c == nullptr) return;
@@ -1527,6 +1546,13 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
                 else if (id == "drive") sp.drive = v;
                 else if (id == "fmRatio") sp.fmRatio = v; else if (id == "fmIndex") sp.fmIndex = v; else if (id == "morph") sp.morph = v;
+                else if (id == "wtPos") sp.wtPos = v; else if (id == "wtKind") { sp.wtKind = (int) v; sp.wt.reset(); sp.wtName.clear(); }
+                else if (id.startsWith ("x") && id.length() == 3 && id[2] >= '1' && id[2] <= '3')
+                {
+                    const auto o = (size_t) (id[2] - '1');
+                    if (id[1] == 'w') sp.xWave[o] = (int) v; else if (id[1] == 'v') sp.xVol[o] = v;
+                    else if (id[1] == 's') sp.xSemi[o] = v; else if (id[1] == 'f') sp.xFine[o] = v;
+                }
                 else if (id == "noise") sp.noise = v; else if (id == "lfoRate") sp.lfoRate = v; else if (id == "vibrato") sp.vibrato = v;
                 else if (id == "oneShot") c->oneShot = v > 0.5f; else if (id == "cutSelf") c->cutItself = v > 0.5f;
                 else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
@@ -1537,6 +1563,19 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
                 else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
                 else if (id == "tempoSync") c->tempoSync = v > 0.5f; else if (id == "sampleBpm") c->sampleBpm = v;
+            });
+        };
+    if (! sampler)
+        setter = [setter, &s, channelId, key, prevWave = ch->synth.wave] (const juce::String& id, float v) mutable
+        {
+            setter (id, v);
+            if (id != "wave" || (int) v == prevWave) return;
+            prevWave = (int) v;
+            juce::MessageManager::callAsync ([&s, channelId, key]
+            {
+                s.commit ("Synth wave");
+                for (auto* w : EditorWindow::windows()) if (w->key == key) { EditorWindow::windows().removeObject (w); break; }
+                openChannelEditor (s, channelId);
             });
         };
     auto commit = [&s] { s.commit ("Channel settings"); };

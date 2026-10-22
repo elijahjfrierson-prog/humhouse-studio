@@ -165,6 +165,17 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("drv", s.drive, nullptr);
         t.setProperty ("fmr", s.fmRatio, nullptr); t.setProperty ("fmi", s.fmIndex, nullptr); t.setProperty ("mor", s.morph, nullptr);
         t.setProperty ("noi", s.noise, nullptr); t.setProperty ("lfr", s.lfoRate, nullptr); t.setProperty ("vib", s.vibrato, nullptr);
+        {
+            juce::StringArray x;
+            for (size_t o = 0; o < 3; ++o) { x.add (juce::String (s.xWave[o])); x.add (juce::String (s.xVol[o])); x.add (juce::String (s.xSemi[o])); x.add (juce::String (s.xFine[o])); }
+            t.setProperty ("x3", x.joinIntoString (","), nullptr);
+            t.setProperty ("wtPos", s.wtPos, nullptr); t.setProperty ("wtKind", s.wtKind, nullptr);
+            if (s.wt != nullptr && ! s.wt->empty())
+            {
+                t.setProperty ("wt", juce::MemoryBlock (s.wt->data(), s.wt->size() * sizeof (float)).toBase64Encoding(), nullptr);
+                t.setProperty ("wtName", s.wtName, nullptr);
+            }
+        }
         chs.appendChild (t, nullptr);
     }
     root.appendChild (chs, nullptr);
@@ -326,6 +337,24 @@ Project projectFromTree (const juce::ValueTree& root)
         s.detune = t["det"]; s.unison = t.getProperty ("uni", 1); s.drive = t["drv"];
         s.fmRatio = t.getProperty ("fmr", 1.0f); s.fmIndex = t["fmi"]; s.morph = t["mor"];
         s.noise = t["noi"]; s.lfoRate = t["lfr"]; s.vibrato = t["vib"];
+        {
+            const auto x = juce::StringArray::fromTokens (t["x3"].toString(), ",", "");
+            if (x.size() == 12)
+                for (size_t o = 0; o < 3; ++o)
+                {
+                    s.xWave[o] = x[(int) o * 4].getIntValue(); s.xVol[o] = x[(int) o * 4 + 1].getFloatValue();
+                    s.xSemi[o] = x[(int) o * 4 + 2].getFloatValue(); s.xFine[o] = x[(int) o * 4 + 3].getFloatValue();
+                }
+            s.wtPos = t["wtPos"]; s.wtKind = t["wtKind"];
+            juce::MemoryBlock mb;
+            if (t.hasProperty ("wt") && mb.fromBase64Encoding (t["wt"].toString()) && mb.getSize() >= humWaveFrameSize * sizeof (float))
+            {
+                std::vector<float> v (mb.getSize() / sizeof (float));
+                std::memcpy (v.data(), mb.getData(), v.size() * sizeof (float));
+                s.wt = std::make_shared<const std::vector<float>> (std::move (v));
+                s.wtName = t["wtName"].toString();
+            }
+        }
         p.channels.push_back (c);
     }
     for (auto t : root.getChildWithName ("PATTERNS"))

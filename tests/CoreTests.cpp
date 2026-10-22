@@ -2324,6 +2324,50 @@ int main()
         root.deleteRecursively();
     }
 
+    // 3x Oscillation + HumWave (factory table, sample to wavetable) sound, stay finite, and save / load
+    {
+        auto renderPeak = [] (const Channel& c)
+        {
+            auto inst = createInstrument (c, nullptr, 48000.0);
+            juce::AudioBuffer<float> b (2, 4800); b.clear();
+            inst->noteOn (60, 0.9f, false);
+            float pk = 0.0f; bool finite = true;
+            for (int k = 0; k < 10; ++k)
+            {
+                b.clear(); inst->render (b, 0, 4800);
+                for (int i = 0; i < 4800; ++i) { const float x = b.getSample (0, i); finite &= std::isfinite (x); pk = std::max (pk, std::abs (x)); }
+            }
+            return finite ? pk : -1.0f;
+        };
+        Channel x3; x3.type = ChannelType::Synth; x3.synth.wave = 9; x3.synth.xVol = { 1, 0.7f, 0.5f }; x3.synth.xWave = { 0, 1, 4 }; x3.synth.xSemi = { 0, 7, -12 };
+        const float p3 = renderPeak (x3);
+        CHECK (p3 > 0.05f && p3 < 4.0f);
+        for (int kind = 0; kind < 8; ++kind)
+        {
+            Channel hw; hw.type = ChannelType::Synth; hw.synth.wave = 10; hw.synth.wtKind = kind; hw.synth.wtPos = 0.6f; hw.synth.morph = 0.5f; hw.synth.lfoRate = 1.0f;
+            const float ph = renderPeak (hw);
+            CHECK (ph > 0.05f && ph < 4.0f);
+        }
+        juce::AudioBuffer<float> smp (1, 20000);
+        for (int i = 0; i < smp.getNumSamples(); ++i) smp.setSample (0, i, std::sin (i * 0.05f) * std::exp (-i / 8000.0f) + 0.3f * std::sin (i * 0.31f));
+        auto tab = humWaveFromAudio (smp);
+        CHECK (tab != nullptr && (int) tab->size() == 32 * humWaveFrameSize);
+        Project p = Project::createDefault();
+        Channel hw; hw.type = ChannelType::Synth; hw.name = "HW"; hw.synth.wave = 10; hw.synth.wt = tab; hw.synth.wtName = "kick"; hw.synth.wtPos = 0.25f;
+        hw.synth.xSemi = { 0, 5, -7 };
+        CHECK (renderPeak (hw) > 0.05f);
+        const int id = p.addChannel (hw);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-humwave.hhs");
+        CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        const Channel* got = nullptr;
+        for (auto& c : q.channels) if (c.id == id) got = &c;
+        CHECK (got != nullptr && got->synth.wave == 10 && got->synth.wt != nullptr && *got->synth.wt == *tab
+               && got->synth.wtName == "kick" && std::abs (got->synth.wtPos - 0.25f) < 1.0e-4f && got->synth.xSemi[1] == 5.0f);
+        f.deleteFile();
+        std::printf ("3x Oscillation peak %.2f, HumWave 8 tables + sample-to-wavetable render and round-trip\n", p3);
+    }
+
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;
 }

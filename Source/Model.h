@@ -54,7 +54,16 @@ struct SynthParams
     float morph = 0.0f;                     // morph wave: sine > triangle > saw > square
     float noise = 0.0f;                     // breath / air mixed into any wave
     float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
+    // wave 9 = 3x Oscillation: three oscillators, each its own shape (saw, square, triangle, sine, noise), tune and level
+    std::array<int, 3>   xWave { 0, 1, 3 };
+    std::array<float, 3> xVol { 1.0f, 0.0f, 0.0f }, xSemi { 0, 0, 0 }, xFine { 0, 0, 0 };
+    // wave 10 = HumWave wavetable: frames of humWaveFrameSize samples, scanned by wtPos (Morph = LFO sweep depth)
+    float wtPos = 0.0f;
+    int   wtKind = 0;                                   // factory table, used when no custom table is loaded
+    std::shared_ptr<const std::vector<float>> wt;       // custom table (picture to sound, sample to wavetable)
+    juce::String wtName;
 };
+constexpr int humWaveFrameSize = 256;
 
 // Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
 struct DrummerParams
