@@ -440,7 +440,7 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 };
 }
 
-class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
+class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
     MainComponent()
@@ -805,6 +805,15 @@ public:
                 tm.addSeparator();
                 tm.addItem (396, "Add a templates folder (e.g. Desktop)...");
                 tm.addItem (397, "Show templates folder");
+                tm.addSeparator();
+                tm.addItem (398, "Share this project as a template file (sounds inside)...");
+                if (! ts.isEmpty())
+                {
+                    juce::PopupMenu share;
+                    for (int i = 0; i < ts.size() && i < 90; ++i) share.addItem (700 + i, ts[i].getFileNameWithoutExtension());
+                    tm.addSubMenu ("Share a saved template as a file", share);
+                }
+                tm.addItem (399, "Import a template / preset / FX chain file someone sent you...");
                 m.addSubMenu ("New from template", tm);
             }
             add (mSaveTemplate, "Save as template...");
@@ -910,6 +919,15 @@ public:
         if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
         if (id == 396) { addTemplateFolder(); return; }
         if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
+        if (id == 398) { shareProjectAsTemplate(); return; }
+        if (id == 399) { importSharedFile(); return; }
+        if (id >= 700 && id < 790)
+        {
+            auto ts = templateFiles();
+            Project q;
+            if (id - 700 < ts.size() && loadProject (q, ts[id - 700])) shareTemplatePack (q, ts[id - 700].getFileNameWithoutExtension());
+            return;
+        }
         if (id >= 300 && id < 390)
         {
             auto ts = templateFiles();
@@ -1433,6 +1451,73 @@ private:
         else tmp.deleteFile();
     }
 
+    void shareTemplatePack (const Project& p, const juce::String& name)
+    {
+        auto proj = std::make_shared<Project> (p);
+        chooser = std::make_unique<juce::FileChooser> ("Share template (one file with its sounds inside - email it, AirDrop it, text it)",
+            juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (juce::File::createLegalFileName (name) + ".hhpack"), "*.hhpack");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe, proj, name] (const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (safe == nullptr || f == juce::File()) return;
+                f = f.withFileExtension ("hhpack");
+                if (packTemplate (*proj, name, f)) { safe->flash ("Template file ready: " + f.getFileName()); f.revealToUser(); }
+                else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share template", "Couldn't write " + f.getFullPathName());
+            });
+    }
+    void shareProjectAsTemplate()
+    {
+        engine.storePluginStates();
+        auto& p = engine.project();
+        shareTemplatePack (p, lastTemplate.isNotEmpty() ? lastTemplate
+                            : p.projectFile.existsAsFile() ? p.projectFile.getFileNameWithoutExtension() : juce::String ("My template"));
+    }
+    void importSharedFile()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import a HumHouse file", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhpack;*.hhpreset;*.hhchain;*.hhs");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+            if (safe != nullptr && fc.getResult().existsAsFile()) safe->openFile (fc.getResult());
+        });
+    }
+
+public:
+    // a file opened from Finder / Explorer / an email, or dropped on the window
+    void openFile (const juce::File& f)
+    {
+        auto fail = [] (const juce::String& what) {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "That file isn't a HumHouse " + what + ".");
+        };
+        if (f.hasFileExtension ("hhpack"))
+        {
+            auto t = unpackTemplate (f, templatesDir());
+            if (t == juce::File()) { fail ("template"); return; }
+            flash ("Template added: " + t.getFileNameWithoutExtension() + " (File > New from template)");
+            newProject (t);
+        }
+        else if (f.hasFileExtension ("hhpreset"))
+        {
+            auto t = installSharedPreset (f);
+            if (t == juce::File()) fail ("preset");
+            else flash ("Preset added: " + t.getFileNameWithoutExtension() + " (in that effect's PRESETS menu)");
+        }
+        else if (f.hasFileExtension ("hhchain"))
+        {
+            auto t = installSharedChain (f);
+            if (t == juce::File()) fail ("FX chain");
+            else flash ("FX chain added: " + t.getFileNameWithoutExtension() + " (right-click a track > FX chain presets)");
+        }
+        else if (f.hasFileExtension ("hhs"))
+            askToSave ([this, f] { load (f); });
+    }
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { return allHumHouseShareFiles (files); }
+    void filesDropped (const juce::StringArray& files, int, int) override
+    {
+        for (auto& p : files) openFile (juce::File (p));
+    }
+private:
+
     void newProject (juce::File templ = {}) { askToSave ([this, templ] { startNewProject (templ); }); }
     void startNewProject (juce::File templ)
     {
@@ -1589,6 +1674,10 @@ private:
 };
 
 std::unique_ptr<juce::Component> createMainComponent() { return std::make_unique<MainComponent>(); }
+void openFileInMain (juce::Component* main, const juce::File& f)
+{
+    if (auto* m = dynamic_cast<MainComponent*> (main)) m->openFile (f);
+}
 void requestQuit (juce::Component* main)
 {
     if (auto* m = dynamic_cast<MainComponent*> (main)) m->requestQuit();

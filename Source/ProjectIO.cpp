@@ -1,4 +1,5 @@
 #include "ProjectIO.h"
+#include <map>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -468,6 +469,89 @@ juce::File writeBackup (const Project& p, int keep)
     std::sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
     for (int i = keep; i < all.size(); ++i) all.getReference (i).deleteFile();
     return f;
+}
+
+static juce::File freshTempDir()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("hhpack-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
+}
+
+bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
+{
+    const auto legal = juce::File::createLegalFileName (name.trim().isEmpty() ? juce::String ("Template") : name.trim());
+    auto stage = freshTempDir();
+    auto root = stage.getChildFile (legal);
+    auto sounds = root.getChildFile ("Sounds");
+    if (! sounds.createDirectory()) return false;
+    Project p = src;
+    std::map<juce::String, juce::File> copied;
+    auto take = [&] (juce::File& f)
+    {
+        if (f == juce::File() || ! f.existsAsFile()) return;
+        auto it = copied.find (f.getFullPathName());
+        if (it == copied.end())
+        {
+            auto dst = sounds.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+            if (! f.copyFileTo (dst)) return;
+            it = copied.emplace (f.getFullPathName(), dst).first;
+        }
+        f = it->second;
+    };
+    for (auto& c : p.channels) take (c.sampleFile);
+    for (auto& c : p.clips) take (c.audioFile);
+    for (auto& m : p.mixer) take (m.frozenFile);
+    for (auto& f : p.audioPool) take (f);
+    p.projectFile = root.getChildFile (legal + ".hhs");
+    bool ok = saveProject (p, p.projectFile);
+    if (ok)
+    {
+        juce::ZipFile::Builder zip;
+        for (auto& f : root.findChildFiles (juce::File::findFiles, true, "*"))
+            zip.addFile (f, f.hasFileExtension ("hhs") ? 9 : 6, f.getRelativePathFrom (stage).replaceCharacter ('\\', '/'));
+        auto tmp = out.getSiblingFile (out.getFileName() + ".tmp");
+        {
+            juce::FileOutputStream os (tmp);
+            ok = os.openedOk() && os.setPosition (0) && os.truncate().wasOk() && zip.writeToStream (os, nullptr);
+            os.flush();
+        }
+        ok = ok && tmp.moveFileTo (out);
+        tmp.deleteFile();
+    }
+    stage.deleteRecursively();
+    return ok;
+}
+
+juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDir)
+{
+    juce::ZipFile zip (pack);
+    juce::String top;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
+        if (n.startsWithChar ('/') || n.contains ("..") || n.containsChar (':')) return {};   // nothing may land outside the template's folder
+        if (top.isEmpty() && n.endsWithIgnoreCase (".hhs") && n.containsChar ('/'))
+            top = n.upToFirstOccurrenceOf ("/", false, false);
+    }
+    if (top.isEmpty()) return {};
+    auto stage = freshTempDir();
+    if (! stage.createDirectory() || zip.uncompressTo (stage, true).failed()) { stage.deleteRecursively(); return {}; }
+    auto from = stage.getChildFile (top);
+    auto inner = from.getChildFile (top + ".hhs");
+    Project check;
+    if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
+    templatesDir.createDirectory();
+    auto dest = templatesDir.getNonexistentChildFile (juce::File::createLegalFileName (top), {}, false);
+    const bool ok = from.copyDirectoryTo (dest);
+    stage.deleteRecursively();
+    if (! ok) return {};
+    auto hhs = dest.getChildFile (top + ".hhs");
+    if (dest.getFileName() != top)
+    {
+        auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
+        if (hhs.moveFileTo (renamed)) hhs = renamed;
+    }
+    return hhs.existsAsFile() ? hhs : juce::File();
 }
 
 void UndoHistory::push (const Project& p, const juce::String& desc)

@@ -246,6 +246,8 @@ private:
         juce::PopupMenu menu;
         menu.addItem (1, "Save preset...");
         if (lastPreset.isNotEmpty()) menu.addItem (2, "Save (overwrite \"" + lastPreset + "\")");
+        menu.addItem (3, "Share this preset as a file (email, AirDrop, text)...");
+        menu.addItem (4, "Import a preset file someone sent you...");
         const auto& fac = factoryPresets (kind);
         if (! fac.empty()) menu.addSectionHeader ("Factory presets");
         for (size_t i = 0; i < fac.size(); ++i) menu.addItem (5000 + (int) i, fac[i].name);
@@ -256,6 +258,8 @@ private:
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
             else if (r == 2) writePreset (lastPreset);
+            else if (r == 3) sharePreset();
+            else if (r == 4) importPreset();
             else if (r >= 5000 && r - 5000 < (int) factoryPresets (kind).size()) loadFactory (factoryPresets (kind)[(size_t) (r - 5000)]);
             else if (r >= 100 && r - 100 < files.size()) { lastPreset = files[r - 100].getFileNameWithoutExtension(); loadPreset (files[r - 100]); }
         });
@@ -273,14 +277,49 @@ private:
             safe->writePreset (name);
         }), true);
     }
+    std::unique_ptr<juce::XmlElement> presetXml() const
+    {
+        auto x = std::make_unique<juce::XmlElement> ("HUMHOUSE_PRESET");
+        x->setAttribute ("kind", kind);
+        for (auto& p : params) { auto* e = x->createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+        return x;
+    }
+    void sharePreset()
+    {
+        const auto name = juce::File::createLegalFileName (lastPreset.isNotEmpty() ? lastPreset : kind + " preset");
+        chooser = std::make_unique<juce::FileChooser> ("Share preset (save the file, then send it any way you like)",
+            juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (name + ".hhpreset"), "*.hhpreset");
+        juce::Component::SafePointer<ParamGrid> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe] (const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (safe == nullptr || f == juce::File()) return;
+                f = f.withFileExtension ("hhpreset");
+                if (safe->presetXml()->writeTo (f)) f.revealToUser();
+                else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share preset", "Couldn't write " + f.getFullPathName());
+            });
+    }
+    void importPreset()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import preset", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhpreset");
+        juce::Component::SafePointer<ParamGrid> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+            auto f = fc.getResult();
+            if (safe == nullptr || ! f.existsAsFile()) return;
+            auto x = juce::XmlDocument::parse (f);
+            auto got = installSharedPreset (f);
+            if (got == juce::File())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Import preset", "That file isn't a HumHouse preset.");
+            else if (x != nullptr && x->getStringAttribute ("kind") == safe->kind) { safe->lastPreset = got.getFileNameWithoutExtension(); safe->loadPreset (got); }
+            else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Import preset",
+                     "Saved \"" + got.getFileNameWithoutExtension() + "\". It's a " + (x != nullptr ? x->getStringAttribute ("kind") : juce::String()) + " preset, so it shows in that effect's PRESETS menu.");
+        });
+    }
     void writePreset (const juce::String& name)
     {
-        juce::XmlElement x ("HUMHOUSE_PRESET");
-        x.setAttribute ("kind", kind);
-        for (auto& p : params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
         presetDir().createDirectory();
         auto f = presetDir().getChildFile (name + ".hhpreset");
-        if (x.writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
+        if (presetXml()->writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
     }
     void loadFactory (const FactoryPreset& fp)
     {
@@ -1635,6 +1674,77 @@ namespace hhs
 {
 static juce::File presetsRoot() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Presets"); }
 
+static std::unique_ptr<juce::XmlElement> chainXml (Studio& s, int track)
+{
+    s.engine.storePluginStates();
+    auto x = std::make_unique<juce::XmlElement> ("HUMHOUSE_CHAIN");
+    for (auto& f : s.p().mixer[(size_t) track].fx)
+    {
+        auto* fe = x->createNewChildElement ("FX");
+        fe->setAttribute ("type", f.type); fe->setAttribute ("plugin", f.pluginId);
+        fe->setAttribute ("bypass", f.bypass); fe->setAttribute ("mix", (double) f.mix);
+        if (f.pluginState.getSize() > 0) fe->setAttribute ("state", f.pluginState.toBase64Encoding());
+        for (auto& [id, v] : f.params) { auto* pe = fe->createNewChildElement ("P"); pe->setAttribute ("id", id); pe->setAttribute ("v", (double) v); }
+    }
+    return x;
+}
+
+static juce::File installShared (const juce::File& f, const juce::String& tag, const juce::File& dir)
+{
+    auto x = juce::XmlDocument::parse (f);
+    if (x == nullptr || ! x->hasTagName (tag)) return {};
+    if (! dir.createDirectory()) return {};
+    auto dst = dir.getChildFile (f.getFileName());
+    if (dst == f) return f;
+    if (dst.existsAsFile() && dst.loadFileAsString() != f.loadFileAsString())
+        dst = dir.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+    return f.copyFileTo (dst) ? dst : juce::File();
+}
+
+juce::File installSharedPreset (const juce::File& f)
+{
+    auto x = juce::XmlDocument::parse (f);
+    if (x == nullptr || x->getStringAttribute ("kind").isEmpty()) return {};
+    return installShared (f, "HUMHOUSE_PRESET", presetsRoot().getChildFile (juce::File::createLegalFileName (x->getStringAttribute ("kind"))));
+}
+
+juce::File installSharedChain (const juce::File& f) { return installShared (f, "HUMHOUSE_CHAIN", presetsRoot().getChildFile ("Chains")); }
+
+static std::unique_ptr<juce::FileChooser>& chainChooser() { static std::unique_ptr<juce::FileChooser> c; return c; }
+
+static void loadChainPreset (Studio& s, int track, const juce::File& file, bool replace);
+
+static void shareChainPreset (Studio& s, int track)
+{
+    if (track < 0 || track >= (int) s.p().mixer.size()) return;
+    std::shared_ptr<juce::XmlElement> x (chainXml (s, track));
+    auto& c = chainChooser();
+    c = std::make_unique<juce::FileChooser> ("Share FX chain (save the file, then send it any way you like)",
+        juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile ("My FX chain.hhchain"), "*.hhchain");
+    c->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+        [x] (const juce::FileChooser& fc) {
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            f = f.withFileExtension ("hhchain");
+            if (x->writeTo (f)) f.revealToUser();
+            else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share FX chain", "Couldn't write " + f.getFullPathName());
+        });
+}
+
+static void importChainPreset (Studio& s, int track)
+{
+    auto& c = chainChooser();
+    c = std::make_unique<juce::FileChooser> ("Import FX chain", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhchain");
+    c->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [&s, track] (const juce::FileChooser& fc) {
+        auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        auto got = installSharedChain (f);
+        if (got == juce::File())
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Import FX chain", "That file isn't a HumHouse FX chain.");
+        else loadChainPreset (s, track, got, false);
+    });
+}
+
 static void saveChainPreset (Studio& s, int track)
 {
     auto* aw = new juce::AlertWindow ("Save FX chain preset", "Name this chain (every effect on the insert, in order)", juce::MessageBoxIconType::NoIcon);
@@ -1644,19 +1754,9 @@ static void saveChainPreset (Studio& s, int track)
     aw->enterModalState (true, juce::ModalCallbackFunction::create ([&s, track, aw] (int r) {
         const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
         if (r != 1 || name.isEmpty() || track < 0 || track >= (int) s.p().mixer.size()) return;
-        s.engine.storePluginStates();
-        juce::XmlElement x ("HUMHOUSE_CHAIN");
-        for (auto& f : s.p().mixer[(size_t) track].fx)
-        {
-            auto* fe = x.createNewChildElement ("FX");
-            fe->setAttribute ("type", f.type); fe->setAttribute ("plugin", f.pluginId);
-            fe->setAttribute ("bypass", f.bypass); fe->setAttribute ("mix", (double) f.mix);
-            if (f.pluginState.getSize() > 0) fe->setAttribute ("state", f.pluginState.toBase64Encoding());
-            for (auto& [id, v] : f.params) { auto* pe = fe->createNewChildElement ("P"); pe->setAttribute ("id", id); pe->setAttribute ("v", (double) v); }
-        }
         auto dir = presetsRoot().getChildFile ("Chains");
         dir.createDirectory();
-        x.writeTo (dir.getChildFile (name + ".hhchain"));
+        chainXml (s, track)->writeTo (dir.getChildFile (name + ".hhchain"));
     }), true);
 }
 
@@ -1697,6 +1797,8 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
     if (chainFiles.isEmpty()) chains.addItem ("(none saved yet)", false, false, [] {});
     m.addSubMenu ("FX chain presets", chains);
     m.addItem ("Save this track's FX chain as preset...", [&s, track] { saveChainPreset (s, track); });
+    m.addItem ("Share this track's FX chain as a file (email, AirDrop, text)...", [&s, track] { shareChainPreset (s, track); });
+    m.addItem ("Import an FX chain file someone sent you (adds it here)...", [&s, track] { importChainPreset (s, track); });
     m.addSeparator();
     m.addSectionHeader ("Add effect from saved preset");
     bool any = false;

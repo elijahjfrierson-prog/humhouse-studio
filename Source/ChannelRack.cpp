@@ -559,7 +559,7 @@ public:
             if (! files.isEmpty()) filesDropped (files, d.localPosition.x, d.localPosition.y);
         }
     }
-    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { return ! allHumHouseShareFiles (files); }
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         juce::Array<juce::File> samples;

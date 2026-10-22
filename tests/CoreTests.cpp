@@ -2406,6 +2406,39 @@ int main()
         std::printf ("3x Oscillation peak %.2f, HumWave 8 tables + sample-to-wavetable render and round-trip\n", p3);
     }
 
+    // A template shared as one file carries its sounds: it opens on another machine with every sample found
+    {
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hh-share-test");
+        tmp.deleteRecursively(); tmp.createDirectory();
+        auto wav = tmp.getChildFile ("myvox.wav");
+        {
+            juce::AudioBuffer<float> b (1, 4800);
+            for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.3f * std::sin (0.05f * (float) i));
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (wav), 48000.0, 1, 24, {}, 0));
+            CHECK (w != nullptr);
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        hhs::Project p;
+        p.channels.emplace_back();
+        p.channels.back().type = hhs::ChannelType::Sampler;
+        p.channels.back().sampleFile = wav;
+        auto pack = tmp.getChildFile ("Beat Starter.hhpack");
+        CHECK (hhs::packTemplate (p, "Beat Starter", pack));
+        wav.deleteFile();   // the sender's original is gone: the receiver only has the pack
+        auto inbox = tmp.getChildFile ("Templates");
+        auto t = hhs::unpackTemplate (pack, inbox);
+        CHECK (t.existsAsFile());
+        hhs::Project q;
+        CHECK (hhs::loadProject (q, t));
+        CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.isAChildOf (inbox));
+        auto t2 = hhs::unpackTemplate (pack, inbox);   // received twice: kept side by side, nothing overwritten
+        CHECK (t2.existsAsFile() && t2 != t);
+        CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
+        std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
+        tmp.deleteRecursively();
+    }
+
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;
 }

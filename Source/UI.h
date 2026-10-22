@@ -296,6 +296,21 @@ struct Studio : public juce::ChangeBroadcaster
 
 std::unique_ptr<juce::Component> createMainComponent();
 void requestQuit (juce::Component* main);   // asks Save / Don't Save / Cancel when the project has changes
+// a project, template pack, preset or FX chain opened from Finder / Explorer, an email or a drop on the window
+void openFileInMain (juce::Component* main, const juce::File&);
+inline bool isHumHouseShareFile (const juce::String& path)
+{
+    const juce::File f (path);
+    return f.hasFileExtension ("hhpack") || f.hasFileExtension ("hhpreset") || f.hasFileExtension ("hhchain") || f.hasFileExtension ("hhs");
+}
+inline bool allHumHouseShareFiles (const juce::StringArray& files)
+{
+    for (auto& f : files) if (! isHumHouseShareFile (f)) return false;
+    return ! files.isEmpty();
+}
+// shared files received by email, AirDrop, USB...: copied into your presets; returns the installed file, or {} if it isn't one
+juce::File installSharedPreset (const juce::File&);
+juce::File installSharedChain (const juce::File&);
 std::unique_ptr<juce::Component> createChannelRack (Studio&);
 std::unique_ptr<juce::Component> createPianoRoll (Studio&);
 std::unique_ptr<juce::Component> createPlaylist (Studio&);
