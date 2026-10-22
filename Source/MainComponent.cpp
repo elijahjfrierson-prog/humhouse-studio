@@ -355,7 +355,16 @@ struct TransportButton : public juce::TextButton   // drawn icons: font glyphs c
         else if (kind == 0) { juce::Path p; p.addTriangle (r.getX() + 1, r.getY(), r.getX() + 1, r.getBottom(), r.getRight(), r.getCentreY()); g.fillPath (p); }
         else if (kind == 1) g.fillRect (r.reduced (1.0f));
         else if (kind == 3) { r = r.reduced (1.0f); g.fillRect (r.removeFromLeft (2.5f)); juce::Path p; p.addTriangle (r.getRight(), r.getY(), r.getRight(), r.getBottom(), r.getX() + 0.5f, r.getCentreY()); g.fillPath (p); }
-        else if (kind == 4) { for (int k = 0; k < 3; ++k) g.fillRoundedRectangle (r.getX() + 1.0f + 5.0f * (float) k, r.getY(), 2.5f, r.getHeight(), 1.0f); }
+        else if (kind == 4)   // the HumHouse logo waveform (4 bars)
+        {
+            static const float bh[] { 0.5f, 1.0f, 0.71f, 0.33f };
+            const float step = r.getWidth() / 4.0f, w = juce::jmax (2.0f, step * 0.62f);
+            for (int k = 0; k < 4; ++k)
+            {
+                const float h = r.getHeight() * bh[k];
+                g.fillRoundedRectangle (r.getX() + step * (float) k + (step - w) * 0.5f, r.getCentreY() - h * 0.5f, w, h, w * 0.5f);
+            }
+        }
         else g.fillEllipse (r);
     }
 };

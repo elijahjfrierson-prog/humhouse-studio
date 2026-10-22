@@ -11,7 +11,7 @@ static inline double keyToHz (double key) { return 440.0 * std::pow (2.0, (key -
 class SamplerInstrument : public ChannelInstrument
 {
 public:
-    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) { sustainPos = findSustain(); }
+    explicit SamplerInstrument (SharedSample s) : sample (std::move (s)) { sustainPos = findSustain(); findBody(); }
     void prepare (double sr, int) override { sampleRate = sr; }
     void update (const Channel& c) override
     {
@@ -72,7 +72,7 @@ public:
         if (v == nullptr) for (auto& c : voices) if (c.releasing) { v = &c; break; }   // steal a fading voice before a held one
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
-        v->active = true; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
+        v->active = true; v->dir = 1; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
@@ -160,11 +160,22 @@ public:
                 // lines up with the other one, and they crossfade - so slides fill the note instead of running out.
                 const int G = juce::jmax (64, (int) (0.06 * sampleRate)) & ~1;
                 const float wA = (float) std::pow (std::sin (juce::MathConstants<double>::pi * v.phase / G), 2.0);
-                oL[i] += (wA * readAt (l, len, v.headA) + (1.0f - wA) * readAt (l, len, v.headB)) * g;
-                oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * g;
+                const float hg = v.slid && bodyLen > 0.0 && v.pos >= sustainPos ? g * bodyGain (v.pos) : g;
+                oL[i] += (wA * readAt (l, len, v.headA) + (1.0f - wA) * readAt (l, len, v.headB)) * hg;
+                oR[i] += (wA * readAt (r, len, v.headA) + (1.0f - wA) * readAt (r, len, v.headB)) * hg;
                 // a slid note keeps sounding for as long as it's held (an 808 slide never "gives up" half way):
-                // past the middle of the sample the time stops and the heads keep cycling the body of the sound
-                if (! (v.slid && ! v.releasing && v.pos >= sustainPos)) v.pos += 1.0;
+                // past the body point the time sweeps slowly back and forth over a long stretch of the body
+                // (never one short piece repeated = the stutter), level-matched so the envelope never runs out
+                // (the sweep stops short of the end by what the heads read ahead at this pitch)
+                const double sweepEnd = juce::jmin (sustainPos + bodyLen, (double) len - 2.0 - G * (rate + 1.0) - 400.0);
+                if (v.slid && v.pos >= sustainPos && sweepEnd > sustainPos + 0.02 * sampleRate)
+                {
+                    v.pos += 0.5 * v.dir;
+                    if (v.pos >= sweepEnd) { v.pos = sweepEnd; v.dir = -1; }
+                    else if (v.pos <= sustainPos) { v.pos = sustainPos; v.dir = 1; }
+                }
+                else if (v.slid && ! v.releasing && v.pos >= sustainPos) v.pos = sustainPos;
+                else v.pos += 1.0;
                 v.headA += rate; v.headB += rate;
                 if (++v.phase >= G) { v.phase = 0; v.headA = alignHead (l, len, v.pos, v.headB, rate); }
                 else if (v.phase == G / 2) v.headB = alignHead (l, len, v.pos, v.headA, rate);
@@ -193,6 +204,33 @@ private:
             if (rms[w] < 0.5f * *peakIt) return juce::jmin (0.5 * len, (double) (w * win));
         return 0.5 * len;
     }
+    // the stretch of body a held slide sweeps over (up to 0.4 s after the body point, while it's still above
+    // -24 dB of it), and the level of the body there so the sweep holds the body point's level the whole time
+    void findBody()
+    {
+        bodyLen = 0.0; bodyRms.clear();
+        if (! sample || sample->getNumSamples() < 4096) return;
+        const int len = sample->getNumSamples(), s0 = (int) sustainPos;
+        const float* x = sample->getReadPointer (0);
+        for (int a = s0; a + bodyWin <= len; a += bodyWin)
+        {
+            double sum = 0; for (int i = a; i < a + bodyWin; ++i) sum += (double) x[i] * x[i];
+            bodyRms.push_back ((float) std::sqrt (sum / bodyWin) + 1.0e-9f);
+        }
+        if (bodyRms.empty()) return;
+        size_t n = 1;
+        while (n < bodyRms.size() && (double) n * bodyWin < 0.4 * sampleRateHint && bodyRms[n] > bodyRms[0] * 0.063f) ++n;
+        bodyLen = (double) (n - 1) * bodyWin;
+        if (bodyLen < 0.05 * sampleRateHint) bodyLen = 0.0;   // too short to sweep: parks as before
+    }
+    float bodyGain (double pos) const
+    {
+        const double w = (pos - sustainPos) / bodyWin;
+        const int k = juce::jlimit (0, (int) bodyRms.size() - 1, (int) w);
+        const int k1 = juce::jmin ((int) bodyRms.size() - 1, k + 1);
+        const float f = (float) juce::jlimit (0.0, 1.0, w - k), lv = bodyRms[(size_t) k] + f * (bodyRms[(size_t) k1] - bodyRms[(size_t) k]);
+        return juce::jlimit (1.0f, 16.0f, bodyRms[0] / lv);
+    }
     static float readAt (const float* x, int len, double pos)
     {
         if (pos < 0.0 || pos >= (double) (len - 1)) return 0.0f;
@@ -219,12 +257,13 @@ private:
         }
         return at;
     }
-    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0, claim = -1; float gain = 1, rel = 1, fadeLen = 0.01f; };
+    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0, claim = -1, dir = 1; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
     bool keyTrack = true;
-    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0, clock = 0.0;
+    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0, clock = 0.0, bodyLen = 0.0, sampleRateHint = 44100.0;
+    static constexpr int bodyWin = 256; std::vector<float> bodyRms;
     float pitch = 0, glide = 0; bool mono = false, keepTime = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };

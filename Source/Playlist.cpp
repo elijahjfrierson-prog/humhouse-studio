@@ -1449,29 +1449,49 @@ private:
         if (! ok) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Key Finder", "Couldn't read this clip (it needs at least 1 second of audio)."); return; }
         const float a4 = 440.0f * std::pow (2.0f, g.cents / 1200.0f);
         const juce::String msg = g.describe() + "\n\nAutoPitch: set Tuning A4 to " + juce::String (a4, 1) + " Hz to tune to this audio.";
+        // closest key + its relative only; the title bar X (or Esc) closes it
+        struct KeyView : juce::Component
+        {
+            juce::Label text; juce::TextButton keyBpm { "Set key + BPM" }, keyOnly { "Set key only" }, rel;
+            std::function<void (int, int, bool)> apply;
+            KeyView (const KeyGuess& g, const juce::String& m)
+            {
+                text.setText (m, juce::dontSendNotification); text.setJustificationType (juce::Justification::topLeft);
+                text.setFont (juce::FontOptions (15.0f));
+                const int rr = g.scaleIndex == 1 ? (g.root + 3) % 12 : (g.root + 9) % 12, rs = g.scaleIndex == 1 ? 0 : 1;
+                rel.setButtonText ("Set relative: " + KeyGuess::keyName (rr, rs));
+                keyBpm.onClick  = [this, g] { done (g.root, g.scaleIndex, true); };
+                keyOnly.onClick = [this, g] { done (g.root, g.scaleIndex, false); };
+                rel.onClick     = [this, rr, rs] { done (rr, rs, false); };
+                for (auto* c : std::initializer_list<juce::Component*> { &text, &keyBpm, &keyOnly, &rel }) addAndMakeVisible (c);
+                setSize (520, 190);
+            }
+            void done (int root, int scale, bool bpm)
+            {
+                if (apply) apply (root, scale, bpm);
+                if (auto* dw = findParentComponentOfClass<juce::DialogWindow>()) dw->exitModalState (0);
+            }
+            void resized() override
+            {
+                auto b = getLocalBounds().reduced (12);
+                auto row = b.removeFromBottom (32);
+                const int w = (row.getWidth() - 16) / 3;
+                keyBpm.setBounds (row.removeFromLeft (w)); row.removeFromLeft (8);
+                keyOnly.setBounds (row.removeFromLeft (w)); row.removeFromLeft (8);
+                rel.setBounds (row);
+                text.setBounds (b);
+            }
+        };
         juce::Component::SafePointer<Playlist> safe (this);
-        juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("Key Finder").withMessage (msg)
-                                        .withButton ("Set project key + BPM").withButton ("Set key only").withButton ("Other keys...").withButton ("Close"),
-            [safe, g] (int r) {
-                auto* pl = safe.getComponent();
-                if (pl == nullptr || r == 0) return;
-                if (r == 3)   // every key that fits, ranked (relative, flat spellings): the project key drives AutoPitch's "Project" key
-                {
-                    juce::PopupMenu m;
-                    m.addSectionHeader ("Pick the key (sets the project key; AutoPitch on Project follows)");
-                    for (size_t i = 0; i < g.alts.size() && i < 10; ++i)
-                        m.addItem ((int) i + 1, KeyGuess::keyName (g.alts[i].root, g.alts[i].scaleIndex) + "   "
-                                       + juce::String (juce::roundToInt (juce::jmax (0.0f, g.alts[i].match) * 100)) + "% fit", true, i == 0);
-                    m.showMenuAsync ({}, [safe, g] (int k) {
-                        auto* p2 = safe.getComponent();
-                        if (p2 == nullptr || k <= 0 || k > (int) g.alts.size()) return;
-                        const auto a = g.alts[(size_t) k - 1];
-                        p2->s.edit ("Key Finder", [a] (Project& p) { p.keyRoot = a.root; p.scaleIndex = a.scaleIndex; });
-                    });
-                    return;
-                }
-                pl->s.edit ("Key Finder", [g, r] (Project& p) { p.keyRoot = g.root; p.scaleIndex = g.scaleIndex; if (r == 1 && g.bpm > 0) p.bpm = g.bpm; });
-            });
+        auto* view = new KeyView (g, msg);
+        view->apply = [safe, g] (int root, int scale, bool bpm) {
+            if (auto* pl = safe.getComponent())
+                pl->s.edit ("Key Finder", [g, root, scale, bpm] (Project& p) { p.keyRoot = root; p.scaleIndex = scale; if (bpm && g.bpm > 0) p.bpm = g.bpm; });
+        };
+        juce::DialogWindow::LaunchOptions o;
+        o.dialogTitle = "Key Finder"; o.content.setOwned (view); o.componentToCentreAround = this;
+        o.dialogBackgroundColour = col::panel; o.escapeKeyTriggersCloseButton = true; o.useNativeTitleBar = false; o.resizable = false;
+        o.launchAsync();
     }
     void stretchClips()
     {

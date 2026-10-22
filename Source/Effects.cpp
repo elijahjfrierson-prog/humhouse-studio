@@ -3,6 +3,17 @@
 #include "Model.h"
 #include <cmath>
 
+// the scale note closest to what was actually sung (a note sung half a step flat goes up to the note
+// meant, not down: rounding to a semitone first lost that and could snap to the note below)
+static int nearestScaleNote (float midi, int root, int scale)
+{
+    const int c = (int) std::round (midi);
+    int best = hhs::snapToScale (c, root, scale); float bd = std::abs ((float) best - midi);
+    for (int k = c - 6; k <= c + 6; ++k)
+        if (hhs::inScale (k, root, scale) && std::abs ((float) k - midi) < bd) { best = k; bd = std::abs ((float) k - midi); }
+    return best;
+}
+
 namespace hhs
 {
 using P = ParamDef;
@@ -1362,10 +1373,10 @@ public:
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
                         const float steer = med + (now - midi);
                         centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / 0.12f));
-                        int target = snapToScale ((int) std::round (centre), root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.55f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        int target = nearestScaleNote (centre, root, scale);
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
-                        const int fast = snapToScale ((int) std::round (now), root, scale);
+                        const int fast = nearestScaleNote (now, root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
                             if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
@@ -1373,7 +1384,7 @@ public:
                         else jumpHops = 0;
                         // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or
                         // leap the hold hasn't caught yet) is never forced on it - that big shift was the transposed / formanted tone
-                        if (std::abs ((float) target - centre) > 1.0f) { target = snapToScale ((int) std::round (centre), root, scale); jumpHops = 0; }
+                        if (std::abs ((float) target - centre) > 1.0f) { target = nearestScaleNote (centre, root, scale); jumpHops = 0; }
                         heldNote = target;
                         float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
@@ -1442,11 +1453,6 @@ juce::String KeyGuess::describe() const
     juce::String s = keyName (root, scaleIndex) + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
     // the relative key uses the same notes: a beat in A minor is just as much C major
     s << "\nRelative: " << (scaleIndex == 1 ? keyName (root + 3, 0) : keyName (root + 9, 1));
-    juce::StringArray also;
-    for (const auto& a : alts)
-        if ((a.root != root || a.scaleIndex != scaleIndex) && also.size() < 5)
-            also.add (keyName (a.root, a.scaleIndex) + " " + juce::String (juce::roundToInt (juce::jmax (0.0f, a.match) * 100)) + "%");
-    if (! also.isEmpty()) s << "\nAlso fits: " << also.joinIntoString (",  ");
     return s;
 }
 

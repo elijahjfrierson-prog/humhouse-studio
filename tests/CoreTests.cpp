@@ -1009,6 +1009,26 @@ int main()
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
     }
+    // AutoPitch holds the note meant when it's sung flat on purpose: E4 / B4 sung 60 cents flat in C major
+    // land on E / B (nearest scale note to what was sung), not the note below
+    for (const double sung : { 329.63 * std::pow (2.0, -0.6 / 12.0), 493.88 * std::pow (2.0, -0.6 / 12.0) })
+        for (int style = 0; style < 4; ++style)
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f); ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0; int zc = 0, counted = 0; float prev = 0;
+            for (int k = 0; k < 300; ++k)
+            {
+                for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * sung / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                ap->process (b, 512, ctx);
+                if (k >= 150) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); if (prev <= 0 && y > 0) ++zc; prev = y; ++counted; }
+            }
+            const double hz = zc * 48000.0 / counted, want = sung > 400 ? 493.88 : 329.63;
+            std::printf ("autopitch flat %.1f Hz (style %d) -> %.1f Hz (want %.1f)\n", sung, style, hz, want);
+            CHECK (std::abs (hz - want) < want * 0.006);
+        }
     // AutoPitch follows the note being sung: a fast drop from A4 to E4 (clean and breathy/deep) lands on E4 at once,
     // never held up on the old note (that big hold-over shift was the transposed / formanted sound)
     for (float noise : { 0.0f, 0.03f })
