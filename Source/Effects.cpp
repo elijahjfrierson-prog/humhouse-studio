@@ -1334,10 +1334,10 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.38f : 0.28f)) ? 1.0f : 0.0f;   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
-                    if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 0.6f && ++tailHops * hopSec < 0.16f))) wetTarget = 1.0f;   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
+                    if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
                     consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
@@ -1383,7 +1383,7 @@ public:
                     }
                     // a rough reading close to the held note still steers the correction (half way per hop), so the voice
                     // drifting under rasp is pulled back onto the key note instead of riding a frozen ratio off it
-                    else if (midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < (hard ? 1.0f : 0.6f) && wetTarget > 0.5f)
+                    else if (midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 1.0f && wetTarget > 0.5f)
                     {
                         const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
