@@ -1125,7 +1125,7 @@ float detectPitchYin (const float* x, int n, double sr, float thresh, float fall
     // difference function computed lag by lag, stopping at the first dip under the threshold (same answer as
     // computing every lag, but high and mid voices only need a fraction of the lags = much less CPU)
     const int lim = std::min (maxTau, (int) d.size());
-    for (int tau = 1; tau < lim; ++tau)
+    auto diff = [&] (int tau)
     {
         float s0 = 0, s1 = 0, s2 = 0, s3 = 0;
         const float* a = x; const float* b = x + tau;
@@ -1139,9 +1139,24 @@ float detectPitchYin (const float* x, int n, double sr, float thresh, float fall
         const float s = (s0 + s1) + (s2 + s3);
         running += s;
         d[(size_t) tau] = running > 0 ? s * (float) tau / running : 1.0f;
-        const int c = tau - 1;   // first local minimum below the threshold
+    };
+    for (int tau = 1; tau < lim; ++tau)
+    {
+        diff (tau);
+        int c = tau - 1;   // first local minimum below the threshold
         if (c >= minTau && c >= 1 && d[(size_t) c] < thresh && d[(size_t) tau] >= d[(size_t) c])
         {
+            // a shallow first dip can be a vowel's strong upper harmonic lining up (ee / i: the false dip sits ~10 % short
+            // of the real period = the note read 1-2 semitones sharp). Look a little further: a clearly deeper dip wins
+            if (d[(size_t) c] > 0.06f)
+            {
+                const int far = std::min (lim, (int) ((float) c * 1.3f) + 2);
+                for (int t2 = tau + 1; t2 < far; ++t2) diff (t2);
+                int best = c;
+                for (int t2 = c + 1; t2 + 1 < far; ++t2)
+                    if (d[(size_t) t2] < d[(size_t) best] && d[(size_t) t2] <= d[(size_t) t2 - 1] && d[(size_t) t2] <= d[(size_t) t2 + 1]) best = t2;
+                if (d[(size_t) best] < 0.5f * d[(size_t) c]) { c = best; tau = best + 1; }
+            }
             const float pa = d[(size_t) c - 1], pb = d[(size_t) c], pc = d[(size_t) tau];
             const float den = pa + pc - 2 * pb;
             const float t = (float) c + (std::abs (den) > 1e-9f ? 0.5f * (pa - pc) / den : 0.0f);
@@ -1260,7 +1275,7 @@ public:
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
-                    if (rough && midi > 0 && heldNote > 0) { missHops = 0; midi = -1.0f; }
+                    if (rough && midi > 0 && heldNote > 0) { missHops = 0; roughMidi = midi; midi = -1.0f; }
                     // the voice coming back after a gap on another note is a fresh start, not a slip of the old note
                     if (midi > 0 && lastMidi > 0 && missHops >= 2 && std::abs (midi - lastMidi) > 1.0f) { heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                     if (midi > 0 && lastMidi > 0)
@@ -1333,6 +1348,13 @@ public:
                         if (onset && (hard || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
+                    // a rough reading close to the held note still steers the correction (half way per hop), so the voice
+                    // drifting under rasp is pulled back onto the key note instead of riding a frozen ratio off it
+                    else if (hard && midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 1.0f)
+                    {
+                        const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
+                        targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
+                    }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
                     else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.18 : 0.12) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
@@ -1360,7 +1382,7 @@ public:
 private:
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
-    float currentRatio = 1, targetRatio = 1;
+    float currentRatio = 1, targetRatio = 1, roughMidi = 0;
     std::array<float, 3> hist {}; int histN = 0;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;

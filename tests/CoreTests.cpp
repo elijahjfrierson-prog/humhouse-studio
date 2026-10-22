@@ -968,6 +968,82 @@ int main()
             std::printf ("autopitch drop A4->E4 style %d noise %.2f -> %.1f Hz\n", style, noise, hz);
             CHECK (std::abs (hz - 329.63) < 4.0);
         }
+    // vowel / accent changes (o -> a, u -> uh, into ee) bend the sung pitch a little and reshape the spectrum:
+    // the tuned output must stay on A3 the whole time (oat must not dip, ee must not rise)
+    for (int style = 0; style < 4; ++style)
+    {
+        struct V { float f1, f2, f3, cents; };
+        const V vs[] { { 500, 850, 2500, -25 }, { 750, 1200, 2600, 0 }, { 320, 800, 2400, -20 }, { 600, 1150, 2500, 0 }, { 280, 2300, 3000, 30 }, { 750, 1200, 2600, 0 } };
+        const double sr = 48000; const int seg = (int) (0.35 * sr), mor = (int) (0.06 * sr), total = seg * 6;
+        std::vector<float> in ((size_t) total), out ((size_t) total);
+        double ph = 0;
+        for (int i = 0; i < total; ++i)
+        {
+            const int k = std::min (5, i / seg), pos = i - k * seg;
+            V v = vs[k];
+            if (k > 0 && pos < mor)
+            {
+                const float m = (float) pos / (float) mor; const V& u = vs[k - 1];
+                v = { u.f1 + (v.f1 - u.f1) * m, u.f2 + (v.f2 - u.f2) * m, u.f3 + (v.f3 - u.f3) * m, u.cents + (v.cents - u.cents) * m };
+            }
+            const double f0 = 220.0 * std::pow (2.0, v.cents / 1200.0);
+            ph += juce::MathConstants<double>::twoPi * f0 / sr;
+            double y = 0;
+            for (int h = 1; h <= 20; ++h)
+            {
+                const double fh = h * f0;
+                auto pk = [fh] (double F, double B) { const double q = (fh - F) / B; return 1.0 / (1.0 + q * q); };
+                y += (pk (v.f1, 80) + 0.7 * pk (v.f2, 100) + 0.3 * pk (v.f3, 150) + 0.05) / std::sqrt ((double) h) * std::sin (h * ph);
+            }
+            in[(size_t) i] = (float) (0.12 * y);
+        }
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", (float) style);
+        ap->prepare (sr, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        for (int o = 0; o + 512 <= total; o += 512)
+        {
+            for (int i = 0; i < 512; ++i) { b.setSample (0, i, in[(size_t) (o + i)]); b.setSample (1, i, in[(size_t) (o + i)]); }
+            ap->process (b, 512, ctx);
+            for (int i = 0; i < 512; ++i) out[(size_t) (o + i)] = b.getSample (0, i);
+        }
+        float worst = 0; int off = 0, n = 0;
+        for (int o = (int) (0.3 * sr); o + 2048 <= total - 1024; o += 512)
+        {
+            const float hz = detectPitchYin (out.data() + o, 2048, sr, 0.15f, 0.0f, 100.0f, 600.0f);
+            if (hz <= 0) continue;
+            const float c = 1200.0f * std::log2 (hz / 220.0f);
+            worst = std::max (worst, std::abs (c)); if (std::abs (c) > 15.0f) ++off; ++n;
+        }
+        std::printf ("autopitch vowels o-a-u-uh-ee style %d: worst %.1f c, %d of %d windows off >15 c\n", style, worst, off, n);
+        CHECK (n > 50);
+        CHECK (off <= n / 50);
+    }
+    // strict key lock: a raspy A4 sung 30 c sharp comes out on A 440 in every mode (no in-between pitch pokes out)
+    for (int style = 0; style < 4; ++style)
+    {
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", (float) style);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        juce::Random rnd (11);
+        const double f = 440.0 * std::pow (2.0, 30.0 / 1200.0);
+        double ph = 0; int zc = 0, counted = 0; float prev = 0, lp = 0;
+        for (int k = 0; k < 200; ++k)
+        {
+            for (int i = 0; i < 512; ++i)
+            {
+                const float v = 0.3f * (float) std::sin (ph) + 0.1f * (float) std::sin (2.0 * ph) + 0.06f * (rnd.nextFloat() * 2.0f - 1.0f);
+                ph += juce::MathConstants<double>::twoPi * f / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v);
+            }
+            ap->process (b, 512, ctx);
+            if (k >= 60)
+                for (int i = 0; i < 512; ++i) { lp += 0.08f * (b.getSample (0, i) - lp); if (prev <= 0 && lp > 0) ++zc; prev = lp; ++counted; }
+        }
+        const double hz = zc * 48000.0 / counted;
+        std::printf ("autopitch strict raspy A4+30c style %d -> %.1f Hz\n", style, hz);
+        CHECK (std::abs (hz - 440.0) < 3.0);
+    }
     // audio quantize: hits are found a few ms before each attack, none in the decays
     {
         const double sr = 48000; const int n = (int) (sr * 2.5);
