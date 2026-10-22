@@ -24,7 +24,26 @@ public:
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
         if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
-        if (mono || slide)
+        if (! mono && slide && glide > 0.0f)
+        {
+            // poly portamento / sliding chords (FL): every note of the chord glides the nearest held voice that no
+            // other note of this chord took yet - a chord slides as a chord instead of collapsing onto one voice
+            Voice* best = nullptr; double bestD = 1.0e9;
+            for (auto& v : voices)
+                if (v.active && v.claim != clock && (! v.releasing || (v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate)))
+                    if (const double d = std::abs (v.targetSemis - target); d < bestD) { bestD = d; best = &v; }
+            if (best != nullptr)
+            {
+                auto& v = *best;
+                v.releasing = false; v.rel = 1.0f; v.claim = clock;
+                v.targetSemis = target; v.key = key; v.holdFrom = v.age;
+                v.glideStep = glideStepFor (target - v.semis);
+                if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; if (v.pos > sustainPos) v.pos = sustainPos; }
+                lastSemis = target;
+                return;
+            }
+        }
+        else if (mono || slide)
         {
             // legato: the previous note's note-off lands on the same sample as this note-on, so a voice released
             // right now is still the held note - keep it playing and glide it instead of cutting it off
@@ -35,7 +54,13 @@ public:
                 {
                     v.targetSemis = target; v.key = key; v.holdFrom = v.age;
                     v.glideStep = glideStepFor (target - v.semis);
-                    if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; }   // a slid note sustains to the end of the note
+                    if (! v.slid)   // a slid note sustains to the end of the note
+                    {
+                        v.slid = true; v.headA = v.headB = v.pos; v.phase = 0;
+                        // a one-shot that already played into its tail goes back to the body: the heads realign there
+                        // over the next crossfade, so the slide comes back up instead of gliding on a faded tail
+                        if (v.pos > sustainPos) v.pos = sustainPos;
+                    }
                     lastSemis = target;
                     return;
                 }
@@ -52,6 +77,7 @@ public:
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
         if (v->semis != target) v->slid = true;   // a fresh voice that glides in sustains like a legato slide (no dying 808 chains)
+        if (! mono && slide) v->claim = clock;
         lastSemis = target;
     }
     // Glide = the time the slide takes, whatever the interval (FL): a 1 s glide reaches the note after 1 s
@@ -72,7 +98,9 @@ public:
     }
     void noteOff (int key) override
     {
-        for (auto& v : voices) if (v.active && ! v.releasing && v.key == key && (mono || ! oneShot)) { v.releasing = true; v.relAge = v.age; }
+        // a slid one-shot is a held note (it parks on its body), so it ends with its note; a chord note that just
+        // took this voice can't be ended by the old chord's note-off landing on the same sample
+        for (auto& v : voices) if (v.active && ! v.releasing && v.key == key && (mono || ! oneShot || v.slid) && v.claim != clock) { v.releasing = true; v.relAge = v.age; }
     }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
     void choke() override   // 6 ms: an 808 sub cut any faster clicks; voices already in a long release get cut too
@@ -142,6 +170,7 @@ public:
                 else if (v.phase == G / 2) v.headB = alignHead (l, len, v.pos, v.headA, rate);
             }
         }
+        clock += num;
     }
 private:
     // where a held slide parks: the first point after the peak where the sound has dropped to half (-6 dB),
@@ -190,12 +219,12 @@ private:
         }
         return at;
     }
-    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0; float gain = 1, rel = 1, fadeLen = 0.01f; };
+    struct Voice { bool active = false, releasing = false, midStart = false, slid = false; int key = 0, phase = 0; double pos = 0, semis = 0, targetSemis = 0, glideStep = 1.0e9, age = 0, relAge = -1, holdFrom = 0, headA = 0, headB = 0, claim = -1; float gain = 1, rel = 1, fadeLen = 0.01f; };
     SharedSample sample;
     std::array<Voice, 32> voices {};
     int next = 0, rootKey = 60;
     bool keyTrack = true;
-    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0;
+    double sampleRate = 44100.0, lastSemis = -999.0, sustainPos = 0.0, clock = 0.0;
     float pitch = 0, glide = 0; bool mono = false, keepTime = false;
     bool oneShot = true, cutItself = false; float attack = 0, hold = 0, release = 0.01f;
 };
@@ -210,7 +239,22 @@ public:
     void noteOn (int key, float vel, bool slide) override
     {
         const double k = key + pitch;
-        if ((mono || slide) && glide > 0.0f)
+        if (! mono && slide && glide > 0.0f)
+        {
+            // poly portamento / sliding chords: each chord note glides the nearest held voice not taken yet (see sampler)
+            Voice* best = nullptr; double bestD = 1.0e9;
+            for (auto& v : voices)
+                if (v.active && v.claim != clock && (v.stage < 3 || (v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate)))
+                    if (const double d = std::abs (v.target - k); d < bestD) { bestD = d; best = &v; }
+            if (best != nullptr)
+            {
+                auto& v = *best;
+                if (v.stage == 3) v.stage = v.prevStage;
+                v.claim = clock; v.target = k; v.key = key; v.velocity = vel; v.glideStep = glideStepFor (k - v.current); v.slid = true; lastKey = k;
+                return;
+            }
+        }
+        else if ((mono || slide) && glide > 0.0f)
         {
             for (auto& v : voices) if (v.active && v.stage == 3 && v.relAge >= 0 && v.age - v.relAge < 0.06 * sampleRate) v.stage = v.prevStage;   // legato (see sampler)
             for (auto& v : voices) if (v.active && v.stage < 3)
@@ -226,10 +270,12 @@ public:
         v->current = (glide > 0.0f && lastKey > 0 && (mono || slide)) ? lastKey : k;
         v->glideStep = glideStepFor (k - v->current);
         v->slid = v->current != k;
+        if (! mono && slide) v->claim = clock;
         lastKey = k;
     }
+    double clock = 0.0;
     double glideStepFor (double semis) const { return glide > 0.0f ? juce::jmax (1.0e-9, std::abs (semis) / (glide * sampleRate)) : 1.0e9; }
-    void noteOff (int key) override { for (auto& v : voices) if (v.active && v.key == key && v.stage < 3) { v.prevStage = v.stage; v.stage = 3; v.relAge = v.age; } }
+    void noteOff (int key) override { for (auto& v : voices) if (v.active && v.key == key && v.stage < 3 && v.claim != clock) { v.prevStage = v.stage; v.stage = 3; v.relAge = v.age; } }
     void allNotesOff() override { for (auto& v : voices) v.active = false; }
     bool isActive() const override { for (auto& v : voices) if (v.active) return true; return false; }
 
@@ -237,6 +283,7 @@ public:
     {
         auto* oL = out.getWritePointer (0);
         auto* oR = out.getWritePointer (1);
+        clock += num;
         const float sr = (float) sampleRate;
         const float aInc = 1.0f / std::max (1.0f, p.attack * sr);
         const float dCoef = std::exp (-1.0f / std::max (1.0f, p.decay * sr * 0.3f));
@@ -296,7 +343,7 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1;
+    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
                    float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
                    uint32_t rng = 0x9e3779b9u; };

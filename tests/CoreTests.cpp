@@ -1728,6 +1728,50 @@ int main()
         CHECK (lo > 0.03f);
     }
 
+    // poly portamento: sliding chords on a one-shot sample and on the synth glide as chords (3 voices), not one
+    for (int inst = 0; inst < 2; ++inst)
+    {
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-chord-glide.wav");
+        if (inst == 0)
+        {
+            const int len = 192000; juce::AudioBuffer<float> b (1, len);
+            for (int i = 0; i < len; ++i) b.setSample (0, i, 0.3f * std::exp (-1.5f * i / (float) len) * (float) std::sin (juce::MathConstants<double>::twoPi * 261.63 * i / 48000.0));
+            wav.deleteFile(); juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (wav.createOutputStream().release(), 48000.0, 1, 24, {}, 0));
+            w->writeFromAudioSampleBuffer (b, 0, len);
+        }
+        float lvl[2] {};
+        for (int chord = 0; chord < 2; ++chord)
+        {
+            auto pr = Project::createDefault();
+            Channel c; c.id = 1; c.glide = 0.08f; c.mono = false; c.rootKey = 60;
+            if (inst == 0) { c.type = ChannelType::Sampler; c.sampleFile = wav; c.oneShot = true; c.keyTrack = true; } else { c.type = ChannelType::Synth; c.synth.sustain = 0.8f; }
+            pr.channels = { c };
+            NoteList nl;
+            const int A[] { 60, 64, 67 }, B[] { 62, 65, 69 };
+            for (int k = 0; k < 40; ++k)
+                for (int j = 0; j < (chord ? 3 : 1); ++j)
+                { Note n; n.key = (k & 1) ? B[j] : A[j]; n.start = k * 0.5; n.length = 0.5; n.slide = k > 0; nl.push_back (n); }
+            pr.patterns[0].notes[1] = nl; pr.bpm = 120;
+            Engine e; e.prepare (48000, 512); e.newProject (pr); e.sync(); e.play();
+            std::vector<float> outL; juce::AudioBuffer<float> out (2, 512);
+            const int noteLen = 12000;
+            for (int blk = 0; blk * 512 < noteLen * 40; ++blk)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                e.processBlock (nullptr, 0, o, 2, 512);
+                outL.insert (outL.end(), out.getReadPointer (0), out.getReadPointer (0) + 512);
+            }
+            e.stop();
+            double sum = 0; const int a0 = 30 * noteLen + noteLen / 4, b0 = a0 + noteLen / 2;
+            for (int i = a0; i < b0; ++i) sum += outL[(size_t) i] * outL[(size_t) i];
+            lvl[chord] = (float) std::sqrt (sum / (b0 - a0));
+        }
+        std::printf ("poly glide chords (%s): one note %.3f, 3-note chord %.3f at note 30 (x%.2f, 3 voices ~x1.7)\n", inst ? "synth" : "one-shot", lvl[0], lvl[1], lvl[1] / juce::jmax (1.0e-6f, lvl[0]));
+        CHECK (lvl[0] > 0.01f && lvl[1] > 1.4f * lvl[0]);
+        wav.deleteFile();
+    }
+
     // rock session: HumHouse Drummer + 64 tracks with 3 inserts each + 24 instruments, song mode
     {
         Engine e; e.prepare (48000, 256);
