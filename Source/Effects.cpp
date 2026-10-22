@@ -1342,7 +1342,7 @@ public:
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f))
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.45f : 0.3f))
                     {
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
