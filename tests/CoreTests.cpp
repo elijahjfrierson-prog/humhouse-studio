@@ -1174,6 +1174,9 @@ int main()
         std::map<juce::String, float> fl { { "speed", 0.9f } };
         migrateFxParams ("flangus", fl);
         CHECK (fl.count ("speed") == 1);
+        std::map<juce::String, float> oldVerb { { "size", 0.8f }, { "reverse", 1.0f } }, newVerb { { "reverse", 1.0f }, { "revroom", 5.0f } }, one { { "size", 0.5f } };
+        migrateFxParams ("verb", oldVerb); migrateFxParams ("verb", newVerb); migrateFxParams ("verb", one);
+        CHECK (oldVerb["revroom"] == 0.0f && newVerb["revroom"] == 5.0f && one.size() == 1);   // old projects keep the classic reverse
         auto ap = createBuiltinEffect ("autopitch");
         ap->setParam ("style", 1.0f); ap->setParam ("body", 0.4f); ap->setParam ("character", 0.3f);
         ap->prepare (48000, 512);

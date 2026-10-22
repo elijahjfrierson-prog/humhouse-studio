@@ -1760,6 +1760,8 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 
 void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params)
 {
+    // Room Verb projects saved before the reverse rooms keep the classic reverse they were made with
+    if (type == "verb" && params.size() > 1 && params.count ("reverse") == 1 && params.count ("revroom") == 0) { params["revroom"] = 0.0f; return; }
     // AutoPitch Retune used to be "speed" with 1 = fastest; it is now "retune" with 0 = fastest (Antares way)
     if (type != "autopitch") return;
     auto it = params.find ("speed");
