@@ -208,6 +208,42 @@ int Project::clipInsert (const Clip& c) const
     return 0;
 }
 
+float autoValueAt (const std::vector<AutoPoint>& pts, double beat)
+{
+    if (pts.empty()) return 0.5f;
+    if (beat <= pts.front().beat) return pts.front().value;
+    for (size_t i = 1; i < pts.size(); ++i)
+        if (beat < pts[i].beat)
+        {
+            const auto& a = pts[i - 1]; const auto& b = pts[i];
+            const double w = b.beat - a.beat;
+            return w > 1.0e-9 ? a.value + (b.value - a.value) * (float) ((beat - a.beat) / w) : b.value;
+        }
+    return pts.back().value;
+}
+float autoToValue (int kind, float v)
+{
+    v = juce::jlimit (0.0f, 1.0f, v);
+    switch (kind)
+    {
+        case AutoInsertVol: return v * 1.25f;
+        case AutoChanVol:   return v;
+        case AutoInsertPan: case AutoChanPan: return v * 2.0f - 1.0f;
+        case AutoChanPitch: return std::round ((v * 2.0f - 1.0f) * 24.0f * 100.0f) / 100.0f;
+        default: return v;
+    }
+}
+float autoFromValue (int kind, float x)
+{
+    switch (kind)
+    {
+        case AutoInsertVol: return juce::jlimit (0.0f, 1.0f, x / 1.25f);
+        case AutoInsertPan: case AutoChanPan: return juce::jlimit (0.0f, 1.0f, (x + 1.0f) * 0.5f);
+        case AutoChanPitch: return juce::jlimit (0.0f, 1.0f, (x / 24.0f + 1.0f) * 0.5f);
+        default: return juce::jlimit (0.0f, 1.0f, x);
+    }
+}
+
 double Project::songLengthBeats() const
 {
     double end = 0.0;

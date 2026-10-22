@@ -548,6 +548,23 @@ public:
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (i >= 0 && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) timeSelA = timeSelB = -1;   // picking another clip drops the old ruler range
+        if (i >= 0 && p.clips[(size_t) i].isAuto() && tool != PTool::Delete && tool != PTool::Slice && tool != PTool::Mute)
+        {
+            const int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (k >= 0 && e.mods.isPopupMenu())   // right-click a point: delete it (FL)
+            {
+                const int uid = p.clips[(size_t) i].uid;
+                s.edit ("Delete automation point", [uid, k] (Project& pr) {
+                    for (auto& c : pr.clips) if (c.uid == uid && k < (int) c.autoPts.size() && c.autoPts.size() > 1) c.autoPts.erase (c.autoPts.begin() + k);
+                });
+                repaint(); return;
+            }
+            if (k >= 0 && ! e.mods.isCommandDown())
+            {
+                drag = Drag::AutoPt; dragClip = i; dragPt = k; dragOrig = p.clips;
+                return;
+            }
+        }
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
@@ -634,6 +651,21 @@ public:
             s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : snap (b)));
             repaint(); return;
         }
+        if (drag == Drag::AutoPt)
+        {
+            if (dragClip < 0 || dragClip >= (int) p.clips.size() || dragOrig.size() != p.clips.size()) return;
+            const double abs = e.mods.isAltDown() ? xToBeat (e.position.x) : snap (xToBeat (e.position.x));
+            s.live ([&] (Project&) {
+                auto& c = p.clips[(size_t) dragClip];
+                if (dragPt < 0 || dragPt >= (int) c.autoPts.size()) return;
+                const double lo = dragPt > 0 ? c.autoPts[(size_t) dragPt - 1].beat : 0.0;
+                const double hi = dragPt + 1 < (int) c.autoPts.size() ? c.autoPts[(size_t) dragPt + 1].beat : 1.0e9;
+                auto& pt = c.autoPts[(size_t) dragPt];
+                pt.beat = juce::jlimit (lo, hi, c.patOffset + abs - c.start);
+                pt.value = autoYToValue (c, e.position.y);
+            });
+            changed = true; repaint(); return;
+        }
         if (drag == Drag::TimeSel)
         {
             if (std::abs (e.position.x - dragStart.x) < 4) return;
@@ -698,7 +730,7 @@ public:
                     const double dd = juce::jlimit (-beatsFromSeconds (o.sourceOffset), o.length - 0.0625, d);
                     o.start += dd; o.length -= dd; o.sourceOffset += beatsToSeconds (dd, p.bpm);
                 }
-                else if (drag == Drag::Trim && o.patternIndex >= 0)
+                else if (drag == Drag::Trim && (o.patternIndex >= 0 || o.isAuto()))
                 {
                     const double dd = juce::jlimit (-o.patOffset, o.length - 0.0625, d);
                     o.start += dd; o.length -= dd; o.patOffset += dd;
@@ -713,6 +745,11 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     {
         auto& p = s.p();
+        if (drag == Drag::AutoPt)
+        {
+            if (changed) s.edit ("Move automation point", [] (Project&) {});
+            drag = Drag::None; dragClip = dragPt = -1; repaint(); return;
+        }
         if (drag == Drag::Marquee)
         {
             if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
@@ -751,6 +788,22 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH) { timeSelA = timeSelB = -1; s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
+        if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
+        {
+            const int uid = p.clips[(size_t) i].uid;
+            const auto& c = p.clips[(size_t) i];
+            const double at = c.patOffset + (e.mods.isAltDown() ? xToBeat (e.position.x) : snap (xToBeat (e.position.x))) - c.start;
+            const float v = autoYToValue (c, e.position.y);
+            s.edit ("Add automation point", [uid, at, v] (Project& pr) {
+                for (auto& o : pr.clips)
+                    if (o.uid == uid)
+                    {
+                        auto it = std::upper_bound (o.autoPts.begin(), o.autoPts.end(), at, [] (double b, const AutoPoint& q) { return b < q.beat; });
+                        o.autoPts.insert (it, { at, v });
+                    }
+            });
+            repaint(); return;
+        }
         if (i >= 0)
         {
             if (p.clips[(size_t) i].isDrummer()) { openChannelEditor (s, p.clips[(size_t) i].drummer); return; }
@@ -963,7 +1016,8 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee };
+    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt };
+    int dragPt = -1;
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -1066,7 +1120,7 @@ private:
                 if (std::abs (pt.x - fo) < 8) { part = Part::FadeOut; return i; }
             }
             if (pt.x > r.getRight() - 6) part = Part::Right;
-            else if (c.isAudio() && pt.x < r.getX() + 6) part = Part::Left;
+            else if ((c.isAudio() || c.isAuto()) && pt.x < r.getX() + 6) part = Part::Left;
             return i;
         }
         return -1;
@@ -1082,12 +1136,48 @@ private:
         t->addChangeListener (this);
         return (thumbs[key] = std::move (t)).get();
     }
+    juce::Rectangle<float> autoBody (const Clip& c) const { return clipRect (c).withTrimmedTop (14).reduced (1, 4); }
+    float autoValueToY (const Clip& c, float v) const { auto b = autoBody (c); return b.getBottom() - v * b.getHeight(); }
+    float autoYToValue (const Clip& c, float y) const { auto b = autoBody (c); return juce::jlimit (0.0f, 1.0f, (b.getBottom() - y) / juce::jmax (1.0f, b.getHeight())); }
+    float autoBeatToX (const Clip& c, double b) const { return beatToX (c.start + b - c.patOffset); }
+    int hitAutoPoint (const Clip& c, juce::Point<float> pt) const
+    {
+        int best = -1; float bd = 8.0f;
+        for (int k = 0; k < (int) c.autoPts.size(); ++k)
+        {
+            const float d = pt.getDistanceFrom ({ autoBeatToX (c, c.autoPts[(size_t) k].beat), autoValueToY (c, c.autoPts[(size_t) k].value) });
+            if (d < bd) { bd = d; best = k; }
+        }
+        return best;
+    }
+    void drawAutomation (juce::Graphics& g, const Clip& c, juce::Rectangle<float> r, juce::Colour colour)
+    {
+        if (c.autoPts.empty()) return;
+        juce::Graphics::ScopedSaveState ss (g);
+        g.reduceClipRegion (r.toNearestInt());
+        auto body = autoBody (c);
+        juce::Path line, fill;
+        const auto& pts = c.autoPts;
+        const float x0 = r.getX(), x1 = r.getRight();
+        line.startNewSubPath (x0, autoValueToY (c, autoValueAt (pts, c.patOffset)));
+        for (auto& q : pts) { const float x = autoBeatToX (c, q.beat); if (x > x0 && x < x1) line.lineTo (x, autoValueToY (c, q.value)); }
+        line.lineTo (x1, autoValueToY (c, autoValueAt (pts, c.patOffset + c.length)));
+        fill = line; fill.lineTo (x1, body.getBottom()); fill.lineTo (x0, body.getBottom()); fill.closeSubPath();
+        g.setColour (colour.withAlpha (0.22f)); g.fillPath (fill);
+        g.setColour (colour.brighter (0.4f)); g.strokePath (line, juce::PathStrokeType (1.6f));
+        for (auto& q : pts)
+        {
+            const float x = autoBeatToX (c, q.beat), y = autoValueToY (c, q.value);
+            g.setColour (juce::Colours::white); g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
+            g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
+        }
+    }
     void drawClip (juce::Graphics& g, const Clip& c)
     {
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
-        juce::Colour colour = c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
         if (! c.colour.isTransparent()) colour = c.colour;
         if (c.muted) colour = col::dim;
@@ -1166,7 +1256,8 @@ private:
                         }
             }
         }
-        juce::String label = c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
+        if (c.isAuto()) drawAutomation (g, c, r, colour);
+        juce::String label = c.isAuto() ? c.autoTarget.name : c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
                                          : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
         if (c.isAudio())
         {
@@ -1184,7 +1275,7 @@ private:
         g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
         g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
-        else if (! c.isAudio() && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
+        else if (c.patternIndex >= 0 && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
     }
     static void addRollItems (juce::PopupMenu& m)
     {
@@ -1422,8 +1513,8 @@ private:
             for (int i = 0; i < 6; ++i) qm.addItem (320 + i, juce::String ("Quantize ") + qn[i]);
             m.addSubMenu ("Quantize hits to grid (cuts at each hit)", qm, clip.isAudio() && ! clip.reversed);
         }
-        m.addItem (5, "Split by channel (one clip per instrument)", ! clip.isAudio());
-        m.addItem (8, "Select all uses of this pattern", ! clip.isAudio());
+        m.addItem (5, "Split by channel (one clip per instrument)", clip.patternIndex >= 0);
+        m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
         {
             auto cm = colourMenu (30);
@@ -1444,8 +1535,29 @@ private:
         m.addItem (11, "Split stems (Drums, Bass, Vocals, Melodies)", clip.isAudio());
        #endif
        #endif
-        m.showMenuAsync ({}, [this, uid = clip.uid] (int r) {
+        std::vector<AutoTarget> autoT;
+        if (! clip.isAuto())
+        {
+            juce::PopupMenu am;
+            if (clip.isAudio()) am = automateMenu (s, autoT, 2000, p.clipInsert (clip), 0, -1);
+            else
+            {
+                std::vector<int> chans;
+                if (clip.isDrummer()) chans.push_back (clip.drummer);
+                else if (clip.patternIndex >= 0 && clip.patternIndex < (int) p.patterns.size())
+                    for (auto& ch : p.channels)
+                        if (auto it = p.patterns[(size_t) clip.patternIndex].notes.find (ch.id); it != p.patterns[(size_t) clip.patternIndex].notes.end() && ! it->second.empty())
+                            chans.push_back (ch.id);
+                for (int id : chans)
+                    if (auto* ch = p.findChannel (id))
+                        am.addSubMenu (ch->name, automateMenu (s, autoT, 2000, ch->mixerTrack, 0, id));
+            }
+            m.addSeparator();
+            m.addSubMenu ("Automate (new track below)", am, autoT.size() > 0);
+        }
+        m.showMenuAsync ({}, [this, uid = clip.uid, autoT, autoLane = clip.lane] (int r) {
             if (r == 0) return;
+            if (r >= 2000) { if (r - 2000 < (int) autoT.size()) createAutomationClip (s, autoT[(size_t) (r - 2000)], autoLane); return; }
             if (r >= 300 && r <= 305)
             {
                 std::vector<int> u;
@@ -1637,3 +1749,99 @@ private:
 
 std::unique_ptr<juce::Component> createPlaylist (Studio& s) { return std::make_unique<Playlist> (s); }
 }
+
+namespace hhs
+{
+// ---------------------------------------------------------------- automation (FL): menus + new automation track
+static juce::String fxSlotName (Studio& s, int track, const FxSlot& f)
+{
+    if (auto* pl = s.engine.fxPlugin (track, f.uid)) return pl->getName();
+    for (auto& e : builtinEffects()) if (f.type == e.id) return e.name;
+    return f.type.isNotEmpty() ? f.type : juce::String ("Effect");
+}
+static void addFxAutoItems (Studio& s, juce::PopupMenu& m, std::vector<AutoTarget>& out, int base, int track, const FxSlot& f)
+{
+    const auto fxName = fxSlotName (s, track, f);
+    auto add = [&] (const juce::String& param, const juce::String& label)
+    {
+        AutoTarget t; t.kind = AutoFxParam; t.track = track; t.fxUid = f.uid; t.param = param; t.name = fxName + " - " + label;
+        m.addItem (base + (int) out.size(), label); out.push_back (t);
+    };
+    if (auto* b = s.engine.builtinFx (track, f.uid)) { for (auto& d : b->params()) add (d.id, d.name); }
+    else if (auto* pl = s.engine.fxPlugin (track, f.uid))
+    {
+        const auto& ps = pl->getParameters();
+        for (int k = 0; k < juce::jmin (128, ps.size()); ++k) add ("#" + juce::String (k), ps[k]->getName (32));
+    }
+}
+juce::PopupMenu automateMenu (Studio& s, std::vector<AutoTarget>& out, int base, int track, int fxUid, int channelId)
+{
+    juce::PopupMenu m;
+    auto& p = s.p();
+    auto add = [&] (juce::PopupMenu& mm, int kind, const juce::String& name, const juce::String& label)
+    {
+        AutoTarget t; t.kind = kind; t.track = track; t.channel = channelId; t.name = name;
+        mm.addItem (base + (int) out.size(), label); out.push_back (t);
+    };
+    if (auto* ch = channelId >= 0 ? p.findChannel (channelId) : nullptr)
+    {
+        add (m, AutoChanVol, ch->name + " - Volume", "Volume");
+        add (m, AutoChanPan, ch->name + " - Pan", "Pan");
+        add (m, AutoChanPitch, ch->name + " - Pitch", "Pitch");
+        m.addSeparator();
+    }
+    if (track >= 0 && track < (int) p.mixer.size())
+    {
+        auto& mt = p.mixer[(size_t) track];
+        const auto ins = mt.name.isNotEmpty() ? mt.name : juce::String ("Insert ") + juce::String (track);
+        add (m, AutoInsertVol, ins + " - Volume", ins + " volume");
+        add (m, AutoInsertPan, ins + " - Pan", ins + " pan");
+        for (auto& f : mt.fx)
+        {
+            if (fxUid > 0 && f.uid != fxUid) continue;
+            if (fxUid > 0) { m.addSeparator(); addFxAutoItems (s, m, out, base, track, f); }
+            else { juce::PopupMenu sub; addFxAutoItems (s, sub, out, base, track, f); m.addSubMenu (fxSlotName (s, track, f), sub); }
+        }
+    }
+    return m;
+}
+void createAutomationClip (Studio& s, const AutoTarget& t, int belowLane)
+{
+    auto& p = s.p();
+    float v = 0.5f;   // the envelope starts flat at the knob's current value
+    if (t.kind == AutoInsertVol || t.kind == AutoInsertPan)
+    {
+        if (t.track >= 0 && t.track < (int) p.mixer.size()) v = autoFromValue (t.kind, t.kind == AutoInsertVol ? p.mixer[(size_t) t.track].volume : p.mixer[(size_t) t.track].pan);
+    }
+    else if (t.kind == AutoFxParam)
+    {
+        if (auto* b = s.engine.builtinFx (t.track, t.fxUid))
+        {
+            const int i = b->paramIndex (t.param);
+            if (i >= 0) { const auto& d = b->params()[(size_t) i]; v = (b->p (i) - d.min) / juce::jmax (1.0e-6f, d.max - d.min); }
+        }
+        else if (auto* pl = s.engine.fxPlugin (t.track, t.fxUid))
+        {
+            const int i = t.param.substring (1).getIntValue();
+            if (i >= 0 && i < pl->getParameters().size()) v = pl->getParameters()[i]->getValue();
+        }
+    }
+    else if (auto* ch = p.findChannel (t.channel))
+        v = autoFromValue (t.kind, t.kind == AutoChanVol ? ch->volume : t.kind == AutoChanPan ? ch->pan : ch->pitch);
+    v = juce::jlimit (0.0f, 1.0f, v);
+    s.edit ("Automate " + t.name, [&] (Project& pr) {
+        const int at = juce::jlimit (0, (int) pr.lanes.size(), belowLane + 1);
+        Lane l;
+        l.name = t.name;
+        l.mixerTrack = belowLane >= 0 && belowLane < (int) pr.lanes.size() ? pr.lanes[(size_t) belowLane].mixerTrack : 0;
+        for (auto& c : pr.clips) if (c.lane >= at) ++c.lane;
+        pr.lanes.insert (pr.lanes.begin() + at, l);
+        Clip c;
+        c.uid = pr.newUid(); c.lane = at; c.start = 0.0;
+        c.length = juce::jmax (pr.songLengthBeats(), (double) pr.beatsPerBar * 4.0);
+        c.autoTarget = t;
+        c.autoPts = { { 0.0, v }, { c.length, v } };
+        pr.clips.push_back (c);
+    });
+}
+} // namespace hhs

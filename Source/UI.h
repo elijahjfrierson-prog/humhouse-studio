@@ -288,6 +288,9 @@ void addEffect (Studio&, int track, const juce::String& type, const juce::String
 void showPluginScanner (Studio&);
 
 void openEffectEditor (Studio&, int track, int slotUid);
+// automation (FL): "Automate" menu; item ids base + index into out. Picking one makes an automation track below belowLane
+juce::PopupMenu automateMenu (Studio&, std::vector<AutoTarget>& out, int base, int track, int fxUid, int channelId);
+void createAutomationClip (Studio&, const AutoTarget&, int belowLane);
 juce::PopupMenu trackPresetMenu (Studio&, int mixerTrack);   // right-click > Presets on tracks / inserts
 // right-click > Color: ids base..base+11 = palette, base+12 = random
 inline juce::Colour pickedColour (int i)

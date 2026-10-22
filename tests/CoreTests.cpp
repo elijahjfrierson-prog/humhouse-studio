@@ -464,6 +464,50 @@ int main()
         e.stop();
     }
 
+    // automation clips (FL): an insert volume envelope mutes then opens the beat, an FX knob follows its envelope, both survive save/load
+    {
+        CHECK (std::abs (autoValueAt ({ { 0.0, 0.0f }, { 4.0, 1.0f } }, 2.0) - 0.5f) < 1.0e-4f);
+        CHECK (std::abs (autoToValue (AutoChanPitch, autoFromValue (AutoChanPitch, 7.0f)) - 7.0f) < 0.02f);
+        auto pr = Project::createDemo();
+        FxSlot fx; fx.uid = pr.newUid(); fx.type = "filter"; pr.mixer[0].fx.push_back (fx);
+        Clip vol; vol.uid = pr.newUid(); vol.lane = 0; vol.start = 0; vol.length = 64;
+        vol.autoTarget.kind = AutoInsertVol; vol.autoTarget.track = 0; vol.autoTarget.name = "Master - Volume";
+        vol.autoPts = { { 0.0, 0.0f }, { 2.0, 0.0f }, { 2.01, 0.64f }, { 64.0, 0.64f } };
+        pr.clips.push_back (vol);
+        auto pdef = createBuiltinEffect ("filter");
+        CHECK (pdef != nullptr && ! pdef->params().empty());
+        juce::String pid = pdef->params().front().id;
+        for (auto& d : pdef->params()) if (d.choices.empty()) { pid = d.id; break; }
+        Clip fxc = vol; fxc.uid = pr.newUid(); fxc.autoTarget = {}; fxc.autoTarget.kind = AutoFxParam; fxc.autoTarget.track = 0; fxc.autoTarget.fxUid = fx.uid;
+        fxc.autoTarget.param = pid; fxc.autoTarget.name = "Filter"; fxc.autoPts = { { 0.0, 0.0f }, { 64.0, 1.0f } };
+        pr.clips.push_back (fxc);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_auto_test.hhs");
+        CHECK (saveProject (pr, f));
+        Project back; CHECK (loadProject (back, f)); f.deleteFile();
+        int autos = 0; for (auto& c : back.clips) if (c.isAuto()) { ++autos; CHECK (! c.isAudio()); }
+        CHECK (autos == 2);
+        Engine e; e.prepare (44100, 512); e.newProject (back); e.sync();
+        e.setPositionBeats (0.0); e.play();
+        const float quiet = renderPeak (e, 40);   // ~0.9 beats
+        e.stop(); e.setPositionBeats (3.0); e.play();
+        renderPeak (e, 4);
+        const float loud = renderPeak (e, 40);
+        const double at = e.positionBeats();
+        e.stop();
+        std::printf ("automation: muted peak %.5f, open peak %.3f\n", quiet, loud);
+        CHECK (quiet < 0.002f);
+        CHECK (loud > 0.05f);
+        auto* b = e.builtinFx (0, fx.uid);
+        CHECK (b != nullptr);
+        if (b != nullptr)
+        {
+            const auto& d = b->params()[(size_t) b->paramIndex (pid)];
+            const float want = d.min + (float) (at / 64.0) * (d.max - d.min);
+            std::printf ("automation: %s = %.3f (want ~%.3f)\n", pid.toRawUTF8(), b->getParam (pid), want);
+            CHECK (std::abs (b->getParam (pid) - want) < 0.03f * (d.max - d.min));
+        }
+    }
+
     // slice tool on pattern clips (FL): cutting a pattern clip anywhere plays exactly like the uncut clip
     {
         auto render = [] (bool cut)

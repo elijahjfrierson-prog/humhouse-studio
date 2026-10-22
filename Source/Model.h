@@ -120,6 +120,20 @@ struct Pattern
     void   toggleStep (int channelId, int step, int rootKey, double stepLen = 0.25);
 };
 
+// ---------------------------------------------------------------- automation (FL-style automation clips)
+enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch };
+struct AutoTarget
+{
+    int kind = AutoNone;
+    int track = 0, fxUid = 0, channel = 0;   // mixer insert + FX slot uid, or channel id
+    juce::String param;                      // built-in param id, or "#n" = plugin parameter n
+    juce::String name;                       // label, e.g. "Room Verb - Mix"
+};
+struct AutoPoint { double beat = 0.0; float value = 0.5f; };   // beat into the clip's content, value 0..1
+float autoValueAt (const std::vector<AutoPoint>& pts, double beat);
+float autoToValue (int kind, float v);      // 0..1 -> channel / insert value (FX params map on their own range)
+float autoFromValue (int kind, float x);
+
 // ---------------------------------------------------------------- playlist
 struct Clip
 {
@@ -141,7 +155,10 @@ struct Clip
     int    group = 0;               // FL-style clip group: grouped clips select / move together
     juce::Colour colour {};         // own clip colour (transparent = track colour)
     int    drummer = -1;            // Drummer region: the drummer channel id it plays
-    bool isAudio() const { return patternIndex < 0 && drummer < 0; }
+    AutoTarget autoTarget;          // automation clip if autoTarget.kind > 0 (patOffset = beats into the envelope)
+    std::vector<AutoPoint> autoPts;
+    bool isAuto() const { return autoTarget.kind > AutoNone; }
+    bool isAudio() const { return patternIndex < 0 && drummer < 0 && ! isAuto(); }
     bool isDrummer() const { return drummer >= 0; }
 };
 

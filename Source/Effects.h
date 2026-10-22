@@ -43,6 +43,7 @@ public:
     int   paramIndex (const juce::String& id) const;
     void  setParam (const juce::String& id, float v);
     float getParam (const juce::String& id) const;
+    void  setParamQuiet (int i, float v) { if (i >= 0 && i < maxParams) values[(size_t) i].store (v, std::memory_order_relaxed); }   // audio thread (automation)
     float p (int i) const { return values[(size_t) i].load (std::memory_order_relaxed); }
     void  initDefaults();
 

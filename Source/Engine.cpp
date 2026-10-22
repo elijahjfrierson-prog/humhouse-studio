@@ -103,6 +103,7 @@ struct Engine::ChannelRuntime
     struct Active { int key; double remaining; };
     std::array<Active, 128> active {}; int numActive = 0;
     int silentBlocks = 0;
+    float gainL = -1.0f, gainR = -1.0f;
     int cutGroup = 0;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
@@ -269,6 +270,7 @@ struct Engine::TrackRuntime
     int ownLatency = 0, inputAlign = 0, arrival = 0;   // samples: this insert's FX, latest input, output
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     float duckGain = 1.0f;
+    float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
     std::vector<std::unique_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
     int silentSamples = 0;
@@ -1460,8 +1462,10 @@ void Engine::processTrack (int t)
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
     const float gl = vol * panGain (mt.pan, false), gr = vol * panGain (mt.pan, true);
-    tr.out.applyGain (0, 0, n, gl);
-    tr.out.applyGain (1, 0, n, gr);
+    if (tr.gainL < 0.0f) { tr.gainL = gl; tr.gainR = gr; }
+    tr.out.applyGainRamp (0, 0, n, tr.gainL, gl);
+    tr.out.applyGainRamp (1, 0, n, tr.gainR, gr);
+    tr.gainL = gl; tr.gainR = gr;
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
     tr.peak.store (std::max (pk, tr.peak.load() * 0.85f));
     if (auto* sc = trackScope (t)) { sc->rate = sampleRate; sc->push (tr.out.getReadPointer (0), tr.out.getReadPointer (1), n); }
@@ -1564,6 +1568,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         }
     }
 
+    if (ctx.playing) applyAutomation (ctx.beatPos);
     renderChannels (n);
 
     // channels -> inserts
@@ -1576,8 +1581,10 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
         const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * panGain (ch.pan, false), gr = v * panGain (ch.pan, true);
         auto& dest = trackRt[(size_t) t]->in;
-        dest.addFrom (0, 0, rt->buf, 0, 0, n, gl);
-        dest.addFrom (1, 0, rt->buf, rt->buf.getNumChannels() > 1 ? 1 : 0, 0, n, gr);
+        if (rt->gainL < 0.0f) { rt->gainL = gl; rt->gainR = gr; }
+        dest.addFromWithRamp (0, 0, rt->buf.getReadPointer (0), n, rt->gainL, gl);
+        dest.addFromWithRamp (1, 0, rt->buf.getReadPointer (rt->buf.getNumChannels() > 1 ? 1 : 0), n, rt->gainR, gr);
+        rt->gainL = gl; rt->gainR = gr;
     }
 
     // live input: armed lanes monitor through their insert and record
@@ -1701,6 +1708,60 @@ void Engine::renderChannels (int n)
         std::sort (chanJobOrder.begin(), chanJobOrder.end(), [this] (int a, int b) { return chanCost[(size_t) a] > chanCost[(size_t) b]; });
     if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::channel, this);
     else for (int i = 0; i < count; ++i) EngineJobs::channel (this, i);
+}
+
+// automation clips (FL): every block, each clip under the playhead sets its knob; the value stays after the clip ends
+void Engine::applyAutomation (double beat)
+{
+    for (auto& c : proj.clips)
+    {
+        if (! c.isAuto() || c.muted || c.hidden || c.autoPts.empty() || beat < c.start || beat >= c.start + c.length) continue;
+        const float v = autoValueAt (c.autoPts, c.patOffset + beat - c.start);
+        const auto& at = c.autoTarget;
+        if (at.kind == AutoInsertVol || at.kind == AutoInsertPan)
+        {
+            if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
+            auto& mt = proj.mixer[(size_t) at.track];
+            (at.kind == AutoInsertVol ? mt.volume : mt.pan) = autoToValue (at.kind, v);
+        }
+        else if (at.kind == AutoChanVol || at.kind == AutoChanPan || at.kind == AutoChanPitch)
+        {
+            auto* ch = proj.findChannel (at.channel);
+            if (ch == nullptr) continue;
+            const float x = autoToValue (at.kind, v);
+            if (at.kind == AutoChanVol) ch->volume = x;
+            else if (at.kind == AutoChanPan) ch->pan = x;
+            else if (std::abs (ch->pitch - x) > 1.0e-4f)
+            {
+                ch->pitch = x;
+                auto it = channelRt.find (ch->id);
+                if (it != channelRt.end() && it->second->inst) it->second->inst->update (*ch);
+            }
+        }
+        else if (at.kind == AutoFxParam && at.track >= 0 && at.track < (int) trackRt.size())
+        {
+            for (auto& f : trackRt[(size_t) at.track]->fx)
+            {
+                if (f->uid != at.fxUid) continue;
+                if (f->builtin)
+                {
+                    const int i = f->builtin->paramIndex (at.param);
+                    if (i < 0) break;
+                    const auto& d = f->builtin->params()[(size_t) i];
+                    float x = d.min + v * (d.max - d.min);
+                    if (! d.choices.empty()) x = std::round (x);
+                    f->builtin->setParamQuiet (i, juce::jlimit (d.min, d.max, x));
+                }
+                else if (f->plugin && at.param.startsWithChar ('#'))
+                {
+                    const auto& ps = f->plugin->getParameters();
+                    const int i = at.param.substring (1).getIntValue();
+                    if (i >= 0 && i < ps.size() && std::abs (ps[i]->getValue() - v) > 1.0e-5f) ps[i]->setValue (v);
+                }
+                break;
+            }
+        }
+    }
 }
 
 void Engine::mixTracks (const float* const*, int, int)

@@ -196,6 +196,13 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
         t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         if (c.drummer >= 0) t.setProperty ("drummer", c.drummer, nullptr);
+        if (c.isAuto())
+        {
+            auto& at = c.autoTarget;
+            t.setProperty ("ak", at.kind, nullptr); t.setProperty ("at", at.track, nullptr); t.setProperty ("afx", at.fxUid, nullptr);
+            t.setProperty ("ach", at.channel, nullptr); t.setProperty ("ap", at.param, nullptr); t.setProperty ("an", at.name, nullptr);
+            for (auto& pt : c.autoPts) { juce::ValueTree q ("PT"); q.setProperty ("b", pt.beat, nullptr); q.setProperty ("v", pt.value, nullptr); t.appendChild (q, nullptr); }
+        }
         t.setProperty ("hidden", c.hidden, nullptr);
         if (! c.colour.isTransparent()) t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
         clips.appendChild (t, nullptr);
@@ -318,6 +325,12 @@ Project projectFromTree (const juce::ValueTree& root)
         c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
         c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0));
+        if ((int) t.getProperty ("ak", 0) > 0)
+        {
+            auto& at = c.autoTarget;
+            at.kind = t["ak"]; at.track = t["at"]; at.fxUid = t["afx"]; at.channel = t["ach"]; at.param = t["ap"].toString(); at.name = t["an"].toString();
+            for (auto q : t) if (q.hasType ("PT")) c.autoPts.push_back ({ (double) q["b"], (float) q["v"] });
+        }
         p.clips.push_back (c);
     }
     for (auto t : root.getChildWithName ("POOL")) p.audioPool.push_back (readFile (t, "file"));
