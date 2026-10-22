@@ -1228,7 +1228,8 @@ public:
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
         const double dsr = sr / dsFactor;
-        const float timeMs = 1.0f - 0.3f * snap + 200.0f * (1.0f - speed) * (1.0f - speed);   // retune glide: 0.75 = ~13 ms, so it lands and holds
+        const float slow = (1.0f - speed) * (1.0f - speed);
+        const float timeMs = style == 0 ? 1.0f + 200.0f * slow : 1.0f - 0.3f * snap + 32.0f * slow + 300.0f * slow * slow;   // retune glide: 0.75 = ~4 ms (Antares locks a note within ~3 ms), 0 = ~330 ms
         const float ref = juce::jlimit (400.0f, 500.0f, p (9) > 0 ? p (9) : 440.0f);
         const float coef = std::exp (-1.0f / (0.001f * timeMs * (float) sr));
         const float humanize = hard ? 0.0f : p (2);
@@ -1271,6 +1272,7 @@ public:
                     // breaths, room noise and hiss: too quiet next to the voice, or not clearly pitched - leave them untuned
                     const float hopSec = (float) hop / (float) dsr;
                     voiceLvl *= std::exp (-hopSec / 0.5f);
+                    const float tailMidi = midi;   // the reading before the gate: a quiet / breathy tail still says where the voice is
                     if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > 0.35f) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
@@ -1307,15 +1309,22 @@ public:
                     else if (midi != -1.0f) pendingMidi = 0;
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
-                    wetTarget = midi > 0 && (hard || ! rough) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : (wetTarget > 0.5f ? 0.3f : 0.2f)) ? 1.0f : 0.0f;   // Hard Tune tunes the rough edges too: no natural voice
+                    const bool wasWet = wetTarget > 0.5f;
+                    wetTarget = midi > 0 && (hard || ! rough) && aper < (hard ? (wetTarget > 0.5f ? 0.45f : 0.35f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.38f : 0.28f)) ? 1.0f : 0.0f;   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
-                    if (hard && midi == -1.0f && heldNote > 0) wetTarget = 1.0f;
+                    if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 0.6f && ++tailHops * hopSec < 0.16f))) wetTarget = 1.0f;   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
                     consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f)) wetTarget = 1.0f;
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f))
+                    {
+                        wetTarget = 1.0f;
+                        // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
+                        if (tailMidi > 0 && std::abs (tailMidi - (float) heldNote) < 1.0f)
+                            targetRatio = std::pow (2.0f, juce::jlimit (-1.5f, 1.5f, (float) heldNote - tailMidi) / 12.0f);
+                    }
                     if (midi > 0)
                     {
                         const bool onset = heldNote == 0;
@@ -1345,12 +1354,12 @@ public:
                         float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
-                        if (onset && (hard || speed > 0.85f)) currentRatio = targetRatio;   // new word starts already on the note
+                        if (onset && (hard || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // a rough reading close to the held note still steers the correction (half way per hop), so the voice
                     // drifting under rasp is pulled back onto the key note instead of riding a frozen ratio off it
-                    else if (hard && midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 1.0f)
+                    else if (midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < (hard ? 1.0f : 0.6f) && wetTarget > 0.5f)
                     {
                         const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);

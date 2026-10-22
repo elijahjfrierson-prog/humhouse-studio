@@ -303,6 +303,35 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 int main()
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
+    // offline AutoPitch render for listening / analysis: HHS_AP_RENDER="in.wav;out.wav;style;key;scale;A4;speed"
+    if (const char* spec = std::getenv ("HHS_AP_RENDER"))
+    {
+        auto f = juce::StringArray::fromTokens (spec, ";", "");
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (f[0])));
+        if (rd == nullptr) { std::printf ("cannot read %s\n", f[0].toRawUTF8()); return 1; }
+        const int len = (int) rd->lengthInSamples;
+        juce::AudioBuffer<float> all (2, len); rd->read (&all, 0, len, 0, true, true);
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
+        ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
+        if (f.size() > 6) ap->setParam ("speed", f[6].getFloatValue());
+        ap->prepare (rd->sampleRate, 512);
+        PlayContext ctx;
+        juce::AudioBuffer<float> b (2, 512);
+        for (int at = 0; at < len; at += 512)
+        {
+            const int n = std::min (512, len - at);
+            for (int c = 0; c < 2; ++c) b.copyFrom (c, 0, all, c, at, n);
+            ap->process (b, n, ctx);
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, 0 + c, 0, n);
+        }
+        juce::File out (f[1]); out.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> wr (wav.createWriterFor (new juce::FileOutputStream (out), rd->sampleRate, 2, 24, {}, 0));
+        wr->writeFromAudioSampleBuffer (all, 0, len);
+        return 0;
+    }
     if (std::getenv ("HHS_AP_PROBE2") != nullptr)
     {
         for (double m : { 57.6, 56.6, 64.3, 50.5 })
