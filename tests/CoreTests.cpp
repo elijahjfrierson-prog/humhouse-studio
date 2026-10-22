@@ -82,7 +82,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     for (auto& s : in) s *= 0.5f / pk;
     auto ap = createBuiltinEffect ("autopitch");
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
-    ap->setParam ("style", (float) style); ap->setParam ("speed", speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
+    ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
     juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
@@ -168,7 +168,7 @@ static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0
     }
     auto ap = createBuiltinEffect ("autopitch");
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
-    ap->setParam ("style", (float) style); ap->setParam ("speed", speed);
+    ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed);
     ap->prepare (fs, 512);
     PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
     juce::AudioBuffer<float> b (2, 512); std::vector<float> out;
@@ -315,7 +315,7 @@ int main()
         auto ap = createBuiltinEffect ("autopitch");
         ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
         ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
-        if (f.size() > 6) ap->setParam ("speed", f[6].getFloatValue());
+        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());   // 0 = fastest
         ap->prepare (rd->sampleRate, 512);
         PlayContext ctx;
         juce::AudioBuffer<float> b (2, 512);
@@ -1145,6 +1145,28 @@ int main()
         std::printf ("audio quantize onsets: %d found\n", (int) on.size());
         CHECK (on.size() == 4);
         for (size_t k = 0; k < on.size() && k < 4; ++k) CHECK (std::abs (on[k] - hits[k]) < 0.01);
+    }
+    // AutoPitch Retune is the Antares way (0 = fastest): old "speed" saves convert; Body + Character add weight without jumping the level
+    {
+        std::map<juce::String, float> m { { "speed", 0.9f } };
+        migrateFxParams ("autopitch", m);
+        CHECK (m.count ("speed") == 0 && std::abs (m["retune"] - 0.1f) < 1.0e-6f);
+        std::map<juce::String, float> fl { { "speed", 0.9f } };
+        migrateFxParams ("flangus", fl);
+        CHECK (fl.count ("speed") == 1);
+        auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("style", 1.0f);
+        ap->prepare (48000, 512);
+        juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+        double ph = 0, inE = 0, outE = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) (std::sin (ph) + 0.4 * std::sin (2 * ph)); ph += juce::MathConstants<double>::twoPi * 220.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); if (k >= 100) inE += v * v; }
+            ap->process (b, 512, ctx);
+            if (k >= 100) for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); CHECK (std::isfinite (y)); outE += y * y; }
+        }
+        std::printf ("autopitch body/character level %+.2f dB\n", 10.0 * std::log10 (outE / inE));
+        CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 3.0);
     }
     // AutoPitch catches rough vocals: breathy (noisy) note, a short "yeah" after silence, and a noisy gap mid-word
     {

@@ -2,6 +2,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_dsp/juce_dsp.h>
 #include <atomic>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -54,6 +55,7 @@ protected:
 struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
+void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 
 // lock-free audio tap for the Scope (written on the audio thread, read by the UI)
 struct ScopeTap

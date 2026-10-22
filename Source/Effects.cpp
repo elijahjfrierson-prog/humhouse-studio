@@ -1195,7 +1195,7 @@ public:
     {
         static const std::vector<ParamDef> ps {
             { "style", "Style", 0, 3, 1, { "Natural", "Classic", "Modern", "Hard Tune" } },
-            { "speed", "Retune Speed", 0, 1, 0.75f }, { "humanize", "Humanize", 0, 1, 0.2f },
+            { "retune", "Retune Speed (0 = fastest)", 0, 1, 0.25f }, { "humanize", "Humanize", 0, 1, 0.2f },
             { "key", "Key", -1, 11, -1, { "Project", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" } },
             { "scale", "Scale", -1, 15, -1, { "Project", "Major", "Minor", "Harmonic Minor", "Melodic Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian",
                                                "Locrian", "Major Pent", "Minor Pent", "Blues", "Hungarian Minor", "Phrygian Dom", "Whole Tone", "Chromatic" } }, { "natvib", "Natural Vibrato %", 0, 200, 0 },
@@ -1203,7 +1203,8 @@ public:
             { "pitch", "Pitch", -12, 12, 0 }, { "detune", "Detune (cents)", -100, 100, 0 },
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
-            { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 } };
+            { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
+            { "body", "Body", 0, 1, 0.4f }, { "character", "Character", 0, 1, 0.3f } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1213,6 +1214,8 @@ public:
         shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
+        for (auto& f : tone) f.clear();
+        dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
         currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
@@ -1220,7 +1223,7 @@ public:
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         const int style = (int) p (0);
-        float speed = p (1);
+        float speed = 1.0f - p (1);                            // Retune knob, Antares way: 0 = fastest, 1 = slowest
         const float snap = juce::jlimit (0.0f, 3.0f, -p (12));   // MetaTune-style negative retune: 0 = instant, -3 = hardest step
         const bool hard = style == 3 || snap > 0.0f;
         if (hard) speed = 1.0f;                                // hard tune: instant
@@ -1240,6 +1243,27 @@ public:
         // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
         const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
         const float wetRel = 1.0f - std::exp (-1.0f / (0.035f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
+        // Body + Character: chest weight, a little forward bite and soft even-order harmonics on the tuned voice,
+        // so it sounds full and alive instead of thin (all zero latency)
+        const float body = p (13), chr = p (14);
+        const bool colourOn = body > 0.001f || chr > 0.001f;
+        if (colourOn)
+        {
+            tone[0].set (Biquad::LowShelf, sr, 190.0, 0.7, 3.5 * body);
+            tone[1].set (Biquad::Peak, sr, 420.0, 0.8, 1.5 * body);
+            tone[2].set (Biquad::Peak, sr, 2900.0, 0.9, 2.0 * chr);
+        }
+        const float drive = 1.0f + 2.5f * chr, bias = 0.25f * chr, tb = std::tanh (bias), satMix = 0.55f * chr;
+        auto colour = [&] (float x, int ch) {
+            x = tone[0].tick (x, ch); x = tone[1].tick (x, ch); x = tone[2].tick (x, ch);
+            if (satMix > 0.0f)
+            {
+                const float y = (std::tanh (drive * x + bias) - tb) / drive;
+                const float hp = y - dcX[ch] + 0.9995f * dcY[ch]; dcX[ch] = y; dcY[ch] = hp;
+                x += (hp - x) * satMix;
+            }
+            return x;
+        };
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
@@ -1384,6 +1408,7 @@ public:
                 l[i] = psola.dryL; r[i] = psola.dryR;
                 wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
             }
+            if (colourOn) { const float cl = colour (wl, 0), cr = colour (wr, 1); wl += wetG * (cl - wl); wr += wetG * (cr - wr); }   // sung vowels only: consonants stay crisp
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -1396,6 +1421,7 @@ private:
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
+    Biquad tone[3]; float dcX[2] {}, dcY[2] {};
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 
@@ -1598,5 +1624,15 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "autopitch") return std::make_unique<AutoPitch>();
     if (id == "gain") return std::make_unique<GainUtil>();
     return {};
+}
+
+void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params)
+{
+    // AutoPitch Retune used to be "speed" with 1 = fastest; it is now "retune" with 0 = fastest (Antares way)
+    if (type != "autopitch") return;
+    auto it = params.find ("speed");
+    if (it == params.end()) return;
+    if (params.count ("retune") == 0) params["retune"] = juce::jlimit (0.0f, 1.0f, 1.0f - it->second);
+    params.erase (it);
 }
 }

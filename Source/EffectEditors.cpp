@@ -77,7 +77,7 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "satur", { { "Tape Warmth", { { "drive", 6.0f }, { "char", 0.0f } } }, { "Tube Push", { { "drive", 10.0f }, { "char", 1.0f } } }, { "Transformer Grit", { { "drive", 14.0f }, { "char", 2.0f }, { "mix", 0.7f } } } } },
         { "strip", { { "Rap Vocal", { { "gateTh", -55.0f }, { "compTh", -20.0f }, { "compRatio", 4.0f }, { "makeup", 5.0f }, { "hpf", 100.0f }, { "mid", -2.0f }, { "midF", 400.0f }, { "high", 3.0f } } }, { "Singer", { { "compTh", -18.0f }, { "compRatio", 3.0f }, { "hpf", 80.0f }, { "high", 2.0f } } }, { "Podcast", { { "gateTh", -50.0f }, { "compTh", -22.0f }, { "compRatio", 3.0f }, { "hpf", 90.0f }, { "low", -2.0f }, { "high", 2.0f } } } } },
         { "purify", { { "A  Warm Glue", { { "mode", 0.0f }, { "amount", 0.5f } } }, { "B  Bright Air", { { "mode", 1.0f }, { "amount", 0.5f } } }, { "C  Punch", { { "mode", 2.0f }, { "amount", 0.55f } } }, { "D  Wide Polish", { { "mode", 3.0f }, { "amount", 0.5f } } }, { "E  Loud Master", { { "mode", 4.0f }, { "amount", 0.6f } } } } },
-        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "speed", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "speed", 0.8f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "speed", 1.0f } } }, { "Robot", { { "style", 3.0f }, { "speed", 1.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
+        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "retune", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "retune", 0.2f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "retune", 0.0f } } }, { "Robot", { { "style", 3.0f }, { "retune", 0.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
         { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
         { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
         { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
@@ -282,11 +282,13 @@ private:
         if (x == nullptr) return;
         for (auto* e : x->getChildWithTagNameIterator ("P"))
         {
-            const auto id = e->getStringAttribute ("id");
+            std::map<juce::String, float> one { { e->getStringAttribute ("id"), (float) e->getDoubleAttribute ("v", 0.0) } };
+            migrateFxParams (kind, one);
+            const auto id = one.begin()->first;
             for (size_t i = 0; i < params.size(); ++i)
             {
                 if (params[i].id != id) continue;
-                const float v = juce::jlimit (params[i].mn, params[i].mx, (float) e->getDoubleAttribute ("v", params[i].value));
+                const float v = juce::jlimit (params[i].mn, params[i].mx, e->hasAttribute ("v") ? one.begin()->second : params[i].value);
                 if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) std::round (v - params[i].mn), juce::dontSendNotification);
                 else if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) k->setValue (v, juce::dontSendNotification);
                 set (id, v);
@@ -1534,6 +1536,7 @@ static void loadChainPreset (Studio& s, int track, const juce::File& file, bool 
             f.mix = (float) fe->getDoubleAttribute ("mix", 1.0);
             if (fe->hasAttribute ("state")) f.pluginState.fromBase64Encoding (fe->getStringAttribute ("state"));
             for (auto* pe : fe->getChildWithTagNameIterator ("P")) f.params[pe->getStringAttribute ("id")] = (float) pe->getDoubleAttribute ("v");
+            migrateFxParams (f.type, f.params);
         }
     });
 }

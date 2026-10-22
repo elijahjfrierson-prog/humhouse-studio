@@ -354,12 +354,23 @@ Project projectFromTree (const juce::ValueTree& root)
                     auto name = c.getPropertyName (i).toString();
                     if (name.startsWith ("p_")) f.params[name.substring (2)] = (float) c[c.getPropertyName (i)];
                 }
+                migrateFxParams (f.type, f.params);
                 m.fx.push_back (f);
             }
         }
         p.mixer.push_back (m);
     }
     if (p.mixer.empty()) { MixerTrack master; master.name = "Master"; master.routesToMaster = false; p.mixer.push_back (master); }
+    // automation of the old AutoPitch "speed" (1 = fastest) -> "retune" (0 = fastest)
+    for (auto& c : p.clips)
+        if (c.isAuto() && c.autoTarget.kind == AutoFxParam && c.autoTarget.param == "speed"
+            && c.autoTarget.track >= 0 && c.autoTarget.track < (int) p.mixer.size())
+            for (auto& f : p.mixer[(size_t) c.autoTarget.track].fx)
+                if (f.uid == c.autoTarget.fxUid && f.type == "autopitch")
+                {
+                    c.autoTarget.param = "retune";
+                    for (auto& pt : c.autoPts) pt.value = 1.0f - pt.value;
+                }
     return p;
 }
 
