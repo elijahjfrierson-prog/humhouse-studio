@@ -172,6 +172,252 @@ static void exitComp (Project& p, int lane)
     }
 }
 
+// ---------- HumTone (pitch of each note) and HumTime (warp hits to the grid): offline clip editors, no formant shift
+static bool readClipAudio (const Clip& c, double bpm, juce::AudioBuffer<float>& out, double& sr)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (c.audioFile));
+    if (r == nullptr || r->sampleRate <= 0) return false;
+    sr = r->sampleRate;
+    const auto from = (juce::int64) (juce::jmax (0.0, c.sourceOffset) * sr);
+    const int len = (int) juce::jmin ((juce::int64) (beatsToSeconds (c.length, bpm) * sr), r->lengthInSamples - from);
+    if (len <= 0) return false;
+    out.setSize (2, len); out.clear();
+    r->read (&out, 0, len, from, true, true);
+    if (r->numChannels == 1) out.copyFrom (1, 0, out, 0, 0, len);
+    return true;
+}
+static bool writeClipAudio (const juce::File& f, const juce::AudioBuffer<float>& b, double sr)
+{
+    f.getParentDirectory().createDirectory();
+    juce::WavAudioFormat wav;
+    auto os = std::make_unique<juce::FileOutputStream> (f);
+    if (! os->openedOk()) return false;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+    if (w == nullptr) return false;
+    os.release();
+    return w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+}
+static void useRendered (Studio& s, int uid, const juce::File& f, const juce::String& what)
+{
+    s.edit (what, [uid, f] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; } });
+    s.engine.sync();
+}
+
+struct ToneNote { int a = 0, b = 0; float sung = 0, target = 0; };   // analysis frames [a, b)
+constexpr int toneHop = 256, toneWin = 2048;
+static std::vector<float> toneCurve (const juce::AudioBuffer<float>& b, double sr)
+{
+    std::vector<float> curve, w ((size_t) toneWin);
+    for (int at = 0; at + toneWin <= b.getNumSamples(); at += toneHop)
+    {
+        double e = 0;
+        for (int i = 0; i < toneWin; ++i) { w[(size_t) i] = 0.5f * (b.getSample (0, at + i) + b.getSample (1, at + i)); e += w[(size_t) i] * w[(size_t) i]; }
+        const float hz = std::sqrt (e / toneWin) > 0.004 ? detectPitchYin (w.data(), toneWin, sr, 0.15f, 0.0f, 55.0f, 1100.0f) : 0.0f;
+        curve.push_back (hz > 0.0f ? 69.0f + 12.0f * std::log2 (hz / 440.0f) : 0.0f);
+    }
+    return curve;
+}
+static std::vector<ToneNote> toneNotes (const std::vector<float>& cv)
+{
+    std::vector<ToneNote> out;
+    const int n = (int) cv.size();
+    for (int i = 0; i < n;)
+    {
+        if (cv[(size_t) i] <= 0.0f) { ++i; continue; }
+        int j = i; float ref = cv[(size_t) i]; std::vector<float> seg;
+        while (j < n && cv[(size_t) j] > 0.0f && std::abs (cv[(size_t) j] - ref) < 0.8f) { seg.push_back (cv[(size_t) j]); ref += 0.2f * (cv[(size_t) j] - ref); ++j; }
+        if (j - i >= 6)
+        {
+            std::nth_element (seg.begin(), seg.begin() + (long) seg.size() / 2, seg.end());
+            ToneNote t; t.a = i; t.b = j; t.sung = t.target = seg[seg.size() / 2];
+            out.push_back (t);
+        }
+        i = juce::jmax (j, i + 1);
+    }
+    return out;
+}
+static juce::AudioBuffer<float> toneRender (const juce::AudioBuffer<float>& in, double sr, const std::vector<ToneNote>& notes)
+{
+    juce::AudioBuffer<float> b (in);
+    auto fx = createBuiltinEffect ("pitchshift");
+    if (fx == nullptr) return b;
+    fx->prepare (sr, 64);
+    const PlayContext ctx;
+    const int n = b.getNumSamples();
+    for (int at = 0; at < n; at += 64)
+    {
+        const int num = juce::jmin (64, n - at);
+        const int fr = (at - toneWin / 2) / toneHop;
+        float off = 0.0f;
+        for (auto& t : notes) if (fr >= t.a && fr < t.b) { off = t.target - t.sung; break; }
+        const float semis = std::round (off);
+        fx->setParamQuiet (0, semis); fx->setParamQuiet (1, (off - semis) * 100.0f);
+        juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, at, num);
+        fx->process (blk, num, ctx);
+    }
+    return b;
+}
+static juce::AudioBuffer<float> timeRender (const juce::AudioBuffer<float>& in, double sr, double bpm, double startBeat, double grid, float strength)
+{
+    const int n = in.getNumSamples(), hop = 256;
+    std::vector<float> e;
+    for (int at = 0; at + 512 <= n; at += hop)
+    {
+        double q = 0;
+        for (int i = 0; i < 512; ++i) q += in.getSample (0, at + i) * in.getSample (0, at + i) + in.getSample (1, at + i) * in.getSample (1, at + i);
+        e.push_back ((float) std::sqrt (q / 1024.0));
+    }
+    const float mx = e.empty() ? 0.0f : *std::max_element (e.begin(), e.end());
+    const double total = n / sr;
+    std::vector<double> src { 0.0 }, dst { 0.0 };
+    double lastOn = -1.0;
+    for (int k = 8; k < (int) e.size(); ++k)
+    {
+        float avg = 0; for (int j = k - 8; j < k; ++j) avg += e[(size_t) j]; avg /= 8.0f;
+        if (! (e[(size_t) k] > 1.8f * avg + 1.0e-4f && e[(size_t) k] > 0.08f * mx)) continue;
+        const double t = k * hop / sr;
+        if (t - lastOn < 0.07) continue;
+        lastOn = t;
+        const double beat = startBeat + t * bpm / 60.0, want = std::round (beat / grid) * grid;
+        const double d = t + strength * (want - beat) * 60.0 / bpm;
+        if (std::abs (d - t) < 0.002 || d <= dst.back() + 0.02 || t <= src.back() + 0.02 || d >= total - 0.02 || t >= total - 0.02) continue;
+        src.push_back (t); dst.push_back (d);
+    }
+    src.push_back (total); dst.push_back (total);
+    juce::AudioBuffer<float> out (2, n); out.clear();
+    for (size_t i = 0; i + 1 < src.size(); ++i)
+    {
+        const int s0 = (int) (src[i] * sr), s1 = juce::jmin (n, (int) (src[i + 1] * sr));
+        const int d0 = (int) (dst[i] * sr), d1 = juce::jmin (n, (int) (dst[i + 1] * sr));
+        if (s1 <= s0 || d1 <= d0) continue;
+        juce::AudioBuffer<float> seg (2, s1 - s0);
+        for (int c = 0; c < 2; ++c) seg.copyFrom (c, 0, in, c, s0, s1 - s0);
+        const double factor = (double) (d1 - d0) / (s1 - s0);
+        juce::AudioBuffer<float> st = std::abs (factor - 1.0) < 0.002 ? seg : olaStretch (seg, factor);
+        const int len = juce::jmin (d1 - d0, st.getNumSamples());
+        const int fade = juce::jmin (16, len / 2);
+        for (int c = 0; c < 2; ++c)
+        {
+            out.copyFrom (c, d0, st, c, 0, len);
+            if (i > 0) out.applyGainRamp (c, d0, fade, 0.0f, 1.0f);
+            out.applyGainRamp (c, d0 + len - fade, fade, 1.0f, 0.0f);
+        }
+    }
+    return out;
+}
+
+class ToolWindow : public juce::DocumentWindow
+{
+public:
+    ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton)
+    {
+        setUsingNativeTitleBar (true); setContentOwned (c, true); setResizable (true, false);
+        centreWithSize (getWidth(), getHeight()); setVisible (true);
+    }
+    void closeButtonPressed() override { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<juce::Component> (this)] { delete sp.getComponent(); }); }
+};
+
+// HumTone: every sung note is a block; drag it up / down (snaps to semitones, Alt = free), SNAP ALL centres every note
+class HumToneView : public juce::Component
+{
+public:
+    HumToneView (Studio& st, int clipUid) : s (st), uid (clipUid)
+    {
+        setupButton (snapBtn, "SNAP ALL", "Centre every note on its nearest semitone");
+        setupButton (resetBtn, "RESET", "Put every note back where it was sung");
+        setupButton (applyBtn, "APPLY", "Render the new pitches into the clip (Ctrl+Z undoes)");
+        setupButton (closeBtn, "X  CLOSE", "Close HumTone without applying");
+        for (auto* b : { &snapBtn, &resetBtn, &applyBtn, &closeBtn }) addAndMakeVisible (*b);
+        snapBtn.onClick = [this] { for (auto& t : notes) t.target = std::round (t.sung); repaint(); };
+        resetBtn.onClick = [this] { for (auto& t : notes) t.target = t.sung; repaint(); };
+        closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
+        applyBtn.onClick = [this] { apply(); };
+        for (auto& c : s.p().clips) if (c.uid == uid) clip = c;
+        if (readClipAudio (clip, s.p().bpm, audio, sr)) { curve = toneCurve (audio, sr); notes = toneNotes (curve); }
+        lo = 127; hi = 0;
+        for (auto& t : notes) { lo = juce::jmin (lo, (int) t.sung - 3); hi = juce::jmax (hi, (int) t.sung + 4); }
+        if (hi <= lo) { lo = 48; hi = 72; }
+        setSize (960, 460);
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromTop (34).reduced (6, 4);
+        for (auto* b : { &snapBtn, &resetBtn, &applyBtn }) { b->setBounds (r.removeFromLeft (90)); r.removeFromLeft (6); }
+        closeBtn.setBounds (r.removeFromRight (100));
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel.darker (0.4f));
+        const auto a = area();
+        const float rowH = a.getHeight() / (float) (hi - lo);
+        static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        for (int k = lo; k < hi; ++k)
+        {
+            const float y = yOf (k + 0.5f);
+            g.setColour (juce::Colours::white.withAlpha ((k % 12 == 1 || k % 12 == 3 || k % 12 == 6 || k % 12 == 8 || k % 12 == 10) ? 0.03f : 0.07f));
+            g.fillRect (a.getX(), y, a.getWidth(), rowH - 1);
+            g.setColour (juce::Colours::white.withAlpha (0.5f));
+            g.setFont (11.0f);
+            g.drawText (juce::String (names[k % 12]) + juce::String (k / 12 - 1), 2, (int) y, 40, (int) rowH, juce::Justification::centredLeft);
+        }
+        if (notes.empty())
+        {
+            g.setColour (juce::Colours::white);
+            g.drawText ("No sung notes found in this clip", a, juce::Justification::centred);
+        }
+        for (auto& t : notes)
+        {
+            const float x0 = xOf (t.a), x1 = xOf (t.b);
+            g.setColour (juce::Colours::white.withAlpha (0.25f));
+            g.drawRect (juce::Rectangle<float> (x0, yOf (t.sung + 0.5f), x1 - x0, rowH), 1.0f);
+            g.setColour (col::accent.withAlpha (0.75f));
+            g.fillRoundedRectangle (juce::Rectangle<float> (x0, yOf (t.target + 0.5f), x1 - x0, rowH).reduced (0, 1), 3.0f);
+            juce::Path pc;
+            for (int f = t.a; f < t.b; ++f)
+            {
+                const float y = yOf (curve[(size_t) f] + t.target - t.sung);
+                if (f == t.a) pc.startNewSubPath (xOf (f), y); else pc.lineTo (xOf (f), y);
+            }
+            g.setColour (juce::Colours::white);
+            g.strokePath (pc, juce::PathStrokeType (1.5f));
+        }
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        drag = -1;
+        for (int i = 0; i < (int) notes.size(); ++i)
+            if (e.x >= xOf (notes[(size_t) i].a) && e.x <= xOf (notes[(size_t) i].b)) { drag = i; dragFrom = notes[(size_t) i].target; }
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (drag < 0) return;
+        const float rowH = area().getHeight() / (float) (hi - lo);
+        float t = dragFrom - e.getDistanceFromDragStartY() / rowH;
+        if (! e.mods.isAltDown()) t = std::round (t);
+        notes[(size_t) drag].target = juce::jlimit ((float) lo, (float) hi - 1, t);
+        repaint();
+    }
+private:
+    juce::Rectangle<float> area() const { return getLocalBounds().withTrimmedTop (38).withTrimmedLeft (44).toFloat().reduced (2); }
+    float xOf (int f) const { const auto a = area(); return a.getX() + a.getWidth() * f / (float) juce::jmax (1, (int) curve.size()); }
+    float yOf (float midi) const { const auto a = area(); return a.getBottom() - a.getHeight() * (midi - lo) / (float) (hi - lo); }
+    void apply()
+    {
+        if (audio.getNumSamples() == 0) return;
+        s.engine.stop();
+        const auto out = toneRender (audio, sr, notes);
+        const auto f = s.p().recordingsFolder().getChildFile ("HumTone").getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_humtone", ".wav");
+        if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, "HumTone");
+        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
+    }
+    Studio& s; int uid; Clip clip;
+    juce::AudioBuffer<float> audio; double sr = 44100;
+    std::vector<float> curve; std::vector<ToneNote> notes;
+    int lo = 48, hi = 72, drag = -1; float dragFrom = 0;
+    juce::TextButton snapBtn, resetBtn, applyBtn, closeBtn;
+};
+
 static bool isSurprise (const Clip& c) { return c.isAudio() && c.audioFile.getFileName().contains ("_surprise"); }
 
 struct LaneHeader : public juce::Component
@@ -1535,6 +1781,19 @@ private:
         });
     }
 
+    void humTime (int uid, double grid, float strength)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio()) return;
+        const Clip c = *cp;
+        s.engine.stop();
+        juce::AudioBuffer<float> in; double sr = 0;
+        if (! readClipAudio (c, s.p().bpm, in, sr)) return;
+        const auto out = timeRender (in, sr, s.p().bpm, c.start, grid, strength);
+        const auto f = s.p().recordingsFolder().getChildFile ("HumTime").getNonexistentChildFile (c.audioFile.getFileNameWithoutExtension() + "_humtime", ".wav");
+        if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, "HumTime");
+    }
+
     void splitClipStems (int uid)
     {
         const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
@@ -1703,6 +1962,13 @@ private:
         m.addItem (5, "Split by channel (one clip per instrument)", clip.patternIndex >= 0);
         m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
+        m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
+        {
+            juce::PopupMenu tm;
+            tm.addItem (340, "Warp hits to 1/16"); tm.addItem (341, "Warp hits to 1/8"); tm.addItem (343, "Warp hits to 1/4");
+            tm.addItem (342, "Warp hits to 1/16 at 50% (keeps the feel)");
+            m.addSubMenu ("HumTime: warp timing to the grid (stretch, no cuts)", tm, clip.isAudio() && ! clip.reversed);
+        }
         if (clip.lane >= 0 && clip.lane < (int) p.lanes.size() && p.lanes[(size_t) clip.lane].compLane >= 0)
             m.addItem (16, "Use in comp (this clip, or the ruler range on it)", clip.isAudio());
         m.addItem (6, "Group selected clips"); m.addItem (7, "Ungroup", clip.group > 0);
@@ -1764,6 +2030,8 @@ private:
                 return;
             }
             if (r == 15) { consolidate (uid); return; }
+            if (r == 17) { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+            if (r >= 340 && r <= 343) { static const double g[] { 0.25, 0.5, 0.25, 1.0 }; humTime (uid, g[r - 340], r == 342 ? 0.5f : 1.0f); return; }
             if (r == 16)
             {
                 const double a = timeSelA, b = timeSelB;
