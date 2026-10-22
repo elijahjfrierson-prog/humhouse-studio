@@ -1019,6 +1019,21 @@ int main()
         CHECK (n > 50);
         CHECK (off <= n / 50);
     }
+    // a highlighted ruler range (bars 3-5) always starts playback at its start, wherever the playhead sits
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        e.project().songMode = true;
+        e.project().punchIn = 8.0; e.project().punchOut = 16.0;
+        for (double at : { 0.0, 10.0, 12.0, 20.0 })
+        {
+            e.setPositionBeats (at);
+            e.play();
+            std::printf ("range play from %.0f -> starts at %.2f\n", at, e.positionBeats());
+            CHECK (std::abs (e.positionBeats() - 8.0) < 1.0e-9);
+            e.stop();
+        }
+    }
     // strict key lock: a raspy A4 sung 30 c sharp comes out on A 440 in every mode (no in-between pitch pokes out)
     for (int style = 0; style < 4; ++style)
     {
