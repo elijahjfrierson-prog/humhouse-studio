@@ -1146,7 +1146,7 @@ int main()
         CHECK (on.size() == 4);
         for (size_t k = 0; k < on.size() && k < 4; ++k) CHECK (std::abs (on[k] - hits[k]) < 0.01);
     }
-    // AutoPitch Retune is the Antares way (0 = fastest): old "speed" saves convert; Body + Character add weight without jumping the level
+    // AutoPitch Retune is the Antares way (0 = fastest): old "speed" saves convert; Body + Character (turned up) add weight without jumping the level
     {
         std::map<juce::String, float> m { { "speed", 0.9f } };
         migrateFxParams ("autopitch", m);
@@ -1155,7 +1155,7 @@ int main()
         migrateFxParams ("flangus", fl);
         CHECK (fl.count ("speed") == 1);
         auto ap = createBuiltinEffect ("autopitch");
-        ap->setParam ("style", 1.0f);
+        ap->setParam ("style", 1.0f); ap->setParam ("body", 0.4f); ap->setParam ("character", 0.3f);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
         double ph = 0, inE = 0, outE = 0;

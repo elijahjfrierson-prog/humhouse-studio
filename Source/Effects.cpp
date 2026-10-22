@@ -1204,7 +1204,7 @@ public:
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
-            { "body", "Body", 0, 1, 0.4f }, { "character", "Character", 0, 1, 0.3f } };
+            { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f } };   // off by default: just the tune, no tone change
         return ps;
     }
     int latencySamples() const override { return 0; }
