@@ -226,6 +226,11 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("duck", m.duck, nullptr); t.setProperty ("duckSrc", m.duckSource, nullptr); t.setProperty ("duckTh", m.duckThreshold, nullptr);
         t.setProperty ("duckRatio", m.duckRatio, nullptr); t.setProperty ("duckAtt", m.duckAttack, nullptr); t.setProperty ("duckRel", m.duckRelease, nullptr);
         t.setProperty ("colour", (juce::int64) m.colour.getARGB(), nullptr);
+        {
+            juce::StringArray q;
+            for (size_t b = 0; b < 5; ++b) { q.add (juce::String (m.meqFreq[b])); q.add (juce::String (m.meqGain[b])); q.add (juce::String (m.meqQ[b])); }
+            t.setProperty ("meq", q.joinIntoString (","), nullptr);
+        }
         for (auto& s : m.sends) { juce::ValueTree st ("SEND"); st.setProperty ("to", s.target, nullptr); st.setProperty ("lvl", s.level, nullptr); t.appendChild (st, nullptr); }
         for (auto& f : m.fx)
         {
@@ -238,6 +243,15 @@ juce::ValueTree projectToTree (const Project& p)
         mix.appendChild (t, nullptr);
     }
     root.appendChild (mix, nullptr);
+    juce::ValueTree links ("CTLLINKS");
+    for (auto& L : p.ctlLinks)
+    {
+        juce::ValueTree t ("L");
+        t.setProperty ("st", L.srcTrack, nullptr); t.setProperty ("su", L.srcUid, nullptr); t.setProperty ("dt", L.dstTrack, nullptr);
+        t.setProperty ("du", L.dstUid, nullptr); t.setProperty ("par", L.param, nullptr); t.setProperty ("lo", L.lo, nullptr); t.setProperty ("hi", L.hi, nullptr);
+        links.appendChild (t, nullptr);
+    }
+    root.appendChild (links, nullptr);
     return root;
 }
 
@@ -351,6 +365,12 @@ Project projectFromTree (const juce::ValueTree& root)
         m.duck = t.getProperty ("duck", 0.0f); m.duckSource = t.getProperty ("duckSrc", -1); m.duckThreshold = t.getProperty ("duckTh", -40.0f);
         m.duckRatio = t.getProperty ("duckRatio", 4.0f); m.duckAttack = t.getProperty ("duckAtt", 5.0f); m.duckRelease = t.getProperty ("duckRel", 150.0f);
         m.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff2a2f36));
+        {
+            juce::StringArray q; q.addTokens (t["meq"].toString(), ",", {});
+            if (q.size() == 15)
+                for (size_t b = 0; b < 5; ++b)
+                { m.meqFreq[b] = q[(int) b * 3].getFloatValue(); m.meqGain[b] = q[(int) b * 3 + 1].getFloatValue(); m.meqQ[b] = q[(int) b * 3 + 2].getFloatValue(); }
+        }
         for (auto c : t)
         {
             if (c.hasType ("SEND")) m.sends.push_back ({ (int) c["to"], (float) c["lvl"] });
@@ -370,6 +390,12 @@ Project projectFromTree (const juce::ValueTree& root)
         p.mixer.push_back (m);
     }
     if (p.mixer.empty()) { MixerTrack master; master.name = "Master"; master.routesToMaster = false; p.mixer.push_back (master); }
+    for (auto t : root.getChildWithName ("CTLLINKS"))
+    {
+        CtlLink L; L.srcTrack = t["st"]; L.srcUid = t["su"]; L.dstTrack = t["dt"]; L.dstUid = t["du"]; L.param = t["par"].toString();
+        L.lo = t.getProperty ("lo", 0.0f); L.hi = t.getProperty ("hi", 1.0f);
+        p.ctlLinks.push_back (L);
+    }
     // automation of the old AutoPitch "speed" (1 = fastest) -> "retune" (0 = fastest)
     for (auto& c : p.clips)
         if (c.isAuto() && c.autoTarget.kind == AutoFxParam && c.autoTarget.param == "speed"

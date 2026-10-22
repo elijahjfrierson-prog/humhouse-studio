@@ -278,6 +278,8 @@ struct Engine::TrackRuntime
     double tailSeconds = 0.0;
     std::unique_ptr<juce::AudioFormatReader> frozen;
     juce::File frozenFile;
+    std::array<Biquad, 5> meq;
+    std::array<float, 15> meqKey {};
 };
 
 // short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
@@ -1366,6 +1368,49 @@ struct EngineJobs
     }
 };
 
+void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
+{
+    bool on[5]; bool any = false;
+    for (size_t b = 0; b < 5; ++b)
+    {
+        on[b] = std::abs (mt.meqGain[b]) > 0.01f;
+        any |= on[b];
+        const float f = juce::jlimit (20.0f, (float) (sampleRate * 0.45), mt.meqFreq[b]), g = mt.meqGain[b], q = juce::jlimit (0.1f, 18.0f, mt.meqQ[b]);
+        if (on[b] && (tr.meqKey[b * 3] != f || tr.meqKey[b * 3 + 1] != g || tr.meqKey[b * 3 + 2] != q))
+        {
+            tr.meq[b].set (b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak, sampleRate, f, q, g);
+            tr.meqKey[b * 3] = f; tr.meqKey[b * 3 + 1] = g; tr.meqKey[b * 3 + 2] = q;
+        }
+        else if (! on[b] && tr.meqKey[b * 3 + 1] != 0.0f) { tr.meq[b].clear(); tr.meqKey[b * 3 + 1] = 0.0f; }
+    }
+    if (! any) return;
+    for (int ch = 0; ch < 2; ++ch)
+        for (auto* x = tr.out.getWritePointer (ch), * e = x + n; x < e; ++x)
+        {
+            float v = *x;
+            for (size_t b = 0; b < 5; ++b) if (on[b]) v = tr.meq[b].tick (v, ch);
+            *x = v;
+        }
+}
+
+// Link to controller: every block each link reads its controller (Peak Controller value 0..1) and sets the knob
+void Engine::applyCtlLinks()
+{
+    for (auto& L : proj.ctlLinks)
+    {
+        auto* src = builtinFx (L.srcTrack, L.srcUid);
+        auto* dst = builtinFx (L.dstTrack, L.dstUid);
+        if (src == nullptr || dst == nullptr || src == dst) continue;
+        const int i = dst->paramIndex (L.param);
+        if (i < 0) continue;
+        const auto& d = dst->params()[(size_t) i];
+        const float v = juce::jlimit (0.0f, 1.0f, src->meter (0));
+        float x = d.min + (L.lo + v * (L.hi - L.lo)) * (d.max - d.min);
+        if (! d.choices.empty()) x = std::round (x);
+        dst->setParamQuiet (i, juce::jlimit (d.min, d.max, x));
+    }
+}
+
 void Engine::processTrack (int t)
 {
     const int n = currentBlock;
@@ -1433,6 +1478,7 @@ void Engine::processTrack (int t)
         }
     }
     else if (idle && ! tr.frozen) tr.out.clear (0, n);
+    if (! tr.frozen) applyMiniEq (tr, mt, n);
 
     tr.level.store (std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n)));
     // one-knob sidechain duck: this insert dips under its SC source (default: the armed vocal track)
@@ -1650,6 +1696,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     juce::ignoreUnused (recordFrom);
 
     mixTracks (in, numIn, n);
+    if (! proj.ctlLinks.empty()) applyCtlLinks();
 
     auto& master = trackRt[0]->out;
     auto* l = master.getWritePointer (0); auto* r = master.getWritePointer (1);

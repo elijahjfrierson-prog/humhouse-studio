@@ -1819,12 +1819,56 @@ const std::vector<EffectInfo>& builtinEffects()
         { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
-        { "glitch", "Glitch Gate", "Time FX" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
     return fx;
 }
 
+// Peak Controller (FL style): follows the level of the audio on its insert and puts out a 0..1 control value that
+// "Link to controller" sends to any effect knob; an LFO can be added on top. Audio passes through (or is muted).
+class PeakController : public BuiltinEffect
+{
+public:
+    PeakController() { initDefaults(); }
+    const char* typeId() const override { return "peakctl"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "base", "Base", 0.0f, 1.0f, 0.0f }, { "volume", "Volume (amount)", -1.0f, 1.0f, 1.0f },
+            { "tension", "Tension", -1.0f, 1.0f, 0.0f }, { "attack", "Attack (ms)", 0.1f, 500.0f, 5.0f },
+            { "release", "Release (ms)", 1.0f, 2000.0f, 150.0f }, { "floor", "Floor (dB)", -80.0f, -6.0f, -48.0f },
+            { "lfoAmt", "LFO amount", 0.0f, 1.0f, 0.0f }, { "lfoRate", "LFO speed (Hz)", 0.05f, 20.0f, 1.0f },
+            { "mute", "Mute audio", 0.0f, 1.0f, 0.0f, { "Off", "On" } } };
+        return ps;
+    }
+    void prepare (double s, int) override { sr = s; env = 0; phase = 0; }
+    void reset() override { env = 0; }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const float a = std::exp (-1.0f / (0.001f * p (3) * (float) sr)), r = std::exp (-1.0f / (0.001f * p (4) * (float) sr));
+        const float* L = b.getReadPointer (0); const float* R = b.getNumChannels() > 1 ? b.getReadPointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = std::max (std::abs (L[i]), std::abs (R[i]));
+            env = (x > env ? a : r) * (env - x) + x;
+        }
+        const float fl = p (5);
+        float v = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (env, -100.0f) - fl) / -fl);
+        const float t = p (2);
+        if (t > 0.0f) v = std::pow (v, 1.0f + 3.0f * t); else if (t < 0.0f) v = 1.0f - std::pow (1.0f - v, 1.0f - 3.0f * t);
+        phase = std::fmod (phase + (double) p (7) * n / sr, 1.0);
+        const float lfo = p (6) * 0.5f * (1.0f + (float) std::sin (juce::MathConstants<double>::twoPi * phase));
+        value.store (juce::jlimit (0.0f, 1.0f, p (0) + p (1) * v + lfo), std::memory_order_relaxed);
+        if (p (8) > 0.5f) b.clear (0, n);
+    }
+    float meter (int) const override { return value.load (std::memory_order_relaxed); }
+private:
+    double sr = 44100, phase = 0; float env = 0;
+    std::atomic<float> value { 0.0f };
+};
+
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
+    if (id == "peakctl") return std::make_unique<PeakController>();
     if (auto s = createStudioEffect (id)) return s;
     if (id == "purify") { auto f = createPurify(); f->initDefaults(); return f; }
     if (id == "scope") return std::make_unique<ScopeFx>();

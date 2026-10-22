@@ -152,6 +152,9 @@ public:
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
                 k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
+                auto* rc = rightClicks.add (new RightClick());
+                rc->fn = [this, id] { if (onParamMenu) onParamMenu (id); };
+                k->addMouseListener (rc, false);
                 controls.add (k);
             }
             addAndMakeVisible (controls.getLast());
@@ -166,6 +169,13 @@ public:
         setSize (juce::jmax (300, cols * 86 + 20), rows * 92 + 50);
     }
     std::function<void()> onAnyChange;
+    std::function<void (const juce::String&)> onParamMenu;   // right-click a knob (Link to controller)
+    struct RightClick : juce::MouseListener
+    {
+        std::function<void()> fn;
+        void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && fn) fn(); }
+    };
+    juce::OwnedArray<RightClick> rightClicks;
     void setExternal (const juce::String& id, float v)
     {
         for (size_t i = 0; i < params.size(); ++i)
@@ -852,6 +862,47 @@ private:
 };
 }
 
+// FL "Remote control > Link to controller": pick a Peak Controller in the project to drive this knob
+static void linkToControllerMenu (Studio& s, int track, int slotUid, const juce::String& param)
+{
+    juce::PopupMenu m, ctl;
+    std::vector<std::pair<int, int>> srcs;
+    const auto& p = s.p();
+    for (size_t t = 0; t < p.mixer.size(); ++t)
+        for (auto& f : p.mixer[t].fx)
+            if (f.type == "peakctl" && ! ((int) t == track && f.uid == slotUid))
+            {
+                srcs.push_back ({ (int) t, f.uid });
+                ctl.addItem (100 + (int) srcs.size() - 1, "Peak Controller on " + (t == 0 ? juce::String ("Master") : juce::String ((int) t) + " " + p.mixer[t].name));
+            }
+    bool linked = false;
+    for (auto& L : p.ctlLinks) linked |= L.dstTrack == track && L.dstUid == slotUid && L.param == param;
+    m.addSectionHeader ("Remote control");
+    m.addSubMenu ("Link to controller", ctl, ctl.getNumItems() > 0);
+    m.addItem (1, "Link to a new Peak Controller on this insert");
+    m.addItem (3, "Unlink", linked);
+    m.showMenuAsync ({}, [&s, track, slotUid, param, srcs] (int r) {
+        if (r <= 0) return;
+        s.edit ("Link to controller", [&] (Project& pr) {
+            pr.ctlLinks.erase (std::remove_if (pr.ctlLinks.begin(), pr.ctlLinks.end(), [&] (const CtlLink& L) {
+                return L.dstTrack == track && L.dstUid == slotUid && L.param == param; }), pr.ctlLinks.end());
+            if (r == 3) return;
+            CtlLink L; L.dstTrack = track; L.dstUid = slotUid; L.param = param;
+            if (r == 1)
+            {
+                auto& fx = pr.mixer[(size_t) track].fx;
+                FxSlot c; c.uid = pr.newUid(); c.type = "peakctl";
+                size_t at = 0; for (size_t k = 0; k < fx.size(); ++k) if (fx[k].uid == slotUid) at = k;
+                fx.insert (fx.begin() + (long) at, c);   // before the knob's effect: it follows the incoming sound
+                L.srcTrack = track; L.srcUid = c.uid;
+            }
+            else if (r >= 100 && r - 100 < (int) srcs.size()) { L.srcTrack = srcs[(size_t) (r - 100)].first; L.srcUid = srcs[(size_t) (r - 100)].second; }
+            else return;
+            pr.ctlLinks.push_back (L);
+        });
+    });
+}
+
 void openEffectEditor (Studio& s, int track, int slotUid)
 {
     auto* slot = findSlot (s, track, slotUid);
@@ -903,6 +954,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
             if (auto* e = s.engine.builtinFx (track, slotUid)) e->setParam (id, v);
         },
         [&s, title] { s.commit (title); }, slot->type);
+    grid->onParamMenu = [&s, track, slotUid] (const juce::String& id) { linkToControllerMenu (s, track, slotUid, id); };
     auto liveFx = [&s, track, slotUid] { return s.engine.builtinFx (track, slotUid); };
     auto tapFn = [&s, track]() -> ScopeTap* { return s.engine.trackScope (track); };
     const auto& ty = slot->type;

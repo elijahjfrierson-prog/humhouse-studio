@@ -332,6 +332,8 @@ inline juce::PopupMenu colourMenu (int base)
     return m;
 }
 void openChannelEditor (Studio&, int channelId);
+// Patch Method (FL Patcher style): the channel gets its own insert and a window to stack effects / chains on it
+void openPatchMethod (Studio&, int channelId);
 void closeAllEditorWindows();
 extern std::function<bool (const juce::KeyPress&)> hostKeyHandler;   // app shortcuts (Cmd+S, Space, undo...) from pop-out / plug-in windows
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);

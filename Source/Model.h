@@ -210,6 +210,16 @@ struct MixerTrack
     float duck = 0.0f;             // 0 = off .. 1 = full
     int   duckSource = -1;         // -1 = auto (first armed vocal track)
     float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
+    // FL-style mini EQ under the FX slots: low shelf, 3 peaks, high shelf; each band has freq / gain / Q
+    std::array<float, 5> meqFreq { 80.0f, 300.0f, 1000.0f, 3500.0f, 10000.0f }, meqGain { 0, 0, 0, 0, 0 }, meqQ { 0.7f, 1.0f, 1.0f, 1.0f, 0.7f };
+};
+
+// Link to controller: a controller effect (Peak Controller) drives one knob of another effect
+struct CtlLink
+{
+    int srcTrack = 0, srcUid = 0, dstTrack = 0, dstUid = 0;
+    juce::String param;
+    float lo = 0.0f, hi = 1.0f;   // controller 0..1 maps onto this part of the knob's range
 };
 
 // ---------------------------------------------------------------- project
@@ -237,6 +247,7 @@ struct Project
     std::vector<Lane>       lanes;
     std::vector<Clip>       clips;
     std::vector<MixerTrack> mixer;   // [0] master
+    std::vector<CtlLink>    ctlLinks;
     std::vector<juce::File> audioPool;   // every audio clip ever used, kept until "Clear unused / Clear all"
     int  insertPatternAfter (int after, Pattern pt);                 // returns the new index; clip indices are remapped
     void removePatterns (const std::function<bool (int)>& drop);    // drops patterns + their clips, remaps the rest

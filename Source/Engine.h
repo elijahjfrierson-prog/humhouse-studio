@@ -148,6 +148,8 @@ private:
     void click (float* l, float* r, int n, double b0, double b1);
     void updateSolo();
     void processTrack (int track);
+    void applyMiniEq (TrackRuntime&, const MixerTrack&, int n);
+    void applyCtlLinks();
     void applyAutomation (double beat);
     double loopLength() const;
 

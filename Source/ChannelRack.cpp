@@ -217,6 +217,8 @@ struct Row : public juce::Component
         juce::PopupMenu m;
         auto* c = s.channel (channelId);
         if (c == nullptr) return;
+        m.addItem (11, "Patch Method (stack effects on this sound)...");
+        m.addSeparator();
         m.addItem (1, "Open in Piano Roll");
         m.addItem (2, c->type == ChannelType::Plugin ? "Open plugin editor" : "Channel settings (synth / sampler)...");
         m.addItem (3, "Rename...");
@@ -232,6 +234,7 @@ struct Row : public juce::Component
         m.showMenuAsync ({}, [this] (int r) {
             const int id = channelId;
             if (r == 1) select (true);
+            else if (r == 11) openPatchMethod (s, id);
             else if (r == 10) changeSoundMenu();
             else if (r == 2) openChannelEditor (s, id);
             else if (r == 3) { auto* c = s.channel (id); if (c) askText ("Rename channel", c->name, [this, id] (juce::String t) { s.edit ("Rename", [&] (Project&) { if (auto* ch = s.channel (id)) ch->name = t; }); }); }
