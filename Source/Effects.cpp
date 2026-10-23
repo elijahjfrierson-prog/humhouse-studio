@@ -192,6 +192,35 @@ private:
 };
 
 // ------------------------------------------------------------ Room Verb
+// modulated short delay used by Flanger and Flangus (0 latency: wet taps only look back in time)
+struct ModTap
+{
+    std::vector<float> buf; int w = 0, size = 0;
+    void prepare (double sr) { size = (int) (sr * 0.05) + 4; buf.assign ((size_t) size, 0.0f); w = 0; }
+    void push (float x) { buf[(size_t) w] = x; if (++w >= size) w = 0; }
+    float read (float delaySamples) const
+    {
+        float r = (float) w - 1.0f - juce::jlimit (0.0f, (float) size - 3.0f, delaySamples);
+        while (r < 0) r += (float) size;
+        const int i0 = (int) r; const float fr = r - (float) i0;
+        const int i1 = (i0 + 1) % size;
+        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
+    }
+};
+
+// Schroeder allpass: smears a signal in time without colouring it (reverb / flanger diffusion)
+struct Diffuser
+{
+    std::vector<float> b; int i = 0;
+    void prepare (int len) { b.assign ((size_t) juce::jmax (1, len), 0.0f); i = 0; }
+    float tick (float x, float g)
+    {
+        const float d = b[(size_t) i], y = d - g * x;
+        b[(size_t) i] = x + g * y; if (++i >= (int) b.size()) i = 0;
+        return y;
+    }
+};
+
 class RoomVerb : public BuiltinEffect, private juce::Thread
 {
 public:
@@ -204,13 +233,16 @@ public:
                                                  { "mix", "Mix", 0, 1, 0.25f }, { "lowcut", "Low Cut", 20, 1000, 200 },
                                                  { "reverse", "Reverse", 0, 1, 0, { "Off", "On" } },
                                                  { "revlen", "Rev Length", 0, 3, 1, { "1/4", "1/2", "1 Bar", "2 Bars" } },
-                                                 { "revroom", "Rev Room", 0, 5, 4, { "Classic", "Room", "Chamber", "Plate", "Hall", "Cathedral" } } };
+                                                 { "revroom", "Rev Room", 0, 5, 4, { "Classic", "Room", "Chamber", "Plate", "Hall", "Cathedral" } },
+                                                 { "smooth", "Smooth (dense, no ring)", 0, 1, 0.7f } };
         return ps;
     }
     double tailSeconds() const override { return p (5) > 0.5f ? 14.0 : 6.0; }
     void prepare (double s, int maxBlock) override
     {
-        sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear();
+        sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear(); dmp[0] = dmp[1] = 0;
+        const int lens[2][4] { { 142, 107, 379, 277 }, { 151, 113, 397, 293 } };
+        for (int c = 0; c < 2; ++c) for (int k = 0; k < 4; ++k) diff[c][k].prepare ((int) (lens[c][k] * s / 44100.0));
         revReady.store (false); prepared = true;
         if (p (5) > 0.5f) allocRev();
         // the reverse room is built here, before the convolver is prepared, so it's ready on the first block
@@ -239,6 +271,24 @@ public:
         {
             auto* s = b.getReadPointer (ch); auto* w = wet.getWritePointer (ch);
             for (int i = 0; i < n; ++i) w[i] = hp.tick (s[i], ch);
+        }
+        // Smooth: the input is diffused before the tank (dense from the first ms, no flutter / metallic ring) and the
+        // wet's top end is eased (a pristine tail instead of a fizzy one)
+        const float sm = p (8);
+        if (sm > 0.001f && ! roomMode())
+        {
+            const float cHi = 1.0f - std::exp (-2.0f * kPi * (float) juce::jmin (0.45 * sr, 16000.0 - 7000.0 * sm) / (float) sr);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* w = wet.getWritePointer (ch);
+                for (int i = 0; i < n; ++i)
+                {
+                    float x = w[i];
+                    for (auto& d : diff[ch]) x = d.tick (x, 0.62f);
+                    dmp[ch] += cHi * (x - dmp[ch]);
+                    w[i] += sm * (dmp[ch] - w[i]);
+                }
+            }
         }
         if (roomMode()) roomReverse (n, ctx);
         else
@@ -376,7 +426,7 @@ private:
             if (++segPos >= L) { segPos = 0; half ^= 1; if (silent > 0) --silent; }
         }
     }
-    double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp;
+    double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp; Diffuser diff[2][4]; float dmp[2] {};
     juce::AudioBuffer<float> rev; std::atomic<bool> revReady { false }; bool prepared = false;
     int revCap = 0, segLen = 0, segPos = 0, half = 0, silent = 0;
     static constexpr double irGain = 2.2;
@@ -395,12 +445,13 @@ public:
     {
         static const std::vector<ParamDef> ps { { "time", "Time", 0, 6, 2, { "1/32", "1/16", "1/8", "1/8 dot", "1/4", "1/4 dot", "1/2" } },
                                                  { "feedback", "Feedback", 0, 0.95f, 0.4f }, { "tone", "Tone", 500, 18000, 6000 },
-                                                 { "pingpong", "Ping Pong", 0, 1, 1, { "Off", "On" } }, { "mix", "Mix", 0, 1, 0.25f } };
+                                                 { "pingpong", "Ping Pong", 0, 1, 1, { "Off", "On" } }, { "mix", "Mix", 0, 1, 0.25f },
+                                                 { "tape", "Tape (wow, flutter, warm repeats)", 0, 1, 0 } };
         return ps;
     }
     double tailSeconds() const override { return 4.0; }
     void prepare (double s, int) override
-    { sr = s; size = (int) (s * 4.0); buf.setSize (2, size); buf.clear(); w = 0; lp[0] = lp[1] = 0; }
+    { sr = s; size = (int) (s * 4.1); buf.setSize (2, size); buf.clear(); w = 0; lp[0] = lp[1] = 0; wow = flut = 0; }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         static const double beats[] { 0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0 };
@@ -409,11 +460,28 @@ public:
         const bool pp = p (3) > 0.5f;
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         auto* bl = buf.getWritePointer (0); auto* br = buf.getWritePointer (1);
+        const float tape = p (5), ct = c * (1.0f - 0.45f * tape);
+        const float wInc = (float) (0.55 / sr), fInc = (float) (6.5 / sr);
         for (int i = 0; i < n; ++i)
         {
-            int rd = w - d; if (rd < 0) rd += size;
-            float dl = bl[rd], dr = br[rd];
-            lp[0] += c * (dl - lp[0]); lp[1] += c * (dr - lp[1]);
+            float dl, dr;
+            if (tape > 0.001f)
+            {
+                // tape: the read head wanders (slow wow + quick flutter), each repeat gets warmer and a little saturated
+                wow += wInc; if (wow >= 1) wow -= 1; flut += fInc; if (flut >= 1) flut -= 1;
+                const float m = tape * (0.0025f * std::sin (kPi * 2 * wow) + 0.0006f * std::sin (kPi * 2 * flut));
+                float rp = (float) w - (float) d * (1.0f + m); while (rp < 0) rp += (float) size;
+                const int i0 = (int) rp % size, i1 = (i0 + 1) % size; const float fr = rp - std::floor (rp);
+                dl = bl[i0] + (bl[i1] - bl[i0]) * fr; dr = br[i0] + (br[i1] - br[i0]) * fr;
+                lp[0] += ct * (dl - lp[0]); lp[1] += ct * (dr - lp[1]);
+                lp[0] += tape * (std::tanh (lp[0]) - lp[0]); lp[1] += tape * (std::tanh (lp[1]) - lp[1]);
+            }
+            else
+            {
+                int rd = w - d; if (rd < 0) rd += size;
+                dl = bl[rd]; dr = br[rd];
+                lp[0] += c * (dl - lp[0]); lp[1] += c * (dr - lp[1]);
+            }
             const float inM = 0.5f * (l[i] + r[i]);
             if (pp) { bl[w] = inM + lp[1] * fb; br[w] = lp[0] * fb; }
             else    { bl[w] = l[i] + lp[0] * fb; br[w] = r[i] + lp[1] * fb; }
@@ -422,7 +490,7 @@ public:
         }
     }
 private:
-    double sr = 44100; juce::AudioBuffer<float> buf; int size = 1, w = 0; float lp[2] {};
+    double sr = 44100; juce::AudioBuffer<float> buf; int size = 1, w = 0; float lp[2] {}, wow = 0, flut = 0;
 };
 
 // ------------------------------------------------------------ wrappers around juce::dsp
@@ -442,34 +510,40 @@ public:
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<ParamDef> ps { { "rate", "Rate Hz", 0.05f, 5, 0.8f }, { "depth", "Depth", 0, 1, 0.35f },
-                                                 { "delay", "Delay ms", 1, 30, 7 }, { "feedback", "Feedback", -0.9f, 0.9f, 0 }, { "mix", "Mix", 0, 1, 0.5f } };
+                                                 { "delay", "Delay ms", 1, 30, 7 }, { "feedback", "Feedback", -0.9f, 0.9f, 0 }, { "mix", "Mix", 0, 1, 0.5f },
+                                                 { "wide", "Wide (extra voices L / R)", 0, 1, 0.5f } };
         return ps;
     }
-    void prepare (double s, int mb) override { d.prepare ({ s, (juce::uint32) mb, 2 }); }
+    void prepare (double s, int mb) override
+    {
+        sr = s; d.prepare ({ s, (juce::uint32) mb, 2 }); for (auto& t : taps) t.prepare (s); extra.setSize (2, mb); ph = 0;
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         d.setRate (p (0)); d.setDepth (p (1)); d.setCentreDelay (p (2)); d.setFeedback (p (3)); d.setMix (p (4));
+        const float wide = p (5), mix = p (4);
+        const bool st = b.getNumChannels() > 1 && extra.getNumSamples() >= n;
+        if (st && wide > 0.001f)
+        {
+            // a second pair of voices, opposite LFOs on L and R: the chorus spreads wide instead of wobbling in the middle
+            const float inc = 0.73f * p (0) / (float) sr, centre = 1.6f * p (2), dep = 0.3f + 3.0f * p (1);
+            for (int i = 0; i < n; ++i)
+                for (int c = 0; c < 2; ++c)
+                {
+                    taps[c].push (b.getSample (c, i));
+                    const float lfo = std::sin (juce::MathConstants<float>::twoPi * (ph + (c == 1 ? 0.5f : 0.0f)));
+                    extra.setSample (c, i, taps[c].read ((centre + dep * lfo) * 0.001f * (float) sr));
+                    if (c == 1) { ph += inc; if (ph >= 1) ph -= 1; }
+                }
+        }
         runDsp (d, b, n);
+        if (st && wide > 0.001f)
+            for (int c = 0; c < 2; ++c) b.addFrom (c, 0, extra, c, 0, n, 0.5f * wide * mix);
     }
 private:
-    juce::dsp::Chorus<float> d;
+    juce::dsp::Chorus<float> d; ModTap taps[2]; juce::AudioBuffer<float> extra; double sr = 44100; float ph = 0;
 };
 
-// modulated short delay used by Flanger and Flangus (0 latency: wet taps only look back in time)
-struct ModTap
-{
-    std::vector<float> buf; int w = 0, size = 0;
-    void prepare (double sr) { size = (int) (sr * 0.05) + 4; buf.assign ((size_t) size, 0.0f); w = 0; }
-    void push (float x) { buf[(size_t) w] = x; if (++w >= size) w = 0; }
-    float read (float delaySamples) const
-    {
-        float r = (float) w - 1.0f - juce::jlimit (0.0f, (float) size - 3.0f, delaySamples);
-        while (r < 0) r += (float) size;
-        const int i0 = (int) r; const float fr = r - (float) i0;
-        const int i1 = (i0 + 1) % size;
-        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
-    }
-};
 
 class Flanger : public BuiltinEffect
 {
@@ -481,10 +555,15 @@ public:
         static const std::vector<ParamDef> ps { { "rate", "Rate Hz", 0.02f, 10, 0.25f }, { "depth", "Depth", 0, 1, 0.7f },
                                                  { "delay", "Delay ms", 0.1f, 10, 1.5f }, { "feedback", "Feedback", -0.95f, 0.95f, 0.5f },
                                                  { "stereo", "Stereo (deg)", 0, 180, 90 }, { "invert", "Polarity", 0, 1, 0, { "Normal", "Inverted (zero-style)" } },
-                                                 { "mix", "Mix", 0, 1, 0.5f } };
+                                                 { "mix", "Mix", 0, 1, 0.5f }, { "space", "Space (body / snapback)", 0, 1, 0.4f } };
         return ps;
     }
-    void prepare (double s, int) override { sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0; }
+    void prepare (double s, int) override
+    {
+        sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0;
+        const int lens[2][2] { { 211, 347 }, { 233, 383 } };
+        for (int c = 0; c < 2; ++c) for (int k = 0; k < 2; ++k) diff[c][k].prepare ((int) (lens[c][k] * s / 44100.0));
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float rate = p (0), depth = p (1), dMs = p (2), feed = p (3), mix = p (6);
@@ -500,14 +579,18 @@ public:
                 auto* x = b.getWritePointer (c);
                 const float wet = taps[c].read (d);
                 taps[c].push (x[i] + feed * fb[c]);
-                fb[c] = wet;
+                // the feedback runs through a short diffuser: each pass smears a little, so the sweep gets a full, roomy
+                // body and a reverb-like snapback instead of a thin comb; the soft limit keeps high feedback musical
+                const float sp = p (7);
+                const float df = diff[c][1].tick (diff[c][0].tick (wet, 0.55f), 0.5f);
+                fb[c] = std::tanh (wet + sp * (df - wet));
                 x[i] = x[i] * (1.0f - 0.5f * mix) + sign * wet * mix * 0.5f * 1.4f;
             }
             phase += inc; if (phase >= 1.0f) phase -= 1.0f;
         }
     }
 private:
-    double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
+    double sr = 44100; ModTap taps[2]; Diffuser diff[2][2]; float fb[2] {}, phase = 0;
 };
 
 // FL Flangus-style multi-voice flanger / chorus: voices, spread, cross feedback
@@ -1516,7 +1599,10 @@ public:
                     const float hopSec = (float) hop / (float) dsr;
                     voiceLvl *= std::exp (-hopSec / 0.5f);
                     const float tailMidi = midi;   // the reading before the gate: a quiet / breathy tail still says where the voice is
-                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
+                    // a yell / strained push: loud next to the voice, so a raspy (less periodic) reading is still the sung
+                    // vowel, not a consonant - the tune has to grab it hardest right there instead of letting go
+                    const bool belt = heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f;
+                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
@@ -1554,11 +1640,11 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
-                    consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
+                    consonant = belt && midi != 0.0f ? aper > 0.65f : rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     breathy = midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 0.75f;   // breath / rasp still on the sung note (not a t, k, s)
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for up to 0.8 s instead of slipping back to the natural pitch, so the corrected note rings on

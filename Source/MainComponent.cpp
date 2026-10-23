@@ -29,15 +29,33 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
-int& fontStyle() { static int st = appDataFile ("font-v2.txt").existsAsFile() ? appDataFile ("font-v2.txt").loadFileAsString().getIntValue() : 3; return st; }
+int& fontStyle() { static int st = appDataFile ("font-v3.txt").existsAsFile() ? appDataFile ("font-v3.txt").loadFileAsString().getIntValue() : 4; return st; }
 void setFontStyle (int st)
 {
     fontStyle() = st;
-    appDataFile ("font-v2.txt").getParentDirectory().createDirectory();
-    appDataFile ("font-v2.txt").replaceWithText (juce::String (st));
+    appDataFile ("font-v3.txt").getParentDirectory().createDirectory();
+    appDataFile ("font-v3.txt").replaceWithText (juce::String (st));
     juce::Typeface::clearTypefaceCache();
     for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
+}
+// combo boxes marked "smallArrow" (Playlist track routing) get a slim arrow so the name gets the room
+void HHLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox& box)
+{
+    if (! box.getProperties().contains ("smallArrow")) { LookAndFeel_V4::drawComboBox (g, w, h, down, bx, by, bw, bh, box); return; }
+    const auto b = juce::Rectangle<int> (0, 0, w, h).toFloat();
+    g.setColour (box.findColour (juce::ComboBox::backgroundColourId)); g.fillRoundedRectangle (b, 2.0f);
+    g.setColour (box.findColour (juce::ComboBox::outlineColourId)); g.drawRoundedRectangle (b.reduced (0.5f), 2.0f, 1.0f);
+    const float cx = (float) w - 7.0f, cy = (float) h * 0.5f;
+    juce::Path a; a.startNewSubPath (cx - 2.5f, cy - 1.2f); a.lineTo (cx, cy + 1.3f); a.lineTo (cx + 2.5f, cy - 1.2f);
+    g.setColour (box.findColour (juce::ComboBox::arrowColourId).withAlpha (box.isEnabled() ? 0.8f : 0.2f));
+    g.strokePath (a, juce::PathStrokeType (1.2f));
+}
+void HHLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
+{
+    if (! box.getProperties().contains ("smallArrow")) { LookAndFeel_V4::positionComboBoxText (box, label); return; }
+    label.setBounds (1, 1, box.getWidth() - 13, box.getHeight() - 2);
+    label.setFont (getComboBoxFont (box));
 }
 juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
@@ -45,6 +63,9 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
     static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
     static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
     static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
+    static auto sharp = juce::Typeface::createSystemTypefaceFor (BinaryData::IBMPlexSansCondensedRegular_ttf, (size_t) BinaryData::IBMPlexSansCondensedRegular_ttfSize);
+    static auto sharpBold = juce::Typeface::createSystemTypefaceFor (BinaryData::IBMPlexSansCondensedSemiBold_ttf, (size_t) BinaryData::IBMPlexSansCondensedSemiBold_ttfSize);
+    if (fontStyle() == 4 && sharp != nullptr) return f.isBold() && sharpBold != nullptr ? sharpBold : sharp;
     if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
     if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
     if (fontStyle() == 1 && flash != nullptr) return flash;
@@ -873,8 +894,8 @@ public:
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
                 juce::PopupMenu fm;
-                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "System", "Pro (sleek, default)" };
-                for (int i = 0; i < 4; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "System", "Pro (smooth)", "Sharp (mature, default)" };
+                for (int i = 0; i < 5; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
                 m.addSubMenu ("Font", fm);
             }
             {
@@ -932,7 +953,7 @@ public:
             if (id - 300 < ts.size()) newProject (ts[id - 300]);
             return;
         }
-        if (id >= 250 && id < 254) { setFontStyle (id - 250); return; }
+        if (id >= 250 && id < 255) { setFontStyle (id - 250); return; }
         if (id == 480)
         {
             captureFriendlyDrawing() = ! captureFriendlyDrawing();

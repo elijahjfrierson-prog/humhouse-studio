@@ -1234,6 +1234,43 @@ int main()
         CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
         CHECK (std::abs (gap - 440.0f) < 4.0f);
     }
+    // AutoPitch holds on yelled / strained notes: a loud, raspy, jittery voice sharp of the key stays tuned on the note
+    {
+        for (int style : { 3, 1 })
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (7); double ph = 0; float jit = 0, env = 0; std::vector<float> out;
+            for (int k = 0; k < 200; ++k)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const bool yell = k >= 60;   // sung, then the singer pushes hard into a yell on the same note
+                    const float lvl = yell ? 0.7f : 0.2f;
+                    env += (lvl - env) * 0.001f;
+                    jit += ((rnd.nextFloat() * 2 - 1) * 0.06f - jit) * 0.02f;   // strained voice: the period wanders cycle to cycle
+                    const float rasp = (rnd.nextFloat() * 2 - 1) * (yell ? 0.45f : 0.05f) * (0.6f + 0.4f * (float) std::sin (ph));
+                    float v = 0;
+                    for (int h = 1; h <= 8; ++h) v += (float) std::sin (h * ph) * (yell ? 1.0f / (float) h : 1.0f / (float) (h * h));
+                    ph += juce::MathConstants<double>::twoPi * 452.0 * (1.0 + jit) / 48000.0;
+                    const float x = env * (0.5f * v + rasp);
+                    b.setSample (0, i, x); b.setSample (1, i, x);
+                }
+                ap->process (b, 512, ctx);
+                for (int i = 0; i < 512; ++i) out.push_back (b.getSample (0, i));
+            }
+            int on = 0, n = 0;
+            for (size_t at = 90 * 512; at + 2048 < out.size(); at += 1024, ++n)
+            {
+                const float hz = detectPitchYin (out.data() + at, 2048, 48000.0, 0.3f, 0.6f);
+                if (hz > 0 && std::abs (1200.0f * std::log2 (hz / 440.0f)) < 20.0f) ++on;
+            }
+            std::printf ("autopitch yell style %d: %d of %d windows on the note\n", style, on, n);
+            CHECK (on >= n * 9 / 10);
+        }
+    }
     // AutoPitch keeps enunciation and punch: consonants pass through untouched (not smeared by the shifter),
     // attacks and level stay as sung, in every style
     for (double off : { 0.0, 40.0 })

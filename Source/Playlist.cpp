@@ -576,6 +576,7 @@ struct LaneHeader : public juce::Component
             s.edit ("Input", [&] (Project& p) { auto& l = p.lanes[(size_t) index];
                 if (id >= 1000) { l.stereoIn = true; l.inputPair = id - 1000; } else { l.stereoIn = false; l.inputCh = id - 1; } }); };
         insert.setTooltip ("Mixer insert this track plays and records through - every take stays on it");
+        insert.getProperties().set ("smallArrow", true); input.getProperties().set ("smallArrow", true);
         insert.onChange = [this] { const int v = insert.getSelectedItemIndex(); s.edit ("Route track", [&] (Project& p) { p.lanes[(size_t) index].mixerTrack = v; }); };
         for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon, (juce::Component*) &norm,
                                     (juce::Component*) &input, (juce::Component*) &insert })
@@ -1736,7 +1737,7 @@ private:
         if (c.isAudio())
         {
             const int ins = p.clipInsert (c);
-            if (ins >= 0 && ins < (int) p.mixer.size()) label << "  > " << p.mixer[(size_t) ins].name;
+            if (ins >= 0 && ins < (int) p.mixer.size()) label << juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xba ")) << p.mixer[(size_t) ins].name;
             if (c.takeGroup > 0)
             {
                 int n = 0, k = 0;
