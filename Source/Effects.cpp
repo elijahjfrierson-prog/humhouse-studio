@@ -1452,7 +1452,7 @@ public:
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
         // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
         const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
-        const float wetRel = 1.0f - std::exp (-1.0f / (0.035f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
+        const float wetRel = 1.0f - std::exp (-1.0f / (0.07f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
         // Body + Character: chest weight, a little forward bite and soft even-order harmonics on the tuned voice,
         // so it sounds full and alive instead of thin (all zero latency)
         const float body = p (13), chr = p (14);
@@ -1552,9 +1552,9 @@ public:
                     consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     breathy = midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 0.75f;   // breath / rasp still on the sung note (not a t, k, s)
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
-                    // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
+                    // for up to 0.6 s instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f))
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.6f : 0.35f))
                     {
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
@@ -1609,8 +1609,8 @@ public:
                         const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
-                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.32 : 0.22) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.6 s
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.6 : 0.4) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
