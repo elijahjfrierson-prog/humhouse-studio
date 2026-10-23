@@ -323,12 +323,21 @@ void askText (const juce::String& title, const juce::String& initial, std::funct
 }
 
 // ------------------------------------------------------------------ studio
+// auto-backups write the .hhs on a background thread: serialising + disk writes on the message thread froze the
+// waveforms / meters for a moment every few edits while the song played
+static void writeBackupAsync (const Project& p)
+{
+    static juce::ThreadPool pool (1);
+    if (pool.getNumJobs() > 1) return;   // one queued is enough
+    pool.addJob ([copy = std::make_shared<Project> (p)] { writeBackup (*copy); });
+}
+
 void Studio::commit (const juce::String& what)
 {
     undo.push (p(), what);
     engine.sync();
     dirty = true;
-    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackup (p()); }   // auto-backup every few edits
+    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits
     sendChangeMessage();
 }
 
@@ -1212,7 +1221,8 @@ private:
             if (autoBackup() && studio.dirty)
             {
                 engine.storePluginStates();
-                if (writeBackup (engine.project()).existsAsFile()) flash ("Auto-backup saved");
+                writeBackupAsync (engine.project());
+                flash ("Auto-backup saved");
             }
         }
     }

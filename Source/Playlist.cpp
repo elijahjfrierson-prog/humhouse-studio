@@ -1514,6 +1514,7 @@ private:
     bool wasPlaying = false;
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
+    std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
@@ -1600,6 +1601,14 @@ private:
         }
         return -1;
     }
+    // getApproximatePeak walks the whole thumbnail: once per loaded file, not on every 30 Hz playhead repaint
+    float peakOf (juce::AudioThumbnail& t)
+    {
+        if (auto it = thumbPeak.find (&t); it != thumbPeak.end()) return it->second;
+        const float pk = t.getApproximatePeak();
+        if (t.isFullyLoaded()) thumbPeak[&t] = pk;
+        return pk;
+    }
     juce::AudioThumbnail* thumb (const juce::File& f)
     {
         auto key = f.getFullPathName();
@@ -1652,6 +1661,7 @@ private:
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > getWidth()) return;
+        if (! g.getClipBounds().toFloat().expanded (2).intersects (r)) return;   // playhead strip repaints skip clips they don't touch
         juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
         if (! c.colour.isTransparent()) colour = c.colour;
@@ -1665,7 +1675,7 @@ private:
             {
                 const double secs = beatsToSeconds (c.length, p.bpm);
                 g.setColour (colour.brighter (0.4f));
-                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, t->getApproximatePeak())));   // quiet takes stay visible
+                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
             }
             // fades
             const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);
