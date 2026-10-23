@@ -1414,7 +1414,8 @@ public:
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
-            { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f } };   // off by default: just the tune, no tone change
+            { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f },   // off by default: just the tune, no tone change
+            { "glow", "Glow", 0, 1, 0.0f }, { "canvas", "Canvas", 0, 1, 0.0f } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1462,6 +1463,14 @@ public:
             tone[0].set (Biquad::LowShelf, sr, 190.0, 0.7, 3.5 * body);
             tone[1].set (Biquad::Peak, sr, 420.0, 0.8, 1.5 * body);
             tone[2].set (Biquad::Peak, sr, 2900.0, 0.9, 2.0 * chr);
+        }
+        // Glow: air on the tuned vowels (brings back the brightness the tune takes off). Canvas: clears the low-mid mud
+        const float glow = p (15), canvas = p (16);
+        const bool glowOn = glow > 0.001f || canvas > 0.001f;
+        if (glowOn)
+        {
+            glowF.set (Biquad::HighShelf, sr, 5000.0, 0.7, 1.2 * glow);
+            canvasF.set (Biquad::Peak, sr, 320.0, 1.0, -2.0 * canvas);
         }
         const float drive = 1.0f + 2.5f * chr, bias = 0.25f * chr, tb = std::tanh (bias), satMix = 0.55f * chr;
         auto colour = [&] (float x, int ch) {
@@ -1552,9 +1561,9 @@ public:
                     consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     breathy = midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 0.75f;   // breath / rasp still on the sung note (not a t, k, s)
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
-                    // for up to 0.6 s instead of slipping back to the natural pitch, so the corrected note rings on
+                    // for up to 0.8 s instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.6f : 0.35f))
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.8f : 0.45f))
                     {
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
@@ -1609,8 +1618,8 @@ public:
                         const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
-                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.6 s
-                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.6 : 0.4) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.75 s
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.75 : 0.5) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -1646,6 +1655,7 @@ public:
                 wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
             }
             if (colourOn) { const float cl = colour (wl, 0), cr = colour (wr, 1); wl += wetG * (cl - wl); wr += wetG * (cr - wr); }   // sung vowels only: consonants stay crisp
+            if (glowOn) { const float gl = glowF.tick (canvasF.tick (wl, 0), 0), gr = glowF.tick (canvasF.tick (wr, 1), 1); wl += wetG * (gl - wl); wr += wetG * (gr - wr); }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -1659,7 +1669,7 @@ private:
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0, youngHops = 1 << 20; static constexpr float youngSec = 0.08f, yTau = 0.05f, yHys = 0.55f; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
-    Biquad tone[3]; float dcX[2] {}, dcY[2] {};
+    Biquad tone[3], glowF, canvasF; float dcX[2] {}, dcY[2] {};
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 

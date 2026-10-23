@@ -316,7 +316,8 @@ int main()
         auto ap = createBuiltinEffect ("autopitch");
         ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
         ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
-        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());   // 0 = fastest
+        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());
+        if (f.size() > 8) { ap->setParam ("glow", f[7].getFloatValue()); ap->setParam ("canvas", f[8].getFloatValue()); }   // 0 = fastest
         ap->prepare (rd->sampleRate, 512);
         PlayContext ctx;
         juce::AudioBuffer<float> b (2, 512);
