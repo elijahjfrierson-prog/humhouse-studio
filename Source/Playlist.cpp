@@ -307,34 +307,84 @@ static juce::AudioBuffer<float> timeRender (const juce::AudioBuffer<float>& in, 
     return out;
 }
 
-class ToolWindow : public juce::DocumentWindow
+// pops out like the mixer: floats over the app, Space / shortcuts still drive the song while it's open
+class ToolWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
-    ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton)
+    ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
         setUsingNativeTitleBar (true); setContentOwned (c, true); setResizable (true, false);
         centreWithSize (getWidth(), getHeight()); setVisible (true);
+        makeCaptureFriendly (*this);
+        markFloating (*this);
+        if (floatWithTopmost) setAlwaysOnTop (true);
+        startTimer (300);
     }
     void closeButtonPressed() override { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<juce::Component> (this)] { delete sp.getComponent(); }); }
+    bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
+private:
+    void timerCallback() override { updateFloating (*this); }
+};
+
+// shared by HumTone / HumTime: PLAY keeps the song going while you edit, and every change is rendered
+// straight into the clip so you hear it on the next pass (always from the original take, Ctrl+Z undoes)
+struct LiveClipEditor : public juce::Component, private juce::Timer
+{
+    LiveClipEditor (Studio& st, int clipUid, const juce::String& what) : s (st), uid (clipUid), name (what)
+    {
+        setupButton (playBtn, "PLAY", "Play / stop the song (Space) - keep listening while you edit");
+        setupButton (origBtn, "ORIGINAL", "Put the clip back to the take as it was recorded");
+        setupButton (closeBtn, "X  CLOSE", "Close " + what + " (your edit stays on the clip, Ctrl+Z undoes)");
+        playBtn.setColour (juce::TextButton::buttonOnColourId, col::good);
+        playBtn.onClick = [this] { s.engine.togglePlay(); timerCallback(); };
+        origBtn.onClick = [this] { changed = false; s.edit ("Original take", [this] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = clip.audioFile; c.sourceOffset = clip.sourceOffset; } }); s.engine.sync(); };
+        closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
+        for (auto* b : { &playBtn, &origBtn, &closeBtn }) addAndMakeVisible (*b);
+        for (auto& c : s.p().clips) if (c.uid == uid) clip = c;
+        readClipAudio (clip, s.p().bpm, audio, sr);
+        startTimer (120);
+    }
+    // re-render a moment after the last change, so dragging stays smooth
+    void changedSoon() { changed = true; dueAt = juce::Time::getMillisecondCounter() + 250; }
+    virtual juce::AudioBuffer<float> render() = 0;
+    void layoutTop (juce::Rectangle<int>& r)
+    {
+        closeBtn.setBounds (r.removeFromRight (100)); r.removeFromRight (6);
+        origBtn.setBounds (r.removeFromRight (90)); r.removeFromRight (6);
+        playBtn.setBounds (r.removeFromRight (80)); r.removeFromRight (12);
+    }
+    Studio& s; int uid; juce::String name; Clip clip;
+    juce::AudioBuffer<float> audio; double sr = 44100;
+private:
+    juce::TextButton playBtn, origBtn, closeBtn;
+    bool changed = false; juce::uint32 dueAt = 0;
+    void timerCallback() override
+    {
+        const bool on = s.engine.isPlaying();
+        if (playBtn.getToggleState() != on) { playBtn.setToggleState (on, juce::dontSendNotification); playBtn.setButtonText (on ? "STOP" : "PLAY"); }
+        if (! changed || juce::Time::getMillisecondCounter() < dueAt || audio.getNumSamples() == 0) return;
+        changed = false;
+        bool still = false;
+        for (auto& c : s.p().clips) still |= c.uid == uid;
+        if (! still) return;
+        const auto out = render();
+        const auto f = s.p().recordingsFolder().getChildFile (name).getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_" + name.toLowerCase(), ".wav");
+        if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, name);   // no stop: the song keeps playing
+    }
 };
 
 // HumTone: every sung note is a block; drag it up / down (snaps to semitones, Alt = free), SNAP ALL centres every note
-class HumToneView : public juce::Component
+class HumToneView : public LiveClipEditor
 {
 public:
-    HumToneView (Studio& st, int clipUid) : s (st), uid (clipUid)
+    HumToneView (Studio& st, int clipUid) : LiveClipEditor (st, clipUid, "HumTone")
     {
         setupButton (snapBtn, "SNAP ALL", "Centre every note on its nearest semitone");
         setupButton (resetBtn, "RESET", "Put every note back where it was sung");
-        setupButton (applyBtn, "APPLY", "Render the new pitches into the clip (Ctrl+Z undoes)");
-        setupButton (closeBtn, "X  CLOSE", "Close HumTone without applying");
-        for (auto* b : { &snapBtn, &resetBtn, &applyBtn, &closeBtn }) addAndMakeVisible (*b);
-        snapBtn.onClick = [this] { for (auto& t : notes) t.target = std::round (t.sung); repaint(); };
-        resetBtn.onClick = [this] { for (auto& t : notes) t.target = t.sung; repaint(); };
-        closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
-        applyBtn.onClick = [this] { apply(); };
-        for (auto& c : s.p().clips) if (c.uid == uid) clip = c;
-        if (readClipAudio (clip, s.p().bpm, audio, sr)) { curve = toneCurve (audio, sr); notes = toneNotes (curve); }
+        for (auto* b : { &snapBtn, &resetBtn }) addAndMakeVisible (*b);
+        snapBtn.onClick = [this] { for (auto& t : notes) t.target = std::round (t.sung); repaint(); changedSoon(); };
+        resetBtn.onClick = [this] { for (auto& t : notes) t.target = t.sung; repaint(); changedSoon(); };
+        if (audio.getNumSamples() > 0) { curve = toneCurve (audio, sr); notes = toneNotes (curve); }
         lo = 127; hi = 0;
         for (auto& t : notes) { lo = juce::jmin (lo, (int) t.sung - 3); hi = juce::jmax (hi, (int) t.sung + 4); }
         if (hi <= lo) { lo = 48; hi = 72; }
@@ -343,8 +393,8 @@ public:
     void resized() override
     {
         auto r = getLocalBounds().removeFromTop (34).reduced (6, 4);
-        for (auto* b : { &snapBtn, &resetBtn, &applyBtn }) { b->setBounds (r.removeFromLeft (90)); r.removeFromLeft (6); }
-        closeBtn.setBounds (r.removeFromRight (100));
+        layoutTop (r);
+        for (auto* b : { &snapBtn, &resetBtn }) { b->setBounds (r.removeFromLeft (90)); r.removeFromLeft (6); }
     }
     void paint (juce::Graphics& g) override
     {
@@ -398,24 +448,83 @@ public:
         notes[(size_t) drag].target = juce::jlimit ((float) lo, (float) hi - 1, t);
         repaint();
     }
+    void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) changedSoon(); drag = -1; }
+    juce::AudioBuffer<float> render() override { return toneRender (audio, sr, notes); }
 private:
     juce::Rectangle<float> area() const { return getLocalBounds().withTrimmedTop (38).withTrimmedLeft (44).toFloat().reduced (2); }
     float xOf (int f) const { const auto a = area(); return a.getX() + a.getWidth() * f / (float) juce::jmax (1, (int) curve.size()); }
     float yOf (float midi) const { const auto a = area(); return a.getBottom() - a.getHeight() * (midi - lo) / (float) (hi - lo); }
-    void apply()
-    {
-        if (audio.getNumSamples() == 0) return;
-        s.engine.stop();
-        const auto out = toneRender (audio, sr, notes);
-        const auto f = s.p().recordingsFolder().getChildFile ("HumTone").getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_humtone", ".wav");
-        if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, "HumTone");
-        if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed();
-    }
-    Studio& s; int uid; Clip clip;
-    juce::AudioBuffer<float> audio; double sr = 44100;
     std::vector<float> curve; std::vector<ToneNote> notes;
     int lo = 48, hi = 72, drag = -1; float dragFrom = 0;
-    juce::TextButton snapBtn, resetBtn, applyBtn, closeBtn;
+    juce::TextButton snapBtn, resetBtn;
+};
+
+// HumTime: pick a grid and how hard to pull; the hits stretch onto it (no cuts) while the song plays
+class HumTimeView : public LiveClipEditor
+{
+public:
+    HumTimeView (Studio& st, int clipUid, double startGrid, float startStrength) : LiveClipEditor (st, clipUid, "HumTime"), grid (startGrid)
+    {
+        static const char* gn[] { "1/4", "1/8", "1/16", "1/32" };
+        static const double gv[] { 1.0, 0.5, 0.25, 0.125 };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* b = gridBtns.add (new juce::TextButton());
+            setupButton (*b, gn[i], juce::String ("Warp the hits to ") + gn[i], true);
+            b->setRadioGroupId (7301);
+            b->setToggleState (std::abs (gv[i] - grid) < 1.0e-6, juce::dontSendNotification);
+            const double g = gv[i];
+            b->onClick = [this, g] { grid = g; changedSoon(); };
+            addAndMakeVisible (b);
+        }
+        strength.setSliderStyle (juce::Slider::LinearHorizontal);
+        strength.setRange (0.0, 100.0, 1.0); strength.setValue (startStrength * 100.0, juce::dontSendNotification);
+        strength.setTextValueSuffix (" %"); strength.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 20);
+        strength.setTooltip ("How hard the hits pull to the grid: 100% = dead on, 50% keeps some feel");
+        strength.onDragEnd = [this] { changedSoon(); };
+        strength.onValueChange = [this] { if (! strength.isMouseButtonDown()) changedSoon(); };
+        addAndMakeVisible (strength);
+        changedSoon();   // opening it warps with the picked grid straight away
+        setSize (820, 220);
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromTop (34).reduced (6, 4);
+        layoutTop (r);
+        for (auto* b : gridBtns) { b->setBounds (r.removeFromLeft (54)); r.removeFromLeft (4); }
+        r.removeFromLeft (8);
+        strength.setBounds (r);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel.darker (0.4f));
+        auto a = getLocalBounds().withTrimmedTop (40).reduced (8).toFloat();
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        const double beats = clip.length;
+        for (double b = 0; b < beats && grid > 0; b += grid)
+        {
+            const float x = a.getX() + a.getWidth() * (float) (b / beats);
+            g.fillRect (x, a.getY(), 1.0f, a.getHeight());
+        }
+        const int n = audio.getNumSamples();
+        if (n == 0) { g.setColour (juce::Colours::white); g.drawText ("Clip audio not found", a, juce::Justification::centred); return; }
+        g.setColour (col::accent.withAlpha (0.8f));
+        const int w = juce::jmax (1, (int) a.getWidth());
+        for (int x = 0; x < w; ++x)
+        {
+            const int s0 = (int) ((juce::int64) n * x / w), s1 = juce::jmax (s0 + 1, (int) ((juce::int64) n * (x + 1) / w));
+            const float m = audio.getMagnitude (0, s0, s1 - s0);
+            g.fillRect (a.getX() + x, a.getCentreY() - m * a.getHeight() * 0.5f, 1.0f, juce::jmax (1.0f, m * a.getHeight()));
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.7f));
+        g.setFont (12.0f);
+        g.drawText ("Pick a grid and strength: you hear it on the next pass. ORIGINAL puts the take back.", getLocalBounds().removeFromBottom (22), juce::Justification::centred);
+    }
+    juce::AudioBuffer<float> render() override { return timeRender (audio, sr, s.p().bpm, clip.start, grid, (float) strength.getValue() / 100.0f); }
+private:
+    double grid;
+    juce::OwnedArray<juce::TextButton> gridBtns;
+    juce::Slider strength;
 };
 
 static bool isSurprise (const Clip& c) { return c.isAudio() && c.audioFile.getFileName().contains ("_surprise"); }
@@ -1786,7 +1895,6 @@ private:
         const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
         if (cp == nullptr || ! cp->isAudio()) return;
         const Clip c = *cp;
-        s.engine.stop();
         juce::AudioBuffer<float> in; double sr = 0;
         if (! readClipAudio (c, s.p().bpm, in, sr)) return;
         const auto out = timeRender (in, sr, s.p().bpm, c.start, grid, strength);
@@ -1897,7 +2005,18 @@ private:
         auto* view = new KeyView (g, msg);
         view->apply = [safe, g] (int root, int scale, bool bpm) {
             if (auto* pl = safe.getComponent())
-                pl->s.edit ("Key Finder", [g, root, scale, bpm] (Project& p) { p.keyRoot = root; p.scaleIndex = scale; if (bpm && g.bpm > 0) p.bpm = g.bpm; });
+            {
+                // AutoPitch everywhere follows the key it found (Key = Project, Scale = Project)
+                pl->s.edit ("Key Finder", [g, root, scale, bpm] (Project& p) {
+                    p.keyRoot = root; p.scaleIndex = scale; if (bpm && g.bpm > 0) p.bpm = g.bpm;
+                    for (auto& m : p.mixer) for (auto& f : m.fx) if (f.type == "autopitch") { f.params["key"] = -1.0f; f.params["scale"] = -1.0f; }
+                });
+                const auto& mx = pl->s.p().mixer;
+                for (int t = 0; t < (int) mx.size(); ++t)
+                    for (auto& f : mx[(size_t) t].fx)
+                        if (f.type == "autopitch")
+                            if (auto* fx = pl->s.engine.builtinFx (t, f.uid)) { fx->setParam ("key", -1.0f); fx->setParam ("scale", -1.0f); }
+            }
         };
         juce::DialogWindow::LaunchOptions o;
         o.dialogTitle = "Key Finder"; o.content.setOwned (view); o.componentToCentreAround = this;
@@ -1967,6 +2086,8 @@ private:
         m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
         {
             juce::PopupMenu tm;
+            tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");
+            tm.addSeparator();
             tm.addItem (340, "Warp hits to 1/16"); tm.addItem (341, "Warp hits to 1/8"); tm.addItem (343, "Warp hits to 1/4");
             tm.addItem (342, "Warp hits to 1/16 at 50% (keeps the feel)");
             m.addSubMenu ("HumTime: warp timing to the grid (stretch, no cuts)", tm, clip.isAudio() && ! clip.reversed);
@@ -2033,6 +2154,7 @@ private:
             }
             if (r == 15) { consolidate (uid); return; }
             if (r == 17) { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+            if (r == 344) { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }
             if (r >= 340 && r <= 343) { static const double g[] { 0.25, 0.5, 0.25, 1.0 }; humTime (uid, g[r - 340], r == 342 ? 0.5f : 1.0f); return; }
             if (r == 16)
             {

@@ -546,7 +546,7 @@ void Engine::sync()
             // a clip under (or just ahead of) the playhead - e.g. the take you just stopped - is buffered before it
             // goes live, so it sounds at once instead of a second of silence while the disk thread catches up
             const double pb = positionBeats();
-            if (! c.reversed && pb < c.start + c.length && pb > c.start - 2.0)
+            if (playing.load() && ! c.hidden && ! c.reversed && pb < c.start + c.length && pb > c.start - 2.0)   // stopped (e.g. opening a project): play primes it, no 0.3 s wait per clip
             {
                 const auto at = (juce::int64) ((c.sourceOffset + std::max (0.0, pb - c.start) * 60.0 / proj.bpm) * r->sampleRate);
                 if (at >= 0 && at < r->lengthInSamples)
@@ -939,6 +939,30 @@ void Engine::startRecordingWriters (bool surprise)
     takes = std::move (newTakes);
 }
 
+// a take covered by a new recording goes to the first take lane under its track with room for it; a new
+// take lane (muted, feeds the track like Comp takes) is added when they're all busy. Returns the inserted lane or -1.
+static int bumpTakeDown (Project& p, Clip c, int lane)
+{
+    if (lane < 0 || lane >= (int) p.lanes.size()) return -1;
+    const double c1 = c.start + c.length;
+    int i = lane + 1;
+    for (; i < (int) p.lanes.size() && p.lanes[(size_t) i].compLane == lane; ++i)
+    {
+        bool busy = false;
+        for (auto& o : p.clips) busy |= o.lane == i && ! o.hidden && o.start < c1 - 1.0e-6 && o.start + o.length > c.start + 1.0e-6;
+        if (! busy) { c.lane = i; p.clips.push_back (c); return -1; }
+    }
+    const int at = i, k = at - lane;
+    for (auto& o : p.clips) if (o.lane >= at) ++o.lane;
+    for (auto& l : p.lanes) if (l.compLane >= at) ++l.compLane;
+    const auto base = p.lanes[(size_t) lane];
+    Lane l; l.name = "Take " + juce::String (k) + " - " + base.name; l.mixerTrack = base.mixerTrack; l.muted = true; l.compLane = lane;
+    l.colour = base.colour; l.height = juce::jmin (base.height, 44.0f); l.monitor = false;
+    p.lanes.insert (p.lanes.begin() + at, l);
+    c.lane = at; p.clips.push_back (c);
+    return at;
+}
+
 void Engine::finishRecordingWriters()
 {
     std::vector<std::unique_ptr<Take>> done;
@@ -1001,7 +1025,7 @@ void Engine::finishRecordingWriters()
         // edges (the rest keeps playing) and kept underneath as an alternate
         // punch: cut existing clips on this lane at the new take's range (5 ms crossfade via fades)
         const double r0 = newClips.front().start, r1 = newClips.front().start + newClips.front().length;
-        std::vector<Clip> keep;
+        std::vector<Clip> keep, bumped;
         for (auto& c : proj.clips)
         {
             if (c.lane != t->lane || ! c.isAudio() || c.hidden || c.start >= r1 || c.start + c.length <= r0) { keep.push_back (c); continue; }
@@ -1013,8 +1037,12 @@ void Engine::finishRecordingWriters()
                 b.sourceOffset += (r1 - c.start) * 60.0 / proj.bpm; b.start = r1; b.length = c.start + c.length - r1; b.fadeIn = 0.02;
                 keep.push_back (b);
             }
-            Clip hiddenOld = c; hiddenOld.hidden = true; hiddenOld.takeGroup = group; hiddenOld.uid = proj.newUid();
-            keep.push_back (hiddenOld);   // old take kept as an alternate
+            // the part the new take covers bumps down to a take lane under the track (still there, muted, ready to comp)
+            Clip down = c; down.uid = proj.newUid(); down.hidden = false; down.selected = false; down.takeGroup = group; down.group = 0;
+            const double d0 = std::max (c.start, r0), d1 = std::min (c.start + c.length, r1);
+            if (! c.reversed) down.sourceOffset += (d0 - c.start) * 60.0 / proj.bpm;
+            down.start = d0; down.length = d1 - d0; down.fadeIn = down.fadeOut = 0.02;
+            bumped.push_back (down);
         }
         for (size_t i = 0; i < newClips.size(); ++i)
         {
@@ -1024,6 +1052,9 @@ void Engine::finishRecordingWriters()
         {
             const juce::ScopedLock sl (lock);
             proj.clips = std::move (keep);
+            for (auto& b : bumped)
+                if (const int at = bumpTakeDown (proj, b, t->lane); at >= 0)
+                    for (auto& o : done) if (&o != &t && o->lane >= at) ++o->lane;   // other tracks recording this pass move down too
         }
         added = true;
     }

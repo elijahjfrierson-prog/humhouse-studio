@@ -661,10 +661,33 @@ int main()
             for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
             e.stop(); e.setRecording (false);
         };
+        const int lanesBefore = (int) p.lanes.size();
         take(); take();
+        // the new take sits on the track, the one it covered bumps down to a muted take lane right under it
         int onLane1 = 0, onLane2 = 0, hidden = 0;
         for (auto& c : p.clips) if (c.isAudio()) { if (c.hidden) hidden += c.lane == 1; else { onLane1 += c.lane == 1; onLane2 += c.lane == 2; } }
-        CHECK (onLane1 == 1 && onLane2 == 0 && hidden >= 1);
+        std::printf ("take bump-down: track %d clip(s), take lane %d clip(s), lanes %d -> %d\n", onLane1, onLane2, lanesBefore, (int) p.lanes.size());
+        CHECK (onLane1 == 1 && onLane2 == 1 && hidden == 0);
+        CHECK ((int) p.lanes.size() == lanesBefore + 1 && p.lanes[2].compLane == 1 && p.lanes[2].muted && p.lanes[2].mixerTrack == p.lanes[1].mixerTrack);
+        // a third take: take 2 bumps down too, onto a second take lane (take 1 stays where it is)
+        take();
+        int l1 = 0, l2 = 0, l3 = 0;
+        for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { l1 += c.lane == 1; l2 += c.lane == 2; l3 += c.lane == 3; }
+        CHECK (l1 == 1 && l2 == 1 && l3 == 1);
+        CHECK ((int) p.lanes.size() == lanesBefore + 2 && p.lanes[3].compLane == 1);
+        // punch in bars 1-2 (beats 2-4 of take 3): the track keeps its outside parts, only the punched piece goes down
+        p.punchIn = 1.0; p.punchOut = 2.0;
+        take();
+        int trackParts = 0, downPieces = 0;
+        for (auto& c : p.clips)
+            if (c.isAudio() && ! c.hidden)
+            {
+                if (c.lane == 1) ++trackParts;
+                if (c.lane >= 2 && c.lane <= 4 && p.lanes[(size_t) c.lane].compLane == 1 && std::abs (c.start - 1.0) < 1.0e-6 && std::abs (c.length - 1.0) < 1.0e-6) ++downPieces;
+            }
+        std::printf ("punch down: track %d part(s), %d punched piece(s) under it\n", trackParts, downPieces);
+        CHECK (trackParts == 3 && downPieces == 1);
+        p.punchIn = p.punchOut = 0.0;
         // surprise take: armed + playing with record off is captured as a hidden take
         const auto before = p.clips.size();
         e.setPositionBeats (0.0); e.play();

@@ -198,8 +198,7 @@ void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool
         return;
     }
     col::drawWithHalo (g, b.isEnabled() ? 1.0f : 0.5f, [&] (int dx, int dy) { g.drawFittedText (b.getButtonText(), area.translated (dx, dy), juce::Justification::centred, 2); });
-    col::setFontGradientFill (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, b.isEnabled() ? 1.0f : 0.5f);
-    g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+    col::fillGradientText (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, 2, 0.0f, b.isEnabled() ? 1.0f : 0.5f);
 }
 
 void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
@@ -224,8 +223,7 @@ void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
     const float alpha = l.isEnabled() ? 1.0f : 0.5f;
     const int lines = juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight()));
     col::drawWithHalo (g, alpha, [&] (int dx, int dy) { g.drawFittedText (l.getText(), area.translated (dx, dy), l.getJustificationType(), lines, l.getMinimumHorizontalScale()); });
-    col::setFontGradientFill (g, l.getText(), area.toFloat(), l.getJustificationType(), alpha);
-    g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+    col::fillGradientText (g, l.getText(), area.toFloat(), l.getJustificationType(), lines, l.getMinimumHorizontalScale(), alpha);
     g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));
     g.drawRect (l.getLocalBounds());
 }
@@ -1206,28 +1204,44 @@ private:
         if (p.projectFile == juce::File()) return;
         const auto base = p.projectFile.getParentDirectory();
         const auto app = juce::File::getSpecialLocation (juce::File::currentApplicationFile), exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
-        std::map<juce::String, juce::File> moved;
+        std::vector<std::pair<juce::File, juce::File>> jobs;
+        std::set<juce::String> seen;
         auto take = [&] (const juce::File& f, const juce::File& dest) {
-            if (! f.existsAsFile() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || moved.count (f.getFullPathName())) return;
-            dest.createDirectory();
-            auto t = dest.getChildFile (f.getFileName());
-            if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
-            if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+            if (f == juce::File() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || ! seen.insert (f.getFullPathName()).second) return;
+            jobs.push_back ({ f, dest });
         };
         const auto shared = docsDir().getChildFile ("Recordings");
         for (auto& c : p.clips) take (c.audioFile, base.getChildFile (c.audioFile.isAChildOf (shared) ? "Recordings" : "Audio Files"));
         for (auto& f : p.audioPool) take (f, base.getChildFile ("Audio Files"));
         for (auto& c : p.channels) take (c.sampleFile, base.getChildFile ("Samples"));
         for (auto& m : p.mixer) take (m.frozenFile, base.getChildFile ("Recordings").getChildFile ("Freeze"));
-        if (moved.empty()) return;
-        studio.live ([&moved] (Project& pr) {
-            auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
-            for (auto& c : pr.clips) re (c.audioFile);
-            for (auto& f : pr.audioPool) re (f);
-            for (auto& c : pr.channels) re (c.sampleFile);
-            for (auto& m : pr.mixer) re (m.frozenFile);
+        if (jobs.empty()) return;
+        // copying a project's sounds next to it runs in the background: the project is open and playable at once
+        juce::Component::SafePointer<MainComponent> sp (this);
+        const auto projFile = p.projectFile;
+        juce::Thread::launch ([sp, jobs, projFile] {
+            std::map<juce::String, juce::File> moved;
+            for (auto& [f, dest] : jobs)
+            {
+                if (! f.existsAsFile()) continue;
+                dest.createDirectory();
+                auto t = dest.getChildFile (f.getFileName());
+                if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
+                if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+            }
+            if (moved.empty()) return;
+            juce::MessageManager::callAsync ([sp, moved, projFile] {
+                if (sp == nullptr || sp->engine.project().projectFile != projFile) return;
+                sp->studio.live ([&moved] (Project& pr) {
+                    auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
+                    for (auto& c : pr.clips) re (c.audioFile);
+                    for (auto& f : pr.audioPool) re (f);
+                    for (auto& c : pr.channels) re (c.sampleFile);
+                    for (auto& m : pr.mixer) re (m.frozenFile);
+                });
+                sp->engine.sync();
+            });
         });
-        engine.sync();
     }
 
     void locateMissingAudio()

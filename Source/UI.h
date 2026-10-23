@@ -92,6 +92,21 @@ namespace col
                       : j.testFlags (juce::Justification::horizontallyCentred) ? area.getCentreX() - w * 0.5f : area.getX();
         g.setGradientFill (fontGradientFill (x, x + w, alpha));
     }
+    // gradient text as one glyph path: macOS fills a gradient glyph-by-glyph and a space (empty outline) leaves the clip open,
+    // painting the whole bar in the gradient - so build the outline ourselves and fill only the letters
+    inline void fillGradientText (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j,
+                                  int lines, float minScale, float alpha = 1.0f)
+    {
+        juce::GlyphArrangement ga;
+        ga.addFittedText (g.getCurrentFont(), text, area.getX(), area.getY(), area.getWidth(), area.getHeight(), j, juce::jmax (1, lines), minScale);
+        juce::Path p; ga.createPath (p);
+        if (p.isEmpty() || p.getBounds().isEmpty()) return;
+        const auto bb = p.getBounds();
+        g.saveState();
+        g.setGradientFill (fontGradientFill (bb.getX(), bb.getRight(), alpha));
+        g.fillPath (p);
+        g.restoreState();
+    }
 }
 
 // Panel titles / names drawn in paint(): gradient when Font = Gradient, otherwise the colour already set on g
@@ -100,7 +115,8 @@ inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rec
     if (col::fontGradient && col::isHeadline (g.getCurrentFont()))
     {
         col::drawWithHalo (g, 1.0f, [&] (int dx, int dy) { if (fitted) g.drawFittedText (text, area.translated (dx, dy), j, 1); else g.drawText (text, area.translated (dx, dy), j, true); });
-        col::setFontGradientFill (g, text, area.toFloat(), j);
+        col::fillGradientText (g, text, area.toFloat(), j, 1, fitted ? 0.0f : 1.0f);
+        return;
     }
     if (fitted) g.drawFittedText (text, area, j, 1);
     else g.drawText (text, area, j, true);
