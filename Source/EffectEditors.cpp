@@ -1,4 +1,5 @@
 #include "UI.h"
+#include "Instruments.h"
 #include "Drummer/DrummerCore.h"
 #include <complex>
 #include <map>
@@ -81,7 +82,10 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
         { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
         { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
-        { "gate", { { "Tight", { { "threshold", -40.0f }, { "release", 50.0f } } }, { "Soft", { { "threshold", -55.0f }, { "release", 200.0f }, { "range", -20.0f } } } } },
+        { "gate", { { "Tight", { { "threshold", -40.0f }, { "release", 50.0f } } }, { "Soft", { { "threshold", -55.0f }, { "release", 200.0f }, { "range", -20.0f } } },
+                    { "EarPods (wired)", { { "threshold", -48.0f }, { "attack", 0.5f }, { "release", 150.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 150.0f }, { "keyhi", 4000.0f }, { "tame", 12.0f } } },
+                    { "AirPods mic", { { "threshold", -44.0f }, { "attack", 0.5f }, { "release", 140.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 200.0f }, { "keyhi", 3500.0f }, { "tame", 6.0f } } },
+                    { "Mac / iPhone mic", { { "threshold", -50.0f }, { "attack", 0.5f }, { "release", 180.0f }, { "range", -40.0f }, { "hold", 150.0f }, { "keylo", 120.0f }, { "keyhi", 5000.0f }, { "tame", 8.0f } } } } },
         { "pump", { { "Classic 1/4", { { "depth", 0.8f }, { "rate", 1.0f } } }, { "Subtle", { { "depth", 0.4f } } }, { "1/8 Pulse", { { "rate", 2.0f }, { "depth", 0.7f } } } } },
         { "clip", { { "Warm", { { "gain", 3.0f }, { "ceiling", -1.0f } } }, { "Loud", { { "gain", 9.0f }, { "ceiling", -0.5f } } } } },
         { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } }, { "Reverse Swell", { { "size", 0.85f }, { "damp", 0.4f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 1.0f } } }, { "Ghost Hall Reverse", { { "size", 0.6f }, { "damp", 0.35f }, { "width", 1.0f }, { "mix", 0.45f }, { "lowcut", 200.0f }, { "reverse", 1.0f }, { "revlen", 1.0f }, { "revroom", 4.0f } } }, { "Cathedral Reverse", { { "size", 0.7f }, { "damp", 0.3f }, { "width", 1.0f }, { "mix", 0.5f }, { "lowcut", 180.0f }, { "reverse", 1.0f }, { "revlen", 2.0f }, { "revroom", 5.0f } } }, { "Plate Reverse", { { "size", 0.5f }, { "damp", 0.2f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 0.0f }, { "revroom", 3.0f } } } } },
@@ -152,6 +156,9 @@ public:
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
                 k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
+                auto* rc = rightClicks.add (new RightClick());
+                rc->fn = [this, id] { if (onParamMenu) onParamMenu (id); };
+                k->addMouseListener (rc, false);
                 controls.add (k);
             }
             addAndMakeVisible (controls.getLast());
@@ -166,6 +173,13 @@ public:
         setSize (juce::jmax (300, cols * 86 + 20), rows * 92 + 50);
     }
     std::function<void()> onAnyChange;
+    std::function<void (const juce::String&)> onParamMenu;   // right-click a knob (Link to controller)
+    struct RightClick : juce::MouseListener
+    {
+        std::function<void()> fn;
+        void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && fn) fn(); }
+    };
+    juce::OwnedArray<RightClick> rightClicks;
     void setExternal (const juce::String& id, float v)
     {
         for (size_t i = 0; i < params.size(); ++i)
@@ -232,6 +246,8 @@ private:
         juce::PopupMenu menu;
         menu.addItem (1, "Save preset...");
         if (lastPreset.isNotEmpty()) menu.addItem (2, "Save (overwrite \"" + lastPreset + "\")");
+        menu.addItem (3, "Share this preset as a file (email, AirDrop, text)...");
+        menu.addItem (4, "Import a preset file someone sent you...");
         const auto& fac = factoryPresets (kind);
         if (! fac.empty()) menu.addSectionHeader ("Factory presets");
         for (size_t i = 0; i < fac.size(); ++i) menu.addItem (5000 + (int) i, fac[i].name);
@@ -242,6 +258,8 @@ private:
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
             else if (r == 2) writePreset (lastPreset);
+            else if (r == 3) sharePreset();
+            else if (r == 4) importPreset();
             else if (r >= 5000 && r - 5000 < (int) factoryPresets (kind).size()) loadFactory (factoryPresets (kind)[(size_t) (r - 5000)]);
             else if (r >= 100 && r - 100 < files.size()) { lastPreset = files[r - 100].getFileNameWithoutExtension(); loadPreset (files[r - 100]); }
         });
@@ -259,14 +277,49 @@ private:
             safe->writePreset (name);
         }), true);
     }
+    std::unique_ptr<juce::XmlElement> presetXml() const
+    {
+        auto x = std::make_unique<juce::XmlElement> ("HUMHOUSE_PRESET");
+        x->setAttribute ("kind", kind);
+        for (auto& p : params) { auto* e = x->createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+        return x;
+    }
+    void sharePreset()
+    {
+        const auto name = juce::File::createLegalFileName (lastPreset.isNotEmpty() ? lastPreset : kind + " preset");
+        chooser = std::make_unique<juce::FileChooser> ("Share preset (save the file, then send it any way you like)",
+            juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (name + ".hhpreset"), "*.hhpreset");
+        juce::Component::SafePointer<ParamGrid> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe] (const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (safe == nullptr || f == juce::File()) return;
+                f = f.withFileExtension ("hhpreset");
+                if (safe->presetXml()->writeTo (f)) f.revealToUser();
+                else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share preset", "Couldn't write " + f.getFullPathName());
+            });
+    }
+    void importPreset()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import preset", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhpreset");
+        juce::Component::SafePointer<ParamGrid> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+            auto f = fc.getResult();
+            if (safe == nullptr || ! f.existsAsFile()) return;
+            auto x = juce::XmlDocument::parse (f);
+            auto got = installSharedPreset (f);
+            if (got == juce::File())
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Import preset", "That file isn't a HumHouse preset.");
+            else if (x != nullptr && x->getStringAttribute ("kind") == safe->kind) { safe->lastPreset = got.getFileNameWithoutExtension(); safe->loadPreset (got); }
+            else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Import preset",
+                     "Saved \"" + got.getFileNameWithoutExtension() + "\". It's a " + (x != nullptr ? x->getStringAttribute ("kind") : juce::String()) + " preset, so it shows in that effect's PRESETS menu.");
+        });
+    }
     void writePreset (const juce::String& name)
     {
-        juce::XmlElement x ("HUMHOUSE_PRESET");
-        x.setAttribute ("kind", kind);
-        for (auto& p : params) { auto* e = x.createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
         presetDir().createDirectory();
         auto f = presetDir().getChildFile (name + ".hhpreset");
-        if (x.writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
+        if (presetXml()->writeTo (f)) lastPreset = name;   // same name = replace (written to a temp file first, so a failed save never loses the old one)
     }
     void loadFactory (const FactoryPreset& fp)
     {
@@ -852,6 +905,47 @@ private:
 };
 }
 
+// FL "Remote control > Link to controller": pick a Peak Controller in the project to drive this knob
+static void linkToControllerMenu (Studio& s, int track, int slotUid, const juce::String& param)
+{
+    juce::PopupMenu m, ctl;
+    std::vector<std::pair<int, int>> srcs;
+    const auto& p = s.p();
+    for (size_t t = 0; t < p.mixer.size(); ++t)
+        for (auto& f : p.mixer[t].fx)
+            if (f.type == "peakctl" && ! ((int) t == track && f.uid == slotUid))
+            {
+                srcs.push_back ({ (int) t, f.uid });
+                ctl.addItem (100 + (int) srcs.size() - 1, "Peak Controller on " + (t == 0 ? juce::String ("Master") : juce::String ((int) t) + " " + p.mixer[t].name));
+            }
+    bool linked = false;
+    for (auto& L : p.ctlLinks) linked |= L.dstTrack == track && L.dstUid == slotUid && L.param == param;
+    m.addSectionHeader ("Remote control");
+    m.addSubMenu ("Link to controller", ctl, ctl.getNumItems() > 0);
+    m.addItem (1, "Link to a new Peak Controller on this insert");
+    m.addItem (3, "Unlink", linked);
+    m.showMenuAsync ({}, [&s, track, slotUid, param, srcs] (int r) {
+        if (r <= 0) return;
+        s.edit ("Link to controller", [&] (Project& pr) {
+            pr.ctlLinks.erase (std::remove_if (pr.ctlLinks.begin(), pr.ctlLinks.end(), [&] (const CtlLink& L) {
+                return L.dstTrack == track && L.dstUid == slotUid && L.param == param; }), pr.ctlLinks.end());
+            if (r == 3) return;
+            CtlLink L; L.dstTrack = track; L.dstUid = slotUid; L.param = param;
+            if (r == 1)
+            {
+                auto& fx = pr.mixer[(size_t) track].fx;
+                FxSlot c; c.uid = pr.newUid(); c.type = "peakctl";
+                size_t at = 0; for (size_t k = 0; k < fx.size(); ++k) if (fx[k].uid == slotUid) at = k;
+                fx.insert (fx.begin() + (long) at, c);   // before the knob's effect: it follows the incoming sound
+                L.srcTrack = track; L.srcUid = c.uid;
+            }
+            else if (r >= 100 && r - 100 < (int) srcs.size()) { L.srcTrack = srcs[(size_t) (r - 100)].first; L.srcUid = srcs[(size_t) (r - 100)].second; }
+            else return;
+            pr.ctlLinks.push_back (L);
+        });
+    });
+}
+
 void openEffectEditor (Studio& s, int track, int slotUid)
 {
     auto* slot = findSlot (s, track, slotUid);
@@ -903,6 +997,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
             if (auto* e = s.engine.builtinFx (track, slotUid)) e->setParam (id, v);
         },
         [&s, title] { s.commit (title); }, slot->type);
+    grid->onParamMenu = [&s, track, slotUid] (const juce::String& id) { linkToControllerMenu (s, track, slotUid, id); };
     auto liveFx = [&s, track, slotUid] { return s.engine.builtinFx (track, slotUid); };
     auto tapFn = [&s, track]() -> ScopeTap* { return s.engine.trackScope (track); };
     const auto& ty = slot->type;
@@ -1025,6 +1120,16 @@ struct ChannelTabs : juce::Component
 };
 
 // Logic-style drummer pad: across = simple -> complex, up = soft -> loud; dragging rewrites the region live
+struct PopOutBar : juce::Component
+{
+    juce::TextButton b;
+    PopOutBar (const juce::String& text, std::function<void()> f)
+    {
+        b.setButtonText (text); b.onClick = std::move (f); addAndMakeVisible (b); setSize (560, 34);
+    }
+    void resized() override { b.setBounds (getLocalBounds().reduced (14, 4).removeFromRight (220)); }
+};
+
 struct DrummerPad : juce::Component, juce::Timer
 {
     DrummerPad (Studio& st, int id) : s (st), channelId (id) { setSize (560, 250); startTimerHz (10); }
@@ -1288,6 +1393,11 @@ void openChannelEditor (Studio& s, int channelId)
         std::vector<ParamGrid::P> perf, mix;
         if (! kitChoices.empty()) perf.push_back ({ "kit", "Kit", 0, (float) kitChoices.size() - 1, 0, (float) cur, kitChoices });
         perf.push_back ({ "character", "Style (genre)", 0, 9, 1, (float) d.character, { "Pop Rock", "Rock", "Hard Rock", "Punk", "Metal", "Shuffle", "Half Time", "Roots Rock", "Prog", "Metal 2x Kick" } });
+        perf.push_back ({ "kickPat", "Kick pattern", 0, 5, 0, (float) d.kickPattern, { "Auto (take)", "1 & 3", "Rock push 1, 2&, 3", "Driving 8ths", "Four on the floor", "1, 3, 3&" } });
+        perf.push_back ({ "snarePat", "Snare pattern", 0, 5, 0, (float) d.snarePattern, { "Auto (take)", "2 & 4", "2 & 4 + ghosts", "Half time (3)", "Every beat", "2 & 4 + 4&" } });
+        perf.push_back ({ "hatPat", "Hats/Ride pattern", 0, 5, 0, (float) d.hatPattern, { "Auto (take)", "8ths", "16ths", "Quarters", "Open on the &s", "Off" } });
+        perf.push_back ({ "tomPat", "Toms pattern", 0, 3, 0, (float) d.tomPattern, { "Auto (take)", "Off (fills only)", "Floor tom 8ths", "Floor tom 1 & 3" } });
+        perf.push_back ({ "crashPat", "Crash pattern", 0, 7, 0, (float) d.crashPattern, { "Auto (take)", "1-2-3-4 L / L+R / L / L+R", "L, L, R", "Alternate L / R", "Both every beat", "8ths left, both on 2 & 4", "Half notes", "Just the 1" } });
         static std::vector<std::string> mixNames; mixNames.clear();
         for (size_t i = 0; i < s.p().mixer.size(); ++i) mixNames.push_back (i == 0 ? std::string ("Master") : std::to_string (i) + " " + s.p().mixer[i].name.toStdString());
         std::vector<const char*> mixChoices; for (auto& n : mixNames) mixChoices.push_back (n.c_str());
@@ -1336,6 +1446,9 @@ void openChannelEditor (Studio& s, int channelId)
                 if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
                 else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
                 else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "kickPat") d.kickPattern = (int) std::lround (v); else if (id == "snarePat") d.snarePattern = (int) std::lround (v);
+                else if (id == "hatPat") d.hatPattern = (int) std::lround (v); else if (id == "tomPat") d.tomPattern = (int) std::lround (v);
+                else if (id == "crashPat") d.crashPattern = (int) std::lround (v);
                 else if (id == "ghost") d.ghost = v; else if (id == "hatOpen") d.hatOpen = v; else if (id == "ride") d.ride = v > 0.5f;
                 else if (id == "halfTime") d.halfTime = v > 0.5f; else if (id == "seed") d.seed = juce::roundToInt (v);
                 else if (id == "voicing") d.voicing = (int) v; else if (id == "punch") d.punch = v; else if (id == "glue") d.glue = v;
@@ -1344,6 +1457,11 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "volume") c->volume = v;
                 else if (id == "character") { d.character = juce::jlimit (0, 9, juce::roundToInt (v)); if (d.character == 6) d.halfTime = true; }
                 else if (id == "mixer") c->mixerTrack = juce::roundToInt (v);
+                else if (id.startsWith ("pd"))
+                {
+                    const int k = id.substring (2).getIntValue();
+                    if (k >= 0 && k < NumKitPieces) d.partDb[(size_t) k] = v;
+                }
                 else if (id.startsWith ("pc") && id.length() == 4)
                 {
                     const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
@@ -1353,9 +1471,31 @@ void openChannelEditor (Studio& s, int channelId)
             });
         };
         auto commit = [&s] { s.commit ("Drummer settings"); };
+        // one dB knob per kit piece; the kit is levelled when it loads, so 0 dB everywhere is a balanced kit
+        auto levels = [&s, channelId, setter, commit] () -> juce::Component*
+        {
+            static std::vector<std::string> ids, labels;
+            if (ids.empty())
+                for (int k = 0; k < NumKitPieces; ++k) { ids.push_back ("pd" + std::to_string (k)); labels.push_back (std::string (kitPieceName (k)) + " dB"); }
+            std::vector<ParamGrid::P> lv;
+            const auto* c = s.channel (channelId);
+            for (int k = 0; k < NumKitPieces; ++k)
+                lv.push_back ({ ids[(size_t) k].c_str(), labels[(size_t) k].c_str(), -24, 12, 0, c != nullptr ? c->drum.partDb[(size_t) k] : 0.0f, {} });
+            return new ParamGrid ((c != nullptr ? c->name : juce::String ("Drummer")) + "  |  Kit levels (each piece)", lv, setter, commit, "Drummer Levels");
+        };
+        auto popKey = key + "|pad";
+        auto* popOut = new PopOutBar ("Pop out pad + kit levels", [&s, channelId, levels, popKey]
+        {
+            if (focusExisting (popKey)) return;
+            const auto* c = s.channel (channelId);
+            if (c == nullptr) return;
+            EditorWindow::windows().add (new EditorWindow (c->name + "  |  Drummer pad", new StackPage ({ new DrummerPad (s, channelId), levels() }),
+                                                           popKey, [&s, channelId] { return s.channel (channelId) != nullptr; }));
+        });
         auto* tabs = new ChannelTabs();
-        tabs->add ("DRUMMER", new StackPage ({ new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
+        tabs->add ("DRUMMER", new StackPage ({ popOut, new DrummerPad (s, channelId), new ParamGrid (ch->name + "  |  Drummer", perf, setter, commit, "Drummer") }));
         tabs->add ("KIT MIX", new ParamGrid (ch->name + "  |  Kit mix", mix, setter, commit, "Drummer Mix"));
+        tabs->add ("LEVELS", levels());
         tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
         tabs->add ("SECTIONS", new DrumSections (s, channelId));
         tabs->finish();
@@ -1396,7 +1536,25 @@ void openChannelEditor (Studio& s, int channelId)
     else
     {
         auto& sp = ch->synth;
-        ins.push_back ({ "wave", "Wave", 0, 8, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air" } });
+        ins.push_back ({ "wave", "Wave", 0, 10, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air", "3x Oscillation", "HumWave (wavetable)" } });
+        if (sp.wave == 10)
+        {
+            ins.push_back ({ "wtKind", sp.wt != nullptr ? "Table (now: " + sp.wtName + ")" : juce::String ("Table"), 0, 7, 0, (float) sp.wtKind,
+                             { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM" } });
+            ins.push_back ({ "wtPos", "Wavetable position", 0, 1, 0, sp.wtPos, {} });
+        }
+        if (sp.wave == 9)
+        {
+            const std::vector<const char*> shapes { "Saw", "Square", "Triangle", "Sine", "Noise" };
+            for (int o = 0; o < 3; ++o)
+            {
+                const auto n = "Osc " + juce::String (o + 1) + " ", k = juce::String (o + 1);
+                ins.push_back ({ "xw" + k, n + "shape", 0, 4, 0, (float) sp.xWave[(size_t) o], shapes });
+                ins.push_back ({ "xv" + k, n + "level", 0, 1, o == 0 ? 1.0f : 0.0f, sp.xVol[(size_t) o], {} });
+                ins.push_back ({ "xs" + k, n + "coarse (st)", -24, 24, 0, sp.xSemi[(size_t) o], {} });
+                ins.push_back ({ "xf" + k, n + "fine (cents)", -100, 100, 0, sp.xFine[(size_t) o], {} });
+            }
+        }
         ins.push_back ({ "attack", "Attack", 0.001f, 2, 0.002f, sp.attack, {} });
         ins.push_back ({ "decay", "Decay", 0.01f, 4, 0.3f, sp.decay, {} });
         ins.push_back ({ "sustain", "Sustain", 0, 1, 0.7f, sp.sustain, {} });
@@ -1418,7 +1576,7 @@ void openChannelEditor (Studio& s, int channelId)
     func.push_back ({ "glide", "Portamento / glide (s)", 0, 1, 0, ch->glide, {} });
     func.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
 
-    auto setter = [&s, channelId] (const juce::String& id, float v) {
+    std::function<void (const juce::String&, float)> setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
                 auto* c = s.channel (channelId);
                 if (c == nullptr) return;
@@ -1430,6 +1588,13 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
                 else if (id == "drive") sp.drive = v;
                 else if (id == "fmRatio") sp.fmRatio = v; else if (id == "fmIndex") sp.fmIndex = v; else if (id == "morph") sp.morph = v;
+                else if (id == "wtPos") sp.wtPos = v; else if (id == "wtKind") { sp.wtKind = (int) v; sp.wt.reset(); sp.wtName.clear(); }
+                else if (id.startsWith ("x") && id.length() == 3 && id[2] >= '1' && id[2] <= '3')
+                {
+                    const auto o = (size_t) (id[2] - '1');
+                    if (id[1] == 'w') sp.xWave[o] = (int) v; else if (id[1] == 'v') sp.xVol[o] = v;
+                    else if (id[1] == 's') sp.xSemi[o] = v; else if (id[1] == 'f') sp.xFine[o] = v;
+                }
                 else if (id == "noise") sp.noise = v; else if (id == "lfoRate") sp.lfoRate = v; else if (id == "vibrato") sp.vibrato = v;
                 else if (id == "oneShot") c->oneShot = v > 0.5f; else if (id == "cutSelf") c->cutItself = v > 0.5f;
                 else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
@@ -1440,6 +1605,19 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
                 else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
                 else if (id == "tempoSync") c->tempoSync = v > 0.5f; else if (id == "sampleBpm") c->sampleBpm = v;
+            });
+        };
+    if (! sampler)
+        setter = [setter, &s, channelId, key, prevWave = ch->synth.wave] (const juce::String& id, float v) mutable
+        {
+            setter (id, v);
+            if (id != "wave" || (int) v == prevWave) return;
+            prevWave = (int) v;
+            juce::MessageManager::callAsync ([&s, channelId, key]
+            {
+                s.commit ("Synth wave");
+                for (auto* w : EditorWindow::windows()) if (w->key == key) { EditorWindow::windows().removeObject (w); break; }
+                openChannelEditor (s, channelId);
             });
         };
     auto commit = [&s] { s.commit ("Channel settings"); };
@@ -1496,6 +1674,77 @@ namespace hhs
 {
 static juce::File presetsRoot() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Presets"); }
 
+static std::unique_ptr<juce::XmlElement> chainXml (Studio& s, int track)
+{
+    s.engine.storePluginStates();
+    auto x = std::make_unique<juce::XmlElement> ("HUMHOUSE_CHAIN");
+    for (auto& f : s.p().mixer[(size_t) track].fx)
+    {
+        auto* fe = x->createNewChildElement ("FX");
+        fe->setAttribute ("type", f.type); fe->setAttribute ("plugin", f.pluginId);
+        fe->setAttribute ("bypass", f.bypass); fe->setAttribute ("mix", (double) f.mix);
+        if (f.pluginState.getSize() > 0) fe->setAttribute ("state", f.pluginState.toBase64Encoding());
+        for (auto& [id, v] : f.params) { auto* pe = fe->createNewChildElement ("P"); pe->setAttribute ("id", id); pe->setAttribute ("v", (double) v); }
+    }
+    return x;
+}
+
+static juce::File installShared (const juce::File& f, const juce::String& tag, const juce::File& dir)
+{
+    auto x = juce::XmlDocument::parse (f);
+    if (x == nullptr || ! x->hasTagName (tag)) return {};
+    if (! dir.createDirectory()) return {};
+    auto dst = dir.getChildFile (f.getFileName());
+    if (dst == f) return f;
+    if (dst.existsAsFile() && dst.loadFileAsString() != f.loadFileAsString())
+        dst = dir.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+    return f.copyFileTo (dst) ? dst : juce::File();
+}
+
+juce::File installSharedPreset (const juce::File& f)
+{
+    auto x = juce::XmlDocument::parse (f);
+    if (x == nullptr || x->getStringAttribute ("kind").isEmpty()) return {};
+    return installShared (f, "HUMHOUSE_PRESET", presetsRoot().getChildFile (juce::File::createLegalFileName (x->getStringAttribute ("kind"))));
+}
+
+juce::File installSharedChain (const juce::File& f) { return installShared (f, "HUMHOUSE_CHAIN", presetsRoot().getChildFile ("Chains")); }
+
+static std::unique_ptr<juce::FileChooser>& chainChooser() { static std::unique_ptr<juce::FileChooser> c; return c; }
+
+static void loadChainPreset (Studio& s, int track, const juce::File& file, bool replace);
+
+static void shareChainPreset (Studio& s, int track)
+{
+    if (track < 0 || track >= (int) s.p().mixer.size()) return;
+    std::shared_ptr<juce::XmlElement> x (chainXml (s, track));
+    auto& c = chainChooser();
+    c = std::make_unique<juce::FileChooser> ("Share FX chain (save the file, then send it any way you like)",
+        juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile ("My FX chain.hhchain"), "*.hhchain");
+    c->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+        [x] (const juce::FileChooser& fc) {
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            f = f.withFileExtension ("hhchain");
+            if (x->writeTo (f)) f.revealToUser();
+            else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share FX chain", "Couldn't write " + f.getFullPathName());
+        });
+}
+
+static void importChainPreset (Studio& s, int track)
+{
+    auto& c = chainChooser();
+    c = std::make_unique<juce::FileChooser> ("Import FX chain", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhchain");
+    c->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [&s, track] (const juce::FileChooser& fc) {
+        auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        auto got = installSharedChain (f);
+        if (got == juce::File())
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Import FX chain", "That file isn't a HumHouse FX chain.");
+        else loadChainPreset (s, track, got, false);
+    });
+}
+
 static void saveChainPreset (Studio& s, int track)
 {
     auto* aw = new juce::AlertWindow ("Save FX chain preset", "Name this chain (every effect on the insert, in order)", juce::MessageBoxIconType::NoIcon);
@@ -1505,19 +1754,9 @@ static void saveChainPreset (Studio& s, int track)
     aw->enterModalState (true, juce::ModalCallbackFunction::create ([&s, track, aw] (int r) {
         const auto name = juce::File::createLegalFileName (aw->getTextEditorContents ("name").trim());
         if (r != 1 || name.isEmpty() || track < 0 || track >= (int) s.p().mixer.size()) return;
-        s.engine.storePluginStates();
-        juce::XmlElement x ("HUMHOUSE_CHAIN");
-        for (auto& f : s.p().mixer[(size_t) track].fx)
-        {
-            auto* fe = x.createNewChildElement ("FX");
-            fe->setAttribute ("type", f.type); fe->setAttribute ("plugin", f.pluginId);
-            fe->setAttribute ("bypass", f.bypass); fe->setAttribute ("mix", (double) f.mix);
-            if (f.pluginState.getSize() > 0) fe->setAttribute ("state", f.pluginState.toBase64Encoding());
-            for (auto& [id, v] : f.params) { auto* pe = fe->createNewChildElement ("P"); pe->setAttribute ("id", id); pe->setAttribute ("v", (double) v); }
-        }
         auto dir = presetsRoot().getChildFile ("Chains");
         dir.createDirectory();
-        x.writeTo (dir.getChildFile (name + ".hhchain"));
+        chainXml (s, track)->writeTo (dir.getChildFile (name + ".hhchain"));
     }), true);
 }
 
@@ -1558,6 +1797,8 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
     if (chainFiles.isEmpty()) chains.addItem ("(none saved yet)", false, false, [] {});
     m.addSubMenu ("FX chain presets", chains);
     m.addItem ("Save this track's FX chain as preset...", [&s, track] { saveChainPreset (s, track); });
+    m.addItem ("Share this track's FX chain as a file (email, AirDrop, text)...", [&s, track] { shareChainPreset (s, track); });
+    m.addItem ("Import an FX chain file someone sent you (adds it here)...", [&s, track] { importChainPreset (s, track); });
     m.addSeparator();
     m.addSectionHeader ("Add effect from saved preset");
     bool any = false;

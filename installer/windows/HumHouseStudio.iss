@@ -43,6 +43,7 @@ RestartApplications=no
 UsePreviousAppDir=yes
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
+ChangesAssociations=yes
 
 [InstallDelete]
 Type: files; Name: "{app}\{#MyAppExeName}"
@@ -57,6 +58,15 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Source: "..\..\build\{#MyTarget}_artefacts\Release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\Sounds\*"; DestDir: "{app}\Sounds"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+Root: HKA; Subkey: "Software\Classes\.hhs"; ValueType: string; ValueName: ""; ValueData: "{#MyTarget}.File"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.hhpack"; ValueType: string; ValueName: ""; ValueData: "{#MyTarget}.File"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.hhpreset"; ValueType: string; ValueName: ""; ValueData: "{#MyTarget}.File"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\.hhchain"; ValueType: string; ValueName: ""; ValueData: "{#MyTarget}.File"; Flags: uninsdeletevalue
+Root: HKA; Subkey: "Software\Classes\{#MyTarget}.File"; ValueType: string; ValueName: ""; ValueData: "{#MyAppName} file"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\{#MyTarget}.File\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"
+Root: HKA; Subkey: "Software\Classes\{#MyTarget}.File\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

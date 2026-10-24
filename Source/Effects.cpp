@@ -192,6 +192,35 @@ private:
 };
 
 // ------------------------------------------------------------ Room Verb
+// modulated short delay used by Flanger and Flangus (0 latency: wet taps only look back in time)
+struct ModTap
+{
+    std::vector<float> buf; int w = 0, size = 0;
+    void prepare (double sr) { size = (int) (sr * 0.05) + 4; buf.assign ((size_t) size, 0.0f); w = 0; }
+    void push (float x) { buf[(size_t) w] = x; if (++w >= size) w = 0; }
+    float read (float delaySamples) const
+    {
+        float r = (float) w - 1.0f - juce::jlimit (0.0f, (float) size - 3.0f, delaySamples);
+        while (r < 0) r += (float) size;
+        const int i0 = (int) r; const float fr = r - (float) i0;
+        const int i1 = (i0 + 1) % size;
+        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
+    }
+};
+
+// Schroeder allpass: smears a signal in time without colouring it (reverb / flanger diffusion)
+struct Diffuser
+{
+    std::vector<float> b; int i = 0;
+    void prepare (int len) { b.assign ((size_t) juce::jmax (1, len), 0.0f); i = 0; }
+    float tick (float x, float g)
+    {
+        const float d = b[(size_t) i], y = d - g * x;
+        b[(size_t) i] = x + g * y; if (++i >= (int) b.size()) i = 0;
+        return y;
+    }
+};
+
 class RoomVerb : public BuiltinEffect, private juce::Thread
 {
 public:
@@ -204,13 +233,16 @@ public:
                                                  { "mix", "Mix", 0, 1, 0.25f }, { "lowcut", "Low Cut", 20, 1000, 200 },
                                                  { "reverse", "Reverse", 0, 1, 0, { "Off", "On" } },
                                                  { "revlen", "Rev Length", 0, 3, 1, { "1/4", "1/2", "1 Bar", "2 Bars" } },
-                                                 { "revroom", "Rev Room", 0, 5, 4, { "Classic", "Room", "Chamber", "Plate", "Hall", "Cathedral" } } };
+                                                 { "revroom", "Rev Room", 0, 5, 4, { "Classic", "Room", "Chamber", "Plate", "Hall", "Cathedral" } },
+                                                 { "smooth", "Smooth (dense, no ring)", 0, 1, 0.7f } };
         return ps;
     }
     double tailSeconds() const override { return p (5) > 0.5f ? 14.0 : 6.0; }
     void prepare (double s, int maxBlock) override
     {
-        sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear();
+        sr = s; verb.setSampleRate (s); wet.setSize (2, maxBlock); hp.clear(); dmp[0] = dmp[1] = 0;
+        const int lens[2][4] { { 142, 107, 379, 277 }, { 151, 113, 397, 293 } };
+        for (int c = 0; c < 2; ++c) for (int k = 0; k < 4; ++k) diff[c][k].prepare ((int) (lens[c][k] * s / 44100.0));
         revReady.store (false); prepared = true;
         if (p (5) > 0.5f) allocRev();
         // the reverse room is built here, before the convolver is prepared, so it's ready on the first block
@@ -239,6 +271,24 @@ public:
         {
             auto* s = b.getReadPointer (ch); auto* w = wet.getWritePointer (ch);
             for (int i = 0; i < n; ++i) w[i] = hp.tick (s[i], ch);
+        }
+        // Smooth: the input is diffused before the tank (dense from the first ms, no flutter / metallic ring) and the
+        // wet's top end is eased (a pristine tail instead of a fizzy one)
+        const float sm = p (8);
+        if (sm > 0.001f && ! roomMode())
+        {
+            const float cHi = 1.0f - std::exp (-2.0f * kPi * (float) juce::jmin (0.45 * sr, 16000.0 - 7000.0 * sm) / (float) sr);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* w = wet.getWritePointer (ch);
+                for (int i = 0; i < n; ++i)
+                {
+                    float x = w[i];
+                    for (auto& d : diff[ch]) x = d.tick (x, 0.62f);
+                    dmp[ch] += cHi * (x - dmp[ch]);
+                    w[i] += sm * (dmp[ch] - w[i]);
+                }
+            }
         }
         if (roomMode()) roomReverse (n, ctx);
         else
@@ -376,7 +426,7 @@ private:
             if (++segPos >= L) { segPos = 0; half ^= 1; if (silent > 0) --silent; }
         }
     }
-    double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp;
+    double sr = 44100; juce::Reverb verb; juce::AudioBuffer<float> wet; Biquad hp; Diffuser diff[2][4]; float dmp[2] {};
     juce::AudioBuffer<float> rev; std::atomic<bool> revReady { false }; bool prepared = false;
     int revCap = 0, segLen = 0, segPos = 0, half = 0, silent = 0;
     static constexpr double irGain = 2.2;
@@ -395,12 +445,13 @@ public:
     {
         static const std::vector<ParamDef> ps { { "time", "Time", 0, 6, 2, { "1/32", "1/16", "1/8", "1/8 dot", "1/4", "1/4 dot", "1/2" } },
                                                  { "feedback", "Feedback", 0, 0.95f, 0.4f }, { "tone", "Tone", 500, 18000, 6000 },
-                                                 { "pingpong", "Ping Pong", 0, 1, 1, { "Off", "On" } }, { "mix", "Mix", 0, 1, 0.25f } };
+                                                 { "pingpong", "Ping Pong", 0, 1, 1, { "Off", "On" } }, { "mix", "Mix", 0, 1, 0.25f },
+                                                 { "tape", "Tape (wow, flutter, warm repeats)", 0, 1, 0 } };
         return ps;
     }
     double tailSeconds() const override { return 4.0; }
     void prepare (double s, int) override
-    { sr = s; size = (int) (s * 4.0); buf.setSize (2, size); buf.clear(); w = 0; lp[0] = lp[1] = 0; }
+    { sr = s; size = (int) (s * 4.1); buf.setSize (2, size); buf.clear(); w = 0; lp[0] = lp[1] = 0; wow = flut = 0; }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         static const double beats[] { 0.125, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0 };
@@ -409,11 +460,28 @@ public:
         const bool pp = p (3) > 0.5f;
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         auto* bl = buf.getWritePointer (0); auto* br = buf.getWritePointer (1);
+        const float tape = p (5), ct = c * (1.0f - 0.45f * tape);
+        const float wInc = (float) (0.55 / sr), fInc = (float) (6.5 / sr);
         for (int i = 0; i < n; ++i)
         {
-            int rd = w - d; if (rd < 0) rd += size;
-            float dl = bl[rd], dr = br[rd];
-            lp[0] += c * (dl - lp[0]); lp[1] += c * (dr - lp[1]);
+            float dl, dr;
+            if (tape > 0.001f)
+            {
+                // tape: the read head wanders (slow wow + quick flutter), each repeat gets warmer and a little saturated
+                wow += wInc; if (wow >= 1) wow -= 1; flut += fInc; if (flut >= 1) flut -= 1;
+                const float m = tape * (0.0025f * std::sin (kPi * 2 * wow) + 0.0006f * std::sin (kPi * 2 * flut));
+                float rp = (float) w - (float) d * (1.0f + m); while (rp < 0) rp += (float) size;
+                const int i0 = (int) rp % size, i1 = (i0 + 1) % size; const float fr = rp - std::floor (rp);
+                dl = bl[i0] + (bl[i1] - bl[i0]) * fr; dr = br[i0] + (br[i1] - br[i0]) * fr;
+                lp[0] += ct * (dl - lp[0]); lp[1] += ct * (dr - lp[1]);
+                lp[0] += tape * (std::tanh (lp[0]) - lp[0]); lp[1] += tape * (std::tanh (lp[1]) - lp[1]);
+            }
+            else
+            {
+                int rd = w - d; if (rd < 0) rd += size;
+                dl = bl[rd]; dr = br[rd];
+                lp[0] += c * (dl - lp[0]); lp[1] += c * (dr - lp[1]);
+            }
             const float inM = 0.5f * (l[i] + r[i]);
             if (pp) { bl[w] = inM + lp[1] * fb; br[w] = lp[0] * fb; }
             else    { bl[w] = l[i] + lp[0] * fb; br[w] = r[i] + lp[1] * fb; }
@@ -422,7 +490,7 @@ public:
         }
     }
 private:
-    double sr = 44100; juce::AudioBuffer<float> buf; int size = 1, w = 0; float lp[2] {};
+    double sr = 44100; juce::AudioBuffer<float> buf; int size = 1, w = 0; float lp[2] {}, wow = 0, flut = 0;
 };
 
 // ------------------------------------------------------------ wrappers around juce::dsp
@@ -442,34 +510,40 @@ public:
     const std::vector<ParamDef>& params() const override
     {
         static const std::vector<ParamDef> ps { { "rate", "Rate Hz", 0.05f, 5, 0.8f }, { "depth", "Depth", 0, 1, 0.35f },
-                                                 { "delay", "Delay ms", 1, 30, 7 }, { "feedback", "Feedback", -0.9f, 0.9f, 0 }, { "mix", "Mix", 0, 1, 0.5f } };
+                                                 { "delay", "Delay ms", 1, 30, 7 }, { "feedback", "Feedback", -0.9f, 0.9f, 0 }, { "mix", "Mix", 0, 1, 0.5f },
+                                                 { "wide", "Wide (extra voices L / R)", 0, 1, 0.5f } };
         return ps;
     }
-    void prepare (double s, int mb) override { d.prepare ({ s, (juce::uint32) mb, 2 }); }
+    void prepare (double s, int mb) override
+    {
+        sr = s; d.prepare ({ s, (juce::uint32) mb, 2 }); for (auto& t : taps) t.prepare (s); extra.setSize (2, mb); ph = 0;
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         d.setRate (p (0)); d.setDepth (p (1)); d.setCentreDelay (p (2)); d.setFeedback (p (3)); d.setMix (p (4));
+        const float wide = p (5), mix = p (4);
+        const bool st = b.getNumChannels() > 1 && extra.getNumSamples() >= n;
+        if (st && wide > 0.001f)
+        {
+            // a second pair of voices, opposite LFOs on L and R: the chorus spreads wide instead of wobbling in the middle
+            const float inc = 0.73f * p (0) / (float) sr, centre = 1.6f * p (2), dep = 0.3f + 3.0f * p (1);
+            for (int i = 0; i < n; ++i)
+                for (int c = 0; c < 2; ++c)
+                {
+                    taps[c].push (b.getSample (c, i));
+                    const float lfo = std::sin (juce::MathConstants<float>::twoPi * (ph + (c == 1 ? 0.5f : 0.0f)));
+                    extra.setSample (c, i, taps[c].read ((centre + dep * lfo) * 0.001f * (float) sr));
+                    if (c == 1) { ph += inc; if (ph >= 1) ph -= 1; }
+                }
+        }
         runDsp (d, b, n);
+        if (st && wide > 0.001f)
+            for (int c = 0; c < 2; ++c) b.addFrom (c, 0, extra, c, 0, n, 0.5f * wide * mix);
     }
 private:
-    juce::dsp::Chorus<float> d;
+    juce::dsp::Chorus<float> d; ModTap taps[2]; juce::AudioBuffer<float> extra; double sr = 44100; float ph = 0;
 };
 
-// modulated short delay used by Flanger and Flangus (0 latency: wet taps only look back in time)
-struct ModTap
-{
-    std::vector<float> buf; int w = 0, size = 0;
-    void prepare (double sr) { size = (int) (sr * 0.05) + 4; buf.assign ((size_t) size, 0.0f); w = 0; }
-    void push (float x) { buf[(size_t) w] = x; if (++w >= size) w = 0; }
-    float read (float delaySamples) const
-    {
-        float r = (float) w - 1.0f - juce::jlimit (0.0f, (float) size - 3.0f, delaySamples);
-        while (r < 0) r += (float) size;
-        const int i0 = (int) r; const float fr = r - (float) i0;
-        const int i1 = (i0 + 1) % size;
-        return buf[(size_t) i0] + (buf[(size_t) i1] - buf[(size_t) i0]) * fr;
-    }
-};
 
 class Flanger : public BuiltinEffect
 {
@@ -481,10 +555,15 @@ public:
         static const std::vector<ParamDef> ps { { "rate", "Rate Hz", 0.02f, 10, 0.25f }, { "depth", "Depth", 0, 1, 0.7f },
                                                  { "delay", "Delay ms", 0.1f, 10, 1.5f }, { "feedback", "Feedback", -0.95f, 0.95f, 0.5f },
                                                  { "stereo", "Stereo (deg)", 0, 180, 90 }, { "invert", "Polarity", 0, 1, 0, { "Normal", "Inverted (zero-style)" } },
-                                                 { "mix", "Mix", 0, 1, 0.5f } };
+                                                 { "mix", "Mix", 0, 1, 0.5f }, { "space", "Space (body / snapback)", 0, 1, 0.4f } };
         return ps;
     }
-    void prepare (double s, int) override { sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0; }
+    void prepare (double s, int) override
+    {
+        sr = s; for (auto& t : taps) t.prepare (s); fb[0] = fb[1] = 0;
+        const int lens[2][2] { { 211, 347 }, { 233, 383 } };
+        for (int c = 0; c < 2; ++c) for (int k = 0; k < 2; ++k) diff[c][k].prepare ((int) (lens[c][k] * s / 44100.0));
+    }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float rate = p (0), depth = p (1), dMs = p (2), feed = p (3), mix = p (6);
@@ -500,14 +579,18 @@ public:
                 auto* x = b.getWritePointer (c);
                 const float wet = taps[c].read (d);
                 taps[c].push (x[i] + feed * fb[c]);
-                fb[c] = wet;
+                // the feedback runs through a short diffuser: each pass smears a little, so the sweep gets a full, roomy
+                // body and a reverb-like snapback instead of a thin comb; the soft limit keeps high feedback musical
+                const float sp = p (7);
+                const float df = diff[c][1].tick (diff[c][0].tick (wet, 0.55f), 0.5f);
+                fb[c] = std::tanh (wet + sp * (df - wet));
                 x[i] = x[i] * (1.0f - 0.5f * mix) + sign * wet * mix * 0.5f * 1.4f;
             }
             phase += inc; if (phase >= 1.0f) phase -= 1.0f;
         }
     }
 private:
-    double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
+    double sr = 44100; ModTap taps[2]; Diffuser diff[2][2]; float fb[2] {}, phase = 0;
 };
 
 // FL Flangus-style multi-voice flanger / chorus: voices, spread, cross feedback
@@ -559,6 +642,72 @@ public:
     }
 private:
     double sr = 44100; ModTap taps[2]; float fb[2] {}, phase = 0;
+};
+
+// Pitch Shifter (Logic-style, simple): moves the pitch only. Grains are laid out at the new spacing and never
+// resampled, so the voice keeps its own formants - no chipmunk, no monster. Vocal follows the sung cycle.
+class PitchShifter : public BuiltinEffect
+{
+public:
+    PitchShifter() { initDefaults(); }
+    const char* typeId() const override { return "pitchshift"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "semis", "Semitones", -24, 24, 0 }, { "cents", "Cents", -100, 100, 0 },
+                                                 { "mix", "Mix", 0, 1, 1 }, { "mode", "Mode", 0, 2, 0, { "Vocal", "Drums", "Instrument" } } };
+        return ps;
+    }
+    void prepare (double s, int) override
+    {
+        sr = s; psola.prepare (s); period = 0.008 * s;
+        hist.assign (2048, 0.0f); hw = 0; hop = 0; ratioS = 1.0;
+        lvlCoef = (float) (1.0 - std::exp (-1.0 / (0.15 * s))); eDry = eWet = 0.0f; wetGain = 1.0f;
+    }
+    void reset() override { prepare (sr, 0); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const double target = std::pow (2.0, (std::round (p (0)) + p (1) / 100.0) / 12.0);
+        const float mix = p (2);
+        const int mode = juce::jlimit (0, 2, (int) std::round (p (3)));
+        const bool st = b.getNumChannels() > 1;
+        auto* L = b.getWritePointer (0); auto* R = st ? b.getWritePointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = R[i];
+            hist[(size_t) hw] = 0.5f * (inL + inR); hw = (hw + 1) & 2047;
+            if (mode != 1 && ++hop >= 384)
+            {
+                hop = 0;
+                // half-rate window: cheap, and still ~3 cycles of a low voice
+                std::array<float, 768> w {};
+                for (int k = 0; k < 768; ++k)
+                {
+                    const int a = (hw - 1536 + 2 * k) & 2047;
+                    w[(size_t) k] = 0.5f * (hist[(size_t) a] + hist[(size_t) ((a + 1) & 2047)]);
+                }
+                const float hz = detectPitchYin (w.data(), 768, sr * 0.5, 0.15f, 0.0f, 70.0f, 1000.0f);
+                if (hz > 0.0f) period = sr / hz;
+                else if (mode == 2) period = 0.012 * sr;
+            }
+            const double P = mode == 1 ? 0.006 * sr : period;
+            ratioS += 0.002 * (target - ratioS);   // a knob move glides, no zipper
+            float l = inL, r = inR;
+            psola.process (l, r, ratioS, P);
+            // grains overlapping closer than a cycle (shifting up) partly cancel: level the wet to the dry, slowly
+            eDry += lvlCoef * (psola.dryL * psola.dryL + psola.dryR * psola.dryR - eDry);
+            eWet += lvlCoef * (l * l + r * r - eWet);
+            const float want = eWet > 1e-9f ? juce::jlimit (0.7f, 2.0f, std::sqrt (eDry / eWet)) : wetGain;
+            wetGain += 0.0005f * (want - wetGain);
+            l *= wetGain; r *= wetGain;
+            L[i] = psola.dryL * (1.0f - mix) + l * mix;
+            if (st) R[i] = psola.dryR * (1.0f - mix) + r * mix;
+        }
+    }
+    // like AutoPitch: reported as 0 so the track is never held back (the rule here is no added latency)
+private:
+    PsolaShifter psola; std::vector<float> hist; int hw = 0, hop = 0;
+    double sr = 44100, period = 350, ratioS = 1.0;
+    float lvlCoef = 0.0002f, eDry = 0, eWet = 0, wetGain = 1.0f;
 };
 
 class PhaseSwirl : public BuiltinEffect
@@ -1003,25 +1152,51 @@ class NoiseGate : public BuiltinEffect
 public:
     NoiseGate() { initDefaults(); }
     const char* typeId() const override { return "gate"; }
+    // Key Low/High: the gate listens only to this band (earbud mics pick up hiss + hi-hat bleed that must not open it);
+    // High Tame: extra cut above ~5 kHz while closed. Defaults = the old gate exactly.
     const std::vector<ParamDef>& params() const override
-    { static const std::vector<ParamDef> ps { { "threshold", "Threshold", -80, 0, -45 }, { "attack", "Attack ms", 0.1f, 20, 1 }, { "release", "Release ms", 5, 500, 80 }, { "range", "Range", -80, 0, -60 } }; return ps; }
-    void prepare (double s, int) override { sr = s; env = 0; g = 0; }
+    { static const std::vector<ParamDef> ps { { "threshold", "Threshold", -80, 0, -45 }, { "attack", "Attack ms", 0.1f, 20, 1 }, { "release", "Release ms", 5, 500, 80 }, { "range", "Range", -80, 0, -60 },
+                                               { "hold", "Hold ms", 0, 500, 0 }, { "keylo", "Key Low Hz", 20, 1000, 20 }, { "keyhi", "Key High Hz", 1000, 20000, 20000 }, { "tame", "High Tame dB", 0, 24, 0 } }; return ps; }
+    void prepare (double s, int) override { sr = s; env = 0; g = 0; hold = 0; kLo = kHi = kHi2 = 0; tL = tR = 0; }
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float th = dbToGain (p (0)), floorG = dbToGain (p (3));
         const float att = std::exp (-1.0f / (0.001f * p (1) * (float) sr)), rel = std::exp (-1.0f / (0.001f * p (2) * (float) sr));
-        auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
+        const int holdN = (int) (0.001f * p (4) * (float) sr);
+        const bool keyed = p (5) > 20.5f || p (6) < 19999.0f;
+        const float cLo = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * p (5) / (float) sr);
+        const float cHi = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * juce::jmin (p (6), 0.45f * (float) sr) / (float) sr);
+        const float tameG = dbToGain (-p (7)), cT = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 5000.0f / (float) sr);
+        const bool st = b.getNumChannels() > 1;
+        auto* l = b.getWritePointer (0); auto* r = st ? b.getWritePointer (1) : l;
         for (int i = 0; i < n; ++i)
         {
-            const float a = std::max (std::abs (l[i]), std::abs (r[i]));
+            float a;
+            if (keyed)
+            {
+                const float k = 0.5f * (l[i] + r[i]);
+                kLo += cLo * (k - kLo);
+                kHi += cHi * ((k - kLo) - kHi);
+                kHi2 += cHi * (kHi - kHi2);   // 2 poles: bright hiss / hats fall off fast
+                a = std::abs (p (6) < 19999.0f ? kHi2 : k - kLo);
+            }
+            else a = std::max (std::abs (l[i]), std::abs (r[i]));
             env = std::max (a, env * 0.9995f);
-            const float t = env > th ? 1.0f : floorG;
+            if (env > th) hold = holdN; else if (hold > 0) --hold;
+            const float t = (env > th || hold > 0) ? 1.0f : floorG;
             g = t > g ? att * g + (1 - att) * t : rel * g + (1 - rel) * t;
-            l[i] *= g; r[i] *= g;
+            if (p (7) > 0.0f)
+            {
+                const float open = floorG < 0.999f ? juce::jlimit (0.0f, 1.0f, (g - floorG) / (1.0f - floorG)) : 1.0f;
+                const float hg = tameG + (1.0f - tameG) * open;
+                tL += cT * (l[i] - tL); l[i] = tL + (l[i] - tL) * hg;
+                if (st) { tR += cT * (r[i] - tR); r[i] = tR + (r[i] - tR) * hg; }
+            }
+            l[i] *= g; if (st) r[i] *= g;
         }
     }
 private:
-    double sr = 44100; float env = 0, g = 0;
+    double sr = 44100; float env = 0, g = 0, kLo = 0, kHi = 0, kHi2 = 0, tL = 0, tR = 0; int hold = 0;
 };
 
 class Pump : public BuiltinEffect
@@ -1322,7 +1497,8 @@ public:
             { "tuning", "Tuning A4 (Hz)", 400, 500, 440 },
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
-            { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f } };   // off by default: just the tune, no tone change
+            { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f },   // off by default: just the tune, no tone change
+            { "glow", "Glow", 0, 1, 0.0f }, { "canvas", "Canvas", 0, 1, 0.0f } };
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1334,7 +1510,7 @@ public:
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         for (auto& f : tone) f.clear();
         dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; youngHops = 1 << 20; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1360,7 +1536,7 @@ public:
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
         // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
         const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
-        const float wetRel = 1.0f - std::exp (-1.0f / (0.035f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
+        const float wetRel = 1.0f - std::exp (-1.0f / (0.07f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
         // Body + Character: chest weight, a little forward bite and soft even-order harmonics on the tuned voice,
         // so it sounds full and alive instead of thin (all zero latency)
         const float body = p (13), chr = p (14);
@@ -1370,6 +1546,14 @@ public:
             tone[0].set (Biquad::LowShelf, sr, 190.0, 0.7, 3.5 * body);
             tone[1].set (Biquad::Peak, sr, 420.0, 0.8, 1.5 * body);
             tone[2].set (Biquad::Peak, sr, 2900.0, 0.9, 2.0 * chr);
+        }
+        // Glow: air on the tuned vowels (brings back the brightness the tune takes off). Canvas: clears the low-mid mud
+        const float glow = p (15), canvas = p (16);
+        const bool glowOn = glow > 0.001f || canvas > 0.001f;
+        if (glowOn)
+        {
+            glowF.set (Biquad::HighShelf, sr, 5000.0, 0.7, 1.2 * glow);
+            canvasF.set (Biquad::Peak, sr, 320.0, 1.0, -2.0 * canvas);
         }
         const float drive = 1.0f + 2.5f * chr, bias = 0.25f * chr, tb = std::tanh (bias), satMix = 0.55f * chr;
         auto colour = [&] (float x, int ch) {
@@ -1415,13 +1599,17 @@ public:
                     const float hopSec = (float) hop / (float) dsr;
                     voiceLvl *= std::exp (-hopSec / 0.5f);
                     const float tailMidi = midi;   // the reading before the gate: a quiet / breathy tail still says where the voice is
-                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
+                    // a yell / strained push: loud next to the voice, so a raspy (less periodic) reading is still the sung
+                    // vowel, not a consonant - the tune has to grab it hardest right there instead of letting go
+                    const bool belt = heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f;
+                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
                     if (rough && midi > 0 && heldNote > 0) { missHops = 0; roughMidi = midi; midi = -1.0f; }
                     // the voice coming back after a gap on another note is a fresh start, not a slip of the old note
                     if (midi > 0 && lastMidi > 0 && missHops >= 2 && std::abs (midi - lastMidi) > 1.0f) { heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    youngHops = std::min (youngHops + 1, 1 << 20);
                     if (midi > 0 && lastMidi > 0)
                     {
                         // octave error guard: a sudden exact octave jump inside a note is a detector slip - fold it back
@@ -1452,16 +1640,16 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
-                    consonant = rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
+                    consonant = belt && midi != 0.0f ? aper > 0.65f : rough || aper > 0.35f;   // consonants / noise leave the tune at once, so they stay the singer's
                     breathy = midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 0.75f;   // breath / rasp still on the sung note (not a t, k, s)
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
-                    // for ~70 ms instead of slipping back to the natural pitch, so the corrected note rings on
+                    // for up to 0.8 s instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.28f : 0.16f))
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.8f : 0.45f))
                     {
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
@@ -1476,25 +1664,34 @@ public:
                         // and inflections are corrected where the voice is now (this lag was the leftover "wave")
                         slope = onset || std::abs (midi - lastMidi) > 1.0f ? 0.0f : 0.6f * slope + 0.4f * (midi - lastMidi);
                         const float now = midi + juce::jlimit (-0.5f, 0.5f, slope * 0.5f * (float) wn / (float) hop);
+                        // Hard Tune: the correction leans on the slope less than the note choice: full extrapolation chased
+                        // detector noise and shook the tuned voice rough (cleaner and better locked on both reference takes)
+                        const float nowC = midi + juce::jlimit (-0.5f, 0.5f, (hard ? 0.7f : 1.0f) * slope * 0.5f * (float) wn / (float) hop);
                         missHops = 0; lastMidi = midi; releasing = false;
                         period = (float) (sr / hz);
                         // the note is chosen from the sung note's centre (vibrato removed), so vibrato never flips notes
                         const float steer = med + (now - midi);
-                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / 0.12f));
+                        // a young note (first ~80 ms) re-reads quickly with no hold, once: word starts often scoop in from
+                        // above / below, and holding the note that first reading picked put short words a half step off
+                        const bool young = hard && (float) youngHops * hopSec < youngSec;
+                        const int prevHeld = heldNote; bool restart = onset;
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : 0.12f)));
                         int target = nearestScaleNote (centre, root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
                         const int fast = nearestScaleNote (now, root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
-                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; }   // Hard Tune steps sooner
+                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; restart = true; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
                         // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or
                         // leap the hold hasn't caught yet) is never forced on it - that big shift was the transposed / formanted tone
-                        if (std::abs ((float) target - centre) > 1.0f) { target = nearestScaleNote (centre, root, scale); jumpHops = 0; }
+                        if (std::abs ((float) target - centre) > 1.0f) { target = nearestScaleNote (centre, root, scale); jumpHops = 0; restart = true; }
+                        if (restart) youngHops = 0;
+                        else if (young && target != prevHeld) youngHops = 1 << 20;
                         heldNote = target;
-                        float semis = juce::jlimit (-1.5f, 1.5f, (float) target - now + natVib * (now - centre));
+                        float semis = juce::jlimit (-1.5f, 1.5f, (float) target - nowC + natVib * (nowC - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (hard || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
@@ -1507,8 +1704,8 @@ public:
                         const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
-                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~80 ms
-                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.32 : 0.22) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.75 s
+                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.75 : 0.5) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -1525,7 +1722,7 @@ public:
             {
                 // Antares-clean: on a settled held note (and its breathy stretches), blend each tuned cycle with the one
                 // before, so rasp / breath noise cancels and the note rings clean; never on hard consonants or glides
-                constexpr float ca = 0.4f;
+                constexpr float ca = 0.7f;
                 const double po = juce::jlimit (16.0, 2000.0, (double) period / juce::jmax (0.25, (double) (1.0f + (ratio - 1.0f) * wetG)));
                 poS = poS <= 0.0 ? po : poS + 0.002 * (po - poS);   // the blend delay glides (a jumping delay = clicks)
                 const double rp = (double) cbW - poS; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
@@ -1544,6 +1741,7 @@ public:
                 wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
             }
             if (colourOn) { const float cl = colour (wl, 0), cr = colour (wr, 1); wl += wetG * (cl - wl); wr += wetG * (cr - wr); }   // sung vowels only: consonants stay crisp
+            if (glowOn) { const float gl = glowF.tick (canvasF.tick (wl, 0), 0), gr = glowF.tick (canvasF.tick (wr, 1), 1); wl += wetG * (gl - wl); wr += wetG * (gr - wr); }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -1554,10 +1752,10 @@ private:
     std::vector<float> cbL = std::vector<float> (4096, 0.0f), cbR = std::vector<float> (4096, 0.0f); int cbW = 0; double poS = 0.0; float combG = 0.0f; bool breathy = false;
     float currentRatio = 1, targetRatio = 1, roughMidi = 0;
     std::array<float, 3> hist {}; int histN = 0;
-    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
+    int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0, youngHops = 1 << 20; static constexpr float youngSec = 0.08f, yTau = 0.05f, yHys = 0.55f; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
     float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
     float period = 350;
-    Biquad tone[3]; float dcX[2] {}, dcY[2] {};
+    Biquad tone[3], glowF, canvasF; float dcX[2] {}, dcY[2] {};
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
 };
 
@@ -1734,7 +1932,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
         { "hhmaster", "Hum House Master", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
-        { "autopitch", "AutoPitch", "Vocal" },
+        { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" },
         { "vroom", "HumHouse Vocal Room", "Vocal" },
         { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
@@ -1743,12 +1941,56 @@ const std::vector<EffectInfo>& builtinEffects()
         { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
-        { "glitch", "Glitch Gate", "Time FX" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
     return fx;
 }
 
+// Peak Controller (FL style): follows the level of the audio on its insert and puts out a 0..1 control value that
+// "Link to controller" sends to any effect knob; an LFO can be added on top. Audio passes through (or is muted).
+class PeakController : public BuiltinEffect
+{
+public:
+    PeakController() { initDefaults(); }
+    const char* typeId() const override { return "peakctl"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "base", "Base", 0.0f, 1.0f, 0.0f }, { "volume", "Volume (amount)", -1.0f, 1.0f, 1.0f },
+            { "tension", "Tension", -1.0f, 1.0f, 0.0f }, { "attack", "Attack (ms)", 0.1f, 500.0f, 5.0f },
+            { "release", "Release (ms)", 1.0f, 2000.0f, 150.0f }, { "floor", "Floor (dB)", -80.0f, -6.0f, -48.0f },
+            { "lfoAmt", "LFO amount", 0.0f, 1.0f, 0.0f }, { "lfoRate", "LFO speed (Hz)", 0.05f, 20.0f, 1.0f },
+            { "mute", "Mute audio", 0.0f, 1.0f, 0.0f, { "Off", "On" } } };
+        return ps;
+    }
+    void prepare (double s, int) override { sr = s; env = 0; phase = 0; }
+    void reset() override { env = 0; }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const float a = std::exp (-1.0f / (0.001f * p (3) * (float) sr)), r = std::exp (-1.0f / (0.001f * p (4) * (float) sr));
+        const float* L = b.getReadPointer (0); const float* R = b.getNumChannels() > 1 ? b.getReadPointer (1) : L;
+        for (int i = 0; i < n; ++i)
+        {
+            const float x = std::max (std::abs (L[i]), std::abs (R[i]));
+            env = (x > env ? a : r) * (env - x) + x;
+        }
+        const float fl = p (5);
+        float v = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (env, -100.0f) - fl) / -fl);
+        const float t = p (2);
+        if (t > 0.0f) v = std::pow (v, 1.0f + 3.0f * t); else if (t < 0.0f) v = 1.0f - std::pow (1.0f - v, 1.0f - 3.0f * t);
+        phase = std::fmod (phase + (double) p (7) * n / sr, 1.0);
+        const float lfo = p (6) * 0.5f * (1.0f + (float) std::sin (juce::MathConstants<double>::twoPi * phase));
+        value.store (juce::jlimit (0.0f, 1.0f, p (0) + p (1) * v + lfo), std::memory_order_relaxed);
+        if (p (8) > 0.5f) b.clear (0, n);
+    }
+    float meter (int) const override { return value.load (std::memory_order_relaxed); }
+private:
+    double sr = 44100, phase = 0; float env = 0;
+    std::atomic<float> value { 0.0f };
+};
+
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
+    if (id == "peakctl") return std::make_unique<PeakController>();
     if (auto s = createStudioEffect (id)) return s;
     if (id == "purify") { auto f = createPurify(); f->initDefaults(); return f; }
     if (id == "scope") return std::make_unique<ScopeFx>();
@@ -1760,6 +2002,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "chorus") return std::make_unique<Chorus>();
     if (id == "flanger") return std::make_unique<Flanger>();
     if (id == "flangus") return std::make_unique<Flangus>();
+    if (id == "pitchshift") return std::make_unique<PitchShifter>();
     if (id == "phaser") return std::make_unique<PhaseSwirl>();
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();

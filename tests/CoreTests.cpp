@@ -2,6 +2,7 @@
 #include <set>
 #include "../Source/Engine.h"
 #include "../Source/Drummer/DrummerCore.h"
+#include "../Source/Drummer/KitEngine.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
@@ -315,7 +316,8 @@ int main()
         auto ap = createBuiltinEffect ("autopitch");
         ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
         ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
-        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());   // 0 = fastest
+        if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());
+        if (f.size() > 8) { ap->setParam ("glow", f[7].getFloatValue()); ap->setParam ("canvas", f[8].getFloatValue()); }   // 0 = fastest
         ap->prepare (rd->sampleRate, 512);
         PlayContext ctx;
         juce::AudioBuffer<float> b (2, 512);
@@ -643,7 +645,7 @@ int main()
         if (stereo) CHECK (pr < pl * 0.1f); else CHECK (std::abs (pl - pr) < pl * 0.05f);
         if (! stereo) CHECK (std::abs (pl - 0.3f) < 0.03f);   // default insert + master faders = unity gain (0 dB)
     }
-    // a second take over the same spot drops to the next lane instead of covering the first
+    // a second take over the same spot drops to the next track instead of covering the first
     {
         Engine e;
         e.prepare (44100, 512);
@@ -664,6 +666,14 @@ int main()
         int onLane1 = 0, onLane2 = 0;
         for (auto& c : p.clips) if (c.isAudio() && ! c.hidden) { onLane1 += c.lane == 1; onLane2 += c.lane == 2; }
         CHECK (onLane1 == 1 && onLane2 == 1);
+        // surprise take: armed + playing with record off is captured as a hidden take
+        const auto before = p.clips.size();
+        e.setPositionBeats (0.0); e.play();
+        for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
+        e.stop();
+        int surprise = 0;
+        for (size_t i = before; i < p.clips.size(); ++i) surprise += p.clips[i].hidden && p.clips[i].audioFile.getFileName().contains ("_surprise");
+        CHECK (surprise == 1);
     }
     // recording latency: a take moves earlier by the device's in+out latency, so its first sound lands on the beat
     {
@@ -1224,6 +1234,43 @@ int main()
         CHECK (std::abs (shortYeah - 440.0f) < 4.0f);
         CHECK (std::abs (gap - 440.0f) < 4.0f);
     }
+    // AutoPitch holds on yelled / strained notes: a loud, raspy, jittery voice sharp of the key stays tuned on the note
+    {
+        for (int style : { 3, 1 })
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (7); double ph = 0; float jit = 0, env = 0; std::vector<float> out;
+            for (int k = 0; k < 200; ++k)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    const bool yell = k >= 60;   // sung, then the singer pushes hard into a yell on the same note
+                    const float lvl = yell ? 0.7f : 0.2f;
+                    env += (lvl - env) * 0.001f;
+                    jit += ((rnd.nextFloat() * 2 - 1) * 0.06f - jit) * 0.02f;   // strained voice: the period wanders cycle to cycle
+                    const float rasp = (rnd.nextFloat() * 2 - 1) * (yell ? 0.45f : 0.05f) * (0.6f + 0.4f * (float) std::sin (ph));
+                    float v = 0;
+                    for (int h = 1; h <= 8; ++h) v += (float) std::sin (h * ph) * (yell ? 1.0f / (float) h : 1.0f / (float) (h * h));
+                    ph += juce::MathConstants<double>::twoPi * 452.0 * (1.0 + jit) / 48000.0;
+                    const float x = env * (0.5f * v + rasp);
+                    b.setSample (0, i, x); b.setSample (1, i, x);
+                }
+                ap->process (b, 512, ctx);
+                for (int i = 0; i < 512; ++i) out.push_back (b.getSample (0, i));
+            }
+            int on = 0, n = 0;
+            for (size_t at = 90 * 512; at + 2048 < out.size(); at += 1024, ++n)
+            {
+                const float hz = detectPitchYin (out.data() + at, 2048, 48000.0, 0.3f, 0.6f);
+                if (hz > 0 && std::abs (1200.0f * std::log2 (hz / 440.0f)) < 20.0f) ++on;
+            }
+            std::printf ("autopitch yell style %d: %d of %d windows on the note\n", style, on, n);
+            CHECK (on >= n * 9 / 10);
+        }
+    }
     // AutoPitch keeps enunciation and punch: consonants pass through untouched (not smeared by the shifter),
     // attacks and level stay as sung, in every style
     for (double off : { 0.0, 40.0 })
@@ -1422,6 +1469,169 @@ int main()
         fx->prepare (48000, 128);
         if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
         CHECK (fx->latencySamples() == 0);
+    }
+    // Consolidate: only the chosen clips render, from the first one's start, and every clip's mute comes back
+    {
+        Engine e; e.prepare (44100, 512);
+        auto& p = e.project(); p.songMode = true; p.clips.clear();
+        Channel c; c.type = ChannelType::Synth; c.name = "Lead"; c.mixerTrack = 0;
+        const int id = p.addChannel (c);
+        Note nt; nt.key = 60; nt.start = 0.0; nt.length = 1.0; nt.velocity = 0.9f;
+        p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+        Clip a; a.uid = p.newUid(); a.lane = 0; a.start = 8.0; a.length = 4.0; a.patternIndex = p.currentPattern; p.clips.push_back (a);
+        Clip b = a; b.uid = p.newUid(); b.start = 16.0; b.muted = false; p.clips.push_back (b);
+        e.sync();
+        const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_consolidate_test.wav");
+        double from = -1, len = -1;
+        CHECK (e.consolidateClips ({ a.uid }, f, from, len));
+        CHECK (std::abs (from - 8.0) < 1e-9 && std::abs (len - 4.0) < 1e-9);
+        CHECK (! p.clips[0].muted && ! p.clips[1].muted);
+        juce::WavAudioFormat wav;
+        if (std::unique_ptr<juce::AudioFormatReader> r { wav.createReaderFor (new juce::FileInputStream (f), true) })
+        {
+            juce::AudioBuffer<float> x (2, (int) r->lengthInSamples); r->read (&x, 0, x.getNumSamples(), 0, true, true);
+            const int beat = (int) (44100 * 60.0 / p.bpm);
+            const float head = x.getMagnitude (0, 0, beat / 2), late = x.getMagnitude (0, 2 * beat, std::min (x.getNumSamples() - 2 * beat, 6 * beat));
+            std::printf ("consolidate: %.2f s, note at the start %.3f, after it %.4f\n", x.getNumSamples() / 44100.0, head, late);
+            CHECK (head > 0.05f);       // the note is right at the start of the new clip
+            CHECK (late < head * 0.1f); // the clip at beat 16 (not chosen) is not in it
+            CHECK (std::abs (x.getNumSamples() / 44100.0 - (4 * 60.0 / p.bpm + 2.0)) < 0.05);
+        }
+        else CHECK (false);
+        f.deleteFile();
+    }
+    // Pitch Shifter: moves the pitch, keeps the formants (the tone's spectral envelope stays put)
+    {   // Noise Gate, earbud settings: hiss / hi-hat bleed above the key band stays down, a voice opens it
+        auto gate = createBuiltinEffect ("gate");
+        gate->prepare (48000.0, 512);
+        for (auto [id, v] : std::initializer_list<std::pair<const char*, float>> { { "threshold", -48.0f }, { "attack", 0.5f }, { "release", 150.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 150.0f }, { "keyhi", 4000.0f }, { "tame", 12.0f } })
+            gate->setParam (id, v);
+        juce::Random rng (7);
+        auto runGate = [&] (bool voice) {
+            juce::AudioBuffer<float> b (2, 48000); double e = 0, ein = 0; float hp = 0, prev = 0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                const float w = rng.nextFloat() * 2.0f - 1.0f; hp = 0.5f * (w - prev); prev = w;   // bright hiss
+                const float x = 0.012f * hp + (voice ? 0.2f * std::sin (juce::MathConstants<float>::twoPi * 300.0f * i / 48000.0f) : 0.0f);
+                b.setSample (0, i, x); b.setSample (1, i, x);
+            }
+            for (int i = 0; i < 48000; ++i) ein += b.getSample (0, i) * b.getSample (0, i);
+            const PlayContext ctx;
+            for (int at = 0; at < 48000; at += 512) { juce::AudioBuffer<float> blk (b.getArrayOfWritePointers(), 2, at, juce::jmin (512, 48000 - at)); gate->process (blk, blk.getNumSamples(), ctx); }
+            for (int i = 24000; i < 48000; ++i) e += b.getSample (0, i) * b.getSample (0, i);
+            return 10.0 * std::log10 ((e / 24000.0 + 1e-12) / (ein / 48000.0 + 1e-12));
+        };
+        const double hissDb = runGate (false), voiceDb = runGate (true);
+        CHECK (hissDb < -25.0);
+        CHECK (voiceDb > -1.5);
+        std::printf ("  noise gate (earbuds): hiss %.1f dB, voice %.1f dB\n", hissDb, voiceDb);
+    }
+
+    {
+        const double sr = 48000.0; const int len = (int) sr;
+        auto tone = [&] (juce::AudioBuffer<float>& x) {
+            x.setSize (2, len); x.clear();
+            for (int h = 1; h <= 30; ++h)
+            {
+                const double f = 200.0 * h, a = std::exp (-0.5 * std::pow (std::log2 (f / 1000.0) / 0.35, 2.0)) / h + 0.002;
+                for (int i = 0; i < len; ++i) { const float v = (float) (0.3 * a * std::sin (2.0 * juce::MathConstants<double>::pi * f * i / sr)); x.addSample (0, i, v); x.addSample (1, i, v); }
+            }
+        };
+        auto centroid = [&] (const juce::AudioBuffer<float>& x) {
+            const int n = 4096, at = len - n - 100; double num = 0, den = 0;
+            for (int k = 4; k < 400; ++k)
+            {
+                double re = 0, im = 0;
+                for (int i = 0; i < n; ++i) { const double w = 0.5 - 0.5 * std::cos (2.0 * juce::MathConstants<double>::pi * i / n), v = w * x.getSample (0, at + i);
+                                              re += v * std::cos (2.0 * juce::MathConstants<double>::pi * k * i / n); im -= v * std::sin (2.0 * juce::MathConstants<double>::pi * k * i / n); }
+                const double m = re * re + im * im; num += m * k * sr / n; den += m;
+            }
+            return num / std::max (den, 1e-12);
+        };
+        juce::AudioBuffer<float> in; tone (in);
+        const double c0 = centroid (in);
+        for (float semis : { 0.0f, 7.0f, 12.0f, -12.0f })
+        {
+            auto fx = createBuiltinEffect ("pitchshift");
+            CHECK (fx != nullptr);
+            if (! fx) break;
+            fx->setParam ("semis", semis); fx->prepare (sr, 256);
+            juce::AudioBuffer<float> x; tone (x); PlayContext ctx;
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            const float hz = detectPitchYin (x.getReadPointer (0, len - 2400), 2048, sr, 0.15f, 0.0f, 70.0f, 1100.0f);
+            const double want = 200.0 * std::pow (2.0, semis / 12.0), c1 = centroid (x);
+            bool finite = true; for (int i = 0; i < len; ++i) finite = finite && std::isfinite (x.getSample (0, i));
+            std::printf ("pitch shifter %+3.0f st: %.1f Hz (want %.1f), formant centroid %.0f -> %.0f Hz, rms %.3f -> %.3f\n",
+                         semis, hz, want, c0, c1, in.getRMSLevel (0, len / 2, len / 2), x.getRMSLevel (0, len / 2, len / 2));
+            CHECK (finite);
+            CHECK (std::abs (hz - want) < want * 0.02);
+            CHECK (c1 > c0 * 0.8 && c1 < c0 * 1.25);   // resampling would move it with the pitch (x1.5 at +7)
+            CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 3.0f);
+        }
+    }
+    // Drummer rock fills sit on the straight grid: no triplet pickups, no gallops; the backbeat is dead on
+    for (int st : { 1, 2, 3, 4, 9 })
+    {
+        DrummerParams d; d.character = st; d.fills = 1.0f;
+        auto hv = drummerHits (d, 120, 64);
+        int tripF = 0, galF = 0; double snOff = 0; int sn = 0;
+        std::map<int, std::vector<double>> fillHands;
+        for (auto& h : *hv)
+        {
+            const double b = h.beat, q = b * 4, t = b * 3;
+            const bool fillZone = std::fmod (b, 8.0) >= 4.0;
+            if (fillZone && std::abs (t - std::round (t)) < 0.03 && std::abs (q - std::round (q)) > 0.25) ++tripF;
+            if (h.lane == 1 && std::abs (std::fmod (b, 2.0) - 1.0) < 0.1) { snOff += std::abs (q - std::round (q)) / 4.0 * 500.0; ++sn; }
+            const bool hand = (h.lane >= 1 && h.lane <= 6) || (h.lane >= 27 && h.lane <= 30);
+            if (hand && fillZone) fillHands[(int) std::floor (b / 8.0)].push_back (b);
+        }
+        for (auto& [k, v] : fillHands)
+        {
+            std::sort (v.begin(), v.end());
+            for (size_t i = 2; i < v.size(); ++i)
+            {
+                const double a1 = v[i - 1] - v[i - 2], a2 = v[i] - v[i - 1];
+                if (a1 > 0.03 && a2 > 0.03 && a1 < 0.4 && a2 < 0.4 && (a1 / a2 > 1.45 || a2 / a1 > 1.45)) ++galF;
+            }
+        }
+        std::printf ("drummer rock fills style %d: %d triplet pickups, %d gallops, backbeat %.1f ms off\n", st, tripF, galF, sn ? snOff / sn : 0.0);
+        CHECK (tripF == 0 && galF == 0);
+        CHECK (sn > 0 && snOff / sn < 4.0);
+    }
+    // Kit levelled on load: at default the snare peaks ~2 dB over the kick, hats and cymbals sit well under
+    for (auto& kitDir : drumKits())
+    {
+        if (! kitDir.getFileName().containsIgnoreCase ("Naked")) continue;
+        const double sr = 48000.0; const int len = (int) (sr * 1.0);
+        hhx::KitEngine k; k.prepare (sr, 4096); k.loadKitFolder (kitDir);
+        k.setMixVoicing (1); k.setPunch (0.55f); k.setGlue (0.45f); k.setDrive (0.2f);
+        k.setMicBlend (0.45f); k.setRoomSpace (1); k.setRoom (k.getRoomSize(), k.getRoomDamping(), 0.22f);
+        auto peakOf = [&] (int lane) {
+            juce::AudioBuffer<float> out (2, len); out.clear();
+            for (int pos = 0; pos < len; pos += 64)
+            {
+                if (pos == 0) k.noteOn (lane, 0.8f, 0);
+                juce::AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, 64); b.clear(); k.renderNextBlock (b, 0, 64);
+            }
+            return juce::Decibels::gainToDecibels (out.getMagnitude (0, len));
+        };
+        const float kick = peakOf (hhx::LaneKick), snare = peakOf (hhx::LaneSnare), hat = peakOf (hhx::LaneHatClosed), crash = peakOf (hhx::LaneCrashL);
+        std::printf ("kit levels %s: kick %.1f snare %.1f hat %.1f crash %.1f dBFS\n", kitDir.getFileName().toRawUTF8(), kick, snare, hat, crash);
+        CHECK (snare - kick > 0.5f && snare - kick < 4.0f);
+        CHECK (hat < kick - 3.0f && crash < kick - 3.0f);
+        CHECK (kick < -3.0f && snare < -3.0f);
+        // Two crash parts on one stroke are one cymbal, not two detuned copies swooshing together
+        {
+            juce::AudioBuffer<float> out (2, len); out.clear();
+            for (int pos = 0; pos < len; pos += 64)
+            {
+                if (pos == 0) { k.noteOn (hhx::LaneCrashL, 0.8f, 0); k.noteOn (hhx::LaneCrashL, 0.8f, 1); }
+                juce::AudioBuffer<float> b (out.getArrayOfWritePointers(), 2, pos, 64); b.clear(); k.renderNextBlock (b, 0, 64);
+            }
+            const float dbl = juce::Decibels::gainToDecibels (out.getMagnitude (0, len));
+            std::printf ("crash double-hit %.1f dBFS vs single %.1f\n", dbl, crash);
+            CHECK (dbl < crash + 1.5f);
+        }
     }
     // 40 plug-ins on one session at a 128-sample buffer: no block may miss the audio deadline (= no crackles)
     {
@@ -2188,6 +2398,83 @@ int main()
         std::printf ("moved project: vocal found at %s\n", got.getFullPathName().toRawUTF8());
         CHECK (got.existsAsFile() && got == b.getChildFile ("Recordings").getChildFile ("Vocal_take.wav"));
         root.deleteRecursively();
+    }
+
+    // 3x Oscillation + HumWave (factory table, sample to wavetable) sound, stay finite, and save / load
+    {
+        auto renderPeak = [] (const Channel& c)
+        {
+            auto inst = createInstrument (c, nullptr, 48000.0);
+            juce::AudioBuffer<float> b (2, 4800); b.clear();
+            inst->noteOn (60, 0.9f, false);
+            float pk = 0.0f; bool finite = true;
+            for (int k = 0; k < 10; ++k)
+            {
+                b.clear(); inst->render (b, 0, 4800);
+                for (int i = 0; i < 4800; ++i) { const float x = b.getSample (0, i); finite &= std::isfinite (x); pk = std::max (pk, std::abs (x)); }
+            }
+            return finite ? pk : -1.0f;
+        };
+        Channel x3; x3.type = ChannelType::Synth; x3.synth.wave = 9; x3.synth.xVol = { 1, 0.7f, 0.5f }; x3.synth.xWave = { 0, 1, 4 }; x3.synth.xSemi = { 0, 7, -12 };
+        const float p3 = renderPeak (x3);
+        CHECK (p3 > 0.05f && p3 < 4.0f);
+        for (int kind = 0; kind < 8; ++kind)
+        {
+            Channel hw; hw.type = ChannelType::Synth; hw.synth.wave = 10; hw.synth.wtKind = kind; hw.synth.wtPos = 0.6f; hw.synth.morph = 0.5f; hw.synth.lfoRate = 1.0f;
+            const float ph = renderPeak (hw);
+            CHECK (ph > 0.05f && ph < 4.0f);
+        }
+        juce::AudioBuffer<float> smp (1, 20000);
+        for (int i = 0; i < smp.getNumSamples(); ++i) smp.setSample (0, i, std::sin (i * 0.05f) * std::exp (-i / 8000.0f) + 0.3f * std::sin (i * 0.31f));
+        auto tab = humWaveFromAudio (smp);
+        CHECK (tab != nullptr && (int) tab->size() == 32 * humWaveFrameSize);
+        Project p = Project::createDefault();
+        Channel hw; hw.type = ChannelType::Synth; hw.name = "HW"; hw.synth.wave = 10; hw.synth.wt = tab; hw.synth.wtName = "kick"; hw.synth.wtPos = 0.25f;
+        hw.synth.xSemi = { 0, 5, -7 };
+        CHECK (renderPeak (hw) > 0.05f);
+        const int id = p.addChannel (hw);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-humwave.hhs");
+        CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        const Channel* got = nullptr;
+        for (auto& c : q.channels) if (c.id == id) got = &c;
+        CHECK (got != nullptr && got->synth.wave == 10 && got->synth.wt != nullptr && *got->synth.wt == *tab
+               && got->synth.wtName == "kick" && std::abs (got->synth.wtPos - 0.25f) < 1.0e-4f && got->synth.xSemi[1] == 5.0f);
+        f.deleteFile();
+        std::printf ("3x Oscillation peak %.2f, HumWave 8 tables + sample-to-wavetable render and round-trip\n", p3);
+    }
+
+    // A template shared as one file carries its sounds: it opens on another machine with every sample found
+    {
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hh-share-test");
+        tmp.deleteRecursively(); tmp.createDirectory();
+        auto wav = tmp.getChildFile ("myvox.wav");
+        {
+            juce::AudioBuffer<float> b (1, 4800);
+            for (int i = 0; i < b.getNumSamples(); ++i) b.setSample (0, i, 0.3f * std::sin (0.05f * (float) i));
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (wav), 48000.0, 1, 24, {}, 0));
+            CHECK (w != nullptr);
+            if (w) w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+        }
+        hhs::Project p;
+        p.channels.emplace_back();
+        p.channels.back().type = hhs::ChannelType::Sampler;
+        p.channels.back().sampleFile = wav;
+        auto pack = tmp.getChildFile ("Beat Starter.hhpack");
+        CHECK (hhs::packTemplate (p, "Beat Starter", pack));
+        wav.deleteFile();   // the sender's original is gone: the receiver only has the pack
+        auto inbox = tmp.getChildFile ("Templates");
+        auto t = hhs::unpackTemplate (pack, inbox);
+        CHECK (t.existsAsFile());
+        hhs::Project q;
+        CHECK (hhs::loadProject (q, t));
+        CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.isAChildOf (inbox));
+        auto t2 = hhs::unpackTemplate (pack, inbox);   // received twice: kept side by side, nothing overwritten
+        CHECK (t2.existsAsFile() && t2 != t);
+        CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
+        std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
+        tmp.deleteRecursively();
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);

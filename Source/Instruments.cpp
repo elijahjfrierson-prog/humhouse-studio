@@ -273,7 +273,12 @@ class SynthInstrument : public ChannelInstrument
 {
 public:
     void prepare (double sr, int) override { sampleRate = sr; }
-    void update (const Channel& c) override { p = c.synth; glide = c.glide; mono = c.mono; pitch = c.pitch; }
+    void update (const Channel& c) override
+    {
+        p = c.synth; glide = c.glide; mono = c.mono; pitch = c.pitch;
+        table = p.wave == 10 ? (p.wt != nullptr && p.wt->size() >= (size_t) humWaveFrameSize ? p.wt : humWaveFactory (p.wtKind)) : nullptr;
+        for (int o = 0; o < 3; ++o) xRatio[(size_t) o] = std::pow (2.0f, (p.xSemi[(size_t) o] + p.xFine[(size_t) o] / 100.0f) / 12.0f);
+    }
 
     void noteOn (int key, float vel, bool slide) override
     {
@@ -384,6 +389,7 @@ public:
 private:
     struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
                    float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
+                   std::array<float, 3> xph { 0.0f, 0.31f, 0.67f };
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
                    uint32_t rng = 0x9e3779b9u; };
     static float nextNoise (Voice& v)
@@ -426,10 +432,56 @@ private:
                 const int i0 = juce::jmin (2, (int) m);
                 return w[i0] + (w[i0 + 1] - w[i0]) * (m - (float) i0);
             }
+            case 9: // 3x Oscillation
+            {
+                float s = 0.0f;
+                for (size_t o = 0; o < 3; ++o)
+                {
+                    if (p.xVol[o] <= 0.0f) continue;
+                    const float d = dt * xRatio[o];
+                    float& ph = v.xph[o];
+                    float y;
+                    switch (p.xWave[o])
+                    {
+                        case 0: y = 2.0f * ph - 1.0f - blep (ph, d); break;
+                        case 1: { y = ph < 0.5f ? 1.0f : -1.0f; y += blep (ph, d); float t2 = ph + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f; y -= blep (t2, d); break; }
+                        case 2: y = 4.0f * std::abs (ph - 0.5f) - 1.0f; break;
+                        case 3: y = std::sin (tp * ph); break;
+                        default: y = nextNoise (v); break;
+                    }
+                    s += p.xVol[o] * y;
+                    ph += d; ph -= std::floor (ph);
+                }
+                return 0.6f * s;
+            }
+            case 10: // HumWave wavetable
+            {
+                if (table == nullptr) return std::sin (tp * v.ph1);
+                const auto& t = *table;
+                const int frames = (int) t.size() / humWaveFrameSize;
+                const float pos = juce::jlimit (0.0f, 1.0f, p.wtPos + (p.lfoRate > 0.0f ? 0.5f * p.morph * std::sin (tp * (float) (p.lfoRate * t0 (v))) : 0.0f));
+                const float fp = pos * (float) (frames - 1);
+                const int f0 = juce::jmin (frames - 1, (int) fp), f1 = juce::jmin (frames - 1, f0 + 1);
+                const float ff = fp - (float) f0;
+                auto read = [&] (float ph)
+                {
+                    const float x = ph * humWaveFrameSize;
+                    const int i0 = (int) x & (humWaveFrameSize - 1), i1 = (i0 + 1) & (humWaveFrameSize - 1);
+                    const float fx = x - std::floor (x);
+                    const float* a = t.data() + (size_t) f0 * humWaveFrameSize;
+                    const float* b = t.data() + (size_t) f1 * humWaveFrameSize;
+                    const float ya = a[i0] + (a[i1] - a[i0]) * fx, yb = b[i0] + (b[i1] - b[i0]) * fx;
+                    return ya + (yb - ya) * ff;
+                };
+                float s = read (v.ph1);
+                if (p.detune > 0.0f || p.unison > 1) s = 0.5f * (s + read (v.ph2));
+                return s;
+            }
             default: // air: noise over a sine body
                 return 0.5f * std::sin (tp * v.ph1) + 0.5f * nextNoise (v);
         }
     }
+    double t0 (const Voice& v) const { return v.age / sampleRate; }
     static inline float blep (float t, float dt)
     {
         if (t < dt) { t /= dt; return t + t - t * t - 1.0f; }
@@ -447,9 +499,128 @@ private:
         }
     }
     SynthParams p;
+    std::shared_ptr<const std::vector<float>> table;
+    std::array<float, 3> xRatio { 1, 1, 1 };
     std::array<Voice, 24> voices {};
     int next = 0; double sampleRate = 44100.0, lastKey = -1; float glide = 0, pitch = 0; bool mono = false;
 };
+
+static void bandLimitFrames (std::vector<float>& t)
+{
+    constexpr int N = humWaveFrameSize, H = 64;
+    const int F = (int) t.size() / N;
+    std::vector<float> cs ((size_t) N), sn ((size_t) N);
+    std::vector<double> a ((size_t) H + 1), b ((size_t) H + 1);
+    for (int f = 0; f < F; ++f)
+    {
+        float* x = t.data() + (size_t) f * N;
+        for (int k = 1; k <= H; ++k)
+        {
+            double sa = 0, sb = 0;
+            for (int i = 0; i < N; ++i)
+            {
+                const double ph = juce::MathConstants<double>::twoPi * k * i / N;
+                sa += x[i] * std::cos (ph); sb += x[i] * std::sin (ph);
+            }
+            a[(size_t) k] = 2.0 * sa / N; b[(size_t) k] = 2.0 * sb / N;
+        }
+        float pk = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            double y = 0;
+            for (int k = 1; k <= H; ++k)
+            {
+                const double ph = juce::MathConstants<double>::twoPi * k * i / N;
+                y += a[(size_t) k] * std::cos (ph) + b[(size_t) k] * std::sin (ph);
+            }
+            x[i] = (float) y; pk = std::max (pk, std::abs (x[i]));
+        }
+        if (pk > 1.0e-6f) for (int i = 0; i < N; ++i) x[i] /= pk;
+    }
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFromRaw (std::vector<float> t)
+{
+    t.resize ((size_t) std::max (1, (int) t.size() / humWaveFrameSize) * humWaveFrameSize, 0.0f);
+    bandLimitFrames (t);
+    return std::make_shared<const std::vector<float>> (std::move (t));
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFromAudio (const juce::AudioBuffer<float>& in, int frames)
+{
+    constexpr int N = humWaveFrameSize, L = 2048;
+    const int len = in.getNumSamples();
+    std::vector<float> t ((size_t) (frames * N), 0.0f);
+    if (len <= 0 || in.getNumChannels() == 0) return humWaveFromRaw (std::move (t));
+    // skip the silent lead-in, then spread the frames over the sound
+    int first = 0;
+    while (first < len - 1 && std::abs (in.getSample (0, first)) < 0.01f) ++first;
+    const int span = std::max (1, len - first - L);
+    for (int f = 0; f < frames; ++f)
+    {
+        const int at = first + (frames > 1 ? (int) ((double) span * f / (frames - 1)) : 0);
+        for (int i = 0; i < N; ++i)
+        {
+            double sum = 0; int cnt = 0;
+            for (int j = i * L / N; j < (i + 1) * L / N; ++j)
+                if (at + j < len) { for (int c = 0; c < in.getNumChannels(); ++c) sum += in.getSample (c, at + j); ++cnt; }
+            t[(size_t) (f * N + i)] = cnt > 0 ? (float) (sum / (cnt * in.getNumChannels())) : 0.0f;
+        }
+    }
+    return humWaveFromRaw (std::move (t));
+}
+
+const juce::StringArray& humWaveFactoryNames()
+{
+    static const juce::StringArray n { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM" };
+    return n;
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFactory (int kind)
+{
+    static const std::vector<std::shared_ptr<const std::vector<float>>> tables = []
+    {
+        std::vector<std::shared_ptr<const std::vector<float>>> out;
+        constexpr int N = humWaveFrameSize, F = 32;
+        constexpr double tp = juce::MathConstants<double>::twoPi;
+        for (int kd = 0; kd < 8; ++kd)
+        {
+            std::vector<float> t ((size_t) (F * N));
+            for (int f = 0; f < F; ++f)
+            {
+                const double fr = f / (double) (F - 1);
+                for (int i = 0; i < N; ++i)
+                {
+                    const double p = i / (double) N;
+                    double y = 0;
+                    switch (kd)
+                    {
+                        case 0: { const int hm = 1 + (int) (fr * 63); for (int k = 1; k <= hm; ++k) y += std::sin (tp * k * p) / k; break; }
+                        case 1: y = p < 0.5 - 0.45 * fr ? 1.0 : -1.0; break;
+                        case 2:
+                        {
+                            const double f1 = 3.0 - 1.6 * fr, f2 = 7.0 + 6.0 * fr;
+                            for (int k = 1; k <= 40; ++k)
+                                y += (std::exp (-0.5 * std::pow ((k - f1) / 1.2, 2)) + 0.6 * std::exp (-0.5 * std::pow ((k - f2) / 2.0, 2)) + 0.05 / k) * std::sin (tp * k * p);
+                            break;
+                        }
+                        case 3: y = std::sin (std::sin (tp * p) * (1.0 + 7.0 * fr) * juce::MathConstants<double>::halfPi); break;
+                        case 4: { const double lv = 32.0 - 29.0 * fr; y = std::floor ((2.0 * p - 1.0) * lv) / lv; break; }
+                        case 5: { const double q = p * (1.0 + 7.0 * fr); y = 2.0 * (q - std::floor (q)) - 1.0; y *= 1.0 - p; break; }
+                        case 6: { static const double bars[9] { 1, 2, 3, 4, 6, 8, 10, 12, 16 };
+                                  for (int k = 0; k < 9; ++k) y += std::sin (tp * bars[k] * p) * (k == 0 ? 1.0 : std::max (0.0, std::sin ((fr * 3.0 + k * 0.7))) * 0.6); break; }
+                        default: y = std::sin (tp * p + 6.0 * fr * std::sin (tp * 3.0 * p)); break;
+                    }
+                    t[(size_t) (f * N + i)] = (float) y;
+                }
+            }
+            bandLimitFrames (t);
+            out.push_back (std::make_shared<const std::vector<float>> (std::move (t)));
+        }
+        return out;
+    }();
+    return tables[(size_t) juce::jlimit (0, (int) tables.size() - 1, kind)];
+}
 
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel& c, SharedSample sample, double sr)
 {

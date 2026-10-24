@@ -54,7 +54,16 @@ struct SynthParams
     float morph = 0.0f;                     // morph wave: sine > triangle > saw > square
     float noise = 0.0f;                     // breath / air mixed into any wave
     float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
+    // wave 9 = 3x Oscillation: three oscillators, each its own shape (saw, square, triangle, sine, noise), tune and level
+    std::array<int, 3>   xWave { 0, 1, 3 };
+    std::array<float, 3> xVol { 1.0f, 0.0f, 0.0f }, xSemi { 0, 0, 0 }, xFine { 0, 0, 0 };
+    // wave 10 = HumWave wavetable: frames of humWaveFrameSize samples, scanned by wtPos (Morph = LFO sweep depth)
+    float wtPos = 0.0f;
+    int   wtKind = 0;                                   // factory table, used when no custom table is loaded
+    std::shared_ptr<const std::vector<float>> wt;       // custom table (picture to sound, sample to wavetable)
+    juce::String wtName;
 };
+constexpr int humWaveFrameSize = 256;
 
 // Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
 struct DrummerParams
@@ -63,9 +72,11 @@ struct DrummerParams
     float swing = 0.0f, humanize = 0.5f, ghost = 0.5f, hatOpen = 0.0f;
     bool  halfTime = false, ride = false;
     int   character = 1, seed = 1;
+    int   kickPattern = 0, snarePattern = 0, hatPattern = 0, tomPattern = 0, crashPattern = 0;   // 0 = Auto (the recorded take)
     int   voicing = 1, space = 1, glow = 0;   // mix voicing (Raw, Modern, Punch, Room, Vintage), room space, squeeze glow
     float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
     // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
+    std::array<float, 17> partDb {};   // per kit piece (kitPieceOf), on top of the group level
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
@@ -173,6 +184,7 @@ struct Lane
     int  mixerTrack = 0;
     bool armed = false, muted = false;
     bool monitor = true;
+    int  compLane = -1;            // take lane made by Comp takes: the comp track it feeds
     float height = 56.0f;
     juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
     juce::Colour nameColour {};    // track name color (transparent = automatic, opposite of what it sits on)
@@ -208,6 +220,16 @@ struct MixerTrack
     float duck = 0.0f;             // 0 = off .. 1 = full
     int   duckSource = -1;         // -1 = auto (first armed vocal track)
     float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
+    // FL-style mini EQ under the FX slots: low shelf, 3 peaks, high shelf; each band has freq / gain / Q
+    std::array<float, 5> meqFreq { 80.0f, 300.0f, 1000.0f, 3500.0f, 10000.0f }, meqGain { 0, 0, 0, 0, 0 }, meqQ { 0.7f, 1.0f, 1.0f, 1.0f, 0.7f };
+};
+
+// Link to controller: a controller effect (Peak Controller) drives one knob of another effect
+struct CtlLink
+{
+    int srcTrack = 0, srcUid = 0, dstTrack = 0, dstUid = 0;
+    juce::String param;
+    float lo = 0.0f, hi = 1.0f;   // controller 0..1 maps onto this part of the knob's range
 };
 
 // ---------------------------------------------------------------- project
@@ -235,6 +257,7 @@ struct Project
     std::vector<Lane>       lanes;
     std::vector<Clip>       clips;
     std::vector<MixerTrack> mixer;   // [0] master
+    std::vector<CtlLink>    ctlLinks;
     std::vector<juce::File> audioPool;   // every audio clip ever used, kept until "Clear unused / Clear all"
     int  insertPatternAfter (int after, Pattern pt);                 // returns the new index; clip indices are remapped
     void removePatterns (const std::function<bool (int)>& drop);    // drops patterns + their clips, remaps the rest

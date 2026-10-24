@@ -670,7 +670,44 @@ namespace hhx
             errStraight += std::abs (rel - std::round (rel * 8.0f) / 8.0f);
             errTriplet  += std::abs (rel - std::round (rel * 6.0f) / 6.0f);
         }
-        const float gridDiv = errTriplet < errStraight * 0.5f ? 6.0f : 8.0f;
+        // Only a figure that is plainly triplets is read as one: a loosely
+        // played straight fill sits nearly as close to the triplet grid, and
+        // reading it as triplets is what turned rock fills into gallops.
+        const bool triplet = errTriplet < errStraight * 0.35f;
+
+        const auto near = [&placed] (float at, float self)
+        {
+            for (const float other : placed)
+                if (std::abs (other - self) > 0.01f && std::abs (other - at) < 0.04f)
+                    return true;
+            return false;
+        };
+
+        // A thirty-second is only kept inside a real roll - three or more
+        // strokes in a row at that spacing. A lone thirty-second pickup in
+        // front of a stroke is the "da-DUM" gallop, so it is played on the
+        // straight sixteenth instead, on whichever side is free.
+        const auto straightSnap = [&] (float rel, bool& keep)
+        {
+            keep = true;
+            const float s32 = std::round (rel * 8.0f) / 8.0f;
+            const float s16 = std::round (rel * 4.0f) / 4.0f;
+            if (std::abs (s32 - s16) < 0.001f)
+                return s16;
+            const float t = 0.125f;
+            const bool roll = (near (rel - t, rel) && near (rel + t, rel))
+                           || (near (rel + t, rel) && near (rel + 2.0f * t, rel))
+                           || (near (rel - t, rel) && near (rel - 2.0f * t, rel));
+            if (roll)
+                return s32;
+            const float lo = std::floor (rel * 4.0f) / 4.0f, hi = lo + 0.25f;
+            const bool loTaken = near (lo, rel), hiTaken = near (hi, rel);
+            if (loTaken && hiTaken)
+                keep = false;
+            const bool preferLo = (rel - lo) <= (hi - rel);
+            if (preferLo) return loTaken && ! hiTaken ? hi : lo;
+            return hiTaken && ! loTaken ? lo : hi;
+        };
 
         for (const auto& h : f.hits)
         {
@@ -686,7 +723,11 @@ namespace hhx
             // The take's own micro-timing then rides on top, but only as far
             // as Humanize asks.
             const float rel  = (src - srcSkip) * scale;
-            const float snap = std::round (rel * gridDiv) / gridDiv;
+            bool keep = true;
+            const float snap = triplet ? std::round (rel * 6.0f) / 6.0f
+                                       : straightSnap (rel, keep);
+            if (! keep)
+                continue;
 
             // An isolated stroke is played dead on the grid. Micro-timing is
             // heard as feel inside a run, but a lone hit nudged off the beat is
@@ -697,9 +738,9 @@ namespace hhx
             // most plainly, so the deviation is scaled right down and capped at
             // well under a thirty-second either way.
             const float dev = inARun (rel)
-                            ? std::clamp (h.devBeats() * scale * 0.08f
+                            ? std::clamp (h.devBeats() * scale * 0.04f
                                               * std::clamp (s.humanize, 0.0f, 1.0f),
-                                          -0.03f, 0.03f)
+                                          -0.012f, 0.012f)
                             : 0.0f;
             const float beat = fillStartBeat + snap + dev;
             if (beat < fillStartBeat - 0.02f || beat >= phraseBeats - 0.005f)
@@ -1273,6 +1314,7 @@ namespace hhx
                                         int   phraseIndex,
                                         int   bars,
                                         float dstBar,
+                                        float grooveEnd,
                                         std::uint64_t seed,
                                         std::vector<Hit>& out) const
     {
@@ -1282,6 +1324,11 @@ namespace hhx
             return;
 
         const float energy  = std::clamp (sec.sectionVelocity, 0.0f, 1.0f);
+        if (sec.crashPattern > 0)
+        {
+            addCrashPattern (sec, bars, dstBar, grooveEnd, energy, seed, out);
+            return;
+        }
         const int   section = sectionAtBar (base, phraseIndex * bars);
         const bool  blockTop = phraseIndex == 0
                              || blockIndexForBar (base, phraseIndex * bars)
@@ -1349,6 +1396,293 @@ namespace hhx
         // The crash is played with the hand that was keeping time, so the hat
         // stroke underneath it drops right back: two cymbals sounding equally
         // on one beat is the give-away that a machine placed them.
+        for (Hit& h : out)
+            if (isOrnamentLane (h.lane)
+                && std::any_of (struck.begin(), struck.end(),
+                                [&] (const float beat) { return std::abs (h.beat - beat) < 0.06f; }))
+                h.velocity = (std::uint8_t) std::max (1, (int) h.velocity / 3);
+    }
+
+    void PerformanceEngine::applyPartPatterns (const PerformanceSettings& s,
+                                               float dstBar,
+                                               int   bars,
+                                               std::uint64_t seed,
+                                               std::vector<Raw>& raw) const
+    {
+        // A part set to a pattern is played as written, dead on the beat; the
+        // take still decides the small things - accents, the odd extra kick,
+        // where the ghosts go - so every take sounds like a drummer.
+        const int beatsInBar = std::max (1, (int) std::floor (dstBar + 0.001f));
+        const auto jitter = [&] (int bar, float pos, std::uint64_t salt)
+        {
+            return 1.0f + 0.12f * (rand01 (seed, (std::uint64_t) (bar * 64 + (int) (pos * 8.0f)), salt) - 0.5f);
+        };
+        const auto add = [&] (int bar, float pos, int lane, float vel, std::uint64_t salt)
+        {
+            if (pos < 0.0f || pos >= dstBar - 0.001f)
+                return;
+            raw.push_back (Raw { (float) bar * dstBar + pos, 0.0f, (std::uint8_t) lane,
+                                 (std::uint8_t) std::clamp ((int) std::lround (vel * jitter (bar, pos, salt)), 1, 127) });
+        };
+        const auto clearLanes = [&raw] (auto&& which)
+        {
+            raw.erase (std::remove_if (raw.begin(), raw.end(),
+                                       [&] (const Raw& r) { return which ((int) r.lane); }),
+                       raw.end());
+        };
+
+        if (s.kickPattern > 0)
+        {
+            clearLanes ([] (int lane) { return lane == LaneKick; });
+            for (int bar = 0; bar < bars; ++bar)
+            {
+                std::vector<float> at;
+                switch (s.kickPattern)
+                {
+                    case 1:  at = { 0.0f, 2.0f }; break;
+                    case 2:  at = { 0.0f, 1.5f, 2.0f }; break;
+                    case 3:  for (float p = 0.0f; p < dstBar; p += 0.5f) at.push_back (p); break;
+                    case 4:  for (int b = 0; b < beatsInBar; ++b) at.push_back ((float) b); break;
+                    default: at = { 0.0f, 2.0f, 2.5f }; break;
+                }
+                // The take's variation: now and then the last bar of the
+                // phrase pushes into the next one with a kick on the last "&".
+                if (s.kickPattern != 3 && s.kickPattern != 4 && bar == bars - 1
+                    && rand01 (seed, (std::uint64_t) bar, 0xB1u) < 0.25f + 0.5f * s.complexity)
+                    at.push_back (dstBar - 0.5f);
+                for (const float p : at)
+                    add (bar, p, LaneKick, std::abs (p - std::round (p)) < 0.01f ? 112.0f : 98.0f, 0xB2u);
+            }
+        }
+
+        if (s.snarePattern > 0)
+        {
+            clearLanes ([] (int lane) { return isSnareLane (lane); });
+            const bool half = s.halfTime || s.character == 6;
+            for (int bar = 0; bar < bars; ++bar)
+            {
+                std::vector<float> at;
+                switch (s.snarePattern)
+                {
+                    case 3:  at = { 2.0f }; break;
+                    case 4:  for (int b = 0; b < beatsInBar; ++b) at.push_back ((float) b); break;
+                    case 5:  at = { 1.0f, 3.0f, 3.5f }; break;
+                    default: if (half) at = { 2.0f }; else at = { 1.0f, 3.0f }; break;
+                }
+                for (const float p : at)
+                    add (bar, p, LaneSnare, (p == 3.5f) ? 96.0f : 116.0f, 0xB3u);
+
+                if (s.snarePattern == 2)
+                {
+                    // Ghosts sit on the "e" and "a" around the backbeat, never on
+                    // it; which ones is the take's choice.
+                    static const float spots[] = { 0.75f, 1.25f, 1.75f, 2.25f, 2.75f, 3.25f, 3.75f };
+                    for (int k = 0; k < 7; ++k)
+                        if (rand01 (seed, (std::uint64_t) (bar * 8 + k), 0xB4u) < 0.3f + 0.3f * s.complexity)
+                            add (bar, spots[k], LaneSnareGhost, 34.0f, 0xB5u);
+                }
+            }
+        }
+
+        if (s.hatPattern > 0)
+        {
+            clearLanes ([] (int lane) { return isOrnamentLane (lane); });
+            if (s.hatPattern != 5)
+            {
+                // Which notes the hand leans on is the take's: on the beat,
+                // or riding the "&"s for a pushed feel.
+                const bool pushAnds = rand01 (seed, 1u, 0xB6u) < 0.3f;
+                const float step = s.hatPattern == 2 ? 0.25f : s.hatPattern == 3 ? 1.0f : 0.5f;
+                for (int bar = 0; bar < bars; ++bar)
+                    for (float p = 0.0f; p < dstBar - 0.001f; p += step)
+                    {
+                        const bool onBeat = std::abs (p - std::round (p)) < 0.01f;
+                        const bool isAnd  = std::abs (p - std::floor (p) - 0.5f) < 0.01f;
+                        float vel = onBeat ? 100.0f : isAnd ? 82.0f : 62.0f;
+                        if (pushAnds && (onBeat || isAnd))
+                            vel = onBeat ? 84.0f : 98.0f;
+                        const int lane = (s.hatPattern == 4 && isAnd) ? LaneHatOpen2 : LaneHatClosed;
+                        add (bar, p, lane, vel, 0xB7u);
+                    }
+            }
+        }
+
+        if (s.tomPattern > 0)
+        {
+            clearLanes ([] (int lane) { return isTomLane (lane); });
+            for (int bar = 0; bar < bars; ++bar)
+            {
+                if (s.tomPattern == 2)
+                    for (float p = 0.0f; p < dstBar - 0.001f; p += 0.5f)
+                        add (bar, p, LaneTom3, std::abs (p - std::round (p)) < 0.01f ? 104.0f : 84.0f, 0xB8u);
+                else if (s.tomPattern == 3)
+                    for (const float p : { 0.0f, 2.0f })
+                        add (bar, p, LaneTom3, 104.0f, 0xB8u);
+            }
+        }
+    }
+
+    void PerformanceEngine::shapeBackbeat (const PerformanceSettings& s,
+                                           float dstBar,
+                                           int   bars,
+                                           std::vector<Raw>& raw) const
+    {
+        // A rock groove is built around the backbeat the way a trap beat is
+        // built around the clap: the snare on 2 and 4 is the loudest, steadiest
+        // thing in the bar and everything else sits around it.
+        if (s.snarePattern > 0 || std::abs (dstBar - 4.0f) > 0.01f || s.character == 8
+            || (s.laneMask & (1u << LaneSnare)) == 0)
+            return;
+
+        const bool half = s.halfTime || s.character == 6;
+        const std::vector<float> backbeats = half ? std::vector<float> { 2.0f }
+                                                  : std::vector<float> { 1.0f, 3.0f };
+        const bool kickOffBackbeat = s.character == 0 || s.character == 1
+                                  || s.character == 2 || s.character == 7;
+
+        int typical = 0, count = 0;
+        for (const Raw& r : raw)
+            if (r.lane == LaneSnare)
+                for (const float bb : backbeats)
+                {
+                    const float inBar = r.beat - std::floor (r.beat / dstBar) * dstBar;
+                    if (std::abs (inBar - bb) < 0.07f)
+                    {
+                        typical = std::max (typical, (int) r.velocity);
+                        ++count;
+                    }
+                }
+        const int backVel = std::clamp (std::max (typical, 104) + 8, 1, 127);
+
+        for (int bar = 0; bar < bars; ++bar)
+            for (const float bb : backbeats)
+            {
+                const float at = (float) bar * dstBar + bb;
+                bool found = false;
+                for (Raw& r : raw)
+                {
+                    const float d = std::abs (r.beat - at);
+                    if ((r.lane == LaneSnare || r.lane == LaneSnareRim) && d < 0.07f)
+                    {
+                        // Locked: no drift, no push, the steady point of the bar.
+                        r.beat = at;
+                        r.dev  = 0.0f;
+                        r.velocity = (std::uint8_t) backVel;
+                        found = true;
+                    }
+                }
+                if (! found)
+                    raw.push_back (Raw { at, 0.0f, (std::uint8_t) LaneSnare, (std::uint8_t) backVel });
+
+                raw.erase (std::remove_if (raw.begin(), raw.end(), [&] (const Raw& r)
+                {
+                    const float d = std::abs (r.beat - at);
+                    // Nothing flams the backbeat: a ghost right on top of it
+                    // or a sixteenth either side, and in straight rock the kick
+                    // stays off it so the crack is the snare's alone.
+                    if (r.lane == LaneSnareGhost && d < 0.13f)
+                        return true;
+                    return kickOffBackbeat && r.lane == LaneKick && d < 0.03f;
+                }), raw.end());
+            }
+
+        // The other snare strokes sit under the backbeat rather than level with it.
+        const int cap = (int) std::lround (backVel * 0.82f);
+        for (Raw& r : raw)
+            if (r.lane == LaneSnare && r.velocity > cap)
+            {
+                const float inBar = r.beat - std::floor (r.beat / dstBar) * dstBar;
+                const bool onBack = std::any_of (backbeats.begin(), backbeats.end(),
+                                                 [&] (float bb) { return std::abs (inBar - bb) < 0.001f; });
+                if (! onBack)
+                    r.velocity = (std::uint8_t) cap;
+            }
+    }
+
+    void PerformanceEngine::addCrashPattern (const PerformanceSettings& sec,
+                                             int   bars,
+                                             float dstBar,
+                                             float grooveEnd,
+                                             float energy,
+                                             std::uint64_t seed,
+                                             std::vector<Hit>& out) const
+    {
+        // Crash patterns are locked to the beat - 1, 2, 3, 4 - with each side
+        // at its own level; the take only varies how hard each stroke lands
+        // and which side leads where the pattern leaves it open.
+        const bool haveRight = (sec.laneMask & (1u << LaneCrashR)) != 0;
+        const bool haveLeft  = (sec.laneMask & (1u << LaneCrashL)) != 0;
+        const bool flip   = rand01 (seed, 2u, 0xC1u) < 0.5f;
+        const float level = 0.62f + 0.30f * energy;
+        const int beatsInBar = std::max (1, (int) std::floor (dstBar + 0.001f));
+
+        std::vector<float> struck;
+        int index = 0;
+        const auto hit = [&] (float beat, bool right, float accent)
+        {
+            if (beat >= grooveEnd - 0.01f)
+                return;
+            if (right ? ! haveRight : ! haveLeft)
+                right = ! right;
+            const float v = level * accent
+                          * (1.0f + 0.1f * (rand01 (seed, (std::uint64_t) (beat * 8.0f), right ? 0xC2u : 0xC3u) - 0.5f));
+            out.push_back ({ beat, (std::uint8_t) (right ? LaneCrashR : LaneCrashL),
+                             (std::uint8_t) std::clamp ((int) std::lround (v * 127.0f), 1, 127),
+                             (std::uint8_t) (index % kRoundRobins) });
+            struck.push_back (beat);
+            ++index;
+        };
+
+        int counter = 0;
+        for (int bar = 0; bar < bars; ++bar)
+        {
+            const float b0 = (float) bar * dstBar;
+            switch (sec.crashPattern)
+            {
+                case 1:   // L, L+R, L, L (harder) + R
+                    for (int b = 0; b < beatsInBar; ++b)
+                    {
+                        const int k = b % 4;
+                        hit (b0 + (float) b, false, k == 3 ? 1.08f : k == 0 ? 1.0f : 0.9f);
+                        if (k == 1 || k == 3)
+                            hit (b0 + (float) b, true, 0.86f);
+                    }
+                    break;
+                case 2:   // L, L, R round and round
+                    for (int b = 0; b < beatsInBar; ++b, ++counter)
+                        hit (b0 + (float) b, counter % 3 == 2, counter % 3 == 0 ? 1.0f : 0.9f);
+                    break;
+                case 3:   // alternating
+                    for (int b = 0; b < beatsInBar; ++b, ++counter)
+                        hit (b0 + (float) b, ((counter & 1) != 0) != flip, b == 0 ? 1.0f : 0.9f);
+                    break;
+                case 4:   // both, every beat
+                    for (int b = 0; b < beatsInBar; ++b)
+                    {
+                        hit (b0 + (float) b, false, b == 0 ? 1.0f : 0.9f);
+                        hit (b0 + (float) b, true, b == 0 ? 0.95f : 0.85f);
+                    }
+                    break;
+                case 5:   // eighths on the left, both on 2 and 4
+                    for (int e = 0; e < beatsInBar * 2; ++e)
+                    {
+                        const float p = b0 + 0.5f * (float) e;
+                        const bool onBeat = (e & 1) == 0;
+                        hit (p, false, onBeat ? 0.95f : 0.72f);
+                        if (onBeat && ((e / 2) & 1) != 0)
+                            hit (p, true, 0.9f);
+                    }
+                    break;
+                case 6:   // half notes, alternating
+                    for (int b = 0; b < beatsInBar; b += 2, ++counter)
+                        hit (b0 + (float) b, ((counter & 1) != 0) != flip, 1.0f);
+                    break;
+                default:  // the one only
+                    hit (b0, ((bar & 1) != 0) != flip, 1.0f);
+                    break;
+            }
+        }
+
         for (Hit& h : out)
             if (isOrnamentLane (h.lane)
                 && std::any_of (struck.begin(), struck.end(),
@@ -1549,13 +1883,16 @@ namespace hhx
         thinOrnaments (sec, dstBar, bars, raw);
         supplyLanes (sec, dstBar, bars, seed, raw);
         addGhostNotes (sec, dstBar, bars, seed, raw);
+        applyPartPatterns (sec, dstBar, bars, seed, raw);
+        shapeBackbeat (sec, dstBar, bars, raw);
 
         // --- fill ---------------------------------------------------------
+        const float fillStart = includeFill
+                              ? phraseBeats - std::min (phraseBeats,
+                                                        dstBar * std::max (0.5f, s.fillLengthBars))
+                              : phraseBeats;
         if (includeFill)
         {
-            const float fillBeats = std::min (phraseBeats,
-                                              dstBar * std::max (0.5f, s.fillLengthBars));
-            const float fillStart = phraseBeats - fillBeats;
             raw.erase (std::remove_if (raw.begin(), raw.end(),
                                        [&] (const Raw& h) { return h.beat >= fillStart - 0.02f; }),
                        raw.end());
@@ -1737,11 +2074,18 @@ namespace hhx
             }
             else if (! r.fill)
             {
+                // Which strokes are off-beats is read from where the stroke is
+                // written, before Humanize moves it. Read afterwards, a stroke
+                // nudged across the half-way point swings and its neighbour
+                // does not, which is an off-beat lurch even with Swing at 0.
+                const float gridPos = r.beat / gridUnit;
+                const bool  offBeat = std::abs (gridPos - std::round (gridPos)) < 0.1f
+                                      && (std::llround (gridPos) & 1) != 0;
+
                 beat += r.dev * 2.0f * s.humanize + feelShift
                         + laneTimingBias (lane) * s.humanize;
 
-                const int gridIndex = (int) std::llround (beat / gridUnit);
-                if ((gridIndex & 1) != 0)
+                if (offBeat)
                     beat += swingShift;
 
                 beat += 0.014f * s.humanize
@@ -1875,7 +2219,7 @@ namespace hhx
                              (std::uint8_t) variant });
         }
 
-        addCrashes (s, sec, phraseIndex, bars, dstBar, seed, out);
+        addCrashes (s, sec, phraseIndex, bars, dstBar, fillStart, seed, out);
 
         std::stable_sort (out.begin(), out.end(),
                           [] (const Hit& a, const Hit& b) { return a.beat < b.beat; });

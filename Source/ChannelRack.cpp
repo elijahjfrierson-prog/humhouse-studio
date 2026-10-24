@@ -7,6 +7,9 @@ namespace hhs
 struct PoolInstrument
 {
     const char* name; juce::uint32 colour; int wave; float a, d, s, r, cut, res, det; int uni; float drv, fmr, fmi, mor, noi, lfo, vib, glide; bool mono; int root;
+    int table = 0; float pos = 0;                                       // HumWave (wave 10): factory table + position
+    std::array<int, 3> xw { 0, 1, 3 };                                   // 3x Oscillation (wave 9): shapes, levels, coarse, fine
+    std::array<float, 3> xv { 1, 0, 0 }, xs { 0, 0, 0 }, xf { 0, 0, 0 };
 };
 static const std::vector<PoolInstrument>& instrumentPool()
 {
@@ -27,6 +30,22 @@ static const std::vector<PoolInstrument>& instrumentPool()
         { "Brass Stab",          0xffffd04a, 0, 0.03f, 0.35f,0.55f,0.25f,3800,  0.35f,0.3f,2, 0.2f, 1,   0,   0,   0,    0,    0,    0,    false, 60 },
         { "Flute",               0xffa0e8ff, 3, 0.08f, 0.3f, 0.85f,0.25f,6000,  0.05f,0,   1, 0,    1,   0,   0,   0.08f,5,    0.12f,0,    false, 72 },
         { "Choir Pad",           0xffe0d0ff, 7, 0.6f,  1.2f, 0.85f,1.4f, 4200,  0.25f,0,   1, 0,    1,   0,   0.12f,0.03f,0.3f, 0.04f,0,    false, 60 },
+        // 3x Oscillation                                                                                          shapes      levels             coarse          fine
+        { "3x Saw Stack (lead)", 0xffff9a3d, 9, 0.005f,0.4f, 0.8f, 0.3f, 9000,  0.2f, 0,   1, 0.1f, 1,   0,   0,   0,    0,    0,    0,    false, 60, 0, 0, { 0, 0, 0 }, { 1, 0.8f, 0.6f }, { 0, 0, -12 }, { 0, 12, -9 } },
+        { "3x Sub Bass",         0xffff5d8a, 9, 0.002f,0.6f, 0.7f, 0.15f,1800,  0.25f,0,   1, 0.2f, 1,   0,   0,   0,    0,    0,    0.05f,true,  36, 0, 0, { 3, 2, 0 }, { 1, 0.6f, 0.15f }, { 0, -12, 12 }, { 0, 0, 0 } },
+        { "3x Hollow Square",    0xff6ad1ff, 9, 0.01f, 0.5f, 0.75f,0.35f,5000,  0.3f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 60, 0, 0, { 1, 1, 3 }, { 0.9f, 0.6f, 0.4f }, { 0, 7, 12 }, { 0, 5, 0 } },
+        { "3x Pluck Keys",       0xfff2d35a, 9, 0.001f,0.45f,0,    0.3f, 6000,  0.2f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 60, 0, 0, { 2, 0, 3 }, { 1, 0.4f, 0.5f }, { 0, 12, 19 }, { 0, 3, 0 } },
+        { "3x Noise Snare",      0xffd0d0d0, 9, 0.001f,0.18f,0,    0.12f,8000,  0.1f, 0,   1, 0.2f, 1,   0,   0,   0,    0,    0,    0,    false, 48, 0, 0, { 3, 4, 2 }, { 1, 0.7f, 0.3f }, { 0, 0, 12 }, { 0, 0, 0 } },
+        { "3x Fifths Pad",       0xffa58aff, 9, 0.7f,  1.0f, 0.85f,1.4f, 4000,  0.2f, 0,   1, 0,    1,   0,   0,   0,    0.2f, 0.03f,0,    false, 60, 0, 0, { 0, 2, 0 }, { 0.8f, 0.7f, 0.6f }, { 0, 7, 12 }, { -7, 0, 7 } },
+        // HumWave (wavetable): table, position; Morph = how far the LFO sweeps the position
+        { "HumWave Growl Bass",  0xffff3d6a, 10,0.002f,0.5f, 0.8f, 0.15f,3000,  0.4f, 0,   1, 0.3f, 1,   0,   0.5f,0,    2.0f, 0,    0.05f,true,  36, 3, 0.4f },
+        { "HumWave Vowel Lead",  0xffffb0e0, 10,0.01f, 0.4f, 0.8f, 0.3f, 9000,  0.2f, 0.2f,1, 0.1f, 1,   0,   0.6f,0,    0.8f, 0.05f,0.04f,false, 60, 2, 0.3f },
+        { "HumWave Saw Sweep",   0xff5ad1ff, 10,0.01f, 0.4f, 0.85f,0.4f, 12000, 0.2f, 0.5f,1, 0,    1,   0,   0.3f,0,    0.1f, 0,    0,    false, 60, 0, 0.8f },
+        { "HumWave Glass Pluck", 0xff8affe0, 10,0.001f,0.5f, 0,    0.4f, 14000, 0.1f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 72, 6, 0.6f },
+        { "HumWave PWM Pad",     0xffb06bff, 10,0.8f,  1.0f, 0.9f, 1.5f, 6000,  0.2f, 0.3f,1, 0,    1,   0,   0.8f,0,    0.25f,0.03f,0,    false, 60, 1, 0.5f },
+        { "HumWave Digital Arp", 0xff7dff8a, 10,0.001f,0.25f,0,    0.15f,10000, 0.2f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 60, 4, 0.5f },
+        { "HumWave Sync Scream", 0xffff6a3d, 10,0.005f,0.4f, 0.8f, 0.25f,8000,  0.35f,0.2f,1, 0.4f, 1,   0,   0.7f,0,    4.0f, 0,    0.03f,true,  48, 5, 0.2f },
+        { "HumWave Metal Bell",  0xffe8e8ff, 10,0.001f,1.5f, 0,    1.2f, 14000, 0.1f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 72, 7, 0.5f },
     };
     return pool;
 }
@@ -39,9 +58,31 @@ static Channel poolChannel (const PoolInstrument& e)
     sp.wave = e.wave; sp.attack = e.a; sp.decay = e.d; sp.sustain = e.s; sp.release = e.r; sp.cutoff = e.cut; sp.resonance = e.res;
     sp.detune = e.det; sp.unison = e.uni; sp.drive = e.drv; sp.fmRatio = e.fmr; sp.fmIndex = e.fmi; sp.morph = e.mor; sp.noise = e.noi;
     sp.lfoRate = e.lfo; sp.vibrato = e.vib;
+    sp.wtKind = e.table; sp.wtPos = e.pos;
+    sp.xWave = e.xw; sp.xVol = e.xv; sp.xSemi = e.xs; sp.xFine = e.xf;
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
 }
+// picture to sound: each row of the picture is one wavetable frame, brightness is the wave height
+static std::shared_ptr<const std::vector<float>> pictureTable (const juce::File& f)
+{
+    auto img = juce::ImageFileFormat::loadFrom (f);
+    if (! img.isValid()) return nullptr;
+    constexpr int frames = 64;
+    img = img.rescaled (humWaveFrameSize, frames, juce::Graphics::highResamplingQuality);
+    std::vector<float> t ((size_t) (frames * humWaveFrameSize));
+    for (int y = 0; y < frames; ++y)
+        for (int x = 0; x < humWaveFrameSize; ++x)
+            t[(size_t) (y * humWaveFrameSize + x)] = img.getPixelAt (x, y).getPerceivedBrightness() * 2.0f - 1.0f;
+    return humWaveFromRaw (std::move (t));
+}
+static void makeHumWave (Channel& n, std::shared_ptr<const std::vector<float>> table, const juce::String& from)
+{
+    n.type = ChannelType::Synth; n.name = "HumWave " + from; n.colour = juce::Colour (0xffb06bff);
+    n.synth.wave = 10; n.synth.wt = std::move (table); n.synth.wtName = from; n.synth.wtPos = 0.0f;
+    n.synth.morph = 0.4f; n.synth.lfoRate = 0.3f; n.synth.sustain = 0.8f; n.synth.release = 0.4f;
+}
+
 static bool isMelodicSample (const juce::File& f)   // notes change the pitch (root key plays the WAV as-is); drum hits stay put
 {
     const auto n = f.getFileNameWithoutExtension().toLowerCase(), dir = f.getParentDirectory().getFileName().toLowerCase();
@@ -217,6 +258,13 @@ struct Row : public juce::Component
         juce::PopupMenu m;
         auto* c = s.channel (channelId);
         if (c == nullptr) return;
+        m.addItem (11, "Patch Method (stack effects on this sound)...");
+        juce::PopupMenu hw;
+        hw.addItem (12, "Picture to sound (any image becomes a wavetable)...");
+        hw.addItem (13, "Turn this sample into a wavetable", c->type == ChannelType::Sampler && c->sampleFile.existsAsFile());
+        hw.addItem (14, "Load a sample / kit one-shot as wavetable...");
+        m.addSubMenu ("HumWave", hw);
+        m.addSeparator();
         m.addItem (1, "Open in Piano Roll");
         m.addItem (2, c->type == ChannelType::Plugin ? "Open plugin editor" : "Channel settings (synth / sampler)...");
         m.addItem (3, "Rename...");
@@ -232,6 +280,36 @@ struct Row : public juce::Component
         m.showMenuAsync ({}, [this] (int r) {
             const int id = channelId;
             if (r == 1) select (true);
+            else if (r == 11) openPatchMethod (s, id);
+            else if (r == 12 || r == 14)
+            {
+                const bool pic = r == 12;
+                chooser = std::make_unique<juce::FileChooser> (pic ? "Picture to sound" : "Sample to wavetable",
+                                                               juce::File::getSpecialLocation (pic ? juce::File::userPicturesDirectory : juce::File::userMusicDirectory),
+                                                               pic ? "*.png;*.jpg;*.jpeg;*.gif;*.bmp" : "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this, pic] (const juce::FileChooser& fc) {
+                    const auto f = fc.getResult();
+                    if (! f.existsAsFile()) return;
+                    std::shared_ptr<const std::vector<float>> t;
+                    if (pic) t = pictureTable (f);
+                    else if (auto smp = loadSampleFile (f, 44100.0)) t = humWaveFromAudio (*smp);
+                    if (t == nullptr) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "HumWave", "Couldn't read " + f.getFileName()); return; }
+                    replaceSound ([&] (Channel& n) { makeHumWave (n, t, f.getFileNameWithoutExtension()); });
+                    openChannelEditor (s, channelId);
+                });
+            }
+            else if (r == 13)
+            {
+                auto* ch = s.channel (id);
+                if (ch == nullptr) return;
+                const auto f = ch->sampleFile;
+                if (auto smp = loadSampleFile (f, 44100.0))
+                {
+                    auto t = humWaveFromAudio (*smp);
+                    replaceSound ([&] (Channel& n) { makeHumWave (n, t, f.getFileNameWithoutExtension()); });
+                    openChannelEditor (s, id);
+                }
+            }
             else if (r == 10) changeSoundMenu();
             else if (r == 2) openChannelEditor (s, id);
             else if (r == 3) { auto* c = s.channel (id); if (c) askText ("Rename channel", c->name, [this, id] (juce::String t) { s.edit ("Rename", [&] (Project&) { if (auto* ch = s.channel (id)) ch->name = t; }); }); }
@@ -273,6 +351,10 @@ struct Row : public juce::Component
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
             if (i == 6) pool.addSectionHeader ("Live instruments");
+            if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
+                pool.addSectionHeader ("3x Oscillation");
+            if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("HumWave") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("HumWave"))
+                pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
         m.addSubMenu ("Instrument Pool", pool);
@@ -477,7 +559,7 @@ public:
             if (! files.isEmpty()) filesDropped (files, d.localPosition.x, d.localPosition.y);
         }
     }
-    bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { return ! allHumHouseShareFiles (files); }
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
         juce::Array<juce::File> samples;
@@ -580,6 +662,10 @@ private:
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
             if (i == 6) pool.addSectionHeader ("Live instruments");
+            if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
+                pool.addSectionHeader ("3x Oscillation");
+            if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("HumWave") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("HumWave"))
+                pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
         m.addSubMenu ("Instrument Pool", pool);

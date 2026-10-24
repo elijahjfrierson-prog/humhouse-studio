@@ -94,6 +94,14 @@ namespace hhx
         bool  rideInsteadOfHat = false;
         bool  halfTime         = false;
 
+        /** Per-part patterns, 0 = the take as recorded. Anything else plays
+            that part as a written pattern locked to the beat. */
+        int   kickPattern  = 0;   // 1&3, push, 8ths, four on the floor, 1-3-3&
+        int   snarePattern = 0;   // 2&4, +ghosts, half time, every beat, 2&4 + 4&
+        int   hatPattern   = 0;   // 8ths, 16ths, quarters, open &s, off
+        int   tomPattern   = 0;   // off in grooves, floor 8ths, floor 1&3
+        int   crashPattern = 0;   // L/LR/L/LR, L/L/R, alternate, both, 8ths, halves, the 1
+
         // --- kit / metre ------------------------------------------------
         std::uint32_t laneMask  = 0xFFFFFFFFu;
         std::uint32_t ghostMask = 0;   // lanes forced to ghost level
@@ -211,8 +219,30 @@ namespace hhx
                          int   phraseIndex,
                          int   bars,
                          float dstBar,
+                         float grooveEnd,
                          std::uint64_t seed,
                          std::vector<Hit>& out) const;
+
+        void addCrashPattern (const PerformanceSettings& sec,
+                              int   bars,
+                              float dstBar,
+                              float grooveEnd,
+                              float energy,
+                              std::uint64_t seed,
+                              std::vector<Hit>& out) const;
+
+        /** Plays the parts set to a written pattern instead of the take. */
+        void applyPartPatterns (const PerformanceSettings& s,
+                                float dstBar,
+                                int   bars,
+                                std::uint64_t seed,
+                                std::vector<Raw>& raw) const;
+
+        /** Locks and lifts the backbeat and clears the strokes that crowd it. */
+        void shapeBackbeat (const PerformanceSettings& s,
+                            float dstBar,
+                            int   bars,
+                            std::vector<Raw>& raw) const;
 
         /** Collapses two cymbal strokes that land within a few milliseconds of
             each other - a closed and an open hat on the same eighth, or a

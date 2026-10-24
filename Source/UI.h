@@ -40,7 +40,15 @@ namespace col
     // White theme: darken the stops so they read on white backgrounds
     inline juce::Colour fontStop (juce::Colour c)
     {
-        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.15f), 0.12f + c.getBrightness() * 0.36f, c.getFloatAlpha()) : c;
+        // every stop stays far from the background: deep on the white theme, bright on the dark one
+        return lightMode ? juce::Colour::fromHSV (c.getHue(), juce::jmin (1.0f, c.getSaturation() * 1.2f), 0.08f + c.getBrightness() * 0.2f, c.getFloatAlpha())
+                         : juce::Colour::fromHSV (c.getHue(), c.getSaturation(), juce::jmax (0.8f, c.getBrightness()), c.getFloatAlpha());
+    }
+    // keep `text` unless it would blend into `bg` (similar brightness); then switch to a contrasting color
+    inline juce::Colour readableOn (juce::Colour text, juce::Colour bg)
+    {
+        if (bg.getAlpha() < 40 || std::abs (text.getPerceivedBrightness() - bg.getPerceivedBrightness()) >= 0.33f) return text;
+        return bg.getPerceivedBrightness() > 0.55f ? juce::Colour (0xff0d0f12).withAlpha (text.getFloatAlpha()) : juce::Colour (0xfff4f6fa).withAlpha (text.getFloatAlpha());
     }
     // text sitting on a color: the opposite hue, dark on light colors and bright on dark ones
     inline juce::Colour contrastOn (juce::Colour bg)
@@ -65,6 +73,17 @@ namespace col
         gr.addColour (0.5, fontStop (fontMid).withMultipliedAlpha (alpha));
         return gr;
     }
+    // outline behind gradient text in the theme's background tone, so it still reads where it sits on a colored bar
+    inline juce::Colour fontHalo (float alpha = 1.0f)
+    {
+        return (lightMode ? juce::Colours::white.withAlpha (0.85f) : juce::Colours::black.withAlpha (0.85f)).withMultipliedAlpha (alpha);
+    }
+    template <typename Draw> inline void drawWithHalo (juce::Graphics& g, float alpha, Draw&& draw)
+    {
+        g.saveState(); g.setColour (fontHalo (alpha));
+        for (auto [dx, dy] : { std::pair { -1, 0 }, std::pair { 1, 0 }, std::pair { 0, -1 }, std::pair { 0, 1 } }) draw (dx, dy);
+        g.restoreState();
+    }
     // fill for one line of text in `area`: the gradient spans just the glyphs, so short words still show all three colours
     inline void setFontGradientFill (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j, float alpha = 1.0f)
     {
@@ -73,12 +92,32 @@ namespace col
                       : j.testFlags (juce::Justification::horizontallyCentred) ? area.getCentreX() - w * 0.5f : area.getX();
         g.setGradientFill (fontGradientFill (x, x + w, alpha));
     }
+    // gradient text as one glyph path: macOS fills a gradient glyph-by-glyph and a space (empty outline) leaves the clip open,
+    // painting the whole bar in the gradient - so build the outline ourselves and fill only the letters
+    inline void fillGradientText (juce::Graphics& g, const juce::String& text, juce::Rectangle<float> area, juce::Justification j,
+                                  int lines, float minScale, float alpha = 1.0f)
+    {
+        juce::GlyphArrangement ga;
+        ga.addFittedText (g.getCurrentFont(), text, area.getX(), area.getY(), area.getWidth(), area.getHeight(), j, juce::jmax (1, lines), minScale);
+        juce::Path p; ga.createPath (p);
+        if (p.isEmpty() || p.getBounds().isEmpty()) return;
+        const auto bb = p.getBounds();
+        g.saveState();
+        g.setGradientFill (fontGradientFill (bb.getX(), bb.getRight(), alpha));
+        g.fillPath (p);
+        g.restoreState();
+    }
 }
 
 // Panel titles / names drawn in paint(): gradient when Font = Gradient, otherwise the colour already set on g
 inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, juce::Justification j, bool fitted = false)
 {
-    if (col::fontGradient && col::isHeadline (g.getCurrentFont())) col::setFontGradientFill (g, text, area.toFloat(), j);
+    if (col::fontGradient && col::isHeadline (g.getCurrentFont()))
+    {
+        col::drawWithHalo (g, 1.0f, [&] (int dx, int dy) { if (fitted) g.drawFittedText (text, area.translated (dx, dy), j, 1); else g.drawText (text, area.translated (dx, dy), j, true); });
+        col::fillGradientText (g, text, area.toFloat(), j, 1, fitted ? 0.0f : 1.0f);
+        return;
+    }
     if (fitted) g.drawFittedText (text, area, j, 1);
     else g.drawText (text, area, j, true);
 }
@@ -228,6 +267,8 @@ public:
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;   // Font = Gradient
     void drawLabel (juce::Graphics&, juce::Label&) override;
+    void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
+    void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
     void drawLinearSlider (juce::Graphics&, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                            juce::Slider::SliderStyle, juce::Slider&) override;
     void drawFileBrowserRow (juce::Graphics&, int w, int h, const juce::File&, const juce::String& filename, juce::Image* icon,
@@ -273,6 +314,21 @@ struct Studio : public juce::ChangeBroadcaster
 
 std::unique_ptr<juce::Component> createMainComponent();
 void requestQuit (juce::Component* main);   // asks Save / Don't Save / Cancel when the project has changes
+// a project, template pack, preset or FX chain opened from Finder / Explorer, an email or a drop on the window
+void openFileInMain (juce::Component* main, const juce::File&);
+inline bool isHumHouseShareFile (const juce::String& path)
+{
+    const juce::File f (path);
+    return f.hasFileExtension ("hhpack") || f.hasFileExtension ("hhpreset") || f.hasFileExtension ("hhchain") || f.hasFileExtension ("hhs");
+}
+inline bool allHumHouseShareFiles (const juce::StringArray& files)
+{
+    for (auto& f : files) if (! isHumHouseShareFile (f)) return false;
+    return ! files.isEmpty();
+}
+// shared files received by email, AirDrop, USB...: copied into your presets; returns the installed file, or {} if it isn't one
+juce::File installSharedPreset (const juce::File&);
+juce::File installSharedChain (const juce::File&);
 std::unique_ptr<juce::Component> createChannelRack (Studio&);
 std::unique_ptr<juce::Component> createPianoRoll (Studio&);
 std::unique_ptr<juce::Component> createPlaylist (Studio&);
@@ -309,6 +365,8 @@ inline juce::PopupMenu colourMenu (int base)
     return m;
 }
 void openChannelEditor (Studio&, int channelId);
+// Patch Method (FL Patcher style): the channel gets its own insert and a window to stack effects / chains on it
+void openPatchMethod (Studio&, int channelId);
 void closeAllEditorWindows();
 extern std::function<bool (const juce::KeyPress&)> hostKeyHandler;   // app shortcuts (Cmd+S, Space, undo...) from pop-out / plug-in windows
 juce::Component* createScopeView (std::function<ScopeTap*()> source, const juce::String& title);

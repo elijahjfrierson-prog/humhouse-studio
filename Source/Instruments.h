@@ -32,4 +32,10 @@ SharedSample processSample (SharedSample, const Channel&, double sampleRate, dou
 juce::AudioBuffer<float> olaStretch (const juce::AudioBuffer<float>& in, double factor);   // pitch kept, length x factor
 // the sample's own tempo: typed in, or from the file name ("Loop 140 BPM", "140bpm"); 0 if unknown
 double sampleTempo (const Channel&);
+
+// HumWave wavetables: every frame band-limited (64 harmonics), DC-free and normalised
+const juce::StringArray& humWaveFactoryNames();
+std::shared_ptr<const std::vector<float>> humWaveFactory (int kind);
+std::shared_ptr<const std::vector<float>> humWaveFromRaw (std::vector<float> frames);          // frames x humWaveFrameSize raw values
+std::shared_ptr<const std::vector<float>> humWaveFromAudio (const juce::AudioBuffer<float>&, int frames = 32);   // a one-shot sliced into frames
 }
