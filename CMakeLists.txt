@@ -88,7 +88,7 @@ endif()
 option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
 if(NOT HHS_TESTS_ONLY)
 # classic tattoo lettering (SIL Open Font License, see Resources/Fonts/OFL-*.txt)
-juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf Resources/Fonts/Barlow-Regular.ttf Resources/Fonts/Barlow-SemiBold.ttf Resources/Fonts/IBMPlexSansCondensed-Regular.ttf Resources/Fonts/IBMPlexSansCondensed-SemiBold.ttf)
+juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Resources/Fonts/Rye-Regular.ttf Resources/Fonts/Barlow-Regular.ttf Resources/Fonts/Barlow-SemiBold.ttf)
 
 # "HumHouse Studio" = the stable app (HHS_LICENSED=1: Welcome screen, no new features);
 # "HumHouse Studio Master" = gets every new feature first

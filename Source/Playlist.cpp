@@ -817,7 +817,7 @@ public:
         thumbCache = std::make_unique<juce::AudioThumbnailCache> (256);
         setWantsKeyboardFocus (true);
         refresh();
-        startTimerHz (30);
+        startTimerHz (60);
     }
     ~Playlist() override { s.removeChangeListener (this); }
 

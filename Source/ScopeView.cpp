@@ -25,7 +25,7 @@ public:
         setupButton (freezeBtn, "FREEZE", "Freeze the display", true);
         addAndMakeVisible (freezeBtn);
         setSize (760, 380);
-        startTimerHz (30);
+        startTimerHz (60);
     }
     void resized() override
     {
@@ -96,7 +96,7 @@ private:
         {
             const float db = juce::Decibels::gainToDecibels (fftBuf[(size_t) i] * 4.0f / (float) fftSize, -100.0f);
             auto& sp = spec[(size_t) i];
-            sp = db > sp ? db : sp * 0.85f + db * 0.15f;
+            sp = db > sp ? db : sp * 0.922f + db * 0.078f;   // same fall time as 0.85 at 30 Hz
         }
         repaint();
     }
