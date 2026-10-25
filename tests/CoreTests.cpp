@@ -1280,16 +1280,16 @@ int main()
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
             juce::Random rnd (11); double ph = 0; std::vector<float> out;
-            const int screamAt = 80;
+            const int screamAt = 160;
             for (int k = 0; k < screamAt + 40; ++k)
             {
-                const bool scream = k >= screamAt, gap = k >= screamAt - 6 && ! scream;
+                const bool scream = k >= screamAt, gap = k >= screamAt - 90 && ! scream;   // ~1 s breath: the calm note has let go
                 const double hz = scream ? 523.25 * 1.025 : 440.0;
                 for (int i = 0; i < 512; ++i)
                 {
                     float v = 0;
                     for (int h = 1; h <= 8; ++h) v += (float) std::sin (h * ph) * (scream ? 1.0f / (float) h : 1.0f / (float) (h * h));
-                    const float rasp = scream ? (rnd.nextFloat() * 2 - 1) * 0.4f * (0.6f + 0.4f * (float) std::sin (ph)) : 0.0f;
+                    const float rasp = scream ? (rnd.nextFloat() * 2 - 1) * 0.6f * (0.6f + 0.4f * (float) std::sin (ph)) : 0.0f;
                     ph += juce::MathConstants<double>::twoPi * hz * (1.0 + (rnd.nextFloat() * 2 - 1) * (scream ? 0.01 : 0.0)) / 48000.0;
                     const float x = gap ? 0.0f : (scream ? 0.75f : 0.08f) * (0.5f * v + rasp);
                     b.setSample (0, i, x); b.setSample (1, i, x);
