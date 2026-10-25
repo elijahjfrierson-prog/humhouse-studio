@@ -1126,7 +1126,23 @@ private:
         }
         std::function<void()> onClose;
         juce::TextButton fsBtn { "FULL SCREEN" };
-        void toggleFull() { setFullScreen (! isFullScreen()); }
+        // fills the screen in the same desktop space as the main window, so it stays in view while you record
+        juce::Rectangle<int> normalBounds; bool filled = false;
+        bool isFull() const { return filled || isFullScreen(); }
+        void toggleFull()
+        {
+            if (isFullScreen()) { setFullScreen (false); return; }
+            if (filled) { filled = false; setBounds (normalBounds); toFront (true); return; }
+            const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds());
+            if (d == nullptr) return;
+            normalBounds = getBounds();
+            auto area = d->userArea;
+            if (auto* peer = getPeer())
+                if (auto f = peer->getFrameSizeIfPresent()) area = f->subtractedFrom (area);
+            filled = true;
+            setBounds (area);
+            toFront (true);
+        }
         void closeButtonPressed() override { if (onClose) onClose(); }
         void resized() override { juce::DocumentWindow::resized(); fsBtn.setBounds (getWidth() - 104, getHeight() - 28, 96, 22); fsBtn.toFront (false); }
         bool keyPressed (const juce::KeyPress& k) override
@@ -1137,7 +1153,7 @@ private:
         void timerCallback() override   // stays visible over the main window while you work, not over other apps
         {
             updateFloating (*this);
-            fsBtn.setButtonText (isFullScreen() ? "EXIT FULL" : "FULL SCREEN");
+            fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
         }
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
@@ -1177,6 +1193,7 @@ private:
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab };
         tabs[v]->setToggleState (true, juce::dontSendNotification);
         resized();
+        if (! popouts.empty()) juce::MessageManager::callAsync ([] { raiseFloatingWindows(); });
     }
 
     void syncControls()
@@ -1204,6 +1221,7 @@ private:
         const bool on = ! engine.isRecording();
         engine.setRecording (on);
         if (on && ! engine.isPlaying()) engine.play();
+        if (! popouts.empty()) raiseFloatingWindows();
     }
 
     void timerCallback() override
