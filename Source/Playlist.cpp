@@ -910,7 +910,7 @@ public:
                     g.drawVerticalLine ((int) beatToX (startBeat + i * bpp), mid - a, mid + a);
                 }
             });
-            const float px = beatToX (s.engine.positionBeats());
+            const float px = playheadX();
             const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
             g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
             g.setColour (phc); g.fillRect (px - 0.75f, (float) area.getY(), 1.5f, (float) area.getHeight());
@@ -948,7 +948,7 @@ public:
             g.setColour (col::accent.withAlpha (0.45f));
             g.fillRect (x0, (float) toolbarH + 2, x1 - x0, (float) rulerH - 4);
         }
-        const float px = beatToX (s.engine.positionBeats());
+        const float px = playheadX();
         if (px >= headerW)
         {
             juce::Path tri; tri.addTriangle (px - 7, (float) toolbarH + 1, px + 7, (float) toolbarH + 1, px, (float) (toolbarH + 13));
@@ -1069,7 +1069,7 @@ public:
         {
             timeSelA = timeSelB = -1;
             s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
-            s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
+            s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
             repaint();
             return;
         }
@@ -1094,7 +1094,7 @@ public:
         if (drag == Drag::Scrub)
         {
             const double b = xToBeat (e.position.x);
-            s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : snap (b)));
+            s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : placeSnap (b)));
             repaint(); return;
         }
         if (drag == Drag::AutoPt)
@@ -1198,16 +1198,16 @@ public:
         }
         if (drag == Drag::Marquee)
         {
-            if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
+            if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
             marquee = {}; drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::TimeSel)
         {
-            if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x)))); }
+            if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
             else if (timeSelB > timeSelA) s.edit ("Loop range", [a = timeSelA, b = timeSelB] (Project& pr) { pr.punchIn = a; pr.punchOut = b; });   // FL: playback loops the selection
             drag = Drag::None; repaint(); return;
         }
-        if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, snap (xToBeat (e.position.x))));
+        if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
         else if (changed)
         {
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
@@ -1559,6 +1559,12 @@ private:
         return g;
     }
     double snap (double b) const { return plSnap > 0 ? std::round (b / plSnap) * plSnap : b; }
+    // clicks place the playhead on the grid line you can see under the mouse: a coarse snap (bar) rounded a click
+    // mid-bar up to 2 beats away
+    double placeSnap (double b) const { const double g = plSnap > 0 ? juce::jmin (plSnap, gridSnap()) : 0.0; return g > 0 ? std::round (b / g) * g : b; }
+    // while playing, paint draws the playhead exactly where the timer erased / repainted it: reading the engine again
+    // in paint (a moment later) drew it outside the repainted strip and left a second, stale marker behind
+    float playheadX() const { return s.engine.isPlaying() && lastPx >= 0 ? lastPx : beatToX (s.engine.positionBeats()); }
     void paintOverChildren (juce::Graphics& g) override
     {
         if (nudgeText.isEmpty() || juce::Time::getMillisecondCounter() - nudgeShown > 2500) return;

@@ -43,7 +43,7 @@ bool splitStems (const juce::AudioBuffer<float>& src, double sr, std::array<juce
     }
     for (size_t i = 0; i < mag.size(); ++i) mag[i] = 0.5f * (std::abs (spec[0][i]) + std::abs (spec[1][i]));
     // harmonic / percussive: median along time (sustained) vs along frequency (hits)
-    constexpr int mt = 17, mf = 17;
+    constexpr int mt = 25, mf = 17;   // a longer time median keeps held notes out of the drums
     std::vector<float> harm (mag.size()), perc (mag.size()), tmp (std::max (mt, mf));
     for (int b = 0; b < bins; ++b)
     {
@@ -73,8 +73,9 @@ bool splitStems (const juce::AudioBuffer<float>& src, double sr, std::array<juce
         for (int b = 0; b < bins; ++b)
         {
             const size_t i = (size_t) f * bins + b;
-            const float h2 = harm[i] * harm[i], p2 = perc[i] * perc[i];
-            const float drums = (h2 + p2) > 1e-20f ? p2 / (h2 + p2) : 0.0f;
+            // cubed (harder than Wiener) masks: each bin goes mostly to one side, so drums and tone bleed less into each other
+            const float h3 = harm[i] * harm[i] * harm[i], p3 = perc[i] * perc[i] * perc[i];
+            const float drums = (h3 + p3) > 1e-30f ? p3 / (h3 + p3) : 0.0f;
             const float tonal = 1.0f - drums;
             const float hz = (float) (b * sr / N);
             const float lowW = hz < 150.0f ? 1.0f : hz > 260.0f ? 0.0f : 0.5f + 0.5f * std::cos (juce::MathConstants<float>::pi * (hz - 150.0f) / 110.0f);
@@ -82,7 +83,7 @@ bool splitStems (const juce::AudioBuffer<float>& src, double sr, std::array<juce
             const float centre = (l + r) > 1e-12f ? 1.0f - std::abs (l - r) / (l + r) : 0.0f;
             const float band = hz < 160.0f || hz > 9000.0f ? 0.0f : hz < 250.0f ? (hz - 160.0f) / 90.0f : hz > 6000.0f ? (9000.0f - hz) / 3000.0f : 1.0f;
             const float bass = tonal * lowW;
-            const float voc = tonal * (1.0f - lowW) * band * std::pow (centre, 6.0f);
+            const float voc = tonal * (1.0f - lowW) * band * std::pow (centre, 8.0f);   // only what sits dead centre
             mask[StemDrums][i] = drums; mask[StemBass][i] = bass; mask[StemVocals][i] = voc;
             mask[StemMelodies][i] = juce::jmax (0.0f, 1.0f - drums - bass - voc);
         }

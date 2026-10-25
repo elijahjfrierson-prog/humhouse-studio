@@ -1271,6 +1271,42 @@ int main()
             CHECK (on >= n * 9 / 10);
         }
     }
+    // AutoPitch cups a scream right away: calm rap, a short breath, then a loud raspy scream sharp of a new note
+    {
+        for (int style : { 3, 1 })
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", (float) style);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            juce::Random rnd (11); double ph = 0; std::vector<float> out;
+            const int screamAt = 80;
+            for (int k = 0; k < screamAt + 40; ++k)
+            {
+                const bool scream = k >= screamAt, gap = k >= screamAt - 6 && ! scream;
+                const double hz = scream ? 523.25 * 1.025 : 440.0;
+                for (int i = 0; i < 512; ++i)
+                {
+                    float v = 0;
+                    for (int h = 1; h <= 8; ++h) v += (float) std::sin (h * ph) * (scream ? 1.0f / (float) h : 1.0f / (float) (h * h));
+                    const float rasp = scream ? (rnd.nextFloat() * 2 - 1) * 0.4f * (0.6f + 0.4f * (float) std::sin (ph)) : 0.0f;
+                    ph += juce::MathConstants<double>::twoPi * hz * (1.0 + (rnd.nextFloat() * 2 - 1) * (scream ? 0.01 : 0.0)) / 48000.0;
+                    const float x = gap ? 0.0f : (scream ? 0.75f : 0.08f) * (0.5f * v + rasp);
+                    b.setSample (0, i, x); b.setSample (1, i, x);
+                }
+                ap->process (b, 512, ctx);
+                for (int i = 0; i < 512; ++i) out.push_back (b.getSample (0, i));
+            }
+            int on = 0, n = 0;   // the first ~0.3 s of the scream
+            for (size_t at = (size_t) (screamAt + 2) * 512; at + 1024 <= (size_t) (screamAt + 30) * 512; at += 512, ++n)
+            {
+                const float hz = detectPitchYin (out.data() + at, 1024, 48000.0, 0.3f, 0.6f);
+                if (hz > 0 && std::abs (1200.0f * std::log2 (hz / 523.25f)) < 25.0f) ++on;
+            }
+            std::printf ("autopitch calm->scream style %d: %d of %d windows tuned in the first 0.3 s\n", style, on, n);
+            CHECK (on >= n * 7 / 10);
+        }
+    }
     // AutoPitch keeps enunciation and punch: consonants pass through untouched (not smeared by the shifter),
     // attacks and level stay as sung, in every style
     for (double off : { 0.0, 40.0 })
@@ -2345,6 +2381,8 @@ int main()
             return den > 0 ? num / den : 0.0; };
         std::printf ("stem split: rebuild %.1f dB | kick->Drums %.2f  bass->Bass %.2f  vocal->Vocals %.2f  pad->Melodies %.2f\n", recon,
                      share (kick, StemDrums), share (bass, StemBass), share (voc, StemVocals), share (pad, StemMelodies));
+        std::printf ("stem split bleed: kick->Melodies %.2f  vocal->Melodies %.2f  pad->Vocals %.2f  bass->Drums %.2f\n",
+                     share (kick, StemMelodies), share (voc, StemMelodies), share (pad, StemVocals), share (bass, StemDrums));
         CHECK (recon > 60.0);
         CHECK (share (kick, StemDrums) > 0.4 && share (bass, StemBass) > 0.7 && share (voc, StemVocals) > 0.5 && share (pad, StemMelodies) > 0.5);
     }

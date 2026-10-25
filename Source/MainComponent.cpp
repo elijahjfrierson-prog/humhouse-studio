@@ -752,7 +752,9 @@ public:
     std::map<int, std::pair<double, float>> heldNotes;
 
     juce::Array<juce::MidiDeviceInfo> midiDevs;
-    int midiSeen = -1, midiPoll = 0;
+    int midiSeen = -1;
+    // hot-plug from the OS device-list notification: polling the device list every 2 s stalled the screen on Windows
+    juce::MidiDeviceListConnection midiConn = juce::MidiDeviceListConnection::make ([this] { enableMidiInputs(); });
     // the chosen device (or every connected one when none is chosen) plays live; a keyboard plugged in later just works
     void enableMidiInputs()
     {
@@ -1114,11 +1116,29 @@ private:
     // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
     struct PopOut : public juce::DocumentWindow, private juce::Timer
     {
-        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { markFloating (*this); startTimer (300); }
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons)
+        {
+            markFloating (*this);
+            fsBtn.setTooltip ("Full screen on / off (F11)");
+            fsBtn.onClick = [this] { toggleFull(); };
+            juce::Component::addAndMakeVisible (fsBtn);
+            startTimer (300);
+        }
         std::function<void()> onClose;
+        juce::TextButton fsBtn { "FULL SCREEN" };
+        void toggleFull() { setFullScreen (! isFullScreen()); }
         void closeButtonPressed() override { if (onClose) onClose(); }
-        bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
-        void timerCallback() override { updateFloating (*this); }   // stays visible over the main window while you work, not over other apps
+        void resized() override { juce::DocumentWindow::resized(); fsBtn.setBounds (getWidth() - 104, getHeight() - 28, 96, 22); fsBtn.toFront (false); }
+        bool keyPressed (const juce::KeyPress& k) override
+        {
+            if (k.getKeyCode() == juce::KeyPress::F11Key || k == juce::KeyPress ('f', juce::ModifierKeys::commandModifier | juce::ModifierKeys::ctrlModifier, 0)) { toggleFull(); return true; }
+            return hostKeyHandler && hostKeyHandler (k);
+        }
+        void timerCallback() override   // stays visible over the main window while you work, not over other apps
+        {
+            updateFloating (*this);
+            fsBtn.setButtonText (isFullScreen() ? "EXIT FULL" : "FULL SCREEN");
+        }
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
 
@@ -1188,7 +1208,6 @@ private:
 
     void timerCallback() override
     {
-        if (++midiPoll >= 60) { midiPoll = 0; if (juce::MidiInput::getAvailableDevices().size() != midiSeen) enableMidiInputs(); }   // hot-plug
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);

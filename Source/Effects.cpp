@@ -1601,7 +1601,10 @@ public:
                     const float tailMidi = midi;   // the reading before the gate: a quiet / breathy tail still says where the voice is
                     // a yell / strained push: loud next to the voice, so a raspy (less periodic) reading is still the sung
                     // vowel, not a consonant - the tune has to grab it hardest right there instead of letting go
-                    const bool belt = heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f;
+                    // going from calm rap straight into a scream: louder than anything just sung (or a loud first word) is the
+                    // sung vowel too, so the tune cups it from the first hop instead of waiting for the rasp to settle
+                    const bool push = lvl > 0.01f && (voiceLvl > 0 ? lvl > 1.3f * voiceLvl : lvl > 0.03f);
+                    const bool belt = push || (heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f);
                     if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
@@ -1632,7 +1635,7 @@ public:
                     // misreads from noise or consonants were the chirps / squeaks (a wrong ratio for a few ms)
                     if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
                     {
-                        const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < (rough || pendingRough ? 0.35f : 0.6f);
+                        const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < ((rough || pendingRough) && ! belt ? 0.35f : 0.6f);   // a scream wobbles: the 2nd read may be a bit off
                         if (same) pendingMidi = 0;
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
@@ -1640,7 +1643,7 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || belt || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
