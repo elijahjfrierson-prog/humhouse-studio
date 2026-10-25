@@ -2654,6 +2654,24 @@ int main()
         const double fc = 30.0 * std::pow (20000.0 / 30.0, (best + 0.5) / 96.0);
         CHECK (fc > 190 && fc < 255);
         auto sl = b; humlab::silence (sl, 10000, 20000); CHECK (sl.getMagnitude (0, 10100, 9800) == 0.0f);
+        // HumTime slices: untouched / split-in-place = bit-exact, moved slice lands where placed, glitch changes only its slice
+        std::vector<humlab::Slice> one { { 0, n, 0 } };
+        auto ar = humlab::arrange (b, one, n, sr, 140.0, 0.0);
+        float d2 = 0; for (int i = 0; i < n; ++i) d2 = std::max (d2, std::abs (ar.getSample (1, i) - b.getSample (1, i)));
+        CHECK (ar.getNumSamples() == n && d2 < 1.0e-7f);
+        std::vector<humlab::Slice> two { { 0, 20000, 0 }, { 20000, n, 20000 } };
+        ar = humlab::arrange (b, two, n, sr, 140.0, 0.0);
+        d2 = 0; for (int i = 0; i < n; ++i) d2 = std::max (d2, std::abs (ar.getSample (0, i) - b.getSample (0, i)));
+        CHECK (d2 < 1.0e-7f);
+        std::vector<humlab::Slice> mv { { 30000, 40000, 60000 } };
+        ar = humlab::arrange (b, mv, n, sr, 140.0, 0.0);
+        CHECK (ar.getNumSamples() == 70000 && ar.getMagnitude (0, 0, 60000) == 0.0f && std::abs (ar.getSample (0, 65000) - b.getSample (0, 35000)) < 1.0e-6f);
+        std::vector<humlab::Slice> gl { { 0, 24000, 0 }, { 24000, n, 24000, 13 } };   // Gate 1/16 on the 2nd half only
+        ar = humlab::arrange (b, gl, n, sr, 140.0, 0.0);
+        d2 = 0; for (int i = 0; i < 23000; ++i) d2 = std::max (d2, std::abs (ar.getSample (0, i) - b.getSample (0, i)));
+        const float gatedDb = juce::Decibels::gainToDecibels (ar.getRMSLevel (0, 26000, 20000) / b.getRMSLevel (0, 26000, 20000));
+        std::printf ("HumTime slice glitch (Gate 1/16 on one slice): %.1f dB on that slice, rest untouched (max diff %.2g)\n", gatedDb, d2);
+        CHECK (d2 < 1.0e-7f && gatedDb < -1.5f);
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);

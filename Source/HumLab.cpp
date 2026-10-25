@@ -1,5 +1,6 @@
 #include "HumLab.h"
 #include <juce_dsp/juce_dsp.h>
+#include "Effects.h"
 #include <algorithm>
 #include <complex>
 
@@ -161,6 +162,63 @@ void denoise (juce::AudioBuffer<float>& b, double, int a, int e, float amount)
             else d[i] *= floorG;
         }
     }
+}
+
+juce::AudioBuffer<float> glitchSlice (const juce::AudioBuffer<float>& seg, double sr, double bpm, double startBeat, int fx)
+{
+    juce::AudioBuffer<float> out (seg);
+    auto gg = createBuiltinEffect ("glitch");
+    if (gg == nullptr || fx < 1) return out;
+    gg->prepare (sr, 512);
+    gg->setParam ("fx", (float) fx);
+    gg->setParam ("length", 0.0f);   // shape repeats every beat, so it fits short slices
+    PlayContext ctx; ctx.bpm = bpm; ctx.playing = true;
+    juce::AudioBuffer<float> blk (2, 512);
+    for (int i = 0; i < out.getNumSamples(); i += 512)
+    {
+        const int n = juce::jmin (512, out.getNumSamples() - i);
+        for (int ch = 0; ch < 2; ++ch) blk.copyFrom (ch, 0, out, juce::jmin (ch, out.getNumChannels() - 1), i, n);
+        ctx.beatPos = startBeat + i / sr * bpm / 60.0;
+        gg->process (blk, n, ctx);
+        for (int ch = 0; ch < out.getNumChannels(); ++ch) out.copyFrom (ch, i, blk, ch, 0, n);
+    }
+    return out;
+}
+
+juce::AudioBuffer<float> arrange (const juce::AudioBuffer<float>& src, const std::vector<Slice>& sl, int minLen, double sr, double bpm, double startBeat)
+{
+    int len = minLen;
+    for (auto& s : sl) len = juce::jmax (len, s.dst + (s.src1 - s.src0));
+    juce::AudioBuffer<float> out (src.getNumChannels(), juce::jmax (1, len));
+    out.clear();
+    for (auto& s : sl)
+    {
+        const int a = juce::jlimit (0, src.getNumSamples(), s.src0), e = juce::jlimit (a, src.getNumSamples(), s.src1), n = e - a;
+        if (n <= 0) continue;
+        juce::AudioBuffer<float> seg (src.getNumChannels(), n);
+        for (int ch = 0; ch < src.getNumChannels(); ++ch) seg.copyFrom (ch, 0, src, ch, a, n);
+        if (s.reversed) seg.reverse (0, n);
+        if (s.glitch > 0) seg = glitchSlice (seg, sr, bpm, startBeat + s.dst / sr * bpm / 60.0, s.glitch);
+        // short fades only where the slice doesn't carry straight on from its neighbour (no ticks at the cut, none on untouched audio)
+        auto joins = [&] (bool atStart)
+        {
+            for (auto& o : sl)
+                if (&o != &s && ! o.reversed && ! s.reversed && o.glitch < 1 && s.glitch < 1)
+                {
+                    if (atStart && o.dst + (o.src1 - o.src0) == s.dst && o.src1 == s.src0) return true;
+                    if (! atStart && s.dst + n == o.dst && s.src1 == o.src0) return true;
+                }
+            return false;
+        };
+        const int x = juce::jmin (48, n / 4);
+        for (int ch = 0; ch < seg.getNumChannels(); ++ch)
+        {
+            if (x > 1 && (s.src0 > 0 || s.dst > 0 || s.reversed || s.glitch > 0) && ! joins (true)) seg.applyGainRamp (ch, 0, x, 0.0f, 1.0f);
+            if (x > 1 && (s.src1 < src.getNumSamples() || s.reversed || s.glitch > 0) && ! joins (false)) seg.applyGainRamp (ch, n - x, x, 1.0f, 0.0f);
+            out.addFrom (ch, s.dst, seg, ch, 0, juce::jmin (n, out.getNumSamples() - s.dst));
+        }
+    }
+    return out;
 }
 
 std::vector<float> spectrum (const juce::AudioBuffer<float>& b, double sr, int a, int e, int bands)

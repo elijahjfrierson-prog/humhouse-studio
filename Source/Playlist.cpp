@@ -685,8 +685,27 @@ public:
                 changedSoon(); });
         };
         addAndMakeVisible (presets);
+        static const char* tn[] { "SELECT (E)", "SLICE (C)", "PAINT (P)" };
+        static const char* tt[] { "Click a slice to select (Shift adds), drag to move it (snaps to the grid, Alt = free), drag empty space to box-select",
+                                  "Click to chop the audio at that spot (snaps to the grid, Alt = free)",
+                                  "Click to stamp a copy of the selected slice, drag to place it" };
+        for (int i = 0; i < 3; ++i)
+        {
+            auto* b = toolBtns.add (new juce::TextButton());
+            setupButton (*b, tn[i], tt[i], true);
+            b->setRadioGroupId (7302);
+            b->onClick = [this, i] { setTool (i); };
+            addAndMakeVisible (b);
+        }
+        toolBtns[0]->setToggleState (true, juce::dontSendNotification);
+        setupButton (glitchBtn, "GLITCH GATE", "Glitch Gate, reverse, duplicate or delete the selected slices (or right-click a slice)");
+        glitchBtn.onClick = [this] { showSliceMenu (-1); };
+        addAndMakeVisible (glitchBtn);
+        slices.push_back ({ 0, audio.getNumSamples(), 0 });
+        fitView();
+        setWantsKeyboardFocus (true);
         changedSoon();   // opening it warps with the picked grid straight away
-        setSize (820, 220);
+        setSize (980, 340);
     }
     void resized() override
     {
@@ -696,34 +715,237 @@ public:
         r.removeFromLeft (8);
         presets.setBounds (r.removeFromRight (76)); r.removeFromRight (6);
         strength.setBounds (r);
+        auto r2 = getLocalBounds().withTrimmedTop (34).removeFromTop (28).reduced (6, 2);
+        for (auto* b : toolBtns) { b->setBounds (r2.removeFromLeft (96)); r2.removeFromLeft (4); }
+        r2.removeFromLeft (8);
+        glitchBtn.setBounds (r2.removeFromLeft (110));
     }
     void paint (juce::Graphics& g) override
     {
         g.fillAll (col::panel.darker (0.4f));
-        auto a = getLocalBounds().withTrimmedTop (40).reduced (8).toFloat();
-        g.setColour (juce::Colours::white.withAlpha (0.08f));
-        const double beats = clip.length;
-        for (double b = 0; b < beats && grid > 0; b += grid)
-        {
-            const float x = a.getX() + a.getWidth() * (float) (b / beats);
-            g.fillRect (x, a.getY(), 1.0f, a.getHeight());
-        }
+        const auto a = waveArea();
+        g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (a);
         const int n = audio.getNumSamples();
         if (n == 0) { g.setColour (juce::Colours::white); g.drawText ("Clip audio not found", a, juce::Justification::centred); return; }
-        g.setColour (col::accent.withAlpha (0.8f));
-        const int w = juce::jmax (1, (int) a.getWidth());
-        for (int x = 0; x < w; ++x)
+        g.setColour (juce::Colours::white.withAlpha (0.08f));
+        if (grid > 0)
+            for (double b = std::ceil (clip.start / grid - 1.0e-9) * grid; (b - clip.start) * spbS() < viewN; b += grid)
+                g.fillRect (xOf ((int) ((b - clip.start) * spbS())), a.getY(), 1.0f, a.getHeight());
+        for (auto& sl : slices)
         {
-            const int s0 = (int) ((juce::int64) n * x / w), s1 = juce::jmax (s0 + 1, (int) ((juce::int64) n * (x + 1) / w));
-            const float m = audio.getMagnitude (0, s0, s1 - s0);
-            g.fillRect (a.getX() + x, a.getCentreY() - m * a.getHeight() * 0.5f, 1.0f, juce::jmax (1.0f, m * a.getHeight()));
+            const int len = sl.src1 - sl.src0;
+            const float x0 = xOf (sl.dst), x1 = xOf (sl.dst + len);
+            const juce::Rectangle<float> box (x0, a.getY(), juce::jmax (1.0f, x1 - x0), a.getHeight());
+            g.setColour ((sl.glitch > 0 ? col::rec : col::accent).withAlpha (sl.selected ? 0.30f : 0.10f)); g.fillRect (box);
+            g.setColour (col::accent.withAlpha (0.85f));
+            const int w = (int) box.getWidth();
+            for (int x = 0; x < w && len > 0; ++x)
+            {
+                int s0 = sl.src0 + (int) ((juce::int64) len * x / w), s1 = juce::jmax (s0 + 1, sl.src0 + (int) ((juce::int64) len * (x + 1) / w));
+                if (sl.reversed) { const int t0 = sl.src1 - (s1 - sl.src0); s1 = sl.src1 - (s0 - sl.src0); s0 = t0; }
+                s0 = juce::jlimit (0, n - 1, s0); s1 = juce::jlimit (s0 + 1, n, s1);
+                const float m = audio.getMagnitude (0, s0, s1 - s0);
+                g.fillRect (box.getX() + x, a.getCentreY() - m * a.getHeight() * 0.5f, 1.0f, juce::jmax (1.0f, m * a.getHeight()));
+            }
+            g.setColour (juce::Colours::white.withAlpha (sl.selected ? 0.9f : 0.3f)); g.drawRect (box, sl.selected ? 1.5f : 1.0f);
+            if (sl.glitch > 0 || sl.reversed)
+            {
+                g.setFont (11.0f);
+                g.drawText (juce::String (sl.reversed ? "REV " : "") + (sl.glitch > 0 ? glitchNames()[(size_t) sl.glitch] : juce::String()), box.reduced (3).toNearestInt(), juce::Justification::topLeft, true);
+            }
+        }
+        if (boxSel)
+        {
+            const float x0 = xOf (juce::jmin (boxFrom, boxTo)), x1 = xOf (juce::jmax (boxFrom, boxTo));
+            g.setColour (juce::Colours::white.withAlpha (0.12f)); g.fillRect (x0, a.getY(), x1 - x0, a.getHeight());
         }
         g.setColour (juce::Colours::white.withAlpha (0.7f));
         g.setFont (12.0f);
-        g.drawText ("Pick a grid and strength: you hear it on the next pass. ORIGINAL puts the take back.", getLocalBounds().removeFromBottom (22), juce::Justification::centred);
+        g.drawText ("E select | C slice | P paint | drag = move (Alt = no snap) | Ctrl+B duplicate | Del delete | Ctrl+Z undo | right-click = Glitch Gate / reverse | ORIGINAL = take back",
+                    getLocalBounds().removeFromBottom (22), juce::Justification::centred);
     }
-    juce::AudioBuffer<float> render() override { return timeRender (audio, sr, s.p().bpm, clip.start, grid, (float) strength.getValue() / 100.0f); }
+    juce::AudioBuffer<float> render() override
+    {
+        auto warped = timeRender (audio, sr, s.p().bpm, clip.start, grid, (float) strength.getValue() / 100.0f);
+        return edited() ? humlab::arrange (warped, slices, 0, sr, s.p().bpm, clip.start) : warped;
+    }
+    void useResult (const juce::File& f, int numSamples) override
+    {
+        if (! edited()) { LiveClipEditor::useResult (f, numSamples); return; }
+        const double beats = numSamples / sr * s.p().bpm / 60.0;
+        s.edit ("HumTime", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; } });
+        s.engine.sync();
+    }
+    void onOriginal() override { slices = { { 0, audio.getNumSamples(), 0 } }; undo.clear(); fitView(); repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        grabKeyboardFocus();
+        if (! waveArea().contains (e.position) || audio.getNumSamples() == 0) return;
+        const int at = smpAt (e.position.x), k = sliceAt (at);
+        const bool fr = e.mods.isAltDown();
+        if (e.mods.isPopupMenu()) { if (k >= 0) showSliceMenu (k); return; }
+        if (tool == 1)
+        {
+            if (k < 0) return;
+            const auto q = slices[(size_t) k];
+            const int len = q.src1 - q.src0, cut = snap (at, fr) - q.dst;
+            if (cut < 64 || cut > len - 64) return;
+            pushUndo();
+            humlab::Slice right = q; right.dst = q.dst + cut;
+            if (! q.reversed) { slices[(size_t) k].src1 = q.src0 + cut; right.src0 = q.src0 + cut; }
+            else { slices[(size_t) k].src0 = q.src1 - cut; right.src1 = q.src1 - cut; }
+            slices.insert (slices.begin() + k + 1, right);
+            changed();
+            return;
+        }
+        if (tool == 2)
+        {
+            int from = -1;
+            for (int j = 0; j < (int) slices.size(); ++j) if (slices[(size_t) j].selected) from = j;
+            if (from < 0) from = k;
+            if (from < 0) return;
+            pushUndo();
+            humlab::Slice c = slices[(size_t) from];
+            for (auto& q : slices) q.selected = false;
+            c.selected = true; c.dst = juce::jmax (0, snap (at, fr));
+            slices.push_back (c);
+            startMove (at, (int) slices.size() - 1); moved = true;
+            changed();
+            return;
+        }
+        if (k >= 0)
+        {
+            if (e.mods.isShiftDown()) slices[(size_t) k].selected = ! slices[(size_t) k].selected;
+            else if (! slices[(size_t) k].selected) { for (auto& q : slices) q.selected = false; slices[(size_t) k].selected = true; }
+            pushUndo(); startMove (at, k); moved = false;
+            repaint();
+            return;
+        }
+        for (auto& q : slices) q.selected = false;
+        boxSel = true; boxFrom = boxTo = at;
+        repaint();
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        const int at = smpAt (e.position.x);
+        if (dragMode == 1 && anchor >= 0 && anchor < (int) origDst.size() && origDst.size() == slices.size())
+        {
+            const int a0 = origDst[(size_t) anchor];
+            int delta = snap (a0 + at - dragFrom, e.mods.isAltDown()) - a0;
+            for (size_t j = 0; j < slices.size(); ++j) if (slices[j].selected) delta = juce::jmax (delta, -origDst[j]);
+            for (size_t j = 0; j < slices.size(); ++j) if (slices[j].selected) slices[j].dst = origDst[j] + delta;
+            if (delta != 0) moved = true;
+            repaint();
+            return;
+        }
+        if (boxSel)
+        {
+            boxTo = at;
+            const int lo = juce::jmin (boxFrom, boxTo), hi = juce::jmax (boxFrom, boxTo);
+            for (auto& q : slices) q.selected = q.dst < hi && q.dst + (q.src1 - q.src0) > lo;
+            repaint();
+        }
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragMode == 1) { dragMode = 0; if (moved) { fitView(); changed(); } else if (! undo.empty()) undo.pop_back(); }
+        boxSel = false;
+        repaint();
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        const auto m = k.getModifiers();
+        const auto ch = juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
+        if (! m.isCommandDown() && ! m.isCtrlDown())
+        {
+            if (ch == 'e') { setTool (0); return true; }
+            if (ch == 'c') { setTool (1); return true; }
+            if (ch == 'p') { setTool (2); return true; }
+        }
+        if (k == juce::KeyPress ('b', juce::ModifierKeys::commandModifier, 0) || k == juce::KeyPress ('d', juce::ModifierKeys::commandModifier, 0)) { duplicateSel(); return true; }
+        if (k == juce::KeyPress ('a', juce::ModifierKeys::commandModifier, 0)) { for (auto& q : slices) q.selected = true; repaint(); return true; }
+        if (k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0)) { undoSlices(); return true; }
+        if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) { removeSel(); return true; }
+        return false;
+    }
+
 private:
+    bool edited() const
+    {
+        return ! (slices.size() == 1 && slices[0].src0 == 0 && slices[0].dst == 0 && slices[0].src1 >= audio.getNumSamples() && slices[0].glitch < 1 && ! slices[0].reversed);
+    }
+    juce::Rectangle<float> waveArea() const { return getLocalBounds().withTrimmedTop (64).withTrimmedBottom (22).reduced (8).toFloat(); }
+    float xOf (int smp) const { const auto a = waveArea(); return a.getX() + a.getWidth() * (float) smp / (float) juce::jmax (1, viewN); }
+    int smpAt (float x) const { const auto a = waveArea(); return (int) ((x - a.getX()) / juce::jmax (1.0f, a.getWidth()) * viewN); }
+    double spbS() const { return sr * 60.0 / juce::jmax (20.0, s.p().bpm); }
+    int snap (int smp, bool free) const
+    {
+        if (free || grid <= 0) return smp;
+        const double b = clip.start + smp / spbS();
+        return (int) std::lround ((std::round (b / grid) * grid - clip.start) * spbS());
+    }
+    int sliceAt (int smp) const
+    {
+        for (int k = (int) slices.size() - 1; k >= 0; --k) { const auto& q = slices[(size_t) k]; if (smp >= q.dst && smp < q.dst + q.src1 - q.src0) return k; }
+        return -1;
+    }
+    void fitView() { int e = audio.getNumSamples(); for (auto& q : slices) e = juce::jmax (e, q.dst + q.src1 - q.src0); viewN = juce::jmax (1, (int) (e * 1.25)); }
+    void setTool (int t) { tool = t; for (int i = 0; i < toolBtns.size(); ++i) toolBtns[i]->setToggleState (i == t, juce::dontSendNotification); }
+    void startMove (int at, int anc) { dragMode = 1; dragFrom = at; anchor = anc; origDst.clear(); for (auto& q : slices) origDst.push_back (q.dst); }
+    void pushUndo() { undo.push_back (slices); if (undo.size() > 40) undo.erase (undo.begin()); }
+    void changed() { changedSoon(); repaint(); }
+    void undoSlices() { if (undo.empty()) return; slices = undo.back(); undo.pop_back(); fitView(); changed(); }
+    void duplicateSel()
+    {
+        int lo = std::numeric_limits<int>::max(), hi = 0;
+        for (auto& q : slices) if (q.selected) { lo = juce::jmin (lo, q.dst); hi = juce::jmax (hi, q.dst + q.src1 - q.src0); }
+        if (hi <= lo) return;
+        pushUndo();
+        std::vector<humlab::Slice> add;
+        for (auto& q : slices) if (q.selected) { auto c = q; c.dst += hi - lo; add.push_back (c); q.selected = false; }
+        for (auto& c : add) slices.push_back (c);
+        fitView(); changed();
+    }
+    void removeSel()
+    {
+        const auto before = slices.size();
+        pushUndo();
+        slices.erase (std::remove_if (slices.begin(), slices.end(), [] (const humlab::Slice& q) { return q.selected; }), slices.end());
+        if (slices.empty() || slices.size() == before) { slices = undo.back(); undo.pop_back(); return; }
+        changed();
+    }
+    void showSliceMenu (int k)
+    {
+        if (k >= 0 && ! slices[(size_t) k].selected) { for (auto& q : slices) q.selected = false; slices[(size_t) k].selected = true; }
+        bool any = false; for (auto& q : slices) any = any || q.selected;
+        if (! any) for (auto& q : slices) q.selected = true;   // nothing picked: the whole clip
+        repaint();
+        juce::PopupMenu m, gm;
+        gm.addItem (100, "No glitch");
+        for (int i = 1; i < (int) glitchNames().size(); ++i) gm.addItem (100 + i, glitchNames()[(size_t) i]);
+        m.addSubMenu ("Glitch Gate (only these slices)", gm);
+        m.addItem (1, "Reverse slice");
+        m.addItem (2, "Duplicate (Ctrl+B)");
+        m.addItem (3, "Delete (Del)");
+        m.showMenuAsync ({}, [sp = juce::Component::SafePointer<HumTimeView> (this)] (int r) {
+            auto* v = sp.getComponent();
+            if (v == nullptr || r == 0) return;
+            if (r >= 100) { v->pushUndo(); for (auto& q : v->slices) if (q.selected) q.glitch = r > 100 ? r - 100 : -1; v->changed(); }
+            else if (r == 1) { v->pushUndo(); for (auto& q : v->slices) if (q.selected) q.reversed = ! q.reversed; v->changed(); }
+            else if (r == 2) v->duplicateSel();
+            else if (r == 3) v->removeSel(); });
+    }
+    static const std::vector<juce::String>& glitchNames()
+    {
+        static const std::vector<juce::String> v { "Steps", "Tape Stop", "Tape Start", "Stutter 1/8", "Stutter 1/16", "Triplet Stutter", "Stutter Roll",
+                                                   "Scratch", "Baby Scratch", "Reverse", "Rewind", "Half Speed", "Gate 1/8", "Gate 1/16", "Trance Gate",
+                                                   "Sidechain Pump", "Filter Sweep", "Wobble", "Pan Swirl", "Lo-Fi Crush", "Drop" };
+        return v;
+    }
+    int tool = 0, viewN = 1, dragMode = 0, dragFrom = 0, anchor = 0, boxFrom = 0, boxTo = 0;
+    bool moved = false, boxSel = false;
+    std::vector<humlab::Slice> slices; std::vector<std::vector<humlab::Slice>> undo; std::vector<int> origDst;
+    juce::OwnedArray<juce::TextButton> toolBtns; juce::TextButton glitchBtn;
     double grid;
     juce::OwnedArray<juce::TextButton> gridBtns;
     juce::Slider strength;
@@ -1918,9 +2140,20 @@ private:
         {
             if (auto* t = thumb (c.audioFile))
             {
-                const double secs = beatsToSeconds (c.length, p.bpm);
-                g.setColour (colour.brighter (0.4f));
+                double secs = beatsToSeconds (c.length, p.bpm), stretchK = 1.0;
+                if (stretchDrag)   // Alt+drag stretch: squeeze the original audio into the new length so you see it stretch live
+                    for (auto& o : dragOrig)
+                        if (o.uid == c.uid && o.length > 0 && std::abs (o.length - c.length) > 1.0e-6) { stretchK = c.length / o.length; secs = beatsToSeconds (o.length, p.bpm); }
+                g.setColour (stretchK != 1.0 ? colour.brighter (0.4f).withRotatedHue (0.08f) : colour.brighter (0.4f));
                 t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
+                if (stretchK != 1.0)
+                {
+                    const double add = c.length - c.length / stretchK;
+                    const auto lbl = juce::String (stretchK, 2) + "x  " + (add >= 0 ? "+" : "") + juce::String (add, 2) + " beats  " + (stretchMode == 1 ? "STRETCH" : "RESAMPLE");
+                    auto lr = body.withHeight (16.0f).withWidth (juce::jmin (body.getWidth(), 210.0f));
+                    g.setColour (juce::Colours::black.withAlpha (0.7f)); g.fillRoundedRectangle (lr, 3.0f);
+                    g.setColour (juce::Colours::white); g.setFont (11.5f); g.drawText (lbl, lr.reduced (4, 0), juce::Justification::centredLeft, true);
+                }
             }
             // fades
             const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);
@@ -2029,7 +2262,7 @@ private:
     void quantizeAudioClip (int uid, double div)
     {
         const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
-        if (cp == nullptr || ! cp->isAudio() || cp->reversed || ! cp->audioFile.existsAsFile()) return;
+        if (cp == nullptr || ! cp->isAudio() || ! cp->audioFile.existsAsFile()) return;
         const Clip c = *cp; const double bpm = s.p().bpm;
         const double secs = beatsToSeconds (c.length, bpm), gap = juce::jmax (0.03, beatsToSeconds (div, bpm) * 0.5);
         juce::Component::SafePointer<Playlist> safe (this);
@@ -2366,7 +2599,7 @@ private:
             juce::PopupMenu qm;
             const char* qn[] { "1/4", "1/8", "1/16", "1/32", "1/8 triplet", "1/16 triplet" };
             for (int i = 0; i < 6; ++i) qm.addItem (320 + i, juce::String ("Quantize ") + qn[i]);
-            m.addSubMenu ("Quantize hits to grid (cuts at each hit)", qm, clip.isAudio() && ! clip.reversed);
+            m.addSubMenu ("Quantize hits to grid (cuts at each hit)", qm, clip.isAudio());
         }
         m.addItem (5, "Split by channel (one clip per instrument)", clip.patternIndex >= 0);
         m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
@@ -2379,7 +2612,7 @@ private:
             tm.addSeparator();
             tm.addItem (340, "Warp hits to 1/16"); tm.addItem (341, "Warp hits to 1/8"); tm.addItem (343, "Warp hits to 1/4");
             tm.addItem (342, "Warp hits to 1/16 at 50% (keeps the feel)");
-            m.addSubMenu ("HumTime: warp timing to the grid (stretch, no cuts)", tm, clip.isAudio() && ! clip.reversed);
+            m.addSubMenu ("HumTime: warp timing to the grid (stretch, no cuts)", tm, clip.isAudio());
         }
         if (clip.lane >= 0 && clip.lane < (int) p.lanes.size() && p.lanes[(size_t) clip.lane].compLane >= 0)
             m.addItem (16, "Use in comp (this clip, or the ruler range on it)", clip.isAudio());
@@ -2441,7 +2674,7 @@ private:
             if (r >= 320 && r <= 325)
             {
                 std::vector<int> u;
-                for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio() && ! o.reversed) u.push_back (o.uid);
+                for (auto& o : s.p().clips) if ((o.selected || o.uid == uid) && o.isAudio()) u.push_back (o.uid);
                 static const double divs[] { 1.0, 0.5, 0.25, 0.125, 1.0 / 3.0, 1.0 / 6.0 };
                 for (int q : u) quantizeAudioClip (q, divs[r - 320]);
                 return;
@@ -2487,6 +2720,25 @@ private:
                     for (int li : ls) if (li >= 0 && li < (int) pr.lanes.size()) pr.lanes[(size_t) li].colour = c; });
                 return;
             }
+            if (r == 4)   // bake the reversed audio so it really plays backwards (reversing again bakes it forward)
+            {
+                const auto dir = s.p().recordingsFolder().getChildFile ("Reversed");
+                const double bpm = s.p().bpm;
+                std::vector<std::pair<int, juce::File>> baked;
+                for (auto& o : s.p().clips)
+                    if ((o.selected || o.uid == uid) && o.isAudio())
+                    {
+                        juce::AudioBuffer<float> b; double sr = 0;
+                        if (! readClipAudio (o, bpm, b, sr)) continue;
+                        b.reverse (0, b.getNumSamples());
+                        const auto f = dir.getNonexistentChildFile (o.audioFile.getFileNameWithoutExtension() + "_rev", ".wav");
+                        if (writeClipAudio (f, b, sr)) baked.push_back ({ o.uid, f });
+                    }
+                s.edit ("Reverse", [baked] (Project& pr) {
+                    for (auto& c : pr.clips) for (auto& bk : baked) if (c.uid == bk.first) { c.audioFile = bk.second; c.sourceOffset = 0; c.reversed = ! c.reversed; std::swap (c.fadeIn, c.fadeOut); } });
+                s.engine.sync();
+                return;
+            }
             s.edit ("Clip edit", [&] (Project& pr) {
                 auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
                 if (it == pr.clips.end()) return;
@@ -2514,7 +2766,6 @@ private:
                     for (auto& o : pr.clips) o.selected = ! o.isAudio() && o.patternIndex == pat;
                     pr.currentPattern = pat;
                 }
-                else if (r == 4) { const bool rv = ! c.reversed; forSel ([rv] (Clip& o) { o.reversed = rv; }); }
                 else if (r == 6 || r == 7)
                 {
                     int g = 0;
