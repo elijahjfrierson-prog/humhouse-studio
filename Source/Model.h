@@ -191,6 +191,7 @@ struct Lane
     int  inputPair = 0;            // stereo input pair (0 = in 1/2)
     int  inputCh = 0;              // mono input channel (0 = in 1)
     bool stereoIn = false;         // false: mono input centred in both ears
+    float volumeDb = 0.0f;         // this track's own volume (only its clips, not the shared insert)
     float shiftMs = 0.0f;          // Soft: shift the whole track later (+) / earlier (-) in ms to line vocals up
     bool autoNorm = false;         // zero-latency leveler: brings the voice to a steady strong level
     int  mixerTrack = 0;

@@ -7,6 +7,7 @@
 #include "../Source/ProjectIO.h"
 #include "../Source/Effects.h"
 #include "../Source/StemSplit.h"
+#include "../Source/HumLab.h"
 #include "../Source/License.h"
 #include <cstdio>
 #include <iostream>
@@ -2623,6 +2624,36 @@ int main()
         CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
         std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
         tmp.deleteRecursively();
+    }
+
+    // HumLab: cut / trim / reverse / normalize / gain / clean noise / spectrum on a known signal
+    {
+        const double sr = 48000; const int n = 48000;
+        juce::AudioBuffer<float> b (2, n); juce::Random rng (7);
+        for (int i = 0; i < n; ++i)
+        {
+            const float tone = i >= n / 2 ? 0.5f * std::sin (juce::MathConstants<float>::twoPi * 220.0f * i / (float) sr) : 0.0f;
+            for (int ch = 0; ch < 2; ++ch) b.setSample (ch, i, tone + 0.03f * (rng.nextFloat() * 2.0f - 1.0f));
+        }
+        auto c = b; CHECK (humlab::cut (c, 12000, 24000) && c.getNumSamples() == n - 12000);
+        auto t2 = b; CHECK (humlab::trim (t2, 1000, 3000) && t2.getNumSamples() == 2000);
+        auto r = b; humlab::reverse (r, 0, 0); humlab::reverse (r, 0, 0);
+        float diff = 0; for (int i = 0; i < n; ++i) diff = std::max (diff, std::abs (r.getSample (0, i) - b.getSample (0, i)));
+        CHECK (diff < 1.0e-6f);
+        auto nm = b; humlab::normalize (nm, 0, 0);
+        CHECK (std::abs (juce::Decibels::gainToDecibels (nm.getMagnitude (0, 0, n)) + 0.3f) < 0.05f);
+        auto gq = b; humlab::gain (gq, 0, 0, -6.0206f); CHECK (std::abs (gq.getSample (0, 30000) - 0.5f * b.getSample (0, 30000)) < 1.0e-5f);
+        auto dn = b; humlab::denoise (dn, sr, 0, 0, 0.7f);
+        const float noiseBefore = b.getRMSLevel (0, 4000, 16000), noiseAfter = dn.getRMSLevel (0, 4000, 16000);
+        const float toneBefore = b.getRMSLevel (0, 30000, 16000), toneAfter = dn.getRMSLevel (0, 30000, 16000);
+        const float nDrop = juce::Decibels::gainToDecibels (noiseAfter / noiseBefore), tKeep = juce::Decibels::gainToDecibels (toneAfter / toneBefore);
+        std::printf ("HumLab clean noise: noise %.1f dB, tone %.2f dB\n", nDrop, tKeep);
+        CHECK (nDrop < -10.0f); CHECK (std::abs (tKeep) < 1.0f);
+        const auto sp = humlab::spectrum (b, sr, n / 2, n, 96);
+        int best = 0; for (int j = 1; j < 96; ++j) if (sp[(size_t) j] > sp[(size_t) best]) best = j;
+        const double fc = 30.0 * std::pow (20000.0 / 30.0, (best + 0.5) / 96.0);
+        CHECK (fc > 190 && fc < 255);
+        auto sl = b; humlab::silence (sl, 10000, 20000); CHECK (sl.getMagnitude (0, 10100, 9800) == 0.0f);
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);

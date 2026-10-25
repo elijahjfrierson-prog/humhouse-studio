@@ -1291,6 +1291,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const double shB = (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? proj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * proj.bpm / 60.0;   // Soft
             const double c0 = std::max (b0, clip.start + shB), c1 = std::min (b1, clip.start + clip.length + shB);
             if (c1 <= c0) continue;
+            const float laneGain = clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? juce::Decibels::decibelsToGain (proj.lanes[(size_t) clip.lane].volumeDb, -60.0f) : 1.0f;
             auto it = clipRt.find (clip.uid);
             if (it == clipRt.end() || ! it->second->reader) continue;
             auto& cr = *it->second;
@@ -1317,7 +1318,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
-                float g = clip.gain;
+                float g = clip.gain * laneGain;
                 if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= (float) std::pow (beatInClip / clip.fadeIn, std::exp (clip.fadeCurve));
                 const double toEnd = clip.length - beatInClip;
                 if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= (float) std::pow (std::max (0.0, toEnd / clip.fadeOut), std::exp (clip.fadeCurve));

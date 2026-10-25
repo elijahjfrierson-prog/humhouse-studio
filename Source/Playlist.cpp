@@ -3,6 +3,7 @@
 #include "Drummer/DrummerCore.h"
 #include "StemSplit.h"
 #include "Instruments.h"
+#include "HumLab.h"
 
 // FL-style clip stretch: renders the clip's audio to its own WAV in the song's Recordings folder (glued with the song).
 // Resample = tape (speed and pitch together), Stretch = length only, pitch kept
@@ -365,7 +366,7 @@ struct LiveClipEditor : public juce::Component, private juce::Timer
         setupButton (closeBtn, "X  CLOSE", "Close " + what + " (your edit stays on the clip, Ctrl+Z undoes)");
         playBtn.setColour (juce::TextButton::buttonOnColourId, col::good);
         playBtn.onClick = [this] { s.engine.togglePlay(); timerCallback(); };
-        origBtn.onClick = [this] { changed = false; s.edit ("Original take", [this] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = clip.audioFile; c.sourceOffset = clip.sourceOffset; } }); s.engine.sync(); };
+        origBtn.onClick = [this] { changed = false; s.edit ("Original take", [this] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = clip.audioFile; c.sourceOffset = clip.sourceOffset; c.length = clip.length; } }); s.engine.sync(); onOriginal(); };
         closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
         for (auto* b : { &playBtn, &origBtn, &closeBtn }) addAndMakeVisible (*b);
         for (auto& c : s.p().clips) if (c.uid == uid) clip = c;
@@ -375,6 +376,8 @@ struct LiveClipEditor : public juce::Component, private juce::Timer
     // re-render a moment after the last change, so dragging stays smooth
     void changedSoon() { changed = true; dueAt = juce::Time::getMillisecondCounter() + 250; }
     virtual juce::AudioBuffer<float> render() = 0;
+    virtual void useResult (const juce::File& f, int) { useRendered (s, uid, f, name); }
+    virtual void onOriginal() {}
     void layoutTop (juce::Rectangle<int>& r)
     {
         closeBtn.setBounds (r.removeFromRight (100)); r.removeFromRight (6);
@@ -397,7 +400,7 @@ private:
         if (! still) return;
         const auto out = render();
         const auto f = s.p().recordingsFolder().getChildFile (name).getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_" + name.toLowerCase(), ".wav");
-        if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, name);   // no stop: the song keeps playing
+        if (writeClipAudio (f, out, sr)) useResult (f, out.getNumSamples());   // no stop: the song keeps playing
     }
 };
 
@@ -485,6 +488,164 @@ private:
     std::vector<float> curve; std::vector<ToneNote> notes;
     int lo = 48, hi = 72, drag = -1; float dragFrom = 0;
     juce::TextButton snapBtn, resetBtn;
+};
+
+// HumLab: our own Edison. Drag to select (nothing selected = whole clip), every edit lands on the clip while the song plays
+class HumLabView : public LiveClipEditor
+{
+public:
+    HumLabView (Studio& st, int clipUid) : LiveClipEditor (st, clipUid, "HumLab")
+    {
+        work.makeCopyOf (audio);
+        struct B { const char* t; const char* tip; std::function<void()> f; };
+        const B row[] {
+            { "CUT", "Cut the selection out (Delete)", [this] { apply ([] (auto& b, int a, int e) { humlab::cut (b, a, e); }, true); } },
+            { "TRIM", "Keep only the selection", [this] { apply ([] (auto& b, int a, int e) { humlab::trim (b, a, e); }, true); } },
+            { "SILENCE", "Make the selection silent", [this] { apply ([] (auto& b, int a, int e) { humlab::silence (b, a, e); }); } },
+            { "FADE IN", "Fade the selection in", [this] { apply ([] (auto& b, int a, int e) { humlab::fade (b, a, e, true); }); } },
+            { "FADE OUT", "Fade the selection out", [this] { apply ([] (auto& b, int a, int e) { humlab::fade (b, a, e, false); }); } },
+            { "NORMALIZE", "Bring the selection's peak to -0.3 dB", [this] { apply ([] (auto& b, int a, int e) { humlab::normalize (b, a, e); }); } },
+            { "REVERSE", "Play the selection backwards", [this] { apply ([] (auto& b, int a, int e) { humlab::reverse (b, a, e); }); } },
+            { "+3 dB", "Selection 3 dB louder", [this] { apply ([] (auto& b, int a, int e) { humlab::gain (b, a, e, 3.0f); }); } },
+            { "-3 dB", "Selection 3 dB quieter", [this] { apply ([] (auto& b, int a, int e) { humlab::gain (b, a, e, -3.0f); }); } },
+            { "CLEAN NOISE", "Learns the hiss / room noise from the quietest parts and takes it out", [this] { apply ([this] (auto& b, int a, int e) { humlab::denoise (b, sr, a, e, 0.7f); }); } } };
+        for (auto& x : row) { auto* b = ops.add (new juce::TextButton()); setupButton (*b, x.t, x.tip); b->onClick = x.f; addAndMakeVisible (b); }
+        setupButton (undoBtn, "UNDO", "Undo the last HumLab edit (Ctrl+Z)");
+        undoBtn.onClick = [this] { if (undo.empty()) return; work = std::move (undo.back()); undo.pop_back(); selA = selB = -1; changedSoon(); repaint(); };
+        setupButton (specBtn, "SPECTRUM", "Show the frequency spectrum of the selection", true);
+        specBtn.onClick = [this] { specDirty = true; repaint(); };
+        setupButton (auditionBtn, "PLAY SEL", "Hear just the selection");
+        auditionBtn.onClick = [this] {
+            int a, e; range (a, e);
+            juce::AudioBuffer<float> pv (2, e - a);
+            for (int ch = 0; ch < 2; ++ch) pv.copyFrom (ch, 0, work, ch, a, e - a);
+            const auto f = s.p().recordingsFolder().getChildFile ("HumLab").getChildFile ("preview.wav");
+            if (writeClipAudio (f, pv, sr)) s.engine.previewFile (f); };
+        setupButton (recBtn, "REC", "Record on this clip's track from the selection start");
+        recBtn.setColour (juce::TextButton::buttonOnColourId, col::rec);
+        recBtn.onClick = [this] {
+            if (s.engine.isRecording()) { s.engine.setRecording (false); return; }
+            int a, e; range (a, e);
+            const int lane = clip.lane;
+            s.edit ("Arm", [lane] (Project& p) { if (lane >= 0 && lane < (int) p.lanes.size()) p.lanes[(size_t) lane].armed = true; });
+            s.engine.setPositionBeats (clipStart() + a / sr * s.p().bpm / 60.0);
+            s.engine.setRecording (true);
+            if (! s.engine.isPlaying()) s.engine.play(); };
+        for (auto* b : { &undoBtn, &specBtn, &auditionBtn, &recBtn }) addAndMakeVisible (*b);
+        setWantsKeyboardFocus (true);
+        tick.startTimerHz (20);
+        setSize (1120, 480);
+    }
+    juce::AudioBuffer<float> render() override { return work; }
+    void useResult (const juce::File& f, int numSamples) override
+    {
+        const double beats = numSamples / sr * s.p().bpm / 60.0;
+        s.edit ("HumLab", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; } });
+        s.engine.sync();
+    }
+    void onOriginal() override { work.makeCopyOf (audio); undo.clear(); selA = selB = -1; specDirty = true; repaint(); }
+    void resized() override
+    {
+        auto r = getLocalBounds().removeFromTop (34).reduced (6, 4);
+        layoutTop (r);
+        for (auto* b : { &undoBtn, &specBtn, &auditionBtn, &recBtn }) { b->setBounds (r.removeFromLeft (84)); r.removeFromLeft (6); }
+        auto r2 = getLocalBounds().withTrimmedTop (34).removeFromTop (30).reduced (6, 3);
+        const int w = juce::jmax (60, (r2.getWidth() - 6 * (ops.size() - 1)) / juce::jmax (1, ops.size()));
+        for (auto* b : ops) { b->setBounds (r2.removeFromLeft (w)); r2.removeFromLeft (6); }
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel.darker (0.4f));
+        const auto a = area();
+        g.setColour (juce::Colours::black.withAlpha (0.25f)); g.fillRect (a);
+        const int n = work.getNumSamples();
+        if (n <= 0) return;
+        if (selA >= 0 && selB != selA)
+        {
+            const float x0 = xOf (juce::jmin (selA, selB)), x1 = xOf (juce::jmax (selA, selB));
+            g.setColour (col::accent.withAlpha (0.25f)); g.fillRect (x0, a.getY(), x1 - x0, a.getHeight());
+        }
+        const float mid = a.getCentreY(), half = a.getHeight() * 0.48f;
+        g.setColour (col::accent2);
+        for (int px = 0; px < (int) a.getWidth(); ++px)
+        {
+            const int s0 = (int) ((juce::int64) px * n / (int) a.getWidth()), s1 = juce::jmax (s0 + 1, (int) ((juce::int64) (px + 1) * n / (int) a.getWidth()));
+            float lo = 0, hi = 0;
+            for (int ch = 0; ch < work.getNumChannels(); ++ch) { auto r = work.findMinMax (ch, s0, juce::jmin (n, s1) - s0); lo = juce::jmin (lo, r.getStart()); hi = juce::jmax (hi, r.getEnd()); }
+            g.drawVerticalLine ((int) a.getX() + px, mid - hi * half, mid - lo * half + 1);
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.5f)); g.setFont (11.0f);
+        const double secs = n / sr, stepS = secs > 20 ? 5.0 : secs > 8 ? 2.0 : secs > 3 ? 0.5 : 0.1;
+        for (double t = 0; t < secs; t += stepS) g.drawText (juce::String (t, stepS < 1 ? 1 : 0) + "s", (int) xOf ((int) (t * sr)) + 2, (int) a.getY(), 50, 14, juce::Justification::left);
+        if (specBtn.getToggleState())
+        {
+            if (specDirty) { int s0, s1; range (s0, s1); spec = humlab::spectrum (work, sr, s0, s1, 96); specDirty = false; }
+            juce::Path pth;
+            for (size_t j = 0; j < spec.size(); ++j)
+            {
+                const float x = a.getX() + a.getWidth() * j / (float) juce::jmax ((size_t) 1, spec.size() - 1);
+                const float y = a.getBottom() - a.getHeight() * juce::jlimit (0.0f, 1.0f, (spec[j] + 90.0f) / 90.0f);
+                if (j == 0) pth.startNewSubPath (x, y); else pth.lineTo (x, y);
+            }
+            g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillRect (a);
+            g.setColour (col::accent); g.strokePath (pth, juce::PathStrokeType (2.0f));
+            g.setColour (juce::Colours::white.withAlpha (0.6f));
+            for (double f : { 100.0, 1000.0, 10000.0 })
+            {
+                const float x = a.getX() + a.getWidth() * (float) (std::log (f / 30.0) / std::log (20000.0 / 30.0));
+                g.drawVerticalLine ((int) x, a.getY(), a.getBottom());
+                g.drawText (f >= 1000 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f), (int) x + 3, (int) a.getBottom() - 16, 40, 14, juce::Justification::left);
+            }
+        }
+        const double pos = s.engine.positionBeats() - clipStart();
+        if (pos >= 0)
+        {
+            const int sp = (int) (pos * 60.0 / s.p().bpm * sr);
+            if (sp < n) { g.setColour (juce::Colours::white); g.fillRect (xOf (sp) - 0.75f, a.getY(), 1.5f, a.getHeight()); }
+        }
+        if (s.engine.isRecording()) { g.setColour (col::rec); g.drawRect (a, 2.0f); }
+    }
+    void mouseDown (const juce::MouseEvent& e) override { grabKeyboardFocus(); selA = selB = sampleAt (e.x); dragging = true; repaint(); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (dragging) { selB = sampleAt (e.x); specDirty = true; repaint(); } }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        dragging = false;
+        if (std::abs (e.getDistanceFromDragStartX()) < 3)
+        {
+            const int at = selA; selA = selB = -1;
+            s.engine.setPositionBeats (juce::jmax (0.0, clipStart() + at / sr * s.p().bpm / 60.0));
+        }
+        specDirty = true; repaint();
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey) { ops[0]->triggerClick(); return true; }
+        if (k == juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0)) { undoBtn.triggerClick(); return true; }
+        return false;
+    }
+private:
+    template <typename F> void apply (F&& op, bool clearSel = false)
+    {
+        int a, e; range (a, e);
+        undo.push_back (juce::AudioBuffer<float> (work));
+        if (undo.size() > 30) undo.erase (undo.begin());
+        op (work, a, e);
+        if (clearSel) selA = selB = -1;
+        specDirty = true; changedSoon(); repaint();
+    }
+    void range (int& a, int& e) const
+    {
+        if (selA >= 0 && selB != selA) { a = juce::jmin (selA, selB); e = juce::jmax (selA, selB); }
+        else { a = 0; e = work.getNumSamples(); }
+    }
+    double clipStart() const { for (auto& c : s.p().clips) if (c.uid == uid) return c.start; return clip.start; }
+    juce::Rectangle<float> area() const { return getLocalBounds().withTrimmedTop (68).toFloat().reduced (8); }
+    float xOf (int smp) const { const auto a = area(); return a.getX() + a.getWidth() * smp / (float) juce::jmax (1, work.getNumSamples()); }
+    int sampleAt (int x) const { const auto a = area(); return juce::jlimit (0, work.getNumSamples(), (int) ((x - a.getX()) / a.getWidth() * work.getNumSamples())); }
+    juce::AudioBuffer<float> work; std::vector<juce::AudioBuffer<float>> undo;
+    int selA = -1, selB = -1; bool dragging = false, specDirty = true; std::vector<float> spec;
+    juce::OwnedArray<juce::TextButton> ops; juce::TextButton undoBtn, specBtn, auditionBtn, recBtn;
+    juce::TimedCallback tick { [this] { if (s.engine.isPlaying() || s.engine.isRecording()) repaint(); } };
 };
 
 // HumTime: pick a grid and how hard to pull; the hits stretch onto it (no cuts) while the song plays
@@ -617,6 +778,14 @@ struct LaneHeader : public juce::Component
             s.engine.sync(); };
         soft.onDragEnd = [this] { s.sendChangeMessage(); };
         addAndMakeVisible (soft);
+        vol.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); vol.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        vol.setRange (-60.0, 6.0, 0.1); vol.setSkewFactorFromMidPoint (-12.0); vol.setDoubleClickReturnValue (true, 0.0); vol.setTextValueSuffix (" dB");
+        vol.setTooltip ("Track volume: only this track's clips, even when other tracks share its mixer insert. Double-click = 0 dB");
+        vol.setPopupDisplayEnabled (true, true, nullptr);
+        vol.onValueChange = [this] { const float v = (float) vol.getValue(); const auto t = targets();
+            s.live ([&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].volumeDb = v; }); s.engine.sync(); };
+        vol.onDragEnd = [this] { s.commit ("Track volume"); };
+        addAndMakeVisible (vol);
         setupButton (norm, "N", "N = Auto-normalize: brings your voice to a steady, strong level while recording / monitoring (0 latency)", true);
         norm.setColour (juce::TextButton::buttonOnColourId, col::good);
         norm.onClick = [this] { const bool on = norm.getToggleState(); s.edit ("Auto normalize", [&] (Project& p) { p.lanes[(size_t) index].autoNorm = on; }); };
@@ -648,6 +817,7 @@ struct LaneHeader : public juce::Component
         mon.setToggleState (l.monitor, juce::dontSendNotification);
         norm.setToggleState (l.autoNorm, juce::dontSendNotification);
         if (! soft.isMouseButtonDown()) { soft.setValue (l.shiftMs, juce::dontSendNotification); softPrev = l.shiftMs; }
+        if (! vol.isMouseButtonDown()) vol.setValue (l.volumeDb, juce::dontSendNotification);
         input.clear (juce::dontSendNotification);
         int ins = 2;
         if (auto* d = s.engine.deviceManager.getCurrentAudioDevice()) ins = juce::jmax (2, d->getInputChannelNames().size());
@@ -693,6 +863,7 @@ struct LaneHeader : public juce::Component
         r.removeFromTop (2);
         mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
         norm.setBounds (r.removeFromLeft (44)); r.removeFromLeft (3);
+        vol.setBounds (r.removeFromLeft (24)); r.removeFromLeft (3);
         soft.setBounds (r.removeFromLeft (24)); r.removeFromLeft (3);
         input.setBounds (r.removeFromLeft (70)); r.removeFromLeft (3);
         insert.setBounds (r);
@@ -701,7 +872,7 @@ struct LaneHeader : public juce::Component
     std::function<void (int size)> onAllHeights;
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
-    juce::Slider soft; float softPrev = 0.0f;
+    juce::Slider soft, vol; float softPrev = 0.0f;
     void mouseDoubleClick (const juce::MouseEvent& e) override { if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
@@ -2201,6 +2372,7 @@ private:
         m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
         m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
+        m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
         {
             juce::PopupMenu tm;
             tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");
@@ -2276,6 +2448,7 @@ private:
             }
             if (r == 15) { consolidate (uid); return; }
             if (r == 17) { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+            if (r == 18) { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
             if (r == 344) { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }
             if (r >= 340 && r <= 343) { static const double g[] { 0.25, 0.5, 0.25, 1.0 }; humTime (uid, g[r - 340], r == 342 ? 0.5f : 1.0f); return; }
             if (r == 16)

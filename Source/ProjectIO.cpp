@@ -201,7 +201,7 @@ juce::ValueTree projectToTree (const Project& p)
     for (auto& l : p.lanes)
     {
         juce::ValueTree t ("LANE");
-        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr); t.setProperty ("shiftms", l.shiftMs, nullptr); t.setProperty ("comp", l.compLane, nullptr); t.setProperty ("lmute", l.muted, nullptr); t.setProperty ("colour", (juce::int64) l.colour.getARGB(), nullptr); t.setProperty ("ncol", (juce::int64) l.nameColour.getARGB(), nullptr); t.setProperty ("nfont", l.nameFont, nullptr);
+        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr); t.setProperty ("shiftms", l.shiftMs, nullptr); t.setProperty ("comp", l.compLane, nullptr); t.setProperty ("lmute", l.muted, nullptr); t.setProperty ("colour", (juce::int64) l.colour.getARGB(), nullptr); t.setProperty ("ncol", (juce::int64) l.nameColour.getARGB(), nullptr); t.setProperty ("nfont", l.nameFont, nullptr); t.setProperty ("lvol", l.volumeDb, nullptr);
         t.setProperty ("armed", l.armed, nullptr); t.setProperty ("mute", l.muted, nullptr); t.setProperty ("mon", l.monitor, nullptr);
         t.setProperty ("h", l.height, nullptr);
         lanes.appendChild (t, nullptr);
@@ -378,7 +378,7 @@ Project projectFromTree (const juce::ValueTree& root)
     }
     for (auto t : root.getChildWithName ("LANES"))
     {
-        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.shiftMs = (float) t.getProperty ("shiftms", 0.0); l.compLane = t.getProperty ("comp", -1); l.muted = t.getProperty ("lmute", l.muted); l.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0)); l.armed = t["armed"]; l.nameColour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("ncol", (juce::int64) 0)); l.nameFont = t["nfont"].toString();
+        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.shiftMs = (float) t.getProperty ("shiftms", 0.0); l.compLane = t.getProperty ("comp", -1); l.muted = t.getProperty ("lmute", l.muted); l.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0)); l.armed = t["armed"]; l.nameColour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("ncol", (juce::int64) 0)); l.nameFont = t["nfont"].toString(); l.volumeDb = (float) t.getProperty ("lvol", 0.0);
         l.muted = t["mute"]; l.monitor = t.getProperty ("mon", true); l.height = t.getProperty ("h", 56.0f);
         p.lanes.push_back (l);
     }
