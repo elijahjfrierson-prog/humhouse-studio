@@ -212,8 +212,7 @@ Project Project::createDemo()
     p.addChannel (keys);
 
     Pattern pat; pat.name = "Pattern 1";
-    // trap starter: snare + clap on the half (beat 3), sparse kick, 8th hats with 16th sprinkles; no 808 pattern
-    for (int s : { 0, 10 }) pat.toggleStep (1, s, 60);
+    // trap starter: snare + clap on the half (beat 3), 8th hats with 16th sprinkles; no kick, no 808 pattern
     for (int ch : { 2, 3 }) pat.toggleStep (ch, 8, 60);
     for (int s : { 0, 2, 4, 6, 7, 8, 10, 12, 13, 14 }) pat.toggleStep (4, s, 60);
     p.patterns.push_back (pat);

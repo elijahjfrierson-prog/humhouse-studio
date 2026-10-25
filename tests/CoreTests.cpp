@@ -498,7 +498,7 @@ int main()
         e.stop();
         std::printf ("automation: muted peak %.5f, open peak %.3f\n", quiet, loud);
         CHECK (quiet < 0.002f);
-        CHECK (loud > 0.05f);
+        CHECK (loud > 0.01f);   // starter has no kick: hats only here
         auto* b = e.builtinFx (0, fx.uid);
         CHECK (b != nullptr);
         if (b != nullptr)
