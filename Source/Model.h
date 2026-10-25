@@ -62,6 +62,9 @@ struct SynthParams
     int   wtKind = 0;                                   // factory table, used when no custom table is loaded
     int   warp = 0; float warpAmt = 0.0f;                 // Serum-style warp of the HumWave read (see humWarpNames)
     float uniBlend = 0.5f, sub = 0.0f;                   // unison side-voice level, sine sub one octave down
+    float grain = 0.0f, evolve = 0.0f;                   // HumWave: granular scatter of the table read, and a note that grows / evolves while held
+    int   bWarp = 0, bStart = 0; float bDrop = 0.5f, bClick = 0.0f;   // bStart: 808 start wave (Sine, Triangle, Saw, Square)
+     // HitMaker (wave 4 = 808): warp mode (amount = warpAmt), pitch drop, click / punch
     std::shared_ptr<const std::vector<float>> wt;       // custom table (picture to sound, sample to wavetable)
     juce::String wtName;
 };
@@ -120,6 +123,9 @@ struct Channel
     // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
     bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = false, smpTrim = false;   // defaults: the sample plays exactly like the WAV
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
+    int   smpWarp = 0; float smpWarpAmt = 0.0f;                     // HitMaker: warp a sampled 808 (same modes as the 808 engine)
+    juce::File smpLayerFile;                                         // HitMaker: optional 2nd 808 merged in (cut / stretched to this one)
+    float smpLayerMix = 0.5f; int smpLayerWarp = 0; float smpLayerWarpAmt = 0.0f;
     int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
     bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
@@ -138,12 +144,12 @@ struct Pattern
 };
 
 // ---------------------------------------------------------------- automation (FL-style automation clips)
-enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch };
+enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch, AutoSendLevel };
 struct AutoTarget
 {
     int kind = AutoNone;
     int track = 0, fxUid = 0, channel = 0;   // mixer insert + FX slot uid, or channel id
-    juce::String param;                      // built-in param id, or "#n" = plugin parameter n
+    juce::String param;                      // built-in param id, "#n" = plugin parameter n, or send target bus (AutoSendLevel)
     juce::String name;                       // label, e.g. "Room Verb - Mix"
 };
 struct AutoPoint { double beat = 0.0; float value = 0.5f; };   // beat into the clip's content, value 0..1

@@ -327,7 +327,8 @@ static juce::String channelSignature (const Channel& c, double bpm)
 {
     return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
          + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
-         + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
+         + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpWarp) + "|" + juce::String (c.smpWarpAmt)
+         + "|" + c.smpLayerFile.getFullPathName() + "|" + juce::String (c.smpLayerMix) + "|" + juce::String (c.smpLayerWarp) + "|" + juce::String (c.smpLayerWarpAmt) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
          + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f)
          + "|" + juce::String (c.type == ChannelType::Sampler && c.tempoSync && sampleTempo (c) > 0.0 ? sampleTempo (c) / bpm : 1.0);
 }
@@ -472,7 +473,15 @@ void Engine::sync()
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
                 if (c == sampleCache.end()) c = sampleCache.emplace (key, loadSampleFile (ch.sampleFile, sampleRate)).first;
-                s = processSample (c->second, ch, sampleRate, proj.bpm);
+                SharedSample layer;
+                if (ch.smpLayerFile.existsAsFile())
+                {
+                    auto lk = ch.smpLayerFile.getFullPathName();
+                    auto lc = sampleCache.find (lk);
+                    if (lc == sampleCache.end()) lc = sampleCache.emplace (lk, loadSampleFile (ch.smpLayerFile, sampleRate)).first;
+                    layer = lc->second;
+                }
+                s = processSample (c->second, ch, sampleRate, proj.bpm, layer);
             }
             rt->inst = createInstrument (ch, s, sampleRate);
         }
@@ -1799,6 +1808,15 @@ void Engine::applyAutomation (double beat)
             if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
             auto& mt = proj.mixer[(size_t) at.track];
             (at.kind == AutoInsertVol ? mt.volume : mt.pan) = autoToValue (at.kind, v);
+        }
+        else if (at.kind == AutoSendLevel)
+        {
+            if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
+            const int bus = at.param.getIntValue();
+            const float lv = autoToValue (at.kind, v);
+            for (auto& sd : proj.mixer[(size_t) at.track].sends) if (sd.target == bus) sd.level = lv;
+            if (bus >= 0 && bus < (int) sources.size())
+                for (auto& src : sources[(size_t) bus]) if (src.first == at.track) src.second = lv;
         }
         else if (at.kind == AutoChanVol || at.kind == AutoChanPan || at.kind == AutoChanPitch)
         {

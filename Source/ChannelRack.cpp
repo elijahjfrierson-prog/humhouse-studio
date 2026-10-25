@@ -1,4 +1,5 @@
 #include "UI.h"
+#include <deque>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -12,6 +13,8 @@ struct PoolInstrument
     std::array<float, 3> xv { 1, 0, 0 }, xs { 0, 0, 0 }, xf { 0, 0, 0 };
     int warp = 0; float warpAmt = 0, blend = 0.5f, sub = 0;              // HumWave Serum-style warp, unison blend, sub osc
     const char* cat = nullptr;                                           // HumWave Serum Pack folder (nullptr = main list)
+    float grain = 0, evolve = 0; int bWarp = 0; float bDrop = 0.5f, bClick = 0;   // granular / evolve, HitMaker 808
+    int bStart = 0;
 };
 // HumWave Serum Pack: wavetable + warp presets. The Weird FX folder is voiced after the Triple S Hitters one-shots
 // (measured: ~6.5 kHz brightness, very noisy/gritty spectrum, ~3.7 s tails)
@@ -168,18 +171,135 @@ static std::vector<PoolInstrument> withSerumPack (std::vector<PoolInstrument> v)
         wp (W, "Hell Riser",               0xffff4000, 5,  0.0f, 1,  0.9f, 7, 0.6f, 0.7f,3.0f,  4.0f, 1.0f, 1.0f, 14000, 0.3f, 0.6f, 0.3f, 0.3f, 0.06f,1.0f, 0,     false, 48),
     };
     v.insert (v.end(), pack.begin(), pack.end());
+    // Evolving & Granular: held notes grow and change (Evolve) and grains scatter the table (Granulize)
+    auto ev = [] (PoolInstrument e, float grain, float evolve) { e.grain = grain; e.evolve = evolve; return e; };
+    const char* G = "Evolving & Granular";
+    const std::vector<PoolInstrument> evo {
+        ev (wp (G, "Growing Melody",        0xff7dffc0, 11, 0.0f, 0,  0,    3, 0.2f, 0.5f,0.02f, 1.0f, 0.8f, 0.8f, 9000,  0.2f, 0,    0,    0,    0,    0,    0,     false, 60), 0.15f, 0.8f),
+        ev (wp (G, "Granular Cloud",        0xff9ad0ff, 2,  0.4f, 0,  0,    5, 0.3f, 0.6f,0.6f,  2.0f, 0.9f, 2.5f, 8000,  0.2f, 0,    0.05f,0,    0,    0,    0,     false, 60), 0.8f, 0.3f),
+        ev (wp (G, "Evolving Glass Keys",   0xffd0f0ff, 6,  0.1f, 6,  0.3f, 3, 0.2f, 0.5f,0.005f,1.5f, 0.5f, 1.2f, 14000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72), 0.2f, 0.6f),
+        ev (wp (G, "Blooming Pad",          0xffffb0e0, 11, 0.1f, 9,  0.3f, 7, 0.4f, 0.7f,1.2f,  2.0f, 0.9f, 3.0f, 7000,  0.25f,0,    0,    0,    0.2f, 0.3f, 0,     false, 60), 0.3f, 1.0f),
+        ev (wp (G, "Grain Pluck",           0xffffe08a, 4,  0.3f, 4,  0.4f, 1, 0,    0.5f,0.001f,0.6f, 0,    0.4f, 11000, 0.2f, 0,    0,    0,    0,    0,    0,     false, 60), 0.5f, 0.2f),
+        ev (wp (G, "Rising Siren Lead",     0xffff8a8a, 5,  0.0f, 1,  0.5f, 3, 0.3f, 0.6f,0.01f, 1.0f, 0.9f, 0.5f, 10000, 0.3f, 0.2f, 0,    0,    5.0f, 0,    0.05f, true,  60), 0.1f, 0.9f),
+        ev (wp (G, "Shimmer Texture",       0xffc0c0ff, 12, 0.5f, 2,  0.5f, 5, 0.3f, 0.6f,0.8f,  2.0f, 0.8f, 2.5f, 15000, 0.1f, 0,    0.1f, 0,    0.1f, 0.5f, 0,     false, 72), 1.0f, 0.5f),
+        ev (wp (G, "Evolving Reese",        0xffff4d8a, 0,  0.2f, 2,  0.3f, 5, 0.35f,0.7f,0.003f,0.5f, 0.9f, 0.2f, 2000,  0.35f,0.4f, 0,    0.5f, 0.3f, 0.2f, 0.06f, true,  36), 0.1f, 0.7f),
+        ev (wp (G, "Dust Choir",            0xffe0d0b0, 11, 0.6f, 11, 0.3f, 7, 0.4f, 0.7f,0.5f,  3.0f, 0.8f, 3.0f, 6000,  0.2f, 0.2f, 0.15f,0,    0,    0,    0,     false, 60), 0.7f, 0.6f),
+        ev (wp (G, "Arp Crystal",           0xff8affff, 6,  0.0f, 0,  0,    1, 0,    0.5f,0.001f,0.3f, 0,    0.2f, 14000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72), 0.25f, 0.5f),
+    };
+    v.insert (v.end(), evo.begin(), evo.end());
+    // HitMaker: our 808 maker - every 808 here is built from the 808 engine (drop, click, warp, drive, glide)
+    auto hm = [] (const char* name, juce::uint32 col, int warp, float amt, float drop, float click, float decay, float drv, float glide, float cut)
+    {
+        PoolInstrument e { name, col, 4, 0.001f, decay, 0.0f, 0.3f, cut, 0.1f, 0, 1, drv, 1, 0, 0, 0, 0, 0, glide, true, 36 };
+        e.bWarp = warp; e.warpAmt = amt; e.bDrop = drop; e.bClick = click; e.cat = "HM"; return e;
+    };
+    const std::vector<PoolInstrument> hits {
+        hm ("HitMaker Clean Sub",      0xffff5d8a, 0, 0.0f, 0.4f, 0.0f, 2.5f, 0.0f,  0.08f, 1200),
+        hm ("HitMaker Boom",           0xffff4d6a, 1, 0.3f, 0.6f, 0.2f, 3.0f, 0.1f,  0.08f, 2000),
+        hm ("HitMaker Distorted",      0xffff3d3d, 1, 0.8f, 0.5f, 0.3f, 2.2f, 0.3f,  0.08f, 4000),
+        hm ("HitMaker Folded",         0xffff8a3d, 2, 0.6f, 0.5f, 0.2f, 2.0f, 0.0f,  0.08f, 3500),
+        hm ("HitMaker Hard Clip",      0xffd94a4a, 3, 0.5f, 0.6f, 0.4f, 1.8f, 0.0f,  0.08f, 5000),
+        hm ("HitMaker Bit 808",        0xffa03030, 4, 0.6f, 0.5f, 0.2f, 2.0f, 0.0f,  0.08f, 6000),
+        hm ("HitMaker Growler",        0xffb03dff, 5, 0.6f, 0.5f, 0.1f, 2.5f, 0.1f,  0.08f, 3000),
+        hm ("HitMaker Tape 808",       0xffc98a5a, 6, 0.6f, 0.4f, 0.15f,2.6f, 0.1f,  0.08f, 2500),
+        hm ("HitMaker Knock",          0xffff6a6a, 3, 0.7f, 0.9f, 0.6f, 1.2f, 0.2f,  0.06f, 6000),
+        hm ("HitMaker Long Slide",     0xffff7ab0, 1, 0.2f, 0.3f, 0.0f, 4.0f, 0.05f, 0.12f, 1800),
+        hm ("HitMaker Drill Slide",    0xffff4da0, 1, 0.5f, 0.3f, 0.2f, 3.5f, 0.15f, 0.1f,  3000),
+        hm ("HitMaker Short Bounce",   0xffffa0a0, 1, 0.4f, 0.7f, 0.3f, 0.6f, 0.1f,  0.04f, 3000),
+        hm ("HitMaker Rage",           0xffff2020, 2, 0.9f, 0.6f, 0.4f, 2.0f, 0.4f,  0.08f, 8000),
+        hm ("HitMaker Grit Sub",       0xffd06a6a, 6, 0.4f, 0.4f, 0.1f, 2.8f, 0.2f,  0.08f, 1500),
+        hm ("HitMaker Mafia",          0xff8a2020, 1, 0.6f, 0.8f, 0.5f, 2.4f, 0.25f, 0.08f, 3500),
+        hm ("HitMaker Glitch",         0xff7d7dff, 4, 0.9f, 0.6f, 0.3f, 1.6f, 0.0f,  0.06f, 9000),
+    };
+    v.insert (v.end(), hits.begin(), hits.end());
+    // HitMaker: more 808s from every start wave, plus synth basses
+    auto hs = [&hm] (const char* name, juce::uint32 col, int start, int warp, float amt, float drop, float click, float decay, float drv, float glide, float cut)
+    { auto e = hm (name, col, warp, amt, drop, click, decay, drv, glide, cut); e.bStart = start; return e; };
+    const std::vector<PoolInstrument> hits2 {
+        hs ("HitMaker Triangle Body",  0xffff6a8a, 1, 1, 0.25f, 0.5f, 0.15f, 2.6f, 0.05f, 0.08f, 2500),
+        hs ("HitMaker Triangle Fold",  0xffff8a5a, 1, 2, 0.5f,  0.5f, 0.2f,  2.2f, 0.0f,  0.08f, 4000),
+        hs ("HitMaker Saw Grit",       0xffff3d6a, 2, 1, 0.4f,  0.5f, 0.2f,  2.2f, 0.15f, 0.08f, 1800),
+        hs ("HitMaker Saw Tape",       0xffc97a5a, 2, 6, 0.5f,  0.4f, 0.1f,  2.8f, 0.1f,  0.08f, 1500),
+        hs ("HitMaker Square Punch",   0xffff4d4d, 3, 3, 0.4f,  0.7f, 0.4f,  1.8f, 0.1f,  0.06f, 2200),
+        hs ("HitMaker Square Bit",     0xffa04040, 3, 4, 0.5f,  0.5f, 0.2f,  2.0f, 0.0f,  0.08f, 5000),
+        hs ("HitMaker Sine Deep",      0xffff7aa0, 0, 0, 0.0f,  0.25f,0.0f,  4.5f, 0.0f,  0.1f,  900),
+        hs ("HitMaker Sine Knock Up",  0xffff9a9a, 0, 1, 0.35f, 1.0f, 0.7f,  1.4f, 0.15f, 0.05f, 3000),
+        hs ("HitMaker Detroit",        0xffff2d5a, 0, 3, 0.6f,  0.8f, 0.5f,  1.6f, 0.3f,  0.05f, 6000),
+        hs ("HitMaker UK Drill",       0xffd03d8a, 0, 1, 0.5f,  0.35f,0.25f, 3.2f, 0.2f,  0.14f, 3500),
+        hs ("HitMaker Plugg Sub",      0xffffb0c0, 1, 0, 0.0f,  0.3f, 0.05f, 2.4f, 0.0f,  0.06f, 1200),
+        hs ("HitMaker Rage Fold Saw",  0xffff1d1d, 2, 2, 0.75f, 0.6f, 0.4f,  2.0f, 0.35f, 0.08f, 7000),
+        hs ("HitMaker Growl Square",   0xff9a3dff, 3, 5, 0.55f, 0.5f, 0.2f,  2.4f, 0.1f,  0.08f, 3000),
+        hs ("HitMaker Memphis Boom",   0xffb05050, 0, 6, 0.4f,  0.6f, 0.3f,  3.0f, 0.2f,  0.08f, 2200),
+    };
+    v.insert (v.end(), hits2.begin(), hits2.end());
+    const char* H = "HM";
+    const std::vector<PoolInstrument> basses {
+        wp (H, "HitMaker Synth: Reese",        0xffff4d8a, 0,  0.2f, 0,  0,    5, 0.35f,0.7f,0.003f,0.5f, 0.9f, 0.2f, 2200,  0.3f, 0.4f, 0,    0.5f, 0.3f, 0,    0.06f, true, 36),
+        wp (H, "HitMaker Synth: Saw Sub",      0xffff6a3d, 0,  0.0f, 0,  0,    1, 0,    0.5f,0.002f,0.6f, 0.8f, 0.2f, 1500,  0.4f, 0.2f, 0,    0.6f, 0,    0,    0.06f, true, 36),
+        wp (H, "HitMaker Synth: Square Bass",  0xffff8a3d, 3,  0.3f, 3,  0.3f, 1, 0,    0.5f,0.002f,0.5f, 0.7f, 0.15f,1800,  0.3f, 0.3f, 0,    0.5f, 0,    0,    0.06f, true, 36),
+        wp (H, "HitMaker Synth: Wobble",       0xff9a3dff, 2,  0.4f, 2,  0.5f, 3, 0.2f, 0.6f,0.005f,0.6f, 0.9f, 0.2f, 2500,  0.5f, 0.5f, 0,    0.4f, 2.0f, 0.4f, 0.06f, true, 36),
+        wp (H, "HitMaker Synth: Fold Bass",    0xffd06aff, 5,  0.5f, 11, 0.6f, 1, 0,    0.5f,0.002f,0.6f, 0.8f, 0.2f, 3000,  0.3f, 0.3f, 0,    0.4f, 0,    0,    0.06f, true, 36),
+        wp (H, "HitMaker Synth: Growl Bass",   0xffb03dff, 8,  0.5f, 9,  0.7f, 3, 0.25f,0.6f,0.003f,0.6f, 0.9f, 0.2f, 2800,  0.4f, 0.5f, 0.05f,0.4f, 4.0f, 0.6f, 0.06f, true, 36),
+        wp (H, "HitMaker Synth: Pluck Bass",   0xffffa03d, 4,  0.2f, 1,  0.3f, 1, 0,    0.5f,0.001f,0.35f,0,    0.15f,2500,  0.35f,0.2f, 0,    0.3f, 0,    0,    0.04f, true, 36),
+        wp (H, "HitMaker Synth: Moog Sub",     0xffe08a3d, 0,  0.0f, 0,  0,    1, 0,    0.5f,0.003f,0.8f, 0.9f, 0.2f, 900,   0.6f, 0.15f,0,    0.7f, 0,    0,    0.08f, true, 36),
+        wp (H, "HitMaker Synth: Bit Bass",     0xffa0503d, 7,  0.5f, 12, 0.6f, 1, 0,    0.5f,0.002f,0.5f, 0.7f, 0.2f, 5000,  0.2f, 0.3f, 0,    0.4f, 0,    0,    0.06f, true, 36),
+        wp (H, "HitMaker Synth: Evolving Sub", 0xffff7ad0, 11, 0.2f, 1,  0.3f, 3, 0.2f, 0.6f,0.01f, 1.0f, 0.9f, 0.3f, 2000,  0.3f, 0.2f, 0,    0.5f, 0.2f, 0.3f, 0.08f, true, 36),
+    };
+    v.insert (v.end(), basses.begin(), basses.end());
+    // HumWave Evolve Pack: ~200 generated weird / granular / glittery evolving presets, 5 folders x 40
+    static std::deque<std::string> names;
+    const char* folders[] { "Glitter & Shimmer", "Granular Clouds", "Evolving Pads", "Warped Grains", "Weird Evolve" };
+    const char* adj[] { "Crystal", "Neon", "Liquid", "Frozen", "Golden", "Haunted", "Velvet", "Broken", "Cosmic", "Silk", "Toxic", "Dusty",
+                        "Electric", "Hollow", "Prism", "Ghost", "Molten", "Lunar", "Static", "Candy" };
+    const char* noun[][8] {
+        { "Glitter", "Sparkle", "Shimmer", "Stars", "Dust", "Halo", "Glint", "Twinkle" },
+        { "Cloud", "Fog", "Swarm", "Mist", "Haze", "Spray", "Storm", "Rain" },
+        { "Bloom", "Tide", "Dream", "Horizon", "Aurora", "Garden", "Drift", "Ascent" },
+        { "Shards", "Grinder", "Splinter", "Crush", "Fracture", "Rip", "Scatter", "Glitch" },
+        { "Creature", "Portal", "Machine", "Signal", "Mutant", "Oracle", "Swamp", "Vortex" } };
+    juce::Random rng (0x48554d57);
+    for (int f = 0; f < 5; ++f)
+        for (int i = 0; i < 40; ++i)
+        {
+            names.push_back (std::string (adj[(i * 7 + f * 3) % 20]) + " " + noun[f][(i + f) % 8] + " " + std::to_string (i / 8 + 1));
+            auto R = [&rng] (float a, float b) { return a + (b - a) * rng.nextFloat(); };
+            const juce::uint32 col = juce::Colour::fromHSV (std::fmod (0.1f * (float) f + R (0, 0.15f), 1.0f), R (0.4f, 0.8f), 1.0f, 1.0f).getARGB();
+            const int table = rng.nextInt (12), warp = f == 3 ? 1 + rng.nextInt (12) : (rng.nextFloat() < 0.6f ? rng.nextInt (13) : 0);
+            const float amt = f == 3 ? R (0.4f, 0.9f) : R (0.1f, 0.6f);
+            const int uni = 1 + 2 * rng.nextInt (f == 2 ? 4 : 3);
+            float a = R (0.01f, 0.6f), d = R (0.5f, 2.5f), s = R (0.4f, 0.9f), r = R (1.0f, 3.5f), cut = R (6000, 18000), grain = R (0.2f, 0.7f), evolve = R (0.3f, 0.9f), noi = 0, lfo = 0, mor = 0;
+            int root = 60;
+            if (f == 0) { cut = R (12000, 20000); root = 72; a = R (0.001f, 0.2f); }
+            if (f == 1) { grain = R (0.6f, 1.0f); a = R (0.3f, 1.5f); r = R (2.0f, 4.0f); cut = R (5000, 12000); }
+            if (f == 2) { evolve = R (0.7f, 1.0f); grain = R (0.05f, 0.4f); a = R (0.5f, 2.0f); }
+            if (f == 3) { d = R (0.3f, 1.0f); s = R (0.1f, 0.5f); r = R (0.3f, 1.2f); grain = R (0.4f, 0.9f); }
+            if (f == 4) { noi = R (0.0f, 0.35f); lfo = R (0.1f, 6.0f); mor = R (0.0f, 1.0f); grain = R (0.0f, 1.0f); evolve = R (0.0f, 1.0f); }
+            auto e = wp (folders[f], names.back().c_str(), col, table, R (0, 1), warp, amt, uni, R (0.1f, 0.6f), R (0.4f, 0.9f),
+                         a, d, s, r, cut, R (0.05f, 0.4f), f == 3 ? R (0.1f, 0.5f) : R (0.0f, 0.2f), noi, 0, lfo, mor, 0, false, root);
+            e.grain = grain; e.evolve = evolve;
+            v.push_back (e);
+        }
     return v;
 }
 static void addSerumPackMenu (juce::PopupMenu& pool, const std::vector<PoolInstrument>& all)
 {
     juce::PopupMenu pack;
-    for (auto* folder : { "Bass", "Leads", "Plucks", "Pads", "Keys & Bells", "Weird FX" })
+    for (auto* folder : { "Bass", "Leads", "Plucks", "Pads", "Keys & Bells", "Weird FX", "Evolving & Granular" })
     {
         juce::PopupMenu sub;
         for (int i = 0; i < (int) all.size(); ++i)
             if (all[(size_t) i].cat != nullptr && juce::String (all[(size_t) i].cat) == folder) sub.addItem (2000 + i, all[(size_t) i].name);
         pack.addSubMenu (folder, sub);
     }
+    juce::PopupMenu evoPack;
+    for (auto* folder : { "Glitter & Shimmer", "Granular Clouds", "Evolving Pads", "Warped Grains", "Weird Evolve" })
+    {
+        juce::PopupMenu sub;
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (all[(size_t) i].cat != nullptr && juce::String (all[(size_t) i].cat) == folder) sub.addItem (2000 + i, all[(size_t) i].name);
+        evoPack.addSubMenu (folder, sub);
+    }
+    pack.addSubMenu ("Evolve Pack (200 granular / glitter)", evoPack);
     pool.addSeparator();
     pool.addSubMenu ("HumWave Serum Pack", pack);
     juce::PopupMenu store;
@@ -192,6 +312,10 @@ static void addSerumPackMenu (juce::PopupMenu& pool, const std::vector<PoolInstr
         store.addSubMenu (folder, sub);
     }
     pool.addSubMenu ("Sonic Store", store);
+    juce::PopupMenu hit;
+    for (int i = 0; i < (int) all.size(); ++i)
+        if (all[(size_t) i].cat != nullptr && juce::String ("HM") == all[(size_t) i].cat) hit.addItem (2000 + i, all[(size_t) i].name);
+    pool.addSubMenu ("HitMaker (808 maker)", hit);
 }
 static const std::vector<PoolInstrument>& instrumentPool()
 {
@@ -231,6 +355,19 @@ static const std::vector<PoolInstrument>& instrumentPool()
     });
     return pool;
 }
+// HumHouse 808's: every 808 sample in the bundled kits, grouped by kit
+static const std::vector<juce::File>& humHouse808s()
+{
+    static const std::vector<juce::File> list = [] {
+        std::vector<juce::File> v;
+        for (const auto& e : juce::RangedDirectoryIterator (bundledSoundsRoot(), true, "*.wav;*.flac;*.aif;*.aiff;*.mp3;*.ogg"))
+            if (e.getFile().getFileName().containsIgnoreCase ("808")) v.push_back (e.getFile());
+        std::sort (v.begin(), v.end(), [] (const juce::File& a, const juce::File& b) { return a.getFullPathName().compareNatural (b.getFullPathName()) < 0; });
+        if (v.size() > 400) v.resize (400);
+        return v;
+    }();
+    return list;
+}
 static Channel poolChannel (const PoolInstrument& e)
 {
     Channel c; c.type = ChannelType::Synth; c.mixerTrack = -1;
@@ -241,6 +378,7 @@ static Channel poolChannel (const PoolInstrument& e)
     sp.detune = e.det; sp.unison = e.uni; sp.drive = e.drv; sp.fmRatio = e.fmr; sp.fmIndex = e.fmi; sp.morph = e.mor; sp.noise = e.noi;
     sp.lfoRate = e.lfo; sp.vibrato = e.vib;
     sp.wtKind = e.table; sp.wtPos = e.pos; sp.warp = e.warp; sp.warpAmt = e.warpAmt; sp.uniBlend = e.blend; sp.sub = e.sub;
+    sp.grain = e.grain; sp.evolve = e.evolve; sp.bWarp = e.bWarp; sp.bStart = e.bStart; sp.bDrop = e.bDrop; sp.bClick = e.bClick;
     sp.xWave = e.xw; sp.xVol = e.xv; sp.xSemi = e.xs; sp.xFine = e.xf;
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
@@ -529,6 +667,39 @@ struct Row : public juce::Component
         m.addItem (1, "Sample...");
         m.addItem (2, "Synth (keys / lead)");
         m.addItem (3, "808 (glide bass)");
+        {
+            juce::PopupMenu hit, ours;
+            const char* starts[] { "Sine", "Triangle", "Saw", "Square" };
+            for (int k = 0; k < 4; ++k) hit.addItem (4990 + k, juce::String ("New 808 from ") + starts[k]);
+            hit.addSeparator();
+            const auto& h = humHouse808s();
+            juce::String lastKit; juce::PopupMenu kit;
+            auto flush = [&] { if (lastKit.isNotEmpty()) ours.addSubMenu (lastKit, kit); kit = {}; };
+            for (int i = 0; i < (int) h.size(); ++i)
+            {
+                const auto k = h[(size_t) i].getRelativePathFrom (bundledSoundsRoot()).upToFirstOccurrenceOf ("/", false, false).upToFirstOccurrenceOf ("\\", false, false);
+                if (k != lastKit) { flush(); lastKit = k; }
+                kit.addItem (5000 + i, h[(size_t) i].getFileNameWithoutExtension());
+            }
+            flush();
+            hit.addSubMenu ("HumHouse 808's", ours, ! h.empty());
+            hit.addItem (4999, "My 808's... (Downloads or any folder)");
+            {
+                juce::PopupMenu mergeM, ours2;
+                for (int i = 0; i < (int) h.size(); ++i) ours2.addItem (6000 + i, h[(size_t) i].getParentDirectory().getFileName() + " / " + h[(size_t) i].getFileNameWithoutExtension());
+                mergeM.addSubMenu ("HumHouse 808's", ours2, ! h.empty());
+                mergeM.addItem (5998, "My 808's...");
+                mergeM.addSeparator();
+                mergeM.addItem (5997, "None (use 1 808)");
+                auto* cur = s.channel (channelId);
+                hit.addSubMenu ("Merge a 2nd 808 (by %)", mergeM, cur != nullptr && cur->type == ChannelType::Sampler);
+            }
+            hit.addSeparator();
+            const auto& all = instrumentPool();
+            for (int i = 0; i < (int) all.size(); ++i)
+                if (all[(size_t) i].cat != nullptr && juce::String ("HM") == all[(size_t) i].cat) hit.addItem (2000 + i, all[(size_t) i].name);
+            m.addSubMenu ("HitMaker (808 maker)", hit);
+        }
         pool.addSectionHeader ("Psychedelic synths");
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
@@ -560,6 +731,39 @@ struct Row : public juce::Component
             }
             else if (r == 2) replaceSound ([] (Channel& n) { n.type = ChannelType::Synth; n.name = "Synth"; n.colour = juce::Colour (0xff8a7dff); });
             else if (r == 3) replaceSound ([] (Channel& n) { n.type = ChannelType::Synth; n.name = "808"; n.synth.wave = 4; n.glide = 0.08f; n.mono = true; n.rootKey = 36; n.colour = juce::Colour (0xffff5d8a); });
+            else if (r >= 4990 && r < 4994)
+                replaceSound ([r] (Channel& n) { n.type = ChannelType::Synth; n.name = "HitMaker 808"; n.synth.wave = 4; n.synth.bStart = r - 4990; n.synth.sustain = 0.0f; n.synth.decay = 2.5f;
+                                                 n.glide = 0.08f; n.mono = true; n.rootKey = 36; n.colour = juce::Colour (0xffff5d8a); });
+            else if (r == 5997 || r == 5998 || (r >= 6000 && r < 6000 + (int) humHouse808s().size()))
+            {
+                const int id = channelId;
+                auto setLayer = [this, id] (const juce::File& f) {
+                    s.edit ("Merge 2nd 808", [&] (Project&) { if (auto* ch = s.channel (id)) { ch->smpLayerFile = f; if (f != juce::File() && ch->smpLayerMix <= 0.0f) ch->smpLayerMix = 0.5f; } });
+                };
+                if (r == 5997) setLayer ({});
+                else if (r >= 6000) setLayer (humHouse808s()[(size_t) (r - 6000)]);
+                else
+                {
+                    chooser = std::make_unique<juce::FileChooser> ("2nd 808 to merge", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [setLayer] (const juce::FileChooser& fc) {
+                        if (fc.getResult().existsAsFile()) setLayer (fc.getResult()); });
+                }
+            }
+            else if (r == 4999 || (r >= 5000 && r < 5000 + (int) humHouse808s().size()))
+            {
+                auto use808 = [this] (const juce::File& f) {
+                    replaceSound ([&] (Channel& n) { n.type = ChannelType::Sampler; n.sampleFile = f; n.keyTrack = true; n.rootKey = 36; n.mono = true; n.glide = 0.08f;
+                                                     n.cutItself = true; n.name = f.getFileNameWithoutExtension(); n.colour = juce::Colour (0xffff5d8a); });
+                    if (! s.engine.isPlaying()) s.engine.previewFile (f);
+                };
+                if (r >= 5000) use808 (humHouse808s()[(size_t) (r - 5000)]);
+                else
+                {
+                    chooser = std::make_unique<juce::FileChooser> ("My 808's", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+                    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [use808] (const juce::FileChooser& fc) {
+                        if (fc.getResult().existsAsFile()) use808 (fc.getResult()); });
+                }
+            }
             else if (r >= 2000 && r < 2000 + (int) instrumentPool().size())
                 replaceSound ([r] (Channel& n) { n = poolChannel (instrumentPool()[(size_t) (r - 2000)]); });
             else if (r >= 1000 && r - 1000 < types.size())

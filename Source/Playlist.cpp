@@ -237,6 +237,34 @@ static std::vector<ToneNote> toneNotes (const std::vector<float>& cv)
     }
     return out;
 }
+// Audio to MIDI: pitch curve -> held notes; start/end in beats from the clip start, velocity from loudness
+static NoteList audioToNotes (const juce::AudioBuffer<float>& b, double sr, double bpm)
+{
+    NoteList out;
+    const auto cv = toneCurve (b, sr);
+    const auto tn = toneNotes (cv);
+    float peak = 1e-6f;
+    std::vector<float> rms (tn.size());
+    for (size_t k = 0; k < tn.size(); ++k)
+    {
+        const int a = tn[k].a * toneHop + toneWin / 4, e = juce::jmin (b.getNumSamples(), tn[k].b * toneHop + toneWin * 3 / 4);
+        double acc = 0; for (int i = a; i < e; ++i) { const float v = 0.5f * (b.getSample (0, i) + b.getSample (1, i)); acc += v * v; }
+        rms[k] = (float) std::sqrt (acc / juce::jmax (1, e - a)); peak = juce::jmax (peak, rms[k]);
+    }
+    const double beatsPerSample = bpm / 60.0 / sr;
+    for (size_t k = 0; k < tn.size(); ++k)
+    {
+        Note n;
+        n.key = juce::jlimit (0, 127, juce::roundToInt (tn[k].sung));
+        n.start = (tn[k].a * toneHop + toneWin / 4) * beatsPerSample;
+        n.length = juce::jmax (1.0 / 32.0, (tn[k].b - tn[k].a) * toneHop * beatsPerSample);
+        n.velocity = juce::jlimit (0.25f, 1.0f, 0.35f + 0.65f * std::sqrt (rms[k] / peak));
+        if (! out.empty() && out.back().key == n.key && n.start - (out.back().start + out.back().length) < 1.0 / 32.0)
+            out.back().length = n.start + n.length - out.back().start;   // a wobble inside one sung note: keep it one note
+        else out.push_back (n);
+    }
+    return out;
+}
 static juce::AudioBuffer<float> toneRender (const juce::AudioBuffer<float>& in, double sr, const std::vector<ToneNote>& notes)
 {
     juce::AudioBuffer<float> b (in);
@@ -484,6 +512,18 @@ public:
         strength.onDragEnd = [this] { changedSoon(); };
         strength.onValueChange = [this] { if (! strength.isMouseButtonDown()) changedSoon(); };
         addAndMakeVisible (strength);
+        setupButton (presets, "PRESETS", "Ready-made HumTime settings");
+        presets.onClick = [this] {
+            juce::PopupMenu m;
+            for (int i = 0; i < (int) humTimePresets().size(); ++i) m.addItem (i + 1, humTimePresets()[(size_t) i].name);
+            m.showMenuAsync ({}, [this] (int r) {
+                if (r < 1) return;
+                const auto& p = humTimePresets()[(size_t) r - 1];
+                grid = p.grid; strength.setValue (p.strength, juce::dontSendNotification);
+                for (int i = 0; i < gridBtns.size(); ++i) gridBtns[i]->setToggleState (std::abs ((0.125 * std::pow (2.0, 3 - i)) - grid) < 1.0e-6, juce::dontSendNotification);
+                changedSoon(); });
+        };
+        addAndMakeVisible (presets);
         changedSoon();   // opening it warps with the picked grid straight away
         setSize (820, 220);
     }
@@ -493,6 +533,7 @@ public:
         layoutTop (r);
         for (auto* b : gridBtns) { b->setBounds (r.removeFromLeft (54)); r.removeFromLeft (4); }
         r.removeFromLeft (8);
+        presets.setBounds (r.removeFromRight (76)); r.removeFromRight (6);
         strength.setBounds (r);
     }
     void paint (juce::Graphics& g) override
@@ -525,6 +566,17 @@ private:
     double grid;
     juce::OwnedArray<juce::TextButton> gridBtns;
     juce::Slider strength;
+    juce::TextButton presets;
+    struct HTPreset { const char* name; double grid; double strength; };
+    static const std::vector<HTPreset>& humTimePresets()
+    {
+        static const std::vector<HTPreset> p {
+            { "Tight 16ths (dead on)", 0.25, 100 }, { "Tight 8ths", 0.5, 100 }, { "Tight 32nds (rolls)", 0.125, 100 },
+            { "Quarter lock (half-time)", 1.0, 100 }, { "Keep feel 16ths (60%)", 0.25, 60 }, { "Keep feel 8ths (60%)", 0.5, 60 },
+            { "Light touch 16ths (35%)", 0.25, 35 }, { "Vocal pocket (8ths 50%)", 0.5, 50 }, { "Drum tighten (16ths 85%)", 0.25, 85 },
+            { "Rap flow (16ths 70%)", 0.25, 70 }, { "Hat rolls clean (32nds 90%)", 0.125, 90 }, { "Loose groove (8ths 25%)", 0.5, 25 } };
+        return p;
+    }
 };
 
 static bool isSurprise (const Clip& c) { return c.isAudio() && c.audioFile.getFileName().contains ("_surprise"); }
@@ -1258,8 +1310,9 @@ public:
             {
                 const int uid = p.clips[(size_t) i].uid;
                 juce::PopupMenu m;
-                m.addItem (1, "Split stems (Drums, Bass, Vocals, Melodies)");
-                m.showMenuAsync ({}, [this, uid] (int r) { if (r == 1) splitClipStems (uid); });
+                for (int k = 0; k < NumStemSets; ++k) m.addItem (1 + k, stemSetLabel (k));
+                m.addItem (10, "Audio to MIDI (melody to a new pattern)");
+                m.showMenuAsync ({}, [this, uid] (int r) { if (r >= 1 && r <= NumStemSets) splitClipStems (uid, r - 1); else if (r == 10) audioToMidi (uid); });
                 return;
             }
            #endif
@@ -1934,7 +1987,7 @@ private:
         if (writeClipAudio (f, out, sr)) useRendered (s, uid, f, "HumTime");
     }
 
-    void splitClipStems (int uid)
+    void splitClipStems (int uid, int set = StemSetMain)
     {
         const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
         if (cp == nullptr || ! cp->isAudio() || ! cp->audioFile.existsAsFile()) return;
@@ -1946,27 +1999,59 @@ private:
         addAndMakeVisible (splitBars.add (new SplitProgress (prog, c.audioFile.getFileNameWithoutExtension())));
         placeSplitBars();
         juce::Component::SafePointer<Playlist> safe (this);
-        juce::Thread::launch ([safe, c, dir, secs, prog] {
-            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir, prog.get());
-            juce::MessageManager::callAsync ([safe, c, files, prog] {
+        juce::Thread::launch ([safe, c, dir, secs, prog, set] {
+            const auto files = splitStemsToFiles (c.audioFile, c.sourceOffset, secs, dir, set, prog.get());
+            juce::MessageManager::callAsync ([safe, c, files, prog, set] {
                 auto* pl = safe.getComponent();
                 if (pl == nullptr) return;
                 for (int i = pl->splitBars.size(); --i >= 0;)
                     if (pl->splitBars[i]->prog == prog) pl->splitBars.remove (i);
                 pl->placeSplitBars();
-                if (files[0] == juce::File()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Stem Splitter", "Couldn't split this clip. The original clip is unchanged."); return; }
-                pl->s.edit ("Split stems", [c, files] (Project& p) {
-                    const juce::uint32 cols[] { 0xffff5d5d, 0xff3d9bff, 0xffffc93d, 0xff4ad991 };
-                    for (int k = 0; k < NumStems; ++k)
+                if (files.empty()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Stem Splitter", "Couldn't split this clip. The original clip is unchanged."); return; }
+                pl->s.edit ("Split stems", [c, files, set] (Project& p) {
+                    for (int k = 0; k < (int) files.size(); ++k)
                     {
                         const int at = juce::jmin ((int) p.lanes.size(), c.lane + 1 + k);
                         insertLane (p, at);
-                        auto& l = p.lanes[(size_t) at]; l.name = stemName (k); l.colour = juce::Colour (cols[k]);
+                        auto& l = p.lanes[(size_t) at]; l.name = stemName (set, k); l.colour = juce::Colour (stemColour (set, k));
                         Clip n = c; n.uid = p.newUid(); n.lane = at; n.audioFile = files[(size_t) k]; n.sourceOffset = 0;
                         n.selected = false; n.group = 0; n.takeGroup = 0; n.colour = {}; n.mixerTrack = -1; n.muted = false;
                         p.clips.push_back (n);
                     }
                     for (auto& o : p.clips) if (o.uid == c.uid) o.muted = true;   // the original stays, muted
+                });
+            });
+        });
+    }
+    // Audio to MIDI: the clip's melody (one note at a time: vocals, leads, bass, 808s) becomes a pattern on a new synth channel, on a new track under the clip
+    void audioToMidi (int uid)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio() || ! cp->audioFile.existsAsFile()) return;
+        const Clip c = *cp;
+        const double bpm = s.p().bpm;
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::Thread::launch ([safe, c, bpm] {
+            NoteList notes;
+            juce::AudioBuffer<float> in; double sr = 0;
+            if (readClipAudio (c, bpm, in, sr)) notes = audioToNotes (in, sr, bpm);
+            juce::MessageManager::callAsync ([safe, c, notes] {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr) return;
+                if (notes.empty()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Audio to MIDI", "No clear notes found. Audio to MIDI reads one note at a time (vocals, leads, bass, 808s); split stems first for a full mix."); return; }
+                pl->s.edit ("Audio to MIDI", [c, notes] (Project& p) {
+                    const auto nm = c.audioFile.getFileNameWithoutExtension() + " MIDI";
+                    Channel ch; ch.name = nm; ch.type = ChannelType::Synth; ch.mixerTrack = -1; ch.colour = juce::Colour (0xff4ad991);
+                    ch.synth.wave = 6; ch.synth.fmRatio = 1.0f; ch.synth.fmIndex = 1.2f; ch.synth.attack = 0.003f; ch.synth.decay = 0.6f; ch.synth.sustain = 0.5f; ch.synth.release = 0.3f;
+                    const int id = p.addChannel (ch);
+                    Pattern pat; pat.name = nm; pat.colour = juce::Colour (0xff4ad991); pat.notes[id] = notes;
+                    p.patterns.push_back (pat);
+                    const int at = juce::jmin ((int) p.lanes.size(), c.lane + 1);
+                    insertLane (p, at);
+                    p.lanes[(size_t) at].name = nm;
+                    Clip n; n.uid = p.newUid(); n.lane = at; n.start = c.start; n.patternIndex = (int) p.patterns.size() - 1;
+                    n.length = juce::jmax (c.length, p.patterns.back().lengthBeats());
+                    p.clips.push_back (n);
                 });
             });
         });
@@ -2143,7 +2228,12 @@ private:
         }
         if (clip.isDrummer()) m.addItem (10, "Drummer settings (kit, style, mix)...");
        #if ! HHS_LICENSED
-        m.addItem (11, "Split stems (Drums, Bass, Vocals, Melodies)", clip.isAudio());
+        {
+            juce::PopupMenu stm;
+            for (int k = 0; k < NumStemSets; ++k) stm.addItem (360 + k, stemSetLabel (k));
+            m.addSubMenu ("Split stems (drums apart, snare alone, melodies apart...)", stm, clip.isAudio());
+        }
+        m.addItem (365, "Audio to MIDI (melody to a new pattern)", clip.isAudio());
        #endif
        #endif
         std::vector<AutoTarget> autoT;
@@ -2205,7 +2295,8 @@ private:
                 });
                 return;
             }
-            if (r == 11) { splitClipStems (uid); return; }
+            if (r >= 360 && r < 360 + NumStemSets) { splitClipStems (uid, r - 360); return; }
+            if (r == 365) { audioToMidi (uid); return; }
             if (r == 12 || r == 13) { stretchMode = r - 12; return; }
             if (r == 10) { for (auto& o : s.p().clips) if (o.uid == uid && o.isDrummer()) { openChannelEditor (s, o.drummer); break; } return; }
             if (r == 9) { for (auto& o : s.p().clips) if (o.uid == uid) { findKeyForClip (o); break; } return; }
@@ -2424,19 +2515,38 @@ juce::PopupMenu automateMenu (Studio& s, std::vector<AutoTarget>& out, int base,
         add (m, AutoChanPitch, ch->name + " - Pitch", "Pitch");
         m.addSeparator();
     }
-    if (track >= 0 && track < (int) p.mixer.size())
+    auto insName = [&] (int t) { auto& mt = p.mixer[(size_t) t]; return mt.name.isNotEmpty() ? mt.name : t == 0 ? juce::String ("Master") : juce::String ("Insert ") + juce::String (t); };
+    auto addInsert = [&] (juce::PopupMenu& mm, int t, int onlyFx)
     {
-        auto& mt = p.mixer[(size_t) track];
-        const auto ins = mt.name.isNotEmpty() ? mt.name : juce::String ("Insert ") + juce::String (track);
-        add (m, AutoInsertVol, ins + " - Volume", ins + " volume");
-        add (m, AutoInsertPan, ins + " - Pan", ins + " pan");
+        auto& mt = p.mixer[(size_t) t];
+        const auto ins = insName (t);
+        auto addT = [&] (int kind, const juce::String& name, const juce::String& label, const juce::String& param)
+        {
+            AutoTarget a; a.kind = kind; a.track = t; a.channel = channelId; a.name = name; a.param = param;
+            mm.addItem (base + (int) out.size(), label); out.push_back (a);
+        };
+        addT (AutoInsertVol, ins + " - Volume", ins + " volume", {});
+        addT (AutoInsertPan, ins + " - Pan", ins + " pan", {});
+        for (auto& sd : mt.sends)
+            if (sd.target >= 0 && sd.target < (int) p.mixer.size() && sd.target != t)
+                addT (AutoSendLevel, ins + " -> " + insName (sd.target) + " send", "Send to " + insName (sd.target), juce::String (sd.target));
         for (auto& f : mt.fx)
         {
-            if (fxUid > 0 && f.uid != fxUid) continue;
-            if (fxUid > 0) { m.addSeparator(); addFxAutoItems (s, m, out, base, track, f); }
-            else { juce::PopupMenu sub; addFxAutoItems (s, sub, out, base, track, f); m.addSubMenu (fxSlotName (s, track, f), sub); }
+            if (onlyFx > 0 && f.uid != onlyFx) continue;
+            if (onlyFx > 0) { mm.addSeparator(); addFxAutoItems (s, mm, out, base, t, f); }
+            else { juce::PopupMenu sub; addFxAutoItems (s, sub, out, base, t, f); mm.addSubMenu (fxSlotName (s, t, f), sub); }
         }
+    };
+    if (track >= 0 && track < (int) p.mixer.size())
+        addInsert (m, track, fxUid);
+    juce::PopupMenu buses;   // any other insert / bus / master: link the clip straight to it
+    for (int t = 0; t < (int) p.mixer.size(); ++t)
+    {
+        if (t == track) continue;
+        juce::PopupMenu bm; addInsert (bm, t, 0);
+        buses.addSubMenu (insName (t), bm);
     }
+    if (p.mixer.size() > 1 || track != 0) { m.addSeparator(); m.addSubMenu ("Buses / other inserts", buses); }
     return m;
 }
 void createAutomationClip (Studio& s, const AutoTarget& t, int belowLane)
@@ -2446,6 +2556,11 @@ void createAutomationClip (Studio& s, const AutoTarget& t, int belowLane)
     if (t.kind == AutoInsertVol || t.kind == AutoInsertPan)
     {
         if (t.track >= 0 && t.track < (int) p.mixer.size()) v = autoFromValue (t.kind, t.kind == AutoInsertVol ? p.mixer[(size_t) t.track].volume : p.mixer[(size_t) t.track].pan);
+    }
+    else if (t.kind == AutoSendLevel)
+    {
+        if (t.track >= 0 && t.track < (int) p.mixer.size())
+            for (auto& sd : p.mixer[(size_t) t.track].sends) if (sd.target == t.param.getIntValue()) v = sd.level;
     }
     else if (t.kind == AutoFxParam)
     {

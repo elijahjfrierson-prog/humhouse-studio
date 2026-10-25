@@ -2538,6 +2538,54 @@ int main()
         }
         std::printf ("3x Oscillation peak %.2f, HumWave 12 tables + 13 warps + sample-to-wavetable render and round-trip\n", p3);
     }
+    // HitMaker benchmarks: every start wave x every 808 warp keeps its low end, punch, stays finite; sampled 808 warp + 2nd 808 merge
+    {
+        auto bench = [] (const Channel& c, float& sub, float& punch, float& grit, double& cpu)
+        {
+            auto inst = createInstrument (c, nullptr, 48000.0);
+            const int n = 48000 * 2; juce::AudioBuffer<float> b (2, n); b.clear();
+            inst->noteOn (36, 0.9f, false);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            for (int at = 0; at < n; at += 256) inst->render (b, at, juce::jmin (256, n - at));
+            cpu = (juce::Time::getMillisecondCounterHiRes() - t0) / 2000.0;   // ms of CPU per ms of audio
+            juce::IIRFilter lp, lp2; lp.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 120.0)); lp2.setCoefficients (juce::IIRCoefficients::makeLowPass (48000.0, 1000.0));
+            double e = 0, el = 0, eh = 0; float pk = 0, body = 0; bool fin = true;
+            for (int i = 0; i < n; ++i)
+            {
+                const float x = b.getSample (0, i); fin &= std::isfinite (x);
+                const float l = lp.processSingleSampleRaw (x), m = lp2.processSingleSampleRaw (x);
+                e += x * x; el += l * l; eh += (x - m) * (x - m);
+                if (i < 960) pk = std::max (pk, std::abs (x));
+                if (i >= 4800 && i < 24000) body = std::max (body, std::abs (x));
+            }
+            sub = e > 0 ? (float) (el / e) : 0; grit = e > 0 ? (float) (eh / e) : 0; punch = body > 0 ? pk / body : 0;
+            return fin && e > 0;
+        };
+        const char* sn[] { "Sine", "Triangle", "Saw", "Square" };
+        const char* wn[] { "Clean", "Saturate", "Fold", "Hard clip", "Bitcrush", "Growl", "Tape" };
+        std::printf ("HitMaker benchmark (note C2, 2 s): low end = energy under 120 Hz, grit = energy over 1 kHz, punch = first 20 ms peak / body peak\n");
+        for (int st = 0; st < 4; ++st)
+            for (int w = 0; w < 7; ++w)
+            {
+                Channel c; c.type = ChannelType::Synth; c.synth.wave = 4; c.synth.bStart = st; c.synth.bWarp = w; c.synth.warpAmt = w ? 0.6f : 0.0f;
+                c.synth.bClick = 0.3f; c.synth.sustain = 0.0f; c.synth.decay = 2.5f; c.mono = true; c.rootKey = 36;
+                float sub = 0, punch = 0, grit = 0; double cpu = 0;
+                CHECK (bench (c, sub, punch, grit, cpu));
+                std::printf ("  %-8s %-9s low end %3.0f%%  grit %4.1f%%  punch %.2f  cpu %.3f%%\n", sn[st], wn[w], sub * 100, grit * 100, punch, cpu * 100);
+                if (st == 0) CHECK (sub > 0.4f);   // a sine 808 keeps its sub through every warp
+            }
+        auto mk = [] (double hz, int n) { auto b = std::make_shared<juce::AudioBuffer<float>> (1, n); for (int i = 0; i < n; ++i) b->setSample (0, i, 0.8f * (float) std::sin (juce::MathConstants<double>::twoPi * hz * i / 48000.0) * std::exp (-(float) i / (float) n * 3.0f)); return b; };
+        Channel sc; sc.type = ChannelType::Sampler; sc.smpWarp = 2; sc.smpWarpAmt = 1.0f; sc.smpLayerMix = 0.5f; sc.smpLayerWarp = 1; sc.smpLayerWarpAmt = 0.5f;
+        auto base = mk (55.0, 48000), layer = mk (65.0, 30000);
+        auto out = processSample (base, sc, 48000.0, 0.0, layer);
+        bool fin = out != nullptr && out->getNumSamples() == base->getNumSamples();
+        for (int i = 0; fin && i < out->getNumSamples(); ++i) fin &= std::isfinite (out->getSample (0, i));
+        CHECK (fin);
+        { const float pk = out->getMagnitude (0, 0, out->getNumSamples()); CHECK (pk > 0.3f && pk <= 1.0f); }   // warp keeps the level, no over-warp / clipping
+        sc.smpLayerMix = 0.0f; sc.smpWarp = 0;
+        CHECK (processSample (base, sc, 48000.0, 0.0, layer) == base);   // none = use 1 808, untouched
+        std::printf ("HitMaker sampled 808: warp + 2nd 808 merge (cut / stretched to length) keeps length %d and peak\n", out->getNumSamples());
+    }
 
     // A template shared as one file carries its sounds: it opens on another machine with every sample found
     {

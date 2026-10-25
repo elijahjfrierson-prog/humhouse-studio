@@ -652,7 +652,20 @@ const std::vector<PatchChain>& patchChains()
         { "Glitch stutter (glitch > crush > echo)", { "glitch", "crush", "delay" } },
         { "Grit lead (grit > flanger > EQ)", { "grit", "flanger", "eq" } },
         { "Peak-driven filter (Peak Controller > sweep)", { "peakctl", "filter" } },
-        { "Mix bus polish (strip > EQ > Purify)", { "strip", "steq7", "purify" } } };
+        { "Mix bus polish (strip > EQ > Purify)", { "strip", "steq7", "purify" } },
+        { "Vocal lead (EQ > 1176 > comp > echo)", { "steq7", "fet76", "comp", "delay" } },
+        { "Vocal space (EQ > chorus > room)", { "eq", "chorus", "verb" } },
+        { "Ad-lib phone (filter > crush > echo)", { "filter", "crush", "delay" } },
+        { "Rage lead (grit > wide > room)", { "grit", "wide", "verb" } },
+        { "Dirty 808 (grit > satur > limit)", { "grit", "satur", "limiter" } },
+        { "Clean 808 glue (EQ > comp > clip)", { "eq", "comp", "clip" } },
+        { "Hat sparkle (EQ > wide)", { "steq7", "wide" } },
+        { "Snare crack (gate > comp > clip)", { "stgate", "comp", "clip" } },
+        { "Dream keys (chorus > phase > room)", { "chorus", "phaser", "verb" } },
+        { "Glitter pad (flanger > echo > room)", { "flanger", "delay", "verb" } },
+        { "Tape lo-fi (satur > filter > echo)", { "satur", "filter", "delay" } },
+        { "Sidechain pump pad (pump > wide > room)", { "pump", "wide", "verb" } },
+        { "Master loud (dyn > max > limit)", { "stdyn", "stmax", "stlimit" } } };
     return c;
 }
 

@@ -1033,7 +1033,7 @@ struct SampleWaveView : juce::Component, private juce::Timer
         auto* c = s.channel (channelId);
         if (c == nullptr) return;
         const juce::String k = c->sampleFile.getFullPathName() + juce::String ((int) c->smpNormalize) + juce::String ((int) c->smpReverse)
-            + juce::String ((int) c->smpInvert) + juce::String ((int) c->smpDeclick) + juce::String ((int) c->smpTrim) + juce::String (c->smpBoostDb)
+            + juce::String ((int) c->smpInvert) + juce::String ((int) c->smpDeclick) + juce::String ((int) c->smpTrim) + juce::String (c->smpBoostDb) + "w" + juce::String (c->smpWarp) + juce::String (c->smpWarpAmt)
             + "|" + juce::String (c->smpFadeIn) + "|" + juce::String (c->smpFadeOut) + "|" + juce::String (c->stretchMode) + "|" + juce::String (c->stretchTime);
         if (k == key) return;
         key = k;
@@ -1621,6 +1621,14 @@ void openChannelEditor (Studio& s, int channelId)
     {
         smp.push_back ({ "smpNorm", "Normalize", 0, 1, 0, ch->smpNormalize ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpBoost", "Boost (dB)", -24, 24, 0, ch->smpBoostDb, {} });
+        smp.push_back ({ "smpWarp", "HitMaker 808 warp", 0, 6, 0, (float) ch->smpWarp, { "Clean", "Saturate", "Fold", "Hard clip", "Bitcrush", "Growl", "Tape" } });
+        smp.push_back ({ "smpWarpAmt", "808 warp amount", 0, 1, 0, ch->smpWarpAmt, {} });
+        if (ch->smpLayerFile != juce::File())
+        {
+            smp.push_back ({ "smpLayerMix", "Merge 2nd 808 %", 0, 1, 0, ch->smpLayerMix, {} });
+            smp.push_back ({ "smpLayerWarp", "2nd 808 warp", 0, 6, 0, (float) ch->smpLayerWarp, { "Clean", "Saturate", "Fold", "Hard clip", "Bitcrush", "Growl", "Tape" } });
+            smp.push_back ({ "smpLayerWarpAmt", "2nd 808 warp amount", 0, 1, 0, ch->smpLayerWarpAmt, {} });
+        }
         smp.push_back ({ "smpRev", "Reverse", 0, 1, 0, ch->smpReverse ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpInv", "Polarity", 0, 1, 0, ch->smpInvert ? 1.0f : 0.0f, { "Normal", "Inverted" } });
         smp.push_back ({ "smpDeclick", "Declick", 0, 1, 0, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
@@ -1659,6 +1667,16 @@ void openChannelEditor (Studio& s, int channelId)
             ins.push_back ({ "warp", "Warp", 0, (float) humWarpNames().size() - 1, 0, (float) sp.warp, names (humWarpNames()) });
             ins.push_back ({ "warpAmt", "Warp amount", 0, 1, 0, sp.warpAmt, {} });
             ins.push_back ({ "uniBlend", "Unison blend", 0, 1, 0.5f, sp.uniBlend, {} });
+            ins.push_back ({ "grain", "Granulize", 0, 1, 0, sp.grain, {} });
+            ins.push_back ({ "evolve", "Evolve (note grows)", 0, 1, 0, sp.evolve, {} });
+        }
+        if (sp.wave == 4)
+        {
+            ins.push_back ({ "bStart", "HitMaker start wave", 0, 3, 0, (float) sp.bStart, { "Sine", "Triangle", "Saw", "Square" } });
+            ins.push_back ({ "bWarp", "HitMaker 808 warp", 0, 6, 0, (float) sp.bWarp, { "Clean", "Saturate", "Fold", "Hard clip", "Bitcrush", "Growl", "Tape" } });
+            ins.push_back ({ "warpAmt", "808 warp amount", 0, 1, 0, sp.warpAmt, {} });
+            ins.push_back ({ "bDrop", "808 pitch drop", 0, 1, 0.5f, sp.bDrop, {} });
+            ins.push_back ({ "bClick", "808 click / punch", 0, 1, 0, sp.bClick, {} });
         }
         if (sp.wave == 9)
         {
@@ -1707,6 +1725,8 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "drive") sp.drive = v;
                 else if (id == "fmRatio") sp.fmRatio = v; else if (id == "fmIndex") sp.fmIndex = v; else if (id == "morph") sp.morph = v;
                 else if (id == "wtPos") sp.wtPos = v; else if (id == "warp") sp.warp = (int) v; else if (id == "warpAmt") sp.warpAmt = v;
+                else if (id == "grain") sp.grain = v; else if (id == "evolve") sp.evolve = v;
+                else if (id == "bWarp") sp.bWarp = (int) v; else if (id == "bStart") sp.bStart = (int) v; else if (id == "bDrop") sp.bDrop = v; else if (id == "bClick") sp.bClick = v;
                 else if (id == "uniBlend") sp.uniBlend = v; else if (id == "sub") sp.sub = v; else if (id == "wtKind") { sp.wtKind = (int) v; sp.wt.reset(); sp.wtName.clear(); }
                 else if (id.startsWith ("x") && id.length() == 3 && id[2] >= '1' && id[2] <= '3')
                 {
@@ -1719,6 +1739,8 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "cutGroup") c->cutGroup = (int) v; else if (id == "ampA") c->ampAttack = v;
                 else if (id == "ampH") c->ampHold = v; else if (id == "ampR") c->ampRelease = v;
                 else if (id == "smpNorm") c->smpNormalize = v > 0.5f; else if (id == "smpBoost") c->smpBoostDb = v;
+                else if (id == "smpWarp") c->smpWarp = (int) v; else if (id == "smpWarpAmt") c->smpWarpAmt = v;
+                else if (id == "smpLayerMix") c->smpLayerMix = v; else if (id == "smpLayerWarp") c->smpLayerWarp = (int) v; else if (id == "smpLayerWarpAmt") c->smpLayerWarpAmt = v;
                 else if (id == "smpRev") c->smpReverse = v > 0.5f; else if (id == "smpInv") c->smpInvert = v > 0.5f;
                 else if (id == "smpDeclick") c->smpDeclick = v > 0.5f; else if (id == "smpTrim") c->smpTrim = v > 0.5f;
                 else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;

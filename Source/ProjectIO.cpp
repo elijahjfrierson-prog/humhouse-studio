@@ -156,6 +156,9 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
         t.setProperty ("smpNorm", c.smpNormalize, nullptr); t.setProperty ("smpRev", c.smpReverse, nullptr); t.setProperty ("smpInv", c.smpInvert, nullptr);
         t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("keyTrack", c.keyTrack, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
+        t.setProperty ("smpWarp", c.smpWarp, nullptr); t.setProperty ("smpWarpAmt", c.smpWarpAmt, nullptr);
+        if (c.smpLayerFile != juce::File()) setFile (t, "layer", c.smpLayerFile);
+        t.setProperty ("layerMix", c.smpLayerMix, nullptr); t.setProperty ("layerWarp", c.smpLayerWarp, nullptr); t.setProperty ("layerWarpAmt", c.smpLayerWarpAmt, nullptr);
         t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
         t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
         t.setProperty ("tempoSync", c.tempoSync, nullptr); t.setProperty ("sampleBpm", c.sampleBpm, nullptr);
@@ -172,6 +175,8 @@ juce::ValueTree projectToTree (const Project& p)
             t.setProperty ("x3", x.joinIntoString (","), nullptr);
             t.setProperty ("wtPos", s.wtPos, nullptr); t.setProperty ("wtKind", s.wtKind, nullptr);
             t.setProperty ("wwp", s.warp, nullptr); t.setProperty ("wwa", s.warpAmt, nullptr); t.setProperty ("wub", s.uniBlend, nullptr); t.setProperty ("sub", s.sub, nullptr);
+            t.setProperty ("wgr", s.grain, nullptr); t.setProperty ("wev", s.evolve, nullptr);
+            t.setProperty ("bwp", s.bWarp, nullptr); t.setProperty ("bst", s.bStart, nullptr); t.setProperty ("bdr", s.bDrop, nullptr); t.setProperty ("bck", s.bClick, nullptr);
             if (s.wt != nullptr && ! s.wt->empty())
             {
                 t.setProperty ("wt", juce::MemoryBlock (s.wt->data(), s.wt->size() * sizeof (float)).toBase64Encoding(), nullptr);
@@ -326,7 +331,9 @@ Project projectFromTree (const juce::ValueTree& root)
         c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
-        c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
+        c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpWarp = t.getProperty ("smpWarp", 0); c.smpWarpAmt = t.getProperty ("smpWarpAmt", 0.0f);
+        if (t.hasProperty ("layer")) c.smpLayerFile = readFile (t, "layer");
+        c.smpLayerMix = t.getProperty ("layerMix", 0.5f); c.smpLayerWarp = t.getProperty ("layerWarp", 0); c.smpLayerWarpAmt = t.getProperty ("layerWarpAmt", 0.0f); c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
         c.tempoSync = t.getProperty ("tempoSync", true); c.sampleBpm = t.getProperty ("sampleBpm", 0.0f);
         // v1 projects turned KEY off for every non-808 sample, so Piano Roll notes all played the same pitch
@@ -349,6 +356,8 @@ Project projectFromTree (const juce::ValueTree& root)
                 }
             s.wtPos = t["wtPos"]; s.wtKind = t["wtKind"];
             s.warp = t.getProperty ("wwp", 0); s.warpAmt = t.getProperty ("wwa", 0.0f); s.uniBlend = t.getProperty ("wub", 0.5f); s.sub = t.getProperty ("sub", 0.0f);
+            s.grain = t.getProperty ("wgr", 0.0f); s.evolve = t.getProperty ("wev", 0.0f);
+            s.bWarp = t.getProperty ("bwp", 0); s.bStart = t.getProperty ("bst", 0); s.bDrop = t.getProperty ("bdr", 0.5f); s.bClick = t.getProperty ("bck", 0.0f);
             juce::MemoryBlock mb;
             if (t.hasProperty ("wt") && mb.fromBase64Encoding (t["wt"].toString()) && mb.getSize() >= humWaveFrameSize * sizeof (float))
             {

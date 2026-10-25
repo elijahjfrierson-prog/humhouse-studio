@@ -1582,11 +1582,13 @@ public:
                     const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
                     bool rough = false; int wn = 512; float hz = 0, aper = 1;
                     auto detect = [&] (int len) {
-                        len = juce::jlimit (256, 1024, len);
-                        std::array<float, 1024> win {};
+                        const bool low = lastMidi == 0 || lastMidi < 50;   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
+                        len = juce::jlimit (256, low ? 1536 : 1024, len);
+                        std::array<float, 1536> win {};
                         for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
                         wn = len;
-                        return detectPitchYin (win.data(), len, dsr, th, fbk, 55.0f, 1100.0f, &rough, &aper);
+                        const float h = detectPitchYin (win.data(), len, dsr, th, fbk, low ? 42.0f : 55.0f, 1100.0f, &rough, &aper);
+                        return h > 0.0f && h < 55.0f && (rough || aper > 0.2f) ? 0.0f : h;   // below 55 Hz only a clean baritone read counts (noise / consonants never)
                     };
                     if (lastMidi > 0) hz = detect ((int) ((3.2 - 0.3 * snap) * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
                     if (hz <= 0) hz = detect (512);
