@@ -60,10 +60,16 @@ struct SynthParams
     // wave 10 = HumWave wavetable: frames of humWaveFrameSize samples, scanned by wtPos (Morph = LFO sweep depth)
     float wtPos = 0.0f;
     int   wtKind = 0;                                   // factory table, used when no custom table is loaded
+    int   warp = 0; float warpAmt = 0.0f;                 // Serum-style warp of the HumWave read (see humWarpNames)
+    float uniBlend = 0.5f, sub = 0.0f;                   // unison side-voice level, sine sub one octave down
     std::shared_ptr<const std::vector<float>> wt;       // custom table (picture to sound, sample to wavetable)
     juce::String wtName;
 };
 constexpr int humWaveFrameSize = 256;
+juce::File bundledSoundsRoot();
+struct Project;
+// drag-in drum MIDI (GM keys: 36 kick, 38 snare, 39 clap, 42 hat, 46 open hat, rest perc) -> new pattern on matching channels; returns its index or -1
+int importMidiPattern (Project& p, const juce::File& midiFile);
 
 // Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
 struct DrummerParams

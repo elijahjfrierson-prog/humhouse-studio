@@ -109,6 +109,77 @@ Project Project::createDefault()
     return p;
 }
 
+juce::File bundledSoundsRoot()
+{
+   #if JUCE_MAC
+    return juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Sounds");
+   #else
+    return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getSiblingFile ("Sounds");
+   #endif
+}
+
+// starter kit: the bundled Classic Trap (Maajins) sounds, falling back to the built-in drums if the folder isn't installed
+static juce::File kitSound (const char* dir, const std::vector<const char*>& prefer)
+{
+    const auto d = bundledSoundsRoot().getChildFile ("Classic Trap").getChildFile (dir);
+    if (! d.isDirectory()) return {};
+    for (auto* n : prefer)
+        for (auto* ext : { ".flac", ".wav" })
+            if (auto f = d.getChildFile (juce::String (n) + ext); f.existsAsFile()) return f;
+    auto all = d.findChildFiles (juce::File::findFiles, false, "*.flac;*.wav");
+    all.sort();
+    return all.isEmpty() ? juce::File() : all[0];
+}
+
+int importMidiPattern (Project& p, const juce::File& file)
+{
+    juce::FileInputStream in (file);
+    juce::MidiFile mf;
+    if (! in.openedOk() || ! mf.readFrom (in)) return -1;
+    const short tf = mf.getTimeFormat();
+    const double tpq = tf > 0 ? (double) tf : 96.0;
+    static const char* roles[] { "Kick", "Clap", "Snare", "Hat", "Open Hat", "Perc" };
+    static const char* roleDirs[] { nullptr, "Claps & Snaps", "Snares", "Hi-Hats", "Open Hats", "Percs" };
+    auto roleOf = [] (int k) { switch (k) { case 35: case 36: return 0; case 39: return 1; case 38: case 40: return 2;
+                                            case 42: case 44: return 3; case 46: return 4; default: return 5; } };
+    int ids[6] { -1, -1, -1, -1, -1, -1 };
+    auto channelFor = [&] (int role) -> int
+    {
+        if (ids[role] >= 0) return ids[role];
+        const juce::String want (roles[role]);
+        for (auto& c : p.channels) if (c.name.equalsIgnoreCase (want)) return ids[role] = c.id;
+        for (auto& c : p.channels)
+            if (c.name.containsIgnoreCase (want) && (role != 3 || ! c.name.containsIgnoreCase ("open"))) return ids[role] = c.id;
+        Channel c; c.name = want; c.mixerTrack = -1;
+        c.colour = juce::Colour::fromHSV ((float) role / 8.0f, 0.65f, 0.95f, 1.0f);
+        c.builtinDrum = role < 5 ? role : 3;
+        if (roleDirs[role] != nullptr)
+            if (auto f = kitSound (roleDirs[role], {}); f.existsAsFile()) { c.type = ChannelType::Sampler; c.sampleFile = f; c.builtinDrum = -1; }
+        return ids[role] = p.addChannel (c);
+    };
+    Pattern pat; pat.name = file.getFileNameWithoutExtension(); pat.colour = juce::Colour (0xffff5a8a);
+    for (int t = 0; t < mf.getNumTracks(); ++t)
+    {
+        juce::MidiMessageSequence seq (*mf.getTrack (t));
+        seq.updateMatchedPairs();
+        for (auto* e : seq)
+        {
+            if (! e->message.isNoteOn()) continue;
+            const int id = channelFor (roleOf (e->message.getNoteNumber()));
+            Note n;
+            n.start = e->message.getTimeStamp() / tpq;
+            n.length = e->noteOffObject != nullptr ? juce::jmax (1.0 / 64.0, (e->noteOffObject->message.getTimeStamp() - e->message.getTimeStamp()) / tpq) : 0.125;
+            n.velocity = juce::jlimit (0.05f, 1.0f, e->message.getFloatVelocity());
+            for (auto& c : p.channels) if (c.id == id) n.key = c.rootKey;
+            pat.notes[id].push_back (n);
+        }
+    }
+    if (pat.notes.empty()) return -1;
+    for (auto& [id, nl] : pat.notes) std::sort (nl.begin(), nl.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    p.patterns.push_back (pat);
+    return (int) p.patterns.size() - 1;
+}
+
 Project Project::createDemo()
 {
     Project p;
@@ -123,6 +194,15 @@ Project Project::createDemo()
         if (i == 5) { c.type = ChannelType::Synth; c.synth.wave = 4; c.glide = 0.08f; c.mono = true; c.rootKey = 36;
                       c.synth.attack = 0.001f; c.synth.decay = 1.2f; c.synth.sustain = 0.6f; c.synth.release = 0.3f; c.synth.drive = 0.25f; }
         else        { c.builtinDrum = i; }
+        static const char* kitDirs[] { nullptr, "Claps & Snaps", "Snares", "Hi-Hats", "Open Hats", "808s" };
+        static const std::vector<const char*> kitPick[] { {}, { "basic", "smack dvd" }, { "memphis", "realistic" },
+                                                                    { "dmv", "PARANOID" }, { "gap", "infinite" }, { "slap mf", "trap mf" } };
+        if (kitDirs[i] != nullptr)
+            if (auto f = kitSound (kitDirs[i], kitPick[i]); f.existsAsFile())
+            {
+                c.type = ChannelType::Sampler; c.sampleFile = f; c.builtinDrum = -1;
+                if (i == 5) { c.keyTrack = true; c.cutItself = true; c.rootKey = 60; c.glide = 0.08f; c.mono = true; }
+            }
         c.colour = juce::Colour::fromHSV ((float) i / 8.0f, 0.65f, 0.95f, 1.0f);
         c.mixerTrack = -1;
         p.addChannel (c);
@@ -132,10 +212,10 @@ Project Project::createDemo()
     p.addChannel (keys);
 
     Pattern pat; pat.name = "Pattern 1";
-    // starter groove: kick on 1 & 3, clap on 2 & 4, 8th hats
-    for (int s : { 0, 8 }) pat.toggleStep (1, s, 60);
-    for (int s : { 4, 12 }) pat.toggleStep (2, s, 60);
-    for (int s = 0; s < 16; s += 2) pat.toggleStep (4, s, 60);
+    // trap starter: snare + clap on the half (beat 3), sparse kick, 8th hats with 16th sprinkles; no 808 pattern
+    for (int s : { 0, 10 }) pat.toggleStep (1, s, 60);
+    for (int ch : { 2, 3 }) pat.toggleStep (ch, 8, 60);
+    for (int s : { 0, 2, 4, 6, 7, 8, 10, 12, 13, 14 }) pat.toggleStep (4, s, 60);
     p.patterns.push_back (pat);
 
     for (int i = 0; i < 8; ++i)

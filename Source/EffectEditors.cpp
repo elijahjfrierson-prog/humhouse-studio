@@ -1087,6 +1087,119 @@ struct SampleWaveView : juce::Component, private juce::Timer
     std::vector<std::pair<float, float>> peaks; double seconds = 0; float fadeIn = 0, fadeOut = 0;
 };
 
+// HumWave oscillator view (Serum style): the frame stack in 3D, the playing frame with its warp in front.
+// Drag on it to draw the frame under WT position; right-click to go back to the factory table.
+struct HumWaveView : juce::Component, private juce::Timer
+{
+    HumWaveView (Studio& st, int id) : s (st), channelId (id) { startTimerHz (20); }
+    std::shared_ptr<const std::vector<float>> tableOf (const SynthParams& p) const
+    {
+        return p.wt != nullptr && p.wt->size() >= (size_t) humWaveFrameSize ? p.wt : humWaveFactory (p.wtKind);
+    }
+    void timerCallback() override
+    {
+        auto* c = s.channel (channelId);
+        if (c == nullptr) return;
+        const auto& p = c->synth;
+        const juce::String k = juce::String (p.wtKind) + "|" + juce::String (p.wtPos) + "|" + juce::String (p.warp) + "|" + juce::String (p.warpAmt)
+                             + "|" + juce::String (p.fmRatio) + "|" + juce::String ((juce::pointer_sized_int) p.wt.get());
+        if (k != key) { key = k; repaint(); }
+    }
+    static float frameRead (const std::vector<float>& t, int f, float ph)
+    {
+        const float x = ph * humWaveFrameSize;
+        const int i0 = (int) x & (humWaveFrameSize - 1), i1 = (i0 + 1) & (humWaveFrameSize - 1);
+        const float* a = t.data() + (size_t) f * humWaveFrameSize;
+        return a[i0] + (a[i1] - a[i0]) * (x - std::floor (x));
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::bg);
+        auto* c = s.channel (channelId);
+        if (c == nullptr) return;
+        const auto p = c->synth;
+        const auto tp = tableOf (p);
+        if (tp == nullptr) return;
+        const auto& t = *tp;
+        const int frames = (int) t.size() / humWaveFrameSize;
+        auto r = getLocalBounds().toFloat().reduced (10, 14);
+        const float dx = r.getWidth() * 0.18f, dy = r.getHeight() * 0.32f;
+        const float w = r.getWidth() - dx, h = r.getHeight() - dy;
+        auto path = [&] (int f, float ox, float oy, bool warped)
+        {
+            juce::Path pa;
+            for (int i = 0; i <= 160; ++i)
+            {
+                const float ph = (float) i / 160.0f;
+                auto rd = [&] (float q) { return frameRead (t, f, juce::jlimit (0.0f, 0.9999f, q)); };
+                const float y = warped ? humWarpRead (p.warp, p.warpAmt, juce::jmin (ph, 0.9999f), p.fmRatio, rd) : rd (ph);
+                const float px = r.getX() + ox + ph * w, py = r.getY() + oy + h * 0.5f * (1.0f - juce::jlimit (-1.2f, 1.2f, y) * 0.85f);
+                if (i == 0) pa.startNewSubPath (px, py); else pa.lineTo (px, py);
+            }
+            return pa;
+        };
+        const int cur = juce::jlimit (0, frames - 1, (int) std::round (p.wtPos * (float) (frames - 1)));
+        const int stepF = juce::jmax (1, frames / 16);
+        for (int f = frames - 1; f >= 0; f -= stepF)   // back to front
+        {
+            const float d = frames > 1 ? (float) f / (float) (frames - 1) : 0.0f;
+            g.setColour (col::accent2.withAlpha (0.10f + 0.12f * (1.0f - d)));
+            g.strokePath (path (f, dx * d, dy * (1.0f - d), false), juce::PathStrokeType (1.0f));
+        }
+        const float d = frames > 1 ? (float) cur / (float) (frames - 1) : 0.0f;
+        g.setColour (col::accent);
+        g.strokePath (path (cur, dx * d, dy * (1.0f - d), true), juce::PathStrokeType (2.2f));
+        g.setColour (col::dim); g.setFont (12.0f);
+        g.drawText ((p.wt != nullptr ? p.wtName : humWaveFactoryNames()[p.wtKind]) + "   frame " + juce::String (cur + 1) + "/" + juce::String (frames)
+                    + "   warp " + humWarpNames()[p.warp] + "   (drag to draw, right-click = factory)", getLocalBounds().reduced (8, 2), juce::Justification::topLeft);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        auto* c = s.channel (channelId);
+        if (c == nullptr) return;
+        if (e.mods.isPopupMenu())
+        {
+            s.live ([&] (Project&) { if (auto* ch = s.channel (channelId)) { ch->synth.wt.reset(); ch->synth.wtName.clear(); } });
+            s.commit ("HumWave factory table"); repaint(); return;
+        }
+        draft = *tableOf (c->synth);
+        lastX = -1; mouseDrag (e);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        auto* c = s.channel (channelId);
+        if (c == nullptr || draft.empty()) return;
+        const int frames = (int) draft.size() / humWaveFrameSize;
+        const int cur = juce::jlimit (0, frames - 1, (int) std::round (c->synth.wtPos * (float) (frames - 1)));
+        const float d = frames > 1 ? (float) cur / (float) (frames - 1) : 0.0f;
+        auto r = getLocalBounds().toFloat().reduced (10, 14);
+        const float dx = r.getWidth() * 0.18f, dy = r.getHeight() * 0.32f, w = r.getWidth() - dx, h = r.getHeight() - dy;
+        const int x = juce::jlimit (0, humWaveFrameSize - 1, (int) ((e.position.x - r.getX() - dx * d) / w * humWaveFrameSize));
+        const float y = juce::jlimit (-1.0f, 1.0f, (1.0f - (e.position.y - r.getY() - dy * (1.0f - d)) / (h * 0.5f)) / 0.85f);
+        const int a = lastX < 0 ? x : lastX;
+        const float ya = lastX < 0 ? y : lastY;
+        for (int i = juce::jmin (a, x); i <= juce::jmax (a, x); ++i)
+        {
+            const float f = a == x ? 1.0f : (float) (i - a) / (float) (x - a);
+            draft[(size_t) (cur * humWaveFrameSize + i)] = ya + (y - ya) * f;
+        }
+        lastX = x; lastY = y;
+        auto t = std::make_shared<const std::vector<float>> (draft);
+        s.live ([&] (Project&) { if (auto* ch = s.channel (channelId)) { ch->synth.wt = t; ch->synth.wtName = "Drawn"; } });
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (draft.empty()) return;
+        auto t = humWaveFromRaw (std::move (draft));
+        draft.clear();
+        s.live ([&] (Project&) { if (auto* ch = s.channel (channelId)) { ch->synth.wt = t; ch->synth.wtName = "Drawn"; } });
+        s.commit ("Draw wavetable"); repaint();
+    }
+    Studio& s; int channelId; juce::String key;
+    std::vector<float> draft; int lastX = -1; float lastY = 0;
+};
+
 // stacks pages top to bottom in one scrollable page (sampler MAIN: wave, sample, amp / INS)
 struct StackPage : juce::Component
 {
@@ -1539,9 +1652,13 @@ void openChannelEditor (Studio& s, int channelId)
         ins.push_back ({ "wave", "Wave", 0, 10, 0, (float) sp.wave, { "Saw", "Square", "Triangle", "Sine", "808", "Supersaw", "FM keys", "Morph", "Air", "3x Oscillation", "HumWave (wavetable)" } });
         if (sp.wave == 10)
         {
-            ins.push_back ({ "wtKind", sp.wt != nullptr ? "Table (now: " + sp.wtName + ")" : juce::String ("Table"), 0, 7, 0, (float) sp.wtKind,
-                             { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM" } });
-            ins.push_back ({ "wtPos", "Wavetable position", 0, 1, 0, sp.wtPos, {} });
+            auto names = [] (const juce::StringArray& a) { std::vector<const char*> v; for (auto& n : a) v.push_back (n.toRawUTF8()); return v; };
+            ins.push_back ({ "wtKind", sp.wt != nullptr ? "Table (now: " + sp.wtName + ")" : juce::String ("Table"), 0, (float) humWaveFactoryNames().size() - 1, 0,
+                             (float) sp.wtKind, names (humWaveFactoryNames()) });
+            ins.push_back ({ "wtPos", "WT position", 0, 1, 0, sp.wtPos, {} });
+            ins.push_back ({ "warp", "Warp", 0, (float) humWarpNames().size() - 1, 0, (float) sp.warp, names (humWarpNames()) });
+            ins.push_back ({ "warpAmt", "Warp amount", 0, 1, 0, sp.warpAmt, {} });
+            ins.push_back ({ "uniBlend", "Unison blend", 0, 1, 0.5f, sp.uniBlend, {} });
         }
         if (sp.wave == 9)
         {
@@ -1568,6 +1685,7 @@ void openChannelEditor (Studio& s, int channelId)
         ins.push_back ({ "fmIndex", "FM amount", 0, 8, 0, sp.fmIndex, {} });
         ins.push_back ({ "morph", "Morph", 0, 1, 0, sp.morph, {} });
         ins.push_back ({ "noise", "Air / noise", 0, 1, 0, sp.noise, {} });
+        ins.push_back ({ "sub", "Sub osc", 0, 1, 0, sp.sub, {} });
         func.push_back ({ "lfoRate", "LFO rate (Hz)", 0, 12, 0, sp.lfoRate, {} });
         func.push_back ({ "vibrato", "Vibrato (st)", 0, 1, 0, sp.vibrato, {} });
         func.push_back ({ "pitch", "Pitch (st)", -24, 24, 0, ch->pitch, {} });
@@ -1588,7 +1706,8 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
                 else if (id == "drive") sp.drive = v;
                 else if (id == "fmRatio") sp.fmRatio = v; else if (id == "fmIndex") sp.fmIndex = v; else if (id == "morph") sp.morph = v;
-                else if (id == "wtPos") sp.wtPos = v; else if (id == "wtKind") { sp.wtKind = (int) v; sp.wt.reset(); sp.wtName.clear(); }
+                else if (id == "wtPos") sp.wtPos = v; else if (id == "warp") sp.warp = (int) v; else if (id == "warpAmt") sp.warpAmt = v;
+                else if (id == "uniBlend") sp.uniBlend = v; else if (id == "sub") sp.sub = v; else if (id == "wtKind") { sp.wtKind = (int) v; sp.wt.reset(); sp.wtName.clear(); }
                 else if (id.startsWith ("x") && id.length() == 3 && id[2] >= '1' && id[2] <= '3')
                 {
                     const auto o = (size_t) (id[2] - '1');
@@ -1628,6 +1747,11 @@ void openChannelEditor (Studio& s, int channelId)
         auto* wave = new SampleWaveView (s, channelId); wave->setSize (560, 180);
         tabs->add ("MAIN", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
                                             new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP") }));
+    }
+    else if (ch->synth.wave == 10)   // Serum-style: the wavetable on top, draw on it, knobs below
+    {
+        auto* wv = new HumWaveView (s, channelId); wv->setSize (560, 200);
+        tabs->add ("OSC", new StackPage ({ wv, new ParamGrid (ch->name + "  |  HumWave", ins, setter, commit, kind) }));
     }
     else tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
     tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));

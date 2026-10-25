@@ -10,10 +10,192 @@ struct PoolInstrument
     int table = 0; float pos = 0;                                       // HumWave (wave 10): factory table + position
     std::array<int, 3> xw { 0, 1, 3 };                                   // 3x Oscillation (wave 9): shapes, levels, coarse, fine
     std::array<float, 3> xv { 1, 0, 0 }, xs { 0, 0, 0 }, xf { 0, 0, 0 };
+    int warp = 0; float warpAmt = 0, blend = 0.5f, sub = 0;              // HumWave Serum-style warp, unison blend, sub osc
+    const char* cat = nullptr;                                           // HumWave Serum Pack folder (nullptr = main list)
 };
+// HumWave Serum Pack: wavetable + warp presets. The Weird FX folder is voiced after the Triple S Hitters one-shots
+// (measured: ~6.5 kHz brightness, very noisy/gritty spectrum, ~3.7 s tails)
+static PoolInstrument wp (const char* cat, const char* name, juce::uint32 colour, int table, float pos, int warp, float warpAmt,
+                          int uni, float det, float blend, float a, float d, float s, float r, float cut, float res,
+                          float drv, float noi, float sub, float lfo, float mor, float glide = 0, bool mono = false, int root = 60, float fmr = 2)
+{
+    PoolInstrument e { name, colour, 10, a, d, s, r, cut, res, det, uni, drv, fmr, 0, mor, noi, lfo, 0, glide, mono, root };
+    e.table = table; e.pos = pos; e.warp = warp; e.warpAmt = warpAmt; e.blend = blend; e.sub = sub; e.cat = cat;
+    return e;
+}
+// Sonic Store: our own instrument library (pianos, keys, organs, guitars, basses, synths, pads, strings, brass, bells, FX)
+static PoolInstrument ss (const char* cat, const char* name, juce::uint32 colour, int wave, float a, float d, float s, float r, float cut, float res,
+                          float det, int uni, float drv, float fmr, float fmi, float mor, float noi, float lfo, float vib, float glide = 0, bool mono = false, int root = 60)
+{
+    PoolInstrument e { name, colour, wave, a, d, s, r, cut, res, det, uni, drv, fmr, fmi, mor, noi, lfo, vib, glide, mono, root };
+    e.cat = cat;
+    return e;
+}
+// drawbar organ on 3x Oscillation: three sine drawbars (coarse in semitones) + rotary wobble (LFO vibrato)
+static PoolInstrument organ (const char* name, juce::uint32 colour, std::array<float, 3> bars, std::array<float, 3> semis, float a, float r, float cut,
+                             float drv, float noi, float lfo, float vib, float decay = 0.4f, float sustain = 1.0f)
+{
+    PoolInstrument e { name, colour, 9, a, decay, sustain, r, cut, 0.05f, 0, 1, drv, 1, 0, 0, noi, lfo, vib, 0, false, 60 };
+    e.xw = { 3, 3, 3 }; e.xv = bars; e.xs = semis; e.cat = "SS:Organs";
+    return e;
+}
+static std::vector<PoolInstrument> withSonicStore (std::vector<PoolInstrument> v)
+{
+    const char *PI = "SS:Pianos", *KY = "SS:Keys", *GT = "SS:Guitars", *BS = "SS:Basses", *SY = "SS:Synths", *PD = "SS:Pads",
+               *ST = "SS:Strings & Brass", *BL = "SS:Bells & Mallets", *FX = "SS:FX";
+    const std::vector<PoolInstrument> store {
+        //  folder name                      colour      wv a       d     s     r     cut    res   det  uni drv   fmr  fmi  mor  noi   lfo   vib
+        organ ("SSS Organ",                  0xffff9a3d, { 1.0f, 0.8f, 0.6f }, { 0, 12, 19 }, 0.003f, 0.06f, 9000, 0.25f, 0.02f, 6.5f, 0.06f, 0.35f, 0.95f),
+        organ ("SSS Organ Slow Rotor",       0xffffb05a, { 1.0f, 0.8f, 0.6f }, { 0, 12, 19 }, 0.003f, 0.08f, 8000, 0.2f,  0.02f, 0.8f, 0.08f),
+        organ ("Gospel Organ",               0xffff7a3d, { 1.0f, 0.9f, 0.7f }, { -12, 0, 12 }, 0.002f, 0.1f, 10000, 0.3f, 0.02f, 6.0f, 0.07f),
+        organ ("Jazz Organ",                 0xffe8a050, { 1.0f, 0.7f, 0.0f }, { 0, 19, 0 }, 0.002f, 0.05f, 7000, 0.15f, 0.015f, 5.5f, 0.05f, 0.25f, 0.85f),
+        organ ("Rock Organ",                 0xffff5a2a, { 1.0f, 1.0f, 0.8f }, { 0, 12, 24 }, 0.002f, 0.06f, 11000, 0.6f, 0.02f, 6.8f, 0.07f),
+        organ ("Church Organ",               0xffd8c080, { 1.0f, 0.7f, 0.5f }, { -12, 0, 7 }, 0.08f, 0.6f, 6000, 0.0f, 0.01f, 0, 0),
+        organ ("Combo Organ",                0xffffd04d, { 0.9f, 0.9f, 0.4f }, { 0, 12, 31 }, 0.002f, 0.05f, 12000, 0.35f, 0.02f, 7.0f, 0.04f),
+        ss (PI, "Grand Piano",               0xfff2f2f2, 6, 0.001f,3.0f, 0,    0.5f, 9500,  0.05f,0,   1, 0,    1,   2.6f,0,   0,    0,    0),
+        ss (PI, "Bright Piano",              0xffffffff, 6, 0.001f,2.6f, 0,    0.45f,13000, 0.05f,0,   1, 0.05f,1,   3.4f,0,   0,    0,    0),
+        ss (PI, "Felt Piano",                0xffd8cfc0, 6, 0.004f,2.2f, 0,    0.6f, 3200,  0.05f,0,   1, 0,    1,   1.6f,0,   0.01f,0,    0),
+        ss (PI, "Honky Tonk",                0xffe8d8a0, 6, 0.001f,2.4f, 0,    0.45f,8000,  0.05f,0.3f,2, 0.05f,1,   2.8f,0,   0,    0,    0),
+        ss (PI, "Lo-Fi Upright",             0xffc8b890, 6, 0.002f,2.0f, 0,    0.4f, 4200,  0.1f, 0.1f,1, 0.15f,1,   2.0f,0,   0.04f,0.5f, 0.06f),
+        ss (KY, "Suitcase EP",               0xffff8a5a, 6, 0.002f,2.5f, 0.3f, 0.6f, 5500,  0.1f, 0,   1, 0.12f,1,   1.3f,0,   0,    5.0f, 0.03f),
+        ss (KY, "Wurly",                     0xffffa06a, 6, 0.002f,1.8f, 0.25f,0.5f, 4800,  0.15f,0,   1, 0.25f,1,   2.2f,0,   0,    6.0f, 0.04f),
+        ss (KY, "DX Tine",                   0xffffc0a0, 6, 0.001f,2.2f, 0.2f, 0.6f, 11000, 0.05f,0,   1, 0,    14,  1.6f,0,   0,    0,    0),
+        ss (KY, "Clav",                      0xffd0ff8a, 1, 0.001f,0.5f, 0.2f, 0.12f,3800,  0.4f, 0,   1, 0.2f, 1,   0,   0,   0,    0,    0),
+        ss (KY, "Harpsichord",               0xfff0e0b0, 0, 0.001f,1.2f, 0,    0.3f, 9000,  0.15f,0.08f,2,0,    1,   0,   0,   0,    0,    0),
+        ss (GT, "Nylon Guitar",              0xffd9a066, 2, 0.001f,1.4f, 0,    0.35f,2800,  0.25f,0,   1, 0.05f,1,   0,   0,   0.01f,0,    0),
+        ss (GT, "Clean Electric",            0xffc8a070, 0, 0.001f,1.6f, 0.15f,0.4f, 3600,  0.3f, 0.1f,2, 0.1f, 1,   0,   0,   0,    4.5f, 0.02f),
+        ss (GT, "Crunch Guitar",             0xffd06a3d, 0, 0.002f,1.2f, 0.5f, 0.3f, 3000,  0.3f, 0.15f,2,0.6f, 1,   0,   0,   0,    0,    0),
+        ss (GT, "Lead Guitar",               0xffff6a3d, 0, 0.003f,1.0f, 0.8f, 0.4f, 4200,  0.35f,0.1f,2, 0.8f, 1,   0,   0,   0,    5.5f, 0.12f,0.04f,true),
+        ss (GT, "Koto Pluck",                0xfff0c080, 6, 0.001f,0.9f, 0,    0.3f, 7000,  0.1f, 0,   1, 0,    3,   1.2f,0,   0,    0,    0,    0,    false, 72),
+        ss (BS, "Finger Bass",               0xff9a6a3d, 2, 0.003f,0.9f, 0.4f, 0.15f,1500,  0.25f,0,   1, 0.2f, 1,   0,   0,   0,    0,    0,    0.03f,true,  36),
+        ss (BS, "Slap Bass",                 0xffb07a4a, 6, 0.001f,0.6f, 0.3f, 0.15f,3500,  0.2f, 0,   1, 0.2f, 2,   2.5f,0,   0,    0,    0,    0.02f,true,  36),
+        ss (BS, "Synth Bass 101",            0xffff4d4d, 1, 0.002f,0.4f, 0.4f, 0.1f, 1200,  0.6f, 0,   1, 0.3f, 1,   0,   0,   0,    0,    0,    0.05f,true,  36),
+        ss (BS, "Upright Bass",              0xff8a5a3d, 3, 0.004f,1.2f, 0.2f, 0.2f, 900,   0.15f,0,   1, 0.25f,1,   0,   0,   0.02f,0,    0,    0,    true,  36),
+        ss (BS, "Moog Bass",                 0xffd04a2a, 0, 0.002f,0.5f, 0.5f, 0.12f,800,   0.7f, 0.15f,2,0.4f, 1,   0,   0,   0,    0,    0,    0.06f,true,  36),
+        ss (SY, "Poly Brass Synth",          0xffffb04d, 0, 0.04f, 0.5f, 0.7f, 0.3f, 5000,  0.3f, 0.3f,2, 0.1f, 1,   0,   0,   0,    0,    0),
+        ss (SY, "Jupiter Saw",               0xff5ad1ff, 5, 0.01f, 0.5f, 0.8f, 0.4f, 8000,  0.25f,0.45f,1,0.05f,1,   0,   0,   0,    0,    0),
+        ss (SY, "Square Lead",               0xff8aff6a, 1, 0.003f,0.4f, 0.8f, 0.2f, 7000,  0.2f, 0.1f,2, 0.1f, 1,   0,   0,   0,    5.5f, 0.1f, 0.04f,true),
+        ss (SY, "Sync Arp",                  0xff7dff8a, 0, 0.001f,0.25f,0,    0.15f,9000,  0.45f,0,   1, 0.2f, 1,   0,   0,   0,    0,    0),
+        ss (SY, "Hoover",                    0xffb06bff, 5, 0.01f, 0.5f, 0.9f, 0.4f, 6000,  0.3f, 0.8f,1, 0.3f, 1,   0,   0,   0,    6.0f, 0.3f, 0.1f, true),
+        ss (PD, "Warm Pad",                  0xffb06bff, 7, 0.9f,  1.0f, 0.85f,1.8f, 4500,  0.2f, 0,   1, 0,    1,   0,   0.25f,0,   0.12f,0.03f),
+        ss (PD, "Analog Pad",                0xff9a8aff, 5, 0.7f,  1.0f, 0.9f, 1.6f, 3800,  0.2f, 0.35f,1,0,    1,   0,   0,   0,    0.2f, 0.04f),
+        ss (PD, "Air Pad",                   0xffc0e0ff, 8, 1.2f,  1.5f, 0.9f, 2.5f, 7000,  0.2f, 0,   1, 0,    1,   0,   0,   0.4f, 0.1f, 0.02f),
+        ss (PD, "Dark Pad",                  0xff4a4aa0, 7, 1.5f,  2.0f, 0.9f, 3.0f, 1800,  0.4f, 0,   1, 0.1f, 1,   0,   0.6f,0.05f,0.08f,0.02f),
+        ss (ST, "String Ensemble",           0xffc9a0ff, 5, 0.4f,  1.0f, 0.9f, 0.9f, 5000,  0.15f,0.35f,1,0,    1,   0,   0,   0,    5.0f, 0.08f),
+        ss (ST, "Pizzicato",                 0xffe0c0ff, 2, 0.001f,0.35f,0,    0.2f, 4000,  0.2f, 0.1f,2, 0,    1,   0,   0,   0,    0,    0),
+        ss (ST, "Cello",                     0xffa080d0, 0, 0.15f, 1.0f, 0.85f,0.5f, 2400,  0.2f, 0.1f,2, 0.05f,1,   0,   0,   0,    5.0f, 0.1f, 0,    false, 48),
+        ss (ST, "Brass Section",             0xffffc04d, 0, 0.06f, 0.6f, 0.8f, 0.25f,3600,  0.25f,0.25f,2,0.2f, 1,   0,   0,   0,    5.0f, 0.06f),
+        ss (ST, "Trumpet",                   0xffffd070, 1, 0.04f, 0.6f, 0.8f, 0.2f, 4200,  0.2f, 0,   1, 0.25f,1,   0,   0,   0.01f,5.5f, 0.1f, 0.03f,true),
+        ss (ST, "Flute",                     0xffe0fff0, 3, 0.06f, 0.5f, 0.9f, 0.2f, 6000,  0.1f, 0,   1, 0,    1,   0,   0,   0.12f,5.0f, 0.08f,0.02f,true,  72),
+        ss (BL, "Vibraphone",                0xffc8e8ff, 6, 0.001f,2.5f, 0,    1.5f, 9000,  0.05f,0,   1, 0,    4,   1.2f,0,   0,    5.0f, 0.02f,0,    false, 72),
+        ss (BL, "Marimba",                   0xffd8a070, 6, 0.001f,0.6f, 0,    0.3f, 6000,  0.05f,0,   1, 0,    4,   1.8f,0,   0,    0,    0,    0,    false, 60),
+        ss (BL, "Celesta",                   0xfff0f0ff, 6, 0.001f,1.6f, 0,    0.8f, 14000, 0.05f,0,   1, 0,    7,   1.4f,0,   0,    0,    0,    0,    false, 84),
+        ss (BL, "Tubular Bell",              0xffe8e8c0, 6, 0.001f,3.5f, 0,    2.5f, 12000, 0.05f,0,   1, 0,    3.5f,4.5f,0,   0,    0,    0),
+        ss (BL, "Steel Drum",                0xffffe0a0, 6, 0.001f,1.0f, 0,    0.5f, 9000,  0.1f, 0,   1, 0,    2.5f,2.0f,0,   0,    0,    0,    0,    false, 72),
+        ss (FX, "Riser Sweep",               0xffff8aff, 8, 3.0f,  1.0f, 1.0f, 0.5f, 12000, 0.5f, 0,   1, 0.2f, 1,   0,   0,   0.8f, 0.2f, 0.5f),
+        ss (FX, "Sci-Fi Zap",                0xff3dffd0, 6, 0.001f,0.3f, 0,    0.2f, 15000, 0.4f, 0,   1, 0.3f, 7.5f,8,   0,   0,    9.0f, 1.0f),
+        ss (FX, "Wind",                      0xffa0c0d0, 8, 1.5f,  2.0f, 1.0f, 2.0f, 3000,  0.6f, 0,   1, 0,    1,   0,   0,   1.0f, 0.15f,0),
+        ss (FX, "Noise Hit",                 0xffd0d0d0, 8, 0.001f,0.8f, 0,    0.6f, 8000,  0.3f, 0,   1, 0.4f, 1,   0,   0,   1.0f, 0,    0),
+    };
+    v.insert (v.end(), store.begin(), store.end());
+    return v;
+}
+static std::vector<PoolInstrument> withSerumPack (std::vector<PoolInstrument> v)
+{
+    v = withSonicStore (std::move (v));
+    const char *B = "Bass", *L = "Leads", *P = "Plucks", *D = "Pads", *K = "Keys & Bells", *W = "Weird FX";
+    const std::vector<PoolInstrument> pack {
+        //  folder name                    colour      tbl pos   warp amt  uni det   bld  a      d     s     r     cut    res   drv   noi   sub   lfo   mor  glide  mono  root
+        wp (B, "Reese Grinder",            0xffff3d6a, 0,  0.9f, 2,  0.4f, 5, 0.35f,0.7f,0.003f,0.5f, 0.9f, 0.2f, 1800,  0.35f,0.45f,0,    0.5f, 0.3f, 0.2f, 0.06f, true,  36),
+        wp (B, "Growl Talker",             0xffff6a3d, 2,  0.3f, 9,  0.6f, 3, 0.2f, 0.5f,0.002f,0.4f, 0.8f, 0.15f,3500,  0.45f,0.5f, 0,    0.4f, 3.0f, 0.6f, 0.05f, true,  36, 3),
+        wp (B, "Sync Snarl",               0xffff8a3d, 5,  0.5f, 1,  0.55f,1, 0,    0.5f,0.002f,0.35f,0.7f, 0.12f,4200,  0.3f, 0.4f, 0,    0.5f, 0.5f, 0.3f, 0.04f, true,  36),
+        wp (B, "Folded Sub",               0xffd94a4a, 3,  0.15f,11, 0.3f, 1, 0,    0.5f,0.002f,0.9f, 0.6f, 0.2f, 900,   0.2f, 0.2f, 0,    0.7f, 0,    0,    0.07f, true,  36),
+        wp (B, "Neuro Wobble",             0xffb03dff, 11, 0.4f, 3,  0.5f, 3, 0.25f,0.6f,0.003f,0.6f, 0.9f, 0.18f,2600,  0.55f,0.5f, 0,    0.4f, 4.0f, 0.8f, 0.04f, true,  36),
+        wp (B, "Digital 808",              0xffff4d4d, 4,  0.1f, 8,  0.3f, 1, 0,    0.5f,0.001f,1.4f, 0.4f, 0.3f, 1200,  0.15f,0.35f,0,    0.8f, 0,    0,    0.08f, true,  36),
+        wp (B, "Rubber Bounce",            0xffff7ab0, 10, 0.35f,10, 0.6f, 1, 0,    0.5f,0.002f,0.3f, 0.5f, 0.1f, 3000,  0.4f, 0.25f,0,    0.5f, 0,    0,    0.05f, true,  36),
+        wp (B, "Mirror Bass",              0xffff5a8a, 0,  0.6f, 6,  0.7f, 2, 0.15f,0.5f,0.002f,0.5f, 0.8f, 0.15f,2400,  0.3f, 0.3f, 0,    0.6f, 0,    0,    0.05f, true,  36),
+        wp (B, "PWM Underground",          0xffc94a2a, 1,  0.4f, 4,  0.45f,3, 0.2f, 0.6f,0.003f,0.6f, 0.85f,0.2f, 1600,  0.3f, 0.3f, 0,    0.5f, 0.3f, 0.4f, 0.05f, true,  36),
+        wp (B, "Bit Rot Bass",             0xffa03030, 9,  0.5f, 12, 0.4f, 1, 0,    0.5f,0.002f,0.5f, 0.7f, 0.12f,5000,  0.2f, 0.5f, 0,    0.5f, 0,    0,    0.05f, true,  36),
+        wp (B, "Hollow Square Sub",        0xffd06a6a, 1,  0.2f, 5,  0.4f, 1, 0,    0.5f,0.002f,1.0f, 0.7f, 0.25f,1100,  0.2f, 0.15f,0,    0.6f, 0,    0,    0.08f, true,  36),
+        wp (L, "Serum Supersaw",           0xff5ad1ff, 0,  1.0f, 0,  0,    7, 0.45f,0.8f,0.01f, 0.4f, 0.85f,0.35f,12000, 0.2f, 0.1f, 0,    0,    5.5f, 0,    0,     false, 60),
+        wp (L, "Bend Lead",                0xff38d1ff, 0,  0.8f, 2,  0.6f, 3, 0.2f, 0.5f,0.005f,0.4f, 0.8f, 0.3f, 9000,  0.25f,0.2f, 0,    0,    0,    0,    0.04f, true,  60),
+        wp (L, "Vowel Screamer",           0xffffb0e0, 2,  0.6f, 9,  0.4f, 3, 0.2f, 0.5f,0.01f, 0.4f, 0.8f, 0.3f, 10000, 0.3f, 0.35f,0,    0,    5.0f, 0.4f, 0.05f, true,  60, 3),
+        wp (L, "Hyper Sync Lead",          0xff7dffff, 5,  0.7f, 1,  0.6f, 5, 0.3f, 0.6f,0.005f,0.3f, 0.8f, 0.25f,11000, 0.2f, 0.3f, 0,    0,    0.25f,0.5f, 0.03f, true,  60),
+        wp (L, "Flip Glide",               0xff9affb0, 6,  0.5f, 7,  0.5f, 3, 0.15f,0.5f,0.005f,0.3f, 0.85f,0.25f,9000,  0.2f, 0.15f,0,    0,    0,    0,    0.12f, true,  60),
+        wp (L, "Alien Whistle",            0xff8aff6a, 8,  0.5f, 10, 0.5f, 1, 0,    0.5f,0.02f, 0.4f, 0.9f, 0.4f, 14000, 0.15f,0,    0,    0,    6.0f, 0.5f, 0.08f, true,  72),
+        wp (L, "Rage Lead",                0xffff4d9a, 3,  0.6f, 11, 0.4f, 5, 0.35f,0.7f,0.003f,0.3f, 0.9f, 0.3f, 8000,  0.3f, 0.6f, 0,    0,    0,    0,    0.04f, true,  60),
+        wp (L, "Detroit Saw",              0xff4dc3ff, 0,  0.95f,5,  0.3f, 7, 0.25f,0.6f,0.005f,0.3f, 0.8f, 0.3f, 7000,  0.25f,0.2f, 0,    0,    0,    0,    0,     false, 60),
+        wp (L, "Quantized Chip",           0xffb0ff4d, 4,  0.7f, 8,  0.6f, 1, 0,    0.5f,0.001f,0.2f, 0.7f, 0.1f, 16000, 0.1f, 0,    0,    0,    0,    0,    0.02f, true,  72),
+        wp (L, "Asym Siren",               0xffffe04d, 1,  0.5f, 5,  0.7f, 3, 0.2f, 0.5f,0.02f, 0.4f, 0.9f, 0.4f, 9000,  0.3f, 0.2f, 0,    0,    0.5f, 0.6f, 0.15f, true,  72),
+        wp (L, "Organ Smear",              0xffffc06a, 6,  0.7f, 3,  0.3f, 3, 0.15f,0.4f,0.01f, 0.3f, 0.9f, 0.3f, 8000,  0.1f, 0.1f, 0,    0,    5.0f, 0.2f, 0,     false, 60),
+        wp (P, "Glass Mirror Pluck",       0xff8affe0, 6,  0.6f, 6,  0.6f, 1, 0,    0.5f,0.001f,0.45f,0,    0.4f, 14000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72),
+        wp (P, "Sync Pluck",               0xff6affc8, 5,  0.4f, 1,  0.4f, 3, 0.15f,0.4f,0.001f,0.3f, 0,    0.3f, 12000, 0.15f,0.1f, 0,    0,    0,    0,    0,     false, 72),
+        wp (P, "Bell Bender",              0xffe8e8ff, 7,  0.5f, 2,  0.5f, 1, 0,    0.5f,0.001f,0.9f, 0,    0.8f, 15000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72),
+        wp (P, "Digital Rain",             0xff7dff8a, 4,  0.5f, 12, 0.3f, 1, 0,    0.5f,0.001f,0.25f,0,    0.25f,13000, 0.15f,0,    0.05f,0,    0,    0,    0,     false, 72),
+        wp (P, "Vowel Pop",                0xffffb0ff, 2,  0.4f, 9,  0.3f, 1, 0,    0.5f,0.001f,0.3f, 0,    0.2f, 9000,  0.2f, 0.1f, 0,    0,    0,    0,    0,     false, 72, 2),
+        wp (P, "Plugg Pluck",              0xff6ac8ff, 0,  0.4f, 3,  0.3f, 3, 0.2f, 0.5f,0.001f,0.4f, 0,    0.35f,7000,  0.2f, 0,    0,    0,    0,    0,    0,     false, 72),
+        wp (P, "Rubber Drop",              0xffff9aea, 10, 0.5f, 10, 0.5f, 1, 0,    0.5f,0.001f,0.35f,0,    0.3f, 10000, 0.25f,0.1f, 0,    0.2f, 0,    0,    0,     false, 60),
+        wp (P, "Flip Mallet",              0xffc8ffe0, 3,  0.3f, 7,  0.7f, 1, 0,    0.5f,0.001f,0.5f, 0,    0.5f, 11000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72),
+        wp (D, "Wavetable Dream",          0xffb06bff, 0,  0.5f, 2,  0.3f, 7, 0.3f, 0.7f,0.9f,  1.0f, 0.9f, 2.0f, 6000,  0.2f, 0,    0.05f,0,    0.12f,0.8f, 0,     false, 60),
+        wp (D, "Vowel Choir",              0xffd0a0ff, 2,  0.4f, 6,  0.4f, 5, 0.25f,0.6f,0.8f,  1.0f, 0.9f, 1.8f, 7000,  0.15f,0,    0.04f,0,    0.2f, 0.7f, 0,     false, 60),
+        wp (D, "PWM Strings",              0xffc9a0ff, 1,  0.5f, 4,  0.3f, 7, 0.35f,0.7f,0.6f,  1.0f, 0.9f, 1.4f, 5000,  0.15f,0,    0,    0,    0.3f, 0.6f, 0,     false, 60),
+        wp (D, "Alien Atmos",              0xff6a7dff, 8,  0.5f, 10, 0.4f, 5, 0.3f, 0.6f,1.5f,  2.0f, 1.0f, 3.0f, 5000,  0.3f, 0,    0.15f,0,    0.08f,0.9f, 0,     false, 48),
+        wp (D, "Organ Cloud",              0xffa0c0ff, 6,  0.6f, 0,  0,    7, 0.3f, 0.8f,0.7f,  1.0f, 0.9f, 2.0f, 4500,  0.1f, 0,    0.03f,0.2f, 0.15f,0.5f, 0,     false, 60),
+        wp (D, "Frozen Fold",              0xff8ad8ff, 3,  0.3f, 11, 0.2f, 5, 0.2f, 0.6f,1.2f,  1.5f, 1.0f, 2.5f, 3500,  0.3f, 0,    0.1f, 0,    0.1f, 0.7f, 0,     false, 48),
+        wp (D, "Metal Haze",               0xffc0c0e8, 7,  0.4f, 2,  0.3f, 5, 0.25f,0.6f,1.0f,  1.5f, 0.9f, 2.4f, 6000,  0.2f, 0,    0.12f,0,    0.06f,0.9f, 0,     false, 60),
+        wp (D, "Sync Sunrise",             0xffffd08a, 5,  0.2f, 1,  0.2f, 7, 0.3f, 0.7f,1.4f,  1.0f, 1.0f, 2.0f, 8000,  0.15f,0,    0,    0,    0.05f,1.0f, 0,     false, 60),
+        wp (K, "Glass Rhodes",             0xffff8a5a, 6,  0.3f, 9,  0.25f,1, 0,    0.5f,0.002f,2.2f, 0.25f,0.6f, 6000,  0.1f, 0.1f, 0,    0,    5.0f, 0.05f,0,     false, 60, 1),
+        wp (K, "FM Kalimba",               0xfff2d28a, 7,  0.3f, 9,  0.4f, 1, 0,    0.5f,0.001f,0.8f, 0,    0.6f, 12000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 72, 3),
+        wp (K, "Toy Box",                  0xffffe0f0, 4,  0.6f, 8,  0.5f, 1, 0,    0.5f,0.001f,0.7f, 0,    0.5f, 14000, 0.1f, 0,    0,    0,    0,    0,    0,     false, 84),
+        wp (K, "Bent Music Box",           0xffe0d0ff, 7,  0.6f, 3,  0.5f, 1, 0,    0.5f,0.001f,1.5f, 0,    1.2f, 15000, 0.05f,0,    0,    0,    3.0f, 0.1f, 0,     false, 84),
+        wp (K, "Organ Keys",               0xffffb35a, 6,  0.8f, 0,  0,    1, 0,    0.5f,0.005f,0.5f, 0.9f, 0.2f, 7000,  0.1f, 0.15f,0,    0.2f, 5.5f, 0.05f,0,     false, 60),
+        wp (K, "Mirror Bell",              0xffd8f0ff, 0,  0.3f, 6,  0.9f, 1, 0,    0.5f,0.001f,1.8f, 0,    1.4f, 16000, 0.05f,0,    0,    0,    0,    0,    0,     false, 72),
+        wp (W, "Chaos Hitter",             0xffff3db0, 11, 0.6f, 12, 0.5f, 3, 0.4f, 0.6f,0.001f,3.7f, 0,    1.0f, 18000, 0.3f, 0.5f, 0.35f,0,    7.0f, 0.9f, 0,     false, 60),
+        wp (W, "Static Angel",             0xffffffff, 8,  0.7f, 1,  0.8f, 5, 0.5f, 0.6f,0.01f, 3.5f, 0,    1.2f, 20000, 0.2f, 0.3f, 0.45f,0,    0.5f, 0.8f, 0,     false, 72),
+        wp (W, "Glitch Gremlin",           0xff9aff3d, 9,  0.5f, 12, 0.8f, 1, 0,    0.5f,0.001f,1.2f, 0,    0.6f, 16000, 0.4f, 0.6f, 0.2f, 0,    11.0f,1.0f, 0,     false, 60),
+        wp (W, "Robot Throat",             0xff3dffd0, 2,  0.5f, 9,  0.9f, 1, 0,    0.5f,0.002f,2.0f, 0.4f, 0.8f, 9000,  0.5f, 0.6f, 0.2f, 0.2f, 9.0f, 0.7f, 0.1f,  true,  48, 5),
+        wp (W, "Cyber Goth Stab",          0xffd03dff, 11, 0.8f, 7,  0.6f, 5, 0.5f, 0.7f,0.001f,1.5f, 0,    0.8f, 17000, 0.3f, 0.7f, 0.3f, 0.3f, 0,    0,    0,     false, 60),
+        wp (W, "Laser Rain",               0xff3dd0ff, 5,  1.0f, 1,  1.0f, 3, 0.6f, 0.5f,0.001f,0.6f, 0,    0.4f, 20000, 0.2f, 0.2f, 0.15f,0,    0,    0,    0.3f,  true,  84),
+        wp (W, "Broken Radio",             0xffc8c870, 9,  0.3f, 8,  0.9f, 1, 0,    0.5f,0.02f, 3.7f, 0.3f, 1.5f, 6000,  0.5f, 0.5f, 0.5f, 0,    6.0f, 1.0f, 0,     false, 60),
+        wp (W, "Wormhole",                 0xff6a3dff, 10, 0.5f, 10, 1.0f, 7, 0.6f, 0.8f,0.5f,  4.0f, 0.8f, 3.5f, 12000, 0.4f, 0.3f, 0.3f, 0,    0.3f, 1.0f, 0.5f,  true,  48),
+        wp (W, "Demon Choir",              0xffff2020, 2,  0.2f, 11, 0.7f, 7, 0.4f, 0.7f,0.3f,  3.7f, 0.7f, 2.5f, 7000,  0.4f, 0.6f, 0.25f,0.3f, 0.2f, 0.9f, 0,     false, 48),
+        wp (W, "Bit Crushed Angel",        0xffffd0ff, 4,  0.9f, 8,  0.8f, 5, 0.3f, 0.6f,0.02f, 3.0f, 0,    1.2f, 19000, 0.15f,0.3f, 0.4f, 0,    4.0f, 0.5f, 0,     false, 72),
+        wp (W, "Metal Shredder",           0xffb0b0b0, 7,  1.0f, 9,  1.0f, 3, 0.5f, 0.6f,0.001f,1.8f, 0,    0.7f, 18000, 0.3f, 0.8f, 0.3f, 0,    0,    0,    0,     false, 60, 7),
+        wp (W, "Spiral Siren",             0xffff8aff, 8,  0.5f, 6,  1.0f, 3, 0.4f, 0.6f,0.05f, 3.7f, 0.6f, 1.5f, 15000, 0.3f, 0.3f, 0.2f, 0,    2.0f, 1.0f, 0.6f,  true,  72),
+        wp (W, "Aura Swell",               0xff8ad0ff, 11, 0.3f, 2,  0.7f, 7, 0.5f, 0.8f,2.0f,  3.7f, 0.9f, 3.0f, 16000, 0.2f, 0.2f, 0.4f, 0,    0.1f, 1.0f, 0,     false, 60),
+        wp (W, "Glass Shatter",            0xffe0ffff, 11, 1.0f, 12, 0.9f, 3, 0.7f, 0.6f,0.001f,0.9f, 0,    0.9f, 20000, 0.1f, 0.4f, 0.6f, 0,    0,    0,    0,     false, 84),
+        wp (W, "Rubber Ghost",             0xffd0ffd0, 10, 0.8f, 4,  0.8f, 5, 0.4f, 0.7f,0.4f,  3.0f, 0.5f, 2.0f, 9000,  0.35f,0.3f, 0.2f, 0,    3.0f, 0.8f, 0.2f,  true,  60),
+        wp (W, "Hell Riser",               0xffff4000, 5,  0.0f, 1,  0.9f, 7, 0.6f, 0.7f,3.0f,  4.0f, 1.0f, 1.0f, 14000, 0.3f, 0.6f, 0.3f, 0.3f, 0.06f,1.0f, 0,     false, 48),
+    };
+    v.insert (v.end(), pack.begin(), pack.end());
+    return v;
+}
+static void addSerumPackMenu (juce::PopupMenu& pool, const std::vector<PoolInstrument>& all)
+{
+    juce::PopupMenu pack;
+    for (auto* folder : { "Bass", "Leads", "Plucks", "Pads", "Keys & Bells", "Weird FX" })
+    {
+        juce::PopupMenu sub;
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (all[(size_t) i].cat != nullptr && juce::String (all[(size_t) i].cat) == folder) sub.addItem (2000 + i, all[(size_t) i].name);
+        pack.addSubMenu (folder, sub);
+    }
+    pool.addSeparator();
+    pool.addSubMenu ("HumWave Serum Pack", pack);
+    juce::PopupMenu store;
+    for (auto* folder : { "Pianos", "Keys", "Organs", "Guitars", "Basses", "Synths", "Pads", "Strings & Brass", "Bells & Mallets", "FX" })
+    {
+        juce::PopupMenu sub;
+        const juce::String tag = juce::String ("SS:") + folder;
+        for (int i = 0; i < (int) all.size(); ++i)
+            if (all[(size_t) i].cat != nullptr && tag == all[(size_t) i].cat) sub.addItem (2000 + i, all[(size_t) i].name);
+        store.addSubMenu (folder, sub);
+    }
+    pool.addSubMenu ("Sonic Store", store);
+}
 static const std::vector<PoolInstrument>& instrumentPool()
 {
-    static const std::vector<PoolInstrument> pool {
+    static const std::vector<PoolInstrument> pool = withSerumPack ({
         //  name                 colour      wv  a      d     s     r     cut    res   det  uni drv   fmr  fmi  mor  noi   lfo   vib   glide mono   root
         { "Prism (morph pad)",   0xffb06bff, 7, 0.8f,  1.0f, 0.8f, 1.6f, 6500,  0.3f, 0,   1, 0,    1,   0,   0.3f,0,    0.15f,0.04f,0,    false, 60 },
         { "Drift (supersaw)",    0xff5ad1ff, 5, 0.01f, 0.4f, 0.8f, 0.35f,9000,  0.25f,0.5f,1, 0.1f, 1,   0,   0,   0,    5.5f, 0.12f,0.05f,false, 60 },
@@ -46,7 +228,7 @@ static const std::vector<PoolInstrument>& instrumentPool()
         { "HumWave Digital Arp", 0xff7dff8a, 10,0.001f,0.25f,0,    0.15f,10000, 0.2f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 60, 4, 0.5f },
         { "HumWave Sync Scream", 0xffff6a3d, 10,0.005f,0.4f, 0.8f, 0.25f,8000,  0.35f,0.2f,1, 0.4f, 1,   0,   0.7f,0,    4.0f, 0,    0.03f,true,  48, 5, 0.2f },
         { "HumWave Metal Bell",  0xffe8e8ff, 10,0.001f,1.5f, 0,    1.2f, 14000, 0.1f, 0,   1, 0,    1,   0,   0,   0,    0,    0,    0,    false, 72, 7, 0.5f },
-    };
+    });
     return pool;
 }
 static Channel poolChannel (const PoolInstrument& e)
@@ -58,7 +240,7 @@ static Channel poolChannel (const PoolInstrument& e)
     sp.wave = e.wave; sp.attack = e.a; sp.decay = e.d; sp.sustain = e.s; sp.release = e.r; sp.cutoff = e.cut; sp.resonance = e.res;
     sp.detune = e.det; sp.unison = e.uni; sp.drive = e.drv; sp.fmRatio = e.fmr; sp.fmIndex = e.fmi; sp.morph = e.mor; sp.noise = e.noi;
     sp.lfoRate = e.lfo; sp.vibrato = e.vib;
-    sp.wtKind = e.table; sp.wtPos = e.pos;
+    sp.wtKind = e.table; sp.wtPos = e.pos; sp.warp = e.warp; sp.warpAmt = e.warpAmt; sp.uniBlend = e.blend; sp.sub = e.sub;
     sp.xWave = e.xw; sp.xVol = e.xv; sp.xSemi = e.xs; sp.xFine = e.xf;
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
     return c;
@@ -350,6 +532,7 @@ struct Row : public juce::Component
         pool.addSectionHeader ("Psychedelic synths");
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
+            if (instrumentPool()[(size_t) i].cat != nullptr) continue;
             if (i == 6) pool.addSectionHeader ("Live instruments");
             if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
                 pool.addSectionHeader ("3x Oscillation");
@@ -357,6 +540,7 @@ struct Row : public juce::Component
                 pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
+        addSerumPackMenu (pool, instrumentPool());
         m.addSubMenu ("Instrument Pool", pool);
         auto types = s.engine.knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");
@@ -568,6 +752,8 @@ public:
             juce::File file (f);
             if (file.isDirectory()) importKit (s, file);
             else if (isAudioFile (file)) samples.add (file);
+            else if (file.hasFileExtension ("mid;midi"))
+                s.edit ("Add pattern", [file] (Project& p) { if (const int i = importMidiPattern (p, file); i >= 0) p.currentPattern = i; });
         }
         if (samples.size() == 1 && replaceSampleAt ({ x, y }, samples[0])) return;
         if (! samples.isEmpty()) addSampleChannels (s, samples, samples.size() > 1 ? "Samples" : juce::String());
@@ -661,6 +847,7 @@ private:
         pool.addSectionHeader ("Psychedelic synths");
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
+            if (instrumentPool()[(size_t) i].cat != nullptr) continue;
             if (i == 6) pool.addSectionHeader ("Live instruments");
             if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
                 pool.addSectionHeader ("3x Oscillation");
@@ -668,6 +855,7 @@ private:
                 pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
+        addSerumPackMenu (pool, instrumentPool());
         m.addSubMenu ("Instrument Pool", pool);
         auto types = s.engine.knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");

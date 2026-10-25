@@ -374,6 +374,7 @@ public:
                 float s = p.wave >= 5 ? voiceOsc (v, dt) : osc (v.ph1, dt);
                 if (p.wave < 5 && (p.detune != 0.0f || p.unison > 1)) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
                 if (p.noise > 0.0f) s += p.noise * nextNoise (v);
+                if (p.sub > 0.0f) { s += p.sub * std::sin (juce::MathConstants<float>::twoPi * v.subPh); v.subPh += 0.5f * dt; v.subPh -= std::floor (v.subPh); }
                 v.ph1 += dt; if (v.ph1 >= 1.0f) v.ph1 -= 1.0f;
                 v.ph2 += dt * detRatio; if (v.ph2 >= 1.0f) v.ph2 -= 1.0f;
                 if (p.drive > 0.0f) s = std::tanh (s * (1.0f + p.drive * 8.0f)) / std::tanh (1.0f + p.drive * 8.0f) ;
@@ -388,7 +389,7 @@ public:
     }
 private:
     struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
-                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
+                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0, subPh = 0;
                    std::array<float, 3> xph { 0.0f, 0.31f, 0.67f };
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
                    uint32_t rng = 0x9e3779b9u; };
@@ -473,8 +474,23 @@ private:
                     const float ya = a[i0] + (a[i1] - a[i0]) * fx, yb = b[i0] + (b[i1] - b[i0]) * fx;
                     return ya + (yb - ya) * ff;
                 };
-                float s = read (v.ph1);
-                if (p.detune > 0.0f || p.unison > 1) s = 0.5f * (s + read (v.ph2));
+                auto warped = [&] (float ph) { return humWarpRead (p.warp, p.warpAmt, ph, p.fmRatio, read); };
+                float s = warped (v.ph1);
+                if (p.unison > 1)
+                {
+                    static constexpr float spread[6] { -1.0f, 1.0f, -0.62f, 0.62f, -0.3f, 0.3f };
+                    const int extra = juce::jmin (6, p.unison - 1);
+                    const float amt = 0.002f + p.detune * 0.025f;
+                    float side = 0.0f;
+                    for (int k = 0; k < extra; ++k)
+                    {
+                        float& ph = v.sx[(size_t) k];
+                        side += warped (ph);
+                        ph += dt * (1.0f + spread[k] * amt); ph -= std::floor (ph);
+                    }
+                    s = (s + p.uniBlend * side) / std::sqrt (1.0f + p.uniBlend * p.uniBlend * (float) extra);
+                }
+                else if (p.detune > 0.0f) s = 0.5f * (s + warped (v.ph2));
                 return s;
             }
             default: // air: noise over a sine body
@@ -572,7 +588,13 @@ std::shared_ptr<const std::vector<float>> humWaveFromAudio (const juce::AudioBuf
 
 const juce::StringArray& humWaveFactoryNames()
 {
-    static const juce::StringArray n { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM" };
+    static const juce::StringArray n { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM", "Alien Speak", "Bit Rot", "Rubber Fold", "Chaos Harmonics" };
+    return n;
+}
+
+const juce::StringArray& humWarpNames()
+{
+    static const juce::StringArray n { "Off", "Sync", "Bend +", "Bend -", "PWM", "Asym", "Mirror", "Flip", "Quantize", "FM", "Remap", "Fold", "Downsample" };
     return n;
 }
 
@@ -583,7 +605,7 @@ std::shared_ptr<const std::vector<float>> humWaveFactory (int kind)
         std::vector<std::shared_ptr<const std::vector<float>>> out;
         constexpr int N = humWaveFrameSize, F = 32;
         constexpr double tp = juce::MathConstants<double>::twoPi;
-        for (int kd = 0; kd < 8; ++kd)
+        for (int kd = 0; kd < 12; ++kd)
         {
             std::vector<float> t ((size_t) (F * N));
             for (int f = 0; f < F; ++f)
@@ -609,7 +631,34 @@ std::shared_ptr<const std::vector<float>> humWaveFactory (int kind)
                         case 5: { const double q = p * (1.0 + 7.0 * fr); y = 2.0 * (q - std::floor (q)) - 1.0; y *= 1.0 - p; break; }
                         case 6: { static const double bars[9] { 1, 2, 3, 4, 6, 8, 10, 12, 16 };
                                   for (int k = 0; k < 9; ++k) y += std::sin (tp * bars[k] * p) * (k == 0 ? 1.0 : std::max (0.0, std::sin ((fr * 3.0 + k * 0.7))) * 0.6); break; }
-                        default: y = std::sin (tp * p + 6.0 * fr * std::sin (tp * 3.0 * p)); break;
+                        case 7: y = std::sin (tp * p + 6.0 * fr * std::sin (tp * 3.0 * p)); break;
+                        case 8:   // Alien Speak: two formants sliding past each other, odd partials flipped
+                        {
+                            const double f1 = 2.0 + 10.0 * fr, f2 = 16.0 - 9.0 * fr;
+                            for (int k = 1; k <= 48; ++k)
+                                y += (std::exp (-0.5 * std::pow ((k - f1) / 1.5, 2)) + 0.8 * std::exp (-0.5 * std::pow ((k - f2) / 1.0, 2)) + 0.03 / k)
+                                     * std::sin (tp * k * p) * (k % 3 == 0 ? -1.0 : 1.0);
+                            break;
+                        }
+                        case 9:   // Bit Rot: crushed sine gated by a rising square
+                        {
+                            const double lv = 8.0 - 6.5 * fr;
+                            y = std::floor (std::sin (tp * p) * lv + 0.5) / lv * (std::sin (tp * p * (1.0 + std::floor (fr * 7.0))) >= 0.0 ? 1.0 : -0.6);
+                            break;
+                        }
+                        case 10:  // Rubber Fold: triangle folded harder with a wobble
+                        {
+                            const double tri = 4.0 * std::abs (p - 0.5) - 1.0;
+                            y = std::sin (tri * (1.0 + 9.0 * fr) * juce::MathConstants<double>::halfPi + fr * std::sin (3.0 * tp * p));
+                            break;
+                        }
+                        default:  // Chaos Harmonics: a new random partial mix on every frame (gritty, bright)
+                            for (int k = 1; k <= 64; ++k)
+                            {
+                                const double h = std::sin (k * 12.9898 + f * 78.233) * 43758.5453, amp = h - std::floor (h);
+                                y += amp * amp / std::pow ((double) k, 0.6) * std::sin (tp * k * p + k * 1.3);
+                            }
+                            break;
                     }
                     t[(size_t) (f * N + i)] = (float) y;
                 }

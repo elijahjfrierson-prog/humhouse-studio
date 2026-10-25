@@ -2479,7 +2479,64 @@ int main()
         CHECK (got != nullptr && got->synth.wave == 10 && got->synth.wt != nullptr && *got->synth.wt == *tab
                && got->synth.wtName == "kick" && std::abs (got->synth.wtPos - 0.25f) < 1.0e-4f && got->synth.xSemi[1] == 5.0f);
         f.deleteFile();
-        std::printf ("3x Oscillation peak %.2f, HumWave 8 tables + sample-to-wavetable render and round-trip\n", p3);
+        // Serum-style warps: bounded on every mode, every warp renders, warp/blend/sub survive save/load
+        int bad = 0;
+        for (int m = 0; m < humWarpNames().size(); ++m)
+            for (float a : { 0.0f, 0.5f, 1.0f })
+                for (int i = 0; i < 512; ++i)
+                {
+                    const float y = humWarpRead (m, a, (float) i / 512.0f, 3.0f, [] (float ph) { return std::sin (juce::MathConstants<float>::twoPi * ph); });
+                    if (! std::isfinite (y) || std::abs (y) > 1.01f) ++bad;
+                }
+        CHECK (bad == 0);
+        CHECK (humWaveFactoryNames().size() == 12 && humWaveFactory (11) != nullptr);
+        int quietWarps = 0;
+        for (int m = 0; m < humWarpNames().size(); ++m)
+        {
+            Channel w; w.type = ChannelType::Synth; w.name = "W"; w.synth.wave = 10; w.synth.wtKind = m % 12; w.synth.warp = m; w.synth.warpAmt = 0.7f;
+            w.synth.unison = 3; w.synth.uniBlend = 0.4f; w.synth.sub = 0.5f;
+            const float pk = renderPeak (w);
+            if (! (pk > 0.02f && pk < 6.0f)) ++quietWarps;
+        }
+        CHECK (quietWarps == 0);
+        {
+            Project wp = Project::createDefault();
+            Channel w; w.type = ChannelType::Synth; w.name = "Warp"; w.synth.wave = 10; w.synth.warp = 9; w.synth.warpAmt = 0.6f; w.synth.uniBlend = 0.3f; w.synth.sub = 0.4f;
+            const int wid = wp.addChannel (w);
+            auto wf = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-warp.hhs");
+            CHECK (saveProject (wp, wf));
+            Project wq; CHECK (loadProject (wq, wf));
+            const Channel* g = nullptr;
+            for (auto& c : wq.channels) if (c.id == wid) g = &c;
+            CHECK (g != nullptr && g->synth.warp == 9 && std::abs (g->synth.warpAmt - 0.6f) < 1.0e-4f && std::abs (g->synth.uniBlend - 0.3f) < 1.0e-4f
+                   && std::abs (g->synth.sub - 0.4f) < 1.0e-4f);
+            wf.deleteFile();
+        }
+        // SSS Patterns: a dragged drum MIDI lands on the kit's channels (snare on the half, hats), no extra channels
+        {
+            juce::MidiMessageSequence seq;
+            auto add = [&] (int key, double beat) { auto on = juce::MidiMessage::noteOn (10, key, (juce::uint8) 100); on.setTimeStamp (beat * 96);
+                                                    auto off = juce::MidiMessage::noteOff (10, key); off.setTimeStamp (beat * 96 + 12); seq.addEvent (on); seq.addEvent (off); };
+            add (38, 2.0); add (42, 0.0); add (42, 0.5); add (36, 0.0);
+            seq.updateMatchedPairs();
+            juce::MidiFile mf; mf.setTicksPerQuarterNote (96); mf.addTrack (seq);
+            auto mfile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-sss.mid");
+            mfile.deleteFile();
+            { juce::FileOutputStream os (mfile); CHECK (os.openedOk() && mf.writeTo (os)); }
+            Project dp = Project::createDemo();
+            const size_t chans = dp.channels.size();
+            const int pi = importMidiPattern (dp, mfile);
+            CHECK (pi == (int) dp.patterns.size() - 1 && dp.channels.size() == chans);
+            if (pi >= 0)
+            {
+                auto& pt = dp.patterns[(size_t) pi];
+                CHECK (pt.notes.count (3) == 1 && pt.notes.at (3).size() == 1 && std::abs (pt.notes.at (3)[0].start - 2.0) < 1.0e-6);
+                CHECK (pt.notes.count (4) == 1 && pt.notes.at (4).size() == 2 && pt.notes.count (1) == 1);
+            }
+            CHECK (dp.patterns[0].stepOn (3, 8) && dp.patterns[0].stepOn (2, 8) && ! dp.patterns[0].stepOn (2, 4) && dp.patterns[0].notes[6].empty());
+            mfile.deleteFile();
+        }
+        std::printf ("3x Oscillation peak %.2f, HumWave 12 tables + 13 warps + sample-to-wavetable render and round-trip\n", p3);
     }
 
     // A template shared as one file carries its sounds: it opens on another machine with every sample found

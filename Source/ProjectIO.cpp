@@ -171,6 +171,7 @@ juce::ValueTree projectToTree (const Project& p)
             for (size_t o = 0; o < 3; ++o) { x.add (juce::String (s.xWave[o])); x.add (juce::String (s.xVol[o])); x.add (juce::String (s.xSemi[o])); x.add (juce::String (s.xFine[o])); }
             t.setProperty ("x3", x.joinIntoString (","), nullptr);
             t.setProperty ("wtPos", s.wtPos, nullptr); t.setProperty ("wtKind", s.wtKind, nullptr);
+            t.setProperty ("wwp", s.warp, nullptr); t.setProperty ("wwa", s.warpAmt, nullptr); t.setProperty ("wub", s.uniBlend, nullptr); t.setProperty ("sub", s.sub, nullptr);
             if (s.wt != nullptr && ! s.wt->empty())
             {
                 t.setProperty ("wt", juce::MemoryBlock (s.wt->data(), s.wt->size() * sizeof (float)).toBase64Encoding(), nullptr);
@@ -347,6 +348,7 @@ Project projectFromTree (const juce::ValueTree& root)
                     s.xSemi[o] = x[(int) o * 4 + 2].getFloatValue(); s.xFine[o] = x[(int) o * 4 + 3].getFloatValue();
                 }
             s.wtPos = t["wtPos"]; s.wtKind = t["wtKind"];
+            s.warp = t.getProperty ("wwp", 0); s.warpAmt = t.getProperty ("wwa", 0.0f); s.uniBlend = t.getProperty ("wub", 0.5f); s.sub = t.getProperty ("sub", 0.0f);
             juce::MemoryBlock mb;
             if (t.hasProperty ("wt") && mb.fromBase64Encoding (t["wt"].toString()) && mb.getSize() >= humWaveFrameSize * sizeof (float))
             {

@@ -1465,6 +1465,21 @@ public:
             for (auto& path : files)
             {
                 juce::File f (path);
+                if (f.hasFileExtension ("mid;midi"))
+                {
+                    const int pat = importMidiPattern (p, f);
+                    if (pat < 0) continue;
+                    if (lane < 0 || lane >= (int) p.lanes.size())
+                    {
+                        Lane l; l.name = p.patterns[(size_t) pat].name; l.mixerTrack = p.addMixerTrack (l.name);
+                        p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                    }
+                    Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.patternIndex = pat;
+                    c.length = p.patterns[(size_t) pat].lengthBeats();
+                    p.clips.push_back (c);
+                    ++lane;
+                    continue;
+                }
                 const double secs = audioSeconds (f);
                 if (secs <= 0) continue;
                 if (lane < 0 || lane >= (int) p.lanes.size())

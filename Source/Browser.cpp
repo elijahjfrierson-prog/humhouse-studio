@@ -191,18 +191,11 @@ static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;
 struct SampleSearchFilter : public juce::FileFilter
 {
     SampleSearchFilter() : juce::FileFilter ("Audio") {}
-    bool isFileSuitable (const juce::File& f) const override { return isAudioFile (f); }
+    bool isFileSuitable (const juce::File& f) const override { return isAudioFile (f) || f.hasFileExtension ("mid;midi"); }
     bool isDirectorySuitable (const juce::File&) const override { return true; }
 };
 
-static juce::File bundledSounds()
-{
-   #if JUCE_MAC
-    return juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Sounds");
-   #else
-    return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getSiblingFile ("Sounds");
-   #endif
-}
+static juce::File bundledSounds() { return bundledSoundsRoot(); }
 static juce::File downloadsFolder() { return juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"); }
 
 class SampleBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ListBoxModel
@@ -372,7 +365,7 @@ private:
     void selectedRowsChanged (int row) override { if (row >= 0 && row < hits.size()) s.engine.previewFile (hits[row]); }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override { return "sample"; }
-    void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile()) s.engine.previewFile (f); }
+    void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile() && isAudioFile (f)) s.engine.previewFile (f); }
     void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
     void browserRootChanged (const juce::File&) override {}
