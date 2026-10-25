@@ -2540,6 +2540,27 @@ int main()
                 CHECK (pt.notes.count (4) == 1 && pt.notes.at (4).size() == 2 && pt.notes.count (1) == 1);
             }
             CHECK (dp.patterns[0].stepOn (3, 8) && dp.patterns[0].stepOn (2, 8) && ! dp.patterns[0].stepOn (2, 4) && dp.patterns[0].notes[6].empty());
+            {   // a beat with its own kit names (tags, abbreviations) keeps its sounds: no default one-shots get added
+                Project kp = Project::createDemo();
+                for (auto& c : kp.channels)
+                {
+                    const juce::String n = c.name.toLowerCase();
+                    if (n == "kick") c.name = "fo - BD tight";
+                    else if (n == "snare") c.name = "SNR_crack 3";
+                    else if (n == "clap") c.name = "fo - clp dry";
+                    else if (n == "hat") { c.name = "Sound 4"; c.sampleFile = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("HH_closed_02.wav"); }
+                    else if (n == "open hat") c.name = "OH wide";
+                    else if (n == "perc") c.name = "rim knock";
+                }
+                const size_t kc = kp.channels.size();
+                const int ki = importMidiPattern (kp, mfile);
+                CHECK (ki >= 0 && kp.channels.size() == kc);
+                if (ki >= 0)
+                {
+                    auto& pt = kp.patterns[(size_t) ki];
+                    CHECK (pt.notes.count (3) == 1 && pt.notes.count (4) == 1 && pt.notes.at (4).size() == 2 && pt.notes.count (1) == 1);
+                }
+            }
             mfile.deleteFile();
         }
         std::printf ("3x Oscillation peak %.2f, HumWave 12 tables + 13 warps + sample-to-wavetable render and round-trip\n", p3);

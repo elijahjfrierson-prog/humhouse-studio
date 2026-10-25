@@ -148,8 +148,39 @@ int importMidiPattern (Project& p, const juce::File& file)
         if (ids[role] >= 0) return ids[role];
         const juce::String want (roles[role]);
         for (auto& c : p.channels) if (c.name.equalsIgnoreCase (want)) return ids[role] = c.id;
-        for (auto& c : p.channels)
-            if (c.name.containsIgnoreCase (want) && (role != 3 || ! c.name.containsIgnoreCase ("open"))) return ids[role] = c.id;
+        // use the beat's own kit: match by channel name or sample file name (fo - snr 3, HH_closed, clp dry, rim...)
+        static const char* const keys[6][9] {
+            { "kick", "kck", "bd", "bassdrum", nullptr },
+            { "clap", "clp", "snap", nullptr },
+            { "snare", "snr", "sd", "rimshot", nullptr },
+            { "hat", "hihat", "hh", "chh", "closed", "hats", nullptr },
+            { "open", "oh", "ohh", "ohat", "openhat", nullptr },
+            { "perc", "rim", "shaker", "shake", "tom", "conga", "bongo", "cowbell", "tamb" } };
+        auto words = [] (const Channel& c)
+        {
+            juce::StringArray w; w.addTokens ((c.name + " " + c.sampleFile.getFileNameWithoutExtension()).toLowerCase()
+                                                .replaceCharacters ("-_.()[]", "       "), " ", "");
+            w.removeEmptyStrings(); return w;
+        };
+        auto matches = [&] (const Channel& c, int r)
+        {
+            if (c.type == ChannelType::Synth) return false;
+            const auto w = words (c);
+            const bool open = w.contains ("open") || w.contains ("oh") || w.contains ("ohh") || w.contains ("openhat");
+            if (r == 3 && open) return false;
+            for (auto& t : w)
+                for (const char* k : keys[r])
+                {
+                    if (k == nullptr) break;
+                    const juce::String key (k);
+                    if (t == key || (key.length() >= 3 && t.startsWith (key)) || (key.length() >= 4 && t.contains (key))) return true;
+                }
+            return false;
+        };
+        for (auto& c : p.channels) if (matches (c, role)) return ids[role] = c.id;
+        static const int fallback[6] { -1, 2, 1, -1, 3, -1 };   // no clap -> snare, no snare -> clap, no open hat -> hat
+        if (fallback[role] >= 0)
+            for (auto& c : p.channels) if (matches (c, fallback[role])) return ids[role] = c.id;
         Channel c; c.name = want; c.mixerTrack = -1;
         c.colour = juce::Colour::fromHSV ((float) role / 8.0f, 0.65f, 0.95f, 1.0f);
         c.builtinDrum = role < 5 ? role : 3;
