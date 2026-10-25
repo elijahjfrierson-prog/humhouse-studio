@@ -957,7 +957,13 @@ public:
             if (file.isDirectory()) importKit (s, file);
             else if (isAudioFile (file)) samples.add (file);
             else if (file.hasFileExtension ("mid;midi"))
-                s.edit ("Add pattern", [file] (Project& p) { if (const int i = importMidiPattern (p, file); i >= 0) p.currentPattern = i; });
+                s.edit ("Load pattern", [file] (Project& p) {   // dropped on the rack: replaces the pattern you're on (clears it all, starter groove included)
+                    const int i = importMidiPattern (p, file);
+                    if (i < 0) return;
+                    if (p.currentPattern < 0 || p.currentPattern >= i) { p.currentPattern = i; return; }
+                    auto& cur = p.patterns[(size_t) p.currentPattern];
+                    cur.notes = p.patterns[(size_t) i].notes; cur.name = p.patterns[(size_t) i].name;
+                    p.patterns.erase (p.patterns.begin() + i); });
         }
         if (samples.size() == 1 && replaceSampleAt ({ x, y }, samples[0])) return;
         if (! samples.isEmpty()) addSampleChannels (s, samples, samples.size() > 1 ? "Samples" : juce::String());
