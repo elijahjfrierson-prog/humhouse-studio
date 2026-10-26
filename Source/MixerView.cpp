@@ -460,8 +460,8 @@ private:
         for (int k = 0; k < slots.size(); ++k)
         {
             const auto b = slots[k]->getBounds();
-            if (y < b.getY() + b.getHeight() / 4) return { juce::jmin (k, used), false };
-            if (y < b.getBottom() - b.getHeight() / 4) return k < used ? std::pair<int, bool> { k, true } : std::pair<int, bool> { used, false };
+            if (k < used && y < b.getY() + b.getHeight() / 4) return { k, false };
+            if (y < b.getBottom() - b.getHeight() / 4 || k >= used) return { k, true };   // any slot 1-10, empty or not
         }
         return { used, false };
     }
@@ -471,11 +471,11 @@ private:
         const int t = track();
         s.edit (to.second ? "Replace effect" : "Move effect", [t, from, to] (Project& p) {
             auto& f = p.mixer[(size_t) t].fx;
-            if (from >= (int) f.size() || to.first > (int) f.size()) return;
+            if (from >= (int) f.size() || (! to.second && to.first > (int) f.size())) return;
             const auto moved = f[(size_t) from];
             if (to.second)
             {
-                if (to.first >= (int) f.size()) return;
+                while ((int) f.size() <= to.first) { FxSlot e; e.uid = p.newUid(); f.push_back (e); }
                 f[(size_t) to.first] = moved;
                 FxSlot e; e.uid = p.newUid(); f[(size_t) from] = e;
                 while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
