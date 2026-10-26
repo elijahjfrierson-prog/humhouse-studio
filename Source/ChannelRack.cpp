@@ -15,6 +15,7 @@ struct PoolInstrument
     const char* cat = nullptr;                                           // HumWave Serum Pack folder (nullptr = main list)
     float grain = 0, evolve = 0; int bWarp = 0; float bDrop = 0.5f, bClick = 0;   // granular / evolve, HitMaker 808
     int bStart = 0;
+    const char* sample = nullptr;                                        // played from a bundled recording (path under Sounds/)
 };
 // HumWave Serum Pack: wavetable + warp presets. The Weird FX folder is voiced after the Triple S Hitters one-shots
 // (measured: ~6.5 kHz brightness, very noisy/gritty spectrum, ~3.7 s tails)
@@ -101,6 +102,8 @@ static std::vector<PoolInstrument> withSonicStore (std::vector<PoolInstrument> v
         ss (FX, "Noise Hit",                 0xffd0d0d0, 8, 0.001f,0.8f, 0,    0.6f, 8000,  0.3f, 0,   1, 0.4f, 1,   0,   0,   1.0f, 0,    0),
     };
     v.insert (v.end(), store.begin(), store.end());
+    for (auto& e : v)
+        if (juce::String (e.name) == "SSS Organ") e.sample = "Etherea Instruments/Organ/SSS Organ.flac";   // the real SSS organ stab, played by key
     return v;
 }
 static std::vector<PoolInstrument> withSerumPack (std::vector<PoolInstrument> v)
@@ -381,6 +384,11 @@ static Channel poolChannel (const PoolInstrument& e)
     sp.grain = e.grain; sp.evolve = e.evolve; sp.bWarp = e.bWarp; sp.bStart = e.bStart; sp.bDrop = e.bDrop; sp.bClick = e.bClick;
     sp.xWave = e.xw; sp.xVol = e.xv; sp.xSemi = e.xs; sp.xFine = e.xf;
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
+    if (e.sample != nullptr)
+        if (const auto f = bundledSoundsRoot().getChildFile (e.sample); f.existsAsFile())
+        {
+            c.type = ChannelType::Sampler; c.sampleFile = f; c.keyTrack = true; c.rootKey = e.root;
+        }
     return c;
 }
 // picture to sound: each row of the picture is one wavetable frame, brightness is the wave height
