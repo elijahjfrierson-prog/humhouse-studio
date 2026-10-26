@@ -526,6 +526,8 @@ public:
         if (is ('v', cmd) && ! clipboard().empty())
         {
             double at = floorSnap (s.engine.isPlaying() ? 0.0 : std::fmod (s.engine.positionBeats(), s.p().patterns[(size_t) s.p().currentPattern].lengthBeats()));
+            if (const auto m = getMouseXYRelative(); isMouseOver (true) && gridArea().contains (m))
+                at = juce::jmax (0.0, floorSnap (xToBeat ((float) m.x)));   // FL: paste where the mouse is
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
             if (clipFrom() >= 0.0)

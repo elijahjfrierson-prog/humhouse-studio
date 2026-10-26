@@ -1468,7 +1468,7 @@ public:
         {
             const int lane = laneAt (e.position.y);
             if (lane < 0 || lane >= (int) p.lanes.size()) return;
-            const double at = juce::jmax (0.0, std::floor (xToBeat (e.position.x) / gridSnap()) * gridSnap());
+            const double at = cellStart (xToBeat (e.position.x));   // the snap cell under the mouse, not the (zoom-dependent) drawn grid
             s.edit ("Paint clip", [&] (Project& pr) {
                 Clip c;
                 auto src = std::find_if (pr.clips.begin(), pr.clips.end(), [this] (const Clip& o) { return o.uid == lastClipUid; });
@@ -1836,7 +1836,8 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = juce::jmax (0.0, snap (s.engine.positionBeats()));
+            const bool overGrid = isMouseOver (true) && lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH;
+            const double at = cellStart (overGrid ? xToBeat ((float) lastMouse.x) : s.engine.positionBeats());   // FL: paste where the mouse is
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -2020,6 +2021,7 @@ private:
         return g;
     }
     double snap (double b) const { return plSnap > 0 ? std::round (b / plSnap) * plSnap : b; }
+    double cellStart (double b) const { return juce::jmax (0.0, plSnap > 0 ? std::floor (b / plSnap + 1.0e-6) * plSnap : b); }
     // clicks place the playhead on the grid line you can see under the mouse: a coarse snap (bar) rounded a click
     // mid-bar up to 2 beats away
     double placeSnap (double b) const { const double g = plSnap > 0 ? juce::jmin (plSnap, gridSnap()) : 0.0; return g > 0 ? std::round (b / g) * g : b; }
