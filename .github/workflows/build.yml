@@ -150,7 +150,7 @@ jobs:
         run: cmake --build build-ios --config Release --target HumHouseStudioMaster -- -sdk iphoneos -jobs 2
       - name: Package .ipa
         run: |
-          APP=$(find build-ios -type d -name "*.app" -path "*Release-iphoneos*" | head -1)
+          APP=$(find build-ios/HumHouseStudioMaster_artefacts -maxdepth 2 -type d -name "*.app" | head -1)
           echo "app: $APP"; test -n "$APP"; test -d "$APP/Sounds"
           mkdir -p Payload artifacts
           cp -R "$APP" Payload/
