@@ -45,11 +45,16 @@ set(HHS_DEFS
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_DISPLAY_SPLASH_SCREEN=0
-    JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
 )
+# iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
+if(IOS)
+    list(APPEND HHS_DEFS JUCE_PLUGINHOST_VST3=0)
+else()
+    list(APPEND HHS_DEFS JUCE_PLUGINHOST_VST3=1)
+endif()
 if(APPLE)
     list(APPEND HHS_DEFS JUCE_PLUGINHOST_AU=1)
 endif()
@@ -104,7 +109,20 @@ function(hhs_add_app target product bundle licensed)
         MICROPHONE_PERMISSION_TEXT "${product} records vocals and instruments from your audio input."
         HARDENED_RUNTIME_ENABLED FALSE
         DOCUMENT_EXTENSIONS hhs hhpack hhpreset hhchain
+        # iPhone / iPad (ignored on desktop)
+        IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        REQUIRES_FULL_SCREEN TRUE
+        STATUS_BAR_HIDDEN TRUE
+        BACKGROUND_AUDIO_ENABLED TRUE
+        FILE_SHARING_ENABLED TRUE
+        DOCUMENT_BROWSER_ENABLED TRUE
+        TARGETED_DEVICE_FAMILY "1,2"
     )
+    if(IOS)   # bundled kits / sounds go inside the .app (bundledSoundsRoot = next to the executable)
+        add_custom_command(TARGET ${target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Sounds" "$<TARGET_BUNDLE_DIR:${target}>/Sounds")
+    endif()
     target_sources(${target} PRIVATE
         ${HHS_CORE_SOURCES}
         Source/Main.cpp
@@ -128,6 +146,7 @@ hhs_add_app(HumHouseStudioMaster "HumHouse Studio Master" "com.humhouse.studio.m
 endif()
 
 # --- Tests: engine, effects, note tools and project I/O, headless -------------
+if(NOT IOS)
 enable_testing()
 juce_add_console_app(HHSTests PRODUCT_NAME "HHSTests")
 target_sources(HHSTests PRIVATE ${HHS_CORE_SOURCES} tests/CoreTests.cpp)
@@ -135,3 +154,4 @@ target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_ST
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
+endif()
