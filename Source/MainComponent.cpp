@@ -572,6 +572,7 @@ public:
         setupButton (rackPopBtn, "RACK", "Channel Rack: pop it out into its own window so you can edit samples and one-shots on Rec and in full screen (click again to dock it)", true);
         rackPopBtn.onClick = [this] { if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (rackPopBtn);
+        rackPopOut = [this] { toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
@@ -623,6 +624,7 @@ public:
 
     ~MainComponent() override
     {
+        rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         stopTimer();
         engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
@@ -1159,8 +1161,8 @@ private:
         void timerCallback() override   // stays visible over the main window while you work, not over other apps
         {
             updateFloating (*this);
-            if (! floatWithTopmost)   // Mac: a full-screen pop-out stays over the Beat / Rec screens while the app is in front
-                if (const bool want = filled && juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
+            if (! floatWithTopmost)   // Mac: a pop-out (full screen or not) stays over the Beat / Rec screens while the app is in front, so it never drops behind
+                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
             fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
         }
     };
@@ -1193,6 +1195,7 @@ private:
         popouts.erase (it);
         addAndMakeVisible (c);
         resized();
+        c->resized();
     }
 
     void setView (int v)

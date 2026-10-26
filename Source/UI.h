@@ -197,7 +197,7 @@ inline int rulerLabelStep (float barPx)
 }
 
 // FL-style tool cursors (white icon, dark outline so it reads on any background)
-enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom };
+enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom, Select, Rack };
 inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
 {
     constexpr int S = 32;
@@ -234,6 +234,13 @@ inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
             p.addEllipse (3.0f, 18.0f, 8.0f, 8.0f); p.addEllipse (17.0f, 18.0f, 8.0f, 8.0f);
             p.addLineSegment ({ 9.5f, 19.0f, 19.0f, 2.0f }, 2.5f); p.addLineSegment ({ 18.5f, 19.0f, 9.0f, 2.0f }, 2.5f);
             hx = 14; hy = 2; break;
+        case CursorIcon::Select:   // arrow
+            p.startNewSubPath (6.0f, 3.0f); p.lineTo (6.0f, 24.0f); p.lineTo (11.0f, 19.0f); p.lineTo (15.0f, 27.0f); p.lineTo (18.5f, 25.5f);
+            p.lineTo (14.5f, 17.5f); p.lineTo (21.0f, 17.5f); p.closeSubPath();
+            hx = 6; hy = 3; break;
+        case CursorIcon::Rack:     // 3 lines going down (channel rack rows)
+            for (int i = 0; i < 3; ++i) p.addRoundedRectangle (5.0f, 6.0f + 7.0f * (float) i, 18.0f, 3.5f, 1.5f);
+            hx = 14; hy = 14; break;
         case CursorIcon::Zoom:
             p.addEllipse (3.0f, 3.0f, 15.0f, 15.0f); p.addLineSegment ({ 16.0f, 16.0f, 26.0f, 26.0f }, 4.0f);
             hx = 10; hy = 10; break;
@@ -256,6 +263,23 @@ inline juce::MouseCursor toolCursor (CursorIcon k)
     const auto img = toolCursorImage (k, hx, hy);
     return cache.emplace ((int) k, juce::MouseCursor (img, hx, hy)).first->second;
 }
+
+// a toolbar button that shows an icon instead of text (tooltip says what it does)
+struct IconTextButton : public juce::TextButton
+{
+    int icon = 0;
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        auto& lf = getLookAndFeel();
+        const auto bg = findColour (getToggleState() ? juce::TextButton::buttonOnColourId : juce::TextButton::buttonColourId);
+        lf.drawButtonBackground (g, *this, bg, over, down);
+        int hx, hy;
+        const auto img = toolCursorImage ((CursorIcon) icon, hx, hy);
+        const float sz = (float) juce::jmin (getWidth(), getHeight()) - 6.0f;
+        g.setOpacity (isEnabled() ? 1.0f : 0.4f);
+        g.drawImage (img, juce::Rectangle<float> (sz, sz).withCentre (getLocalBounds().toFloat().getCentre()), juce::RectanglePlacement::centred);
+    }
+};
 
 class HHLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -366,7 +390,8 @@ inline juce::PopupMenu colourMenu (int base)
 }
 void openChannelEditor (Studio&, int channelId);
 void openClipEditor (Studio&, int clipUid);                         // audio clip MAIN / FUNC / SCOPE
-extern std::function<void (int, const juce::String&)> clipAction;   // set by the Playlist: reverse / normalize / humlab / humtime / humtone
+extern std::function<void (int, const juce::String&)> clipAction;
+extern std::function<void()> rackPopOut;   // set by the main window: pop the Channel Rack out / dock it   // set by the Playlist: reverse / normalize / humlab / humtime / humtone
 // Patch Method (FL Patcher style): the channel gets its own insert and a window to stack effects / chains on it
 void openPatchMethod (Studio&, int channelId);
 void closeAllEditorWindows();

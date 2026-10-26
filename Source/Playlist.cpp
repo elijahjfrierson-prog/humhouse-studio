@@ -1216,6 +1216,10 @@ public:
        #if ! HHS_LICENSED
         addAndMakeVisible (addDrummer);
        #endif
+        setupButton (rackPop, {}, "Channel Rack: pop it out into its own window so you can edit samples / one-shots on Rec and in full screen (click again to dock it)");
+        rackPop.icon = (int) CursorIcon::Rack;
+        rackPop.onClick = [] { if (rackPopOut) rackPopOut(); };
+        addAndMakeVisible (rackPop);
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
@@ -1229,8 +1233,11 @@ public:
                                  "Slice (C) - click a clip (audio, pattern or drummer) to cut it at the snap line" };
             for (int i = 0; i < 5; ++i)
             {
-                auto* b = toolBtns.add (new juce::TextButton());
-                setupButton (*b, labels[i], tips[i], true);
+                auto* b = new IconTextButton();
+                toolBtns.add (b);
+                setupButton (*b, {}, tips[i], true);
+                (void) labels;
+                b->icon = (int) std::array<CursorIcon, 5> { CursorIcon::Select, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors }[(size_t) i];
                 b->setRadioGroupId (4301);
                 b->onClick = [this, i] { tool = (PTool) i; };
                 addAndMakeVisible (b);
@@ -1284,11 +1291,12 @@ public:
         t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
         t.removeFromLeft (10);
-        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (50)); t.removeFromLeft (2); }
+        for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (32)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
         if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
+        t.removeFromLeft (4); rackPop.setBounds (t.removeFromLeft (32));
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
         layoutHeaders();
     }
@@ -1970,6 +1978,7 @@ private:
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
     juce::TextButton addTrack, addDrummer, loopRec, rts, preroll, clearPunch;
+    IconTextButton rackPop;
     juce::ComboBox snapBox;
     double plSnap = 1.0;
     float lastPx = -1.0f;

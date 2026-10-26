@@ -43,8 +43,11 @@ public:
                                  "Zoom (Z) - click to zoom in, Shift-click to zoom out" };
             for (int i = 0; i < 7; ++i)
             {
-                auto* b = toolBtns.add (new juce::TextButton());
-                setupButton (*b, labels[i], tips[i], true);
+                auto* b = new IconTextButton();
+                toolBtns.add (b);
+                setupButton (*b, {}, tips[i], true);
+                (void) labels;
+                b->icon = (int) std::array<CursorIcon, 7> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom }[(size_t) i];
                 b->setRadioGroupId (4201);
                 b->onClick = [this, i] { editTool = (EditTool) i; };
                 addAndMakeVisible (b);
@@ -96,7 +99,7 @@ public:
         std::vector<Item> items { { &chLabel, 150, 6 }, { &rootBox, 60, 4 }, { &scaleBox, 150, 4 }, { &highlightBtn, 60, 10 },
                                   { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &quantBtn, 62, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
                                   { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 4 }, { &sizeBtn, 64, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
-        for (auto* b : toolBtns) items.push_back ({ b, 46, 2 });
+        for (auto* b : toolBtns) items.push_back ({ b, 30, 2 });
         const int avail = juce::jmax (100, getWidth() - 12);
         auto layout = [&] (bool apply)
         {

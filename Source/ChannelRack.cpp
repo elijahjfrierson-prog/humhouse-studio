@@ -813,6 +813,9 @@ public:
     {
         s.addChangeListener (this);
         setupButton (addBtn, "+ Channel", "Add a sampler, synth, 808 or plugin instrument");
+        setupButton (popBtn, {}, "Pop the Channel Rack out into its own window (use it on Rec / full screen while you sample); click again to dock it");
+        popBtn.icon = (int) CursorIcon::Rack;
+        popBtn.onClick = [] { if (rackPopOut) rackPopOut(); };
         addBtn.onClick = [this] { addMenu(); };
         setupButton (kitBtn, "Import Kit", "Pick a drum kit folder: every sample becomes a channel (or drag folders / samples onto the rack)");
         kitBtn.onClick = [this] {
@@ -837,7 +840,7 @@ public:
         };
         swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! swing.isMouseButtonDown()) s.commit ("Swing"); };
         swing.onDragEnd = [this] { s.commit ("Swing"); };
-        for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing })
+        for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing, (juce::Component*) &popBtn })
             addAndMakeVisible (c);
         refresh();
         startTimerHz (30);
@@ -917,6 +920,8 @@ public:
         kitBtn.setBounds (top.removeFromLeft (90)); top.removeFromLeft (8);
         patternBox.setBounds (top.removeFromLeft (150)); top.removeFromLeft (8);
         swing.setBounds (top.removeFromLeft (28));
+        popBtn.setToggleState (dynamic_cast<juce::ResizableWindow*> (getParentComponent()) != nullptr, juce::dontSendNotification);
+        popBtn.setBounds (top.removeFromRight (34));
         layoutRows();
     }
 
@@ -997,6 +1002,7 @@ private:
     Studio& s;
     std::vector<std::unique_ptr<Row>> rows;
     juce::TextButton addBtn, kitBtn;
+    IconTextButton popBtn;
     juce::ComboBox patternBox;
     Knob swing { "Swing", "delays every other step for groove", 0.0, 1.0, 0.0 };
     std::unique_ptr<juce::FileChooser> chooser;

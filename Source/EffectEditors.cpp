@@ -1786,6 +1786,7 @@ void openChannelEditor (Studio& s, int channelId)
 }
 
 std::function<void (int, const juce::String&)> clipAction;
+std::function<void()> rackPopOut;
 
 // FL-style settings for an audio clip (MAIN / FUNC / SCOPE). Linked like FL: copies of the same audio share the settings
 void openClipEditor (Studio& s, int clipUid)
