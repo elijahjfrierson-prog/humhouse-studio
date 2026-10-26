@@ -2492,6 +2492,18 @@ private:
     // Key Finder: key, scale, BPM and tuning offset of an audio clip (analysed off the audio thread)
     void findKeyForClip (const Clip& c)
     {
+        if (c.patternIndex >= 0)   // pattern: key from its melodic notes (drums / unpitched one-shots don't count)
+        {
+            auto& p = s.p();
+            if (c.patternIndex >= (int) p.patterns.size()) return;
+            std::vector<std::pair<int, double>> keys;
+            for (auto& [chId, nl] : p.patterns[(size_t) c.patternIndex].notes)
+                if (auto* ch = p.findChannel (chId); ch != nullptr && ch->type != ChannelType::Drummer && ! (ch->type == ChannelType::Sampler && ! ch->keyTrack))
+                    for (auto& n : nl) if (! n.muted) keys.push_back ({ n.key, n.length * n.velocity });
+            if (keys.empty()) { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Key Finder", "This pattern has no melodic notes (only drums), so there's no key to find."); return; }
+            showKeyResult (findKeyFromNotes (keys), true);
+            return;
+        }
         juce::Component::SafePointer<Playlist> safe (this);
         const auto file = c.audioFile; const double off = c.sourceOffset, secs = juce::jmin (120.0, beatsToSeconds (c.length, s.p().bpm));
         juce::Thread::launch ([safe, file, off, secs] {
@@ -2654,7 +2666,7 @@ private:
         }
         if (clip.lane >= 0 && clip.lane < (int) p.lanes.size()) m.addSubMenu ("Track color", colourMenu (50));
        #if ! HHS_LICENSED
-        m.addItem (9, "Find key / BPM / tune", clip.isAudio());
+        m.addItem (9, clip.patternIndex >= 0 ? "Find key (from the pattern's notes)" : "Find key / BPM / tune", clip.isAudio() || clip.patternIndex >= 0);
         {
             juce::PopupMenu sm;
             sm.addItem (12, "Resample (speed + pitch, like tape)", true, stretchMode == 0);

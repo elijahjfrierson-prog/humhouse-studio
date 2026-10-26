@@ -2188,6 +2188,15 @@ int main()
         CHECK (std::abs (g.bpm - 142.0) <= 1.0);
         CHECK (std::abs (g.cents - 18.0f) < 6.0f);
     }
+    // Key Finder from pattern notes: Am - Dm - Em - Am chords
+    {
+        std::vector<std::pair<int, double>> notes;
+        for (int c : { 57, 60, 64, 50, 53, 57, 52, 55, 59, 57, 60, 64, 45, 45 }) notes.push_back ({ c, 1.0 });
+        const auto g = findKeyFromNotes (notes);
+        std::printf ("key finder (pattern): %s\n", g.describe().toRawUTF8());
+        CHECK (g.root == 9 && g.scaleIndex == 1 && ! g.describe().contains ("BPM"));
+        CHECK (findKeyFromNotes ({}).alts.empty());
+    }
     // clip colour survives save / load
     {
         auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-colour-test.hhs");

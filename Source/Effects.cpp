@@ -1778,7 +1778,7 @@ juce::String KeyGuess::keyName (int root, int scaleIndex)
 juce::String KeyGuess::describe() const
 {
     juce::String c = (cents >= 0 ? "+" : "") + juce::String (juce::roundToInt (cents)) + " cents";
-    juce::String s = keyName (root, scaleIndex) + "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c;
+    juce::String s = keyName (root, scaleIndex) + (bpm > 0 ? "   " + juce::String (juce::roundToInt (bpm)) + " BPM   " + c : juce::String());
     // the relative key uses the same notes: a beat in A minor is just as much C major
     s << "\nRelative: " << (scaleIndex == 1 ? keyName (root + 3, 0) : keyName (root + 9, 1));
     return s;
@@ -1811,6 +1811,41 @@ std::vector<double> detectOnsets (const float* x, int n, double sr, double minGa
         }
     }
     return out;
+}
+
+static void keyFromChroma (const double* chroma, KeyGuess& g)
+{
+    static const double maj[12] { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
+    static const double mnr[12] { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
+    auto corr = [&] (const double* prof, int root) {
+        double mx = 0, my = 0; for (int i = 0; i < 12; ++i) { mx += chroma[(i + root) % 12]; my += prof[i]; }
+        mx /= 12; my /= 12;
+        double sxy = 0, sxx = 0, syy = 0;
+        for (int i = 0; i < 12; ++i) { const double a = chroma[(i + root) % 12] - mx, b = prof[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
+        return sxx > 0 ? sxy / std::sqrt (sxx * syy) : 0.0;
+    };
+    double best = -2, second = -2;
+    for (int mode = 0; mode < 2; ++mode)
+        for (int r = 0; r < 12; ++r)
+        {
+            const double c = corr (mode == 0 ? maj : mnr, r);
+            if (c > best) { second = best; best = c; g.root = r; g.scaleIndex = mode; }
+            else if (c > second) second = c;
+        }
+    g.confidence = (float) juce::jlimit (0.0, 1.0, (best - second) * 5.0);
+    for (int mode = 0; mode < 2; ++mode)
+        for (int r = 0; r < 12; ++r) g.alts.push_back ({ r, mode, (float) corr (mode == 0 ? maj : mnr, r) });
+    std::stable_sort (g.alts.begin(), g.alts.end(), [] (const KeyGuess::Alt& a, const KeyGuess::Alt& b) { return a.match > b.match; });
+}
+
+KeyGuess findKeyFromNotes (const std::vector<std::pair<int, double>>& notes)
+{
+    KeyGuess g;
+    double chroma[12] {};
+    for (auto& [key, w] : notes) chroma[((key % 12) + 12) % 12] += juce::jmax (0.0, w);
+    if (std::all_of (std::begin (chroma), std::end (chroma), [] (double c) { return c <= 0.0; })) return g;
+    keyFromChroma (chroma, g);
+    return g;
 }
 
 KeyGuess findKey (const float* x, int n, double sr)
@@ -1859,27 +1894,7 @@ KeyGuess findKey (const float* x, int n, double sr)
         const int pc = (((int) std::lround (p.midi - g.cents / 100.0f)) % 12 + 12) % 12;
         chroma[pc] += std::sqrt (p.w);
     }
-    static const double maj[12] { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
-    static const double mnr[12] { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
-    auto corr = [&] (const double* prof, int root) {
-        double mx = 0, my = 0; for (int i = 0; i < 12; ++i) { mx += chroma[(i + root) % 12]; my += prof[i]; }
-        mx /= 12; my /= 12;
-        double sxy = 0, sxx = 0, syy = 0;
-        for (int i = 0; i < 12; ++i) { const double a = chroma[(i + root) % 12] - mx, b = prof[i] - my; sxy += a * b; sxx += a * a; syy += b * b; }
-        return sxx > 0 ? sxy / std::sqrt (sxx * syy) : 0.0;
-    };
-    double best = -2, second = -2;
-    for (int mode = 0; mode < 2; ++mode)
-        for (int r = 0; r < 12; ++r)
-        {
-            const double c = corr (mode == 0 ? maj : mnr, r);
-            if (c > best) { second = best; best = c; g.root = r; g.scaleIndex = mode; }
-            else if (c > second) second = c;
-        }
-    g.confidence = (float) juce::jlimit (0.0, 1.0, (best - second) * 5.0);
-    for (int mode = 0; mode < 2; ++mode)
-        for (int r = 0; r < 12; ++r) g.alts.push_back ({ r, mode, (float) corr (mode == 0 ? maj : mnr, r) });
-    std::stable_sort (g.alts.begin(), g.alts.end(), [] (const KeyGuess::Alt& a, const KeyGuess::Alt& b) { return a.match > b.match; });
+    keyFromChroma (chroma, g);
     // tempo: spectral-flux onsets, autocorrelation scored over 4 beat multiples
     constexpr int o2 = 10, N2 = 1 << o2, hop = 512;
     juce::dsp::FFT f2 (o2);

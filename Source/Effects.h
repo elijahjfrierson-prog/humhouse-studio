@@ -154,6 +154,7 @@ struct KeyGuess
 
 };
 KeyGuess findKey (const float* mono, int n, double sr);
+KeyGuess findKeyFromNotes (const std::vector<std::pair<int, double>>& notes);   // (MIDI key, weight = length x velocity): key of a pattern
 // hit (transient) times in seconds, a few ms before each attack, at least minGapSec apart
 std::vector<double> detectOnsets (const float* mono, int n, double sr, double minGapSec);
 
