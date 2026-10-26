@@ -2695,6 +2695,41 @@ int main()
         CHECK (d2 < 1.0e-7f && gatedDb < -1.5f);
     }
 
+    // M/S knob merges to mono, trim start cuts the beginning, FX can sit in any slot, all saved
+    {
+        auto pr = Project::createDemo();
+        pr.mixer[0].stereoSep = -1.0f;
+        while (pr.mixer[0].fx.size() < 9) { FxSlot e; e.uid = pr.newUid(); pr.mixer[0].fx.push_back (e); }
+        auto& g = pr.addFx (0, "limiter"); const int gUid = g.uid;
+        Engine e; e.prepare (44100, 512); e.newProject (pr); e.sync(); e.play();
+        juce::AudioBuffer<float> out (2, 512); float diff = 0, peak = 0;
+        for (int b = 0; b < 120; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.processBlock (nullptr, 0, o, 2, 512);
+            for (int i = 0; i < 512; ++i) { CHECK (std::isfinite (o[0][i])); diff = std::max (diff, std::abs (o[0][i] - o[1][i])); peak = std::max (peak, std::abs (o[0][i])); }
+        }
+        e.stop();
+        std::printf ("M/S mono: peak %.3f, L-R %.6f\n", peak, diff);
+        CHECK (peak > 0.01f && diff < 1.0e-4f);
+        CHECK (e.builtinFx (0, gUid) != nullptr);
+
+        Channel c; c.type = ChannelType::Sampler; c.smpStart = 0.25f;
+        auto src = std::make_shared<juce::AudioBuffer<float>> (1, 44100); src->clear();
+        for (int i = 0; i < 44100; ++i) src->setSample (0, i, (float) i / 44100.0f);
+        auto done = processSample (src, c, 44100.0);
+        CHECK (done != nullptr && std::abs (done->getNumSamples() - (44100 - 11025)) <= 1);
+        if (done != nullptr) CHECK (std::abs (done->getSample (0, 0) - 0.25f) < 0.001f);
+
+        pr.channels[0].smpStart = 0.125f;
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_ms_test.hhs");
+        CHECK (saveProject (pr, f));
+        Project back; CHECK (loadProject (back, f)); f.deleteFile();
+        CHECK (std::abs (back.mixer[0].stereoSep + 1.0f) < 1.0e-4f);
+        CHECK (back.mixer[0].fx.size() == 10 && back.mixer[0].fx[9].type == "limiter" && back.mixer[0].fx[3].type.isEmpty());
+        CHECK (std::abs (back.channels[0].smpStart - 0.125f) < 1.0e-4f);
+    }
+
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;
 }

@@ -879,7 +879,7 @@ SharedSample processSample (SharedSample src, const Channel& c, double sr, doubl
     const bool stretch = (c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f))
                       || std::abs (syncMul - 1.0) > 1.0e-4;
     if (! (c.smpNormalize || c.smpReverse || c.smpInvert || c.smpDeclick || c.smpTrim || c.smpBoostDb != 0.0f
-           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || stretch || merge || (c.smpWarp > 0 && c.smpWarpAmt > 0.0f)))
+           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || c.smpStart > 0.0f || stretch || merge || (c.smpWarp > 0 && c.smpWarpAmt > 0.0f)))
         return src;
     juce::AudioBuffer<float> b (*src);
     const int nch = b.getNumChannels();
@@ -893,6 +893,16 @@ SharedSample processSample (SharedSample src, const Channel& c, double sr, doubl
         juce::AudioBuffer<float> t (nch, s1 - s0 + 1);
         for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, s0, t.getNumSamples());
         b = std::move (t);
+    }
+    if (c.smpStart > 0.0f)   // trim knob: cut the beginning off
+    {
+        const int cut = juce::jmin (b.getNumSamples() - 1, (int) (c.smpStart * sr));
+        if (cut > 0)
+        {
+            juce::AudioBuffer<float> t (nch, b.getNumSamples() - cut);
+            for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, cut, t.getNumSamples());
+            b = std::move (t);
+        }
     }
     if (c.smpReverse) b.reverse (0, b.getNumSamples());
     float gain = juce::Decibels::decibelsToGain (c.smpBoostDb) * (c.smpInvert ? -1.0f : 1.0f);

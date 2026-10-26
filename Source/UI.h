@@ -365,6 +365,8 @@ inline juce::PopupMenu colourMenu (int base)
     return m;
 }
 void openChannelEditor (Studio&, int channelId);
+void openClipEditor (Studio&, int clipUid);                         // audio clip MAIN / FUNC / SCOPE
+extern std::function<void (int, const juce::String&)> clipAction;   // set by the Playlist: reverse / normalize / humlab / humtime / humtone
 // Patch Method (FL Patcher style): the channel gets its own insert and a window to stack effects / chains on it
 void openPatchMethod (Studio&, int channelId);
 void closeAllEditorWindows();

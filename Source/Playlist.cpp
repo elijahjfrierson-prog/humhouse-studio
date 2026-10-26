@@ -2348,6 +2348,33 @@ private:
     // HumHouse Stem Splitter: runs in the background; the stems land on 4 new tracks under the clip, the original is muted (kept)
     // FL-style consolidate: the selected clips (audio, patterns, Drummer) render to one audio clip on a free
     // track below; the originals are muted, not deleted, so the edit stays undoable and re-editable
+    void clipSettingAction (int uid, const juce::String& a)   // FUNC buttons of the audio clip wrench (MAIN / FUNC / SCOPE)
+    {
+        const Clip* c = nullptr;
+        for (auto& o : s.p().clips) if (o.uid == uid) c = &o;
+        if (c == nullptr || ! c->isAudio()) return;
+        if (a == "humlab") { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
+        if (a == "humtime") { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }
+        if (a == "humtone") { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+        juce::AudioBuffer<float> b; double sr = 0;
+        if (! readClipAudio (*c, s.p().bpm, b, sr)) return;
+        if (a == "normalize")
+        {
+            float pk = 0; for (int ch = 0; ch < b.getNumChannels(); ++ch) pk = juce::jmax (pk, b.getMagnitude (ch, 0, b.getNumSamples()));
+            if (pk < 1.0e-6f) return;
+            const float g = 0.98f / pk;
+            s.edit ("Normalize clip", [uid, g] (Project& pr) { for (auto& o : pr.clips) if (o.uid == uid) o.gain = g; });
+        }
+        else if (a == "reverse")
+        {
+            b.reverse (0, b.getNumSamples());
+            const auto f = s.p().recordingsFolder().getChildFile ("Reversed").getNonexistentChildFile (c->audioFile.getFileNameWithoutExtension() + "_rev", ".wav");
+            if (! writeClipAudio (f, b, sr)) return;
+            s.edit ("Reverse", [uid, f] (Project& pr) {
+                for (auto& o : pr.clips) if (o.uid == uid) { o.audioFile = f; o.sourceOffset = 0; o.reversed = ! o.reversed; std::swap (o.fadeIn, o.fadeOut); } });
+        }
+        s.engine.sync();
+    }
     void consolidate (int uid)
     {
         std::vector<int> u; int maxLane = 0;
@@ -2606,6 +2633,7 @@ private:
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
         m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
+        m.addItem (19, "Clip settings (FL wrench): Main / Func / Scope...", clip.isAudio());
         {
             juce::PopupMenu tm;
             tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");
@@ -2682,6 +2710,7 @@ private:
             if (r == 15) { consolidate (uid); return; }
             if (r == 17) { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
             if (r == 18) { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
+            if (r == 19) { clipAction = [this] (int u, const juce::String& a) { clipSettingAction (u, a); }; openClipEditor (s, uid); return; }
             if (r == 344) { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }
             if (r >= 340 && r <= 343) { static const double g[] { 0.25, 0.5, 0.25, 1.0 }; humTime (uid, g[r - 340], r == 342 ? 0.5f : 1.0f); return; }
             if (r == 16)

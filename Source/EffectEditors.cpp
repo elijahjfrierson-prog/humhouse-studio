@@ -1034,7 +1034,7 @@ struct SampleWaveView : juce::Component, private juce::Timer
         if (c == nullptr) return;
         const juce::String k = c->sampleFile.getFullPathName() + juce::String ((int) c->smpNormalize) + juce::String ((int) c->smpReverse)
             + juce::String ((int) c->smpInvert) + juce::String ((int) c->smpDeclick) + juce::String ((int) c->smpTrim) + juce::String (c->smpBoostDb) + "w" + juce::String (c->smpWarp) + juce::String (c->smpWarpAmt)
-            + "|" + juce::String (c->smpFadeIn) + "|" + juce::String (c->smpFadeOut) + "|" + juce::String (c->stretchMode) + "|" + juce::String (c->stretchTime);
+            + "|" + juce::String (c->smpFadeIn) + "|" + juce::String (c->smpFadeOut) + "|" + juce::String (c->smpStart) + "|" + juce::String (c->stretchMode) + "|" + juce::String (c->stretchTime);
         if (k == key) return;
         key = k;
         const Channel copy = *c;
@@ -1632,6 +1632,7 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "smpRev", "Reverse", 0, 1, 0, ch->smpReverse ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpInv", "Polarity", 0, 1, 0, ch->smpInvert ? 1.0f : 0.0f, { "Normal", "Inverted" } });
         smp.push_back ({ "smpDeclick", "Declick", 0, 1, 0, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
+        smp.push_back ({ "smpStart", "Trim start (s)", 0, 2, 0, ch->smpStart, {} });
         smp.push_back ({ "smpTrim", "Trim silence", 0, 1, 0, ch->smpTrim ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpFadeIn", "Fade in (s)", 0, 2, 0, ch->smpFadeIn, {} });
         smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
@@ -1743,7 +1744,7 @@ void openChannelEditor (Studio& s, int channelId)
                 else if (id == "smpLayerMix") c->smpLayerMix = v; else if (id == "smpLayerWarp") c->smpLayerWarp = (int) v; else if (id == "smpLayerWarpAmt") c->smpLayerWarpAmt = v;
                 else if (id == "smpRev") c->smpReverse = v > 0.5f; else if (id == "smpInv") c->smpInvert = v > 0.5f;
                 else if (id == "smpDeclick") c->smpDeclick = v > 0.5f; else if (id == "smpTrim") c->smpTrim = v > 0.5f;
-                else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
+                else if (id == "smpStart") c->smpStart = v; else if (id == "smpFadeIn") c->smpFadeIn = v; else if (id == "smpFadeOut") c->smpFadeOut = v;
                 else if (id == "stretchMode") c->stretchMode = (int) v; else if (id == "stretchTime") c->stretchTime = v;
                 else if (id == "tempoSync") c->tempoSync = v > 0.5f; else if (id == "sampleBpm") c->sampleBpm = v;
             });
@@ -1783,6 +1784,76 @@ void openChannelEditor (Studio& s, int channelId)
         return t > 0 ? s.engine.trackScope (t) : &masterScope(); }, ch->name));
     tabs->finish();
     EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
+}
+
+std::function<void (int, const juce::String&)> clipAction;
+
+// FL-style settings for an audio clip (MAIN / FUNC / SCOPE). Linked like FL: copies of the same audio share the settings
+void openClipEditor (Studio& s, int clipUid)
+{
+    const Clip* c0 = nullptr;
+    for (auto& c : s.p().clips) if (c.uid == clipUid) c0 = &c;
+    if (c0 == nullptr || ! c0->isAudio()) return;
+    const auto key = "clip:" + juce::String (clipUid);
+    if (focusExisting (key)) return;
+    const juce::String name = c0->audioFile.getFileNameWithoutExtension();
+    double fileSecs = 30.0;
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        if (std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (c0->audioFile)); rd != nullptr && rd->sampleRate > 0)
+            fileSecs = juce::jmax (0.1, (double) rd->lengthInSamples / rd->sampleRate);
+    }
+    auto link = std::make_shared<bool> (true);
+    auto setter = [&s, clipUid, link] (const juce::String& id, float v)
+    {
+        if (id == "link") { *link = v > 0.5f; return; }
+        if (id == "reverse" || id == "normalize" || id == "humlab" || id == "humtime" || id == "humtone")
+        {
+            if (v > 0.5f || id == "reverse")
+            {
+                bool cur = false; for (auto& c : s.p().clips) if (c.uid == clipUid) cur = c.reversed;
+                if (id != "reverse" || cur != (v > 0.5f))
+                    juce::MessageManager::callAsync ([clipUid, id] { if (clipAction) clipAction (clipUid, id); });
+            }
+            return;
+        }
+        s.live ([&] (Project& p) {
+            juce::File src; for (auto& c : p.clips) if (c.uid == clipUid) src = c.audioFile;
+            for (auto& c : p.clips)
+            {
+                if (! (c.uid == clipUid || (*link && c.isAudio() && c.audioFile == src))) continue;
+                if (id == "gain") c.gain = juce::Decibels::decibelsToGain (v, -60.0f);
+                else if (id == "start") c.sourceOffset = juce::jmax (0.0, (double) v);
+                else if (id == "fadeIn") c.fadeIn = v; else if (id == "fadeOut") c.fadeOut = v;
+                else if (id == "curve") c.fadeCurve = v; else if (id == "mute") c.muted = v > 0.5f;
+            }
+        });
+        s.engine.sync();
+    };
+    auto commit = [&s] { s.commit ("Clip settings"); };
+    std::vector<ParamGrid::P> mainP, func;
+    mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (FL link)" } });
+    mainP.push_back ({ "gain", "Volume (dB)", -24, 12, 0, juce::Decibels::gainToDecibels (c0->gain, -60.0f), {} });
+    mainP.push_back ({ "start", "Trim start (s)", 0, (float) fileSecs, 0, (float) c0->sourceOffset, {} });
+    mainP.push_back ({ "fadeIn", "Fade in (beats)", 0, 8, 0, (float) c0->fadeIn, {} });
+    mainP.push_back ({ "fadeOut", "Fade out (beats)", 0, 8, 0, (float) c0->fadeOut, {} });
+    mainP.push_back ({ "curve", "Fade curve", -1, 1, 0, c0->fadeCurve, {} });
+    mainP.push_back ({ "mute", "Mute", 0, 1, 0, c0->muted ? 1.0f : 0.0f, { "Off", "On" } });
+    func.push_back ({ "reverse", "Reverse", 0, 1, 0, c0->reversed ? 1.0f : 0.0f, { "Off", "On" } });
+    func.push_back ({ "normalize", "Normalize", 0, 1, 0, 0.0f, { "-", "Normalize now" } });
+    func.push_back ({ "humlab", "HumLab editor", 0, 1, 0, 0.0f, { "-", "Open" } });
+    func.push_back ({ "humtime", "HumTime (chop / timing)", 0, 1, 0, 0.0f, { "-", "Open" } });
+    func.push_back ({ "humtone", "HumTone (pitch)", 0, 1, 0, 0.0f, { "-", "Open" } });
+    auto* tabs = new ChannelTabs();
+    tabs->add ("MAIN", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
+    tabs->add ("FUNC", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
+    tabs->add ("SCOPE", createScopeView ([&s, clipUid]() -> ScopeTap* {
+        int t = 0;
+        for (auto& c : s.p().clips)
+            if (c.uid == clipUid) t = c.mixerTrack >= 0 ? c.mixerTrack : (c.lane >= 0 && c.lane < (int) s.p().lanes.size() ? s.p().lanes[(size_t) c.lane].mixerTrack : 0);
+        return t > 0 ? s.engine.trackScope (t) : &masterScope(); }, name));
+    tabs->finish();
+    EditorWindow::windows().add (new EditorWindow (name, tabs, key, [&s, clipUid] { for (auto& c : s.p().clips) if (c.uid == clipUid) return true; return false; }));
 }
 
 void closeAllEditorWindows() { EditorWindow::windows().clear(); }

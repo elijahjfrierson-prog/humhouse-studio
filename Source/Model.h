@@ -123,6 +123,7 @@ struct Channel
     // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
     bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = false, smpTrim = false;   // defaults: the sample plays exactly like the WAV
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
+    float smpStart = 0.0f;                                           // trim knob: seconds cut off the beginning of the sample
     int   smpWarp = 0; float smpWarpAmt = 0.0f;                     // HitMaker: warp a sampled 808 (same modes as the 808 engine)
     juce::File smpLayerFile;                                         // HitMaker: optional 2nd 808 merged in (cut / stretched to this one)
     float smpLayerMix = 0.5f; int smpLayerWarp = 0; float smpLayerWarpAmt = 0.0f;
@@ -222,6 +223,7 @@ struct MixerTrack
 {
     juce::String name;
     float volume = 0.8f, pan = 0.0f;
+    float stereoSep = 0.0f;        // FL stereo separation (M/S): -1 = mono (merge) .. 0 = as is .. +1 = wider (separate)
     bool  muted = false, solo = false, frozen = false;
     juce::File frozenFile;
     int   inputPair = -1;          // recording input for this insert (-1 none)

@@ -159,7 +159,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("smpWarp", c.smpWarp, nullptr); t.setProperty ("smpWarpAmt", c.smpWarpAmt, nullptr);
         if (c.smpLayerFile != juce::File()) setFile (t, "layer", c.smpLayerFile);
         t.setProperty ("layerMix", c.smpLayerMix, nullptr); t.setProperty ("layerWarp", c.smpLayerWarp, nullptr); t.setProperty ("layerWarpAmt", c.smpLayerWarpAmt, nullptr);
-        t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
+        t.setProperty ("smpStart", c.smpStart, nullptr); t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
         t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
         t.setProperty ("tempoSync", c.tempoSync, nullptr); t.setProperty ("sampleBpm", c.sampleBpm, nullptr);
         auto& s = c.synth;
@@ -242,6 +242,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("mute", m.muted, nullptr); t.setProperty ("solo", m.solo, nullptr); t.setProperty ("frozen", m.frozen, nullptr);
         setFile (t, "frozenFile", m.frozenFile); t.setProperty ("master", m.routesToMaster, nullptr);
         t.setProperty ("duck", m.duck, nullptr); t.setProperty ("duckSrc", m.duckSource, nullptr); t.setProperty ("duckTh", m.duckThreshold, nullptr);
+        t.setProperty ("msSep", m.stereoSep, nullptr);
         t.setProperty ("duckRatio", m.duckRatio, nullptr); t.setProperty ("duckAtt", m.duckAttack, nullptr); t.setProperty ("duckRel", m.duckRelease, nullptr);
         t.setProperty ("colour", (juce::int64) m.colour.getARGB(), nullptr);
         {
@@ -333,7 +334,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
         c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpWarp = t.getProperty ("smpWarp", 0); c.smpWarpAmt = t.getProperty ("smpWarpAmt", 0.0f);
         if (t.hasProperty ("layer")) c.smpLayerFile = readFile (t, "layer");
-        c.smpLayerMix = t.getProperty ("layerMix", 0.5f); c.smpLayerWarp = t.getProperty ("layerWarp", 0); c.smpLayerWarpAmt = t.getProperty ("layerWarpAmt", 0.0f); c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
+        c.smpLayerMix = t.getProperty ("layerMix", 0.5f); c.smpLayerWarp = t.getProperty ("layerWarp", 0); c.smpLayerWarpAmt = t.getProperty ("layerWarpAmt", 0.0f); c.smpStart = t.getProperty ("smpStart", 0.0f); c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
         c.tempoSync = t.getProperty ("tempoSync", true); c.sampleBpm = t.getProperty ("sampleBpm", 0.0f);
         // v1 projects turned KEY off for every non-808 sample, so Piano Roll notes all played the same pitch
@@ -404,6 +405,7 @@ Project projectFromTree (const juce::ValueTree& root)
         m.muted = t["mute"]; m.solo = t["solo"]; m.frozen = t["frozen"]; m.frozenFile = readFile (t, "frozenFile");
         m.routesToMaster = t.getProperty ("master", true);
         m.duck = t.getProperty ("duck", 0.0f); m.duckSource = t.getProperty ("duckSrc", -1); m.duckThreshold = t.getProperty ("duckTh", -40.0f);
+        m.stereoSep = t.getProperty ("msSep", 0.0f);
         m.duckRatio = t.getProperty ("duckRatio", 4.0f); m.duckAttack = t.getProperty ("duckAtt", 5.0f); m.duckRelease = t.getProperty ("duckRel", 150.0f);
         m.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff2a2f36));
         {

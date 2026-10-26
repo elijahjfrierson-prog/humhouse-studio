@@ -328,7 +328,7 @@ static juce::String channelSignature (const Channel& c, double bpm)
     return juce::String ((int) c.type) + "|" + c.sampleFile.getFullPathName() + "|" + juce::String (c.builtinDrum) + "|" + c.pluginId
          + "|" + juce::String ((int) c.smpNormalize) + juce::String ((int) c.smpReverse) + juce::String ((int) c.smpInvert) + juce::String ((int) c.smpDeclick) + juce::String ((int) c.smpTrim)
          + "|" + juce::String (c.smpBoostDb) + "|" + juce::String (c.smpWarp) + "|" + juce::String (c.smpWarpAmt)
-         + "|" + c.smpLayerFile.getFullPathName() + "|" + juce::String (c.smpLayerMix) + "|" + juce::String (c.smpLayerWarp) + "|" + juce::String (c.smpLayerWarpAmt) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut)
+         + "|" + c.smpLayerFile.getFullPathName() + "|" + juce::String (c.smpLayerMix) + "|" + juce::String (c.smpLayerWarp) + "|" + juce::String (c.smpLayerWarpAmt) + "|" + juce::String (c.smpFadeIn) + "|" + juce::String (c.smpFadeOut) + "|" + juce::String (c.smpStart)
          + "|" + juce::String (c.stretchMode) + "|" + juce::String (c.stretchTime) + "|" + juce::String (c.stretchMode != 0 ? c.pitch : 0.0f)
          + "|" + juce::String (c.type == ChannelType::Sampler && c.tempoSync && sampleTempo (c) > 0.0 ? sampleTempo (c) / bpm : 1.0);
 }
@@ -1546,6 +1546,12 @@ void Engine::processTrack (int t)
 
     const bool muted = mt.muted || (t > 0 && t < (int) soloMuted.size() && soloMuted[(size_t) t]);
     const float vol = muted ? 0.0f : (mt.volume / 0.8f) * (mt.volume / 0.8f);
+    if (std::abs (mt.stereoSep) > 1.0e-3f)   // M/S stereo separation: scale the side signal (0 = mono .. 2 = twice as wide)
+    {
+        const float side = 1.0f + juce::jlimit (-1.0f, 1.0f, mt.stereoSep);
+        auto* L = tr.out.getWritePointer (0); auto* R = tr.out.getWritePointer (1);
+        for (int i = 0; i < n; ++i) { const float m = 0.5f * (L[i] + R[i]), sd = 0.5f * (L[i] - R[i]) * side; L[i] = m + sd; R[i] = m - sd; }
+    }
     const float gl = vol * panGain (mt.pan, false), gr = vol * panGain (mt.pan, true);
     if (tr.gainL < 0.0f) { tr.gainL = gl; tr.gainR = gr; }
     tr.out.applyGainRamp (0, 0, n, tr.gainL, gl);

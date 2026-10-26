@@ -569,6 +569,9 @@ public:
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
         mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
+        setupButton (rackPopBtn, "RACK", "Channel Rack: pop it out into its own window so you can edit samples and one-shots on Rec and in full screen (click again to dock it)", true);
+        rackPopBtn.onClick = [this] { if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
+        addAndMakeVisible (rackPopBtn);
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
@@ -669,6 +672,8 @@ public:
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
         mixPopBtn.setBounds (t.removeFromRight (40)); t.removeFromRight (6);
+        rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+        rackPopBtn.setBounds (t.removeFromRight (52)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
@@ -1084,6 +1089,7 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
+    juce::TextButton rackPopBtn;
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
@@ -1153,6 +1159,8 @@ private:
         void timerCallback() override   // stays visible over the main window while you work, not over other apps
         {
             updateFloating (*this);
+            if (! floatWithTopmost)   // Mac: a full-screen pop-out stays over the Beat / Rec screens while the app is in front
+                if (const bool want = filled && juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
             fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
         }
     };

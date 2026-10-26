@@ -24,6 +24,9 @@ struct Strip : public juce::Component
         pan.onDragEnd = [this] { s.commit ("Pan"); };
         duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! duck.isMouseButtonDown()) s.commit ("Duck"); };
         duck.onDragEnd = [this] { s.commit ("Duck"); };
+        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); }); if (! sep.isMouseButtonDown()) s.commit ("Stereo separation"); };
+        sep.onDragEnd = [this] { s.commit ("Stereo separation"); };
+        addAndMakeVisible (sep);
         setupButton (scBtn, "SC", "Sidechain: pick the source (default = armed vocal) + ratio / threshold / attack / release");
         scBtn.onClick = [this] { scMenu(); };
         addAndMakeVisible (duck); addAndMakeVisible (scBtn);
@@ -59,6 +62,7 @@ struct Strip : public juce::Component
         auto& t = p.mixer[(size_t) index];
         fader.setValue (t.volume, juce::dontSendNotification);
         pan.setValue (t.pan, juce::dontSendNotification);
+        sep.setValue (t.stereoSep, juce::dontSendNotification);
         duck.setValue (t.duck, juce::dontSendNotification);
         duck.setVisible (index > 0); scBtn.setVisible (index > 0);
         mute.setToggleState (t.muted, juce::dontSendNotification);
@@ -99,14 +103,15 @@ struct Strip : public juce::Component
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
         g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
-        if (index < (int) p.mixer.size() && p.mixer[(size_t) index].fx.size() > 0)
+        const int nfx = index < (int) p.mixer.size() ? (int) std::count_if (p.mixer[(size_t) index].fx.begin(), p.mixer[(size_t) index].fx.end(), [] (const FxSlot& f) { return f.type.isNotEmpty(); }) : 0;
+        if (nfx > 0)
         {
             g.setColour (col::accent); g.setFont (juce::FontOptions (10.0f));
-            g.drawText (juce::String ((int) p.mixer[(size_t) index].fx.size()) + " FX", 0, getHeight() - 58, getWidth(), 12, juce::Justification::centred);
+            g.drawText (juce::String (nfx) + " FX", fxLabel, juce::Justification::centred);
         }
     }
     juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 96, 8, getHeight() - 96 - 96 }; }
-    juce::Rectangle<int> scopeArea;
+    juce::Rectangle<int> scopeArea, fxLabel;
     void paintScope (juce::Graphics& g)
     {
         auto a = scopeArea.toFloat();
@@ -166,11 +171,12 @@ struct Strip : public juce::Component
         pan.setBounds (r.removeFromTop (32).withSizeKeepingCentre (32, 32));
         { auto row = r.removeFromTop (30); duck.setBounds (row.removeFromLeft (row.getWidth() / 2).withSizeKeepingCentre (28, 28)); scBtn.setBounds (row.reduced (2, 5)); }
         scopeArea = r.removeFromTop (28).reduced (0, 2);
-        auto bottom = r.removeFromBottom (90);
+        auto bottom = r.removeFromBottom (120);
         fader.setBounds (r.withTrimmedRight (14));
         auto ms = bottom.removeFromTop (22);
         mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (1)); solo.setBounds (ms.reduced (1));
-        bottom.removeFromTop (14);
+        fxLabel = bottom.removeFromTop (14);
+        sep.setBounds (bottom.removeFromTop (30).withSizeKeepingCentre (28, 28));
         name.setBounds (bottom.removeFromTop (22));
         route.setBounds (bottom.removeFromTop (24).reduced (12, 2));
     }
@@ -211,6 +217,7 @@ struct Strip : public juce::Component
     Studio& s; int index; float level = 0;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
+    Knob sep { "M/S", "stereo separation (FL): left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
     juce::TextButton scBtn;
     juce::TextButton mute, solo, route;
@@ -341,7 +348,7 @@ public:
         const auto& infos = builtinEffects();
         for (int i = 0; i < maxSlots; ++i)
         {
-            const bool has = i < (int) t.fx.size();
+            const bool has = i < (int) t.fx.size() && t.fx[(size_t) i].type.isNotEmpty();
             juce::String label = "(empty)";
             if (has)
             {
@@ -470,7 +477,8 @@ private:
             {
                 if (to.first >= (int) f.size()) return;
                 f[(size_t) to.first] = moved;
-                f.erase (f.begin() + from);
+                FxSlot e; e.uid = p.newUid(); f[(size_t) from] = e;
+                while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
             }
             else
             {
@@ -492,7 +500,16 @@ private:
     {
         const int t = track();
         auto& fx = s.p().mixer[(size_t) t].fx;
-        if (i >= (int) fx.size()) { showPluginHouseMenu (s, t); return; }
+        if (i >= (int) fx.size() || fx[(size_t) i].type.isEmpty())   // any slot, even with nothing above it: the chain runs in slot order
+        {
+            int uid = -1;
+            s.edit ("FX slot", [&] (Project& p) {
+                auto& f = p.mixer[(size_t) t].fx;
+                while ((int) f.size() <= i) { FxSlot e; e.uid = p.newUid(); f.push_back (e); }
+                uid = f[(size_t) i].uid; });
+            showPluginHouseMenu (s, t, uid);
+            return;
+        }
         const int uid = fx[(size_t) i].uid;
         if (! popup) { openEffectEditor (s, t, uid); return; }
         juce::PopupMenu m;
@@ -520,7 +537,8 @@ private:
                     if (r == 2) f[(size_t) i].bypass = ! f[(size_t) i].bypass;
                     else if (r == 4) std::swap (f[(size_t) i], f[(size_t) i - 1]);
                     else if (r == 5) std::swap (f[(size_t) i], f[(size_t) i + 1]);
-                    else if (r == 6) f.erase (f.begin() + i);
+                    else if (r == 6) { FxSlot e; e.uid = p.newUid(); f[(size_t) i] = e; }   // the slot empties; the others keep their place
+                    while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
                 });
         });
     }
