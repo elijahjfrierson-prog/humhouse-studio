@@ -20,6 +20,20 @@ void addEffect (Studio& s, int track, const juce::String& type, const juce::Stri
         for (auto& f : fx)
             if (f.uid == replaceSlotUid) { f.type = type; f.pluginId = pluginId; f.params.clear(); f.pluginState.reset(); uid = f.uid; }
         if (uid < 0) { auto& slot = p.addFx (track, type); slot.pluginId = pluginId; uid = slot.uid; }
+        if (type == "gate")   // a new Noise Gate starts on the preset for the Apple mic in use
+            for (auto& f : fx)
+                if (f.uid == uid)
+                {
+                    const auto dev = s.engine.deviceManager.getAudioDeviceSetup().inputDeviceName;
+                    std::map<juce::String, float> m;
+                    if (dev.containsIgnoreCase ("AirPods") || dev.containsIgnoreCase ("Beats"))
+                        m = { { "threshold", -44.0f }, { "attack", 0.5f }, { "release", 140.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 200.0f }, { "keyhi", 3500.0f }, { "tame", 6.0f } };
+                    else if (dev.containsIgnoreCase ("EarPods") || dev.containsIgnoreCase ("Headset") || dev.containsIgnoreCase ("External Microphone"))
+                        m = { { "threshold", -48.0f }, { "attack", 0.5f }, { "release", 150.0f }, { "range", -30.0f }, { "hold", 120.0f }, { "keylo", 150.0f }, { "keyhi", 4000.0f }, { "tame", 12.0f } };
+                    else if (dev.containsIgnoreCase ("MacBook") || dev.containsIgnoreCase ("iPhone") || dev.containsIgnoreCase ("iMac"))
+                        m = { { "threshold", -50.0f }, { "attack", 0.5f }, { "release", 180.0f }, { "range", -40.0f }, { "hold", 150.0f }, { "keylo", 120.0f }, { "keyhi", 5000.0f }, { "tame", 8.0f } };
+                    for (auto& [k, v] : m) f.params[k] = v;
+                }
     });
     s.selectedTrack = track;
     openEffectEditor (s, track, uid);
@@ -177,18 +191,11 @@ static bool isAudioFile (const juce::File& f) { return f.hasFileExtension ("wav;
 struct SampleSearchFilter : public juce::FileFilter
 {
     SampleSearchFilter() : juce::FileFilter ("Audio") {}
-    bool isFileSuitable (const juce::File& f) const override { return isAudioFile (f); }
+    bool isFileSuitable (const juce::File& f) const override { return isAudioFile (f) || f.hasFileExtension ("mid;midi"); }
     bool isDirectorySuitable (const juce::File&) const override { return true; }
 };
 
-static juce::File bundledSounds()
-{
-   #if JUCE_MAC
-    return juce::File::getSpecialLocation (juce::File::currentApplicationFile).getChildFile ("Contents/Resources/Sounds");
-   #else
-    return juce::File::getSpecialLocation (juce::File::currentExecutableFile).getSiblingFile ("Sounds");
-   #endif
-}
+static juce::File bundledSounds() { return bundledSoundsRoot(); }
 static juce::File downloadsFolder() { return juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"); }
 
 class SampleBrowser : public juce::Component, private juce::FileBrowserListener, private juce::ListBoxModel
@@ -358,7 +365,7 @@ private:
     void selectedRowsChanged (int row) override { if (row >= 0 && row < hits.size()) s.engine.previewFile (hits[row]); }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override { return "sample"; }
-    void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile()) s.engine.previewFile (f); }
+    void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile() && isAudioFile (f)) s.engine.previewFile (f); }
     void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
     void browserRootChanged (const juce::File&) override {}

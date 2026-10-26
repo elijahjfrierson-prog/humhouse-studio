@@ -1,4 +1,5 @@
 #include "ProjectIO.h"
+#include <map>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -129,10 +130,14 @@ juce::ValueTree projectToTree (const Project& p)
             for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
             t.setProperty ("drHt", d.halfTime, nullptr); t.setProperty ("drRi", d.ride, nullptr); t.setProperty ("drCh", d.character, nullptr);
             t.setProperty ("drSe", d.seed, nullptr); t.setProperty ("drVo", d.voicing, nullptr); t.setProperty ("drSp", d.space, nullptr); t.setProperty ("drGw", d.glow, nullptr);
+            for (auto [k, v] : { std::pair { "drKp", d.kickPattern }, { "drSnp", d.snarePattern }, { "drHp", d.hatPattern }, { "drTp", d.tomPattern }, { "drCp", d.crashPattern } })
+                t.setProperty (k, v, nullptr);
             {
                 juce::StringArray pc, sm;
                 for (int g = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) pc.add (juce::String ((*a)[(size_t) g], 3));
                 for (int m : d.sectionMute) sm.add (juce::String (m));
+                juce::StringArray pd; for (float v : d.partDb) pd.add (juce::String (v, 3));
+                t.setProperty ("drPd", pd.joinIntoString (","), nullptr);
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
                 t.setProperty ("drGM", d.groupMask, nullptr); t.setProperty ("drLk", c.drumLink, nullptr); t.setProperty ("mLk", c.midiLink, nullptr);
@@ -151,7 +156,10 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
         t.setProperty ("smpNorm", c.smpNormalize, nullptr); t.setProperty ("smpRev", c.smpReverse, nullptr); t.setProperty ("smpInv", c.smpInvert, nullptr);
         t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("keyTrack", c.keyTrack, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
-        t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
+        t.setProperty ("smpWarp", c.smpWarp, nullptr); t.setProperty ("smpWarpAmt", c.smpWarpAmt, nullptr);
+        if (c.smpLayerFile != juce::File()) setFile (t, "layer", c.smpLayerFile);
+        t.setProperty ("layerMix", c.smpLayerMix, nullptr); t.setProperty ("layerWarp", c.smpLayerWarp, nullptr); t.setProperty ("layerWarpAmt", c.smpLayerWarpAmt, nullptr);
+        t.setProperty ("smpStart", c.smpStart, nullptr); t.setProperty ("smpFadeIn", c.smpFadeIn, nullptr); t.setProperty ("smpFadeOut", c.smpFadeOut, nullptr);
         t.setProperty ("stretchMode", c.stretchMode, nullptr); t.setProperty ("stretchTime", c.stretchTime, nullptr);
         t.setProperty ("tempoSync", c.tempoSync, nullptr); t.setProperty ("sampleBpm", c.sampleBpm, nullptr);
         auto& s = c.synth;
@@ -161,6 +169,20 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("drv", s.drive, nullptr);
         t.setProperty ("fmr", s.fmRatio, nullptr); t.setProperty ("fmi", s.fmIndex, nullptr); t.setProperty ("mor", s.morph, nullptr);
         t.setProperty ("noi", s.noise, nullptr); t.setProperty ("lfr", s.lfoRate, nullptr); t.setProperty ("vib", s.vibrato, nullptr);
+        {
+            juce::StringArray x;
+            for (size_t o = 0; o < 3; ++o) { x.add (juce::String (s.xWave[o])); x.add (juce::String (s.xVol[o])); x.add (juce::String (s.xSemi[o])); x.add (juce::String (s.xFine[o])); }
+            t.setProperty ("x3", x.joinIntoString (","), nullptr);
+            t.setProperty ("wtPos", s.wtPos, nullptr); t.setProperty ("wtKind", s.wtKind, nullptr);
+            t.setProperty ("wwp", s.warp, nullptr); t.setProperty ("wwa", s.warpAmt, nullptr); t.setProperty ("wub", s.uniBlend, nullptr); t.setProperty ("sub", s.sub, nullptr);
+            t.setProperty ("wgr", s.grain, nullptr); t.setProperty ("wev", s.evolve, nullptr);
+            t.setProperty ("bwp", s.bWarp, nullptr); t.setProperty ("bst", s.bStart, nullptr); t.setProperty ("bdr", s.bDrop, nullptr); t.setProperty ("bck", s.bClick, nullptr);
+            if (s.wt != nullptr && ! s.wt->empty())
+            {
+                t.setProperty ("wt", juce::MemoryBlock (s.wt->data(), s.wt->size() * sizeof (float)).toBase64Encoding(), nullptr);
+                t.setProperty ("wtName", s.wtName, nullptr);
+            }
+        }
         chs.appendChild (t, nullptr);
     }
     root.appendChild (chs, nullptr);
@@ -179,7 +201,7 @@ juce::ValueTree projectToTree (const Project& p)
     for (auto& l : p.lanes)
     {
         juce::ValueTree t ("LANE");
-        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr); t.setProperty ("shiftms", l.shiftMs, nullptr); t.setProperty ("colour", (juce::int64) l.colour.getARGB(), nullptr); t.setProperty ("ncol", (juce::int64) l.nameColour.getARGB(), nullptr); t.setProperty ("nfont", l.nameFont, nullptr);
+        t.setProperty ("name", l.name, nullptr); t.setProperty ("mix", l.mixerTrack, nullptr); t.setProperty ("in", l.inputPair, nullptr); t.setProperty ("inc", l.inputCh, nullptr); t.setProperty ("ist", l.stereoIn, nullptr); t.setProperty ("norm", l.autoNorm, nullptr); t.setProperty ("shiftms", l.shiftMs, nullptr); t.setProperty ("comp", l.compLane, nullptr); t.setProperty ("lmute", l.muted, nullptr); t.setProperty ("colour", (juce::int64) l.colour.getARGB(), nullptr); t.setProperty ("ncol", (juce::int64) l.nameColour.getARGB(), nullptr); t.setProperty ("nfont", l.nameFont, nullptr); t.setProperty ("lvol", l.volumeDb, nullptr);
         t.setProperty ("armed", l.armed, nullptr); t.setProperty ("mute", l.muted, nullptr); t.setProperty ("mon", l.monitor, nullptr);
         t.setProperty ("h", l.height, nullptr);
         lanes.appendChild (t, nullptr);
@@ -220,8 +242,14 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("mute", m.muted, nullptr); t.setProperty ("solo", m.solo, nullptr); t.setProperty ("frozen", m.frozen, nullptr);
         setFile (t, "frozenFile", m.frozenFile); t.setProperty ("master", m.routesToMaster, nullptr);
         t.setProperty ("duck", m.duck, nullptr); t.setProperty ("duckSrc", m.duckSource, nullptr); t.setProperty ("duckTh", m.duckThreshold, nullptr);
+        t.setProperty ("msSep", m.stereoSep, nullptr);
         t.setProperty ("duckRatio", m.duckRatio, nullptr); t.setProperty ("duckAtt", m.duckAttack, nullptr); t.setProperty ("duckRel", m.duckRelease, nullptr);
         t.setProperty ("colour", (juce::int64) m.colour.getARGB(), nullptr);
+        {
+            juce::StringArray q;
+            for (size_t b = 0; b < 5; ++b) { q.add (juce::String (m.meqFreq[b])); q.add (juce::String (m.meqGain[b])); q.add (juce::String (m.meqQ[b])); }
+            t.setProperty ("meq", q.joinIntoString (","), nullptr);
+        }
         for (auto& s : m.sends) { juce::ValueTree st ("SEND"); st.setProperty ("to", s.target, nullptr); st.setProperty ("lvl", s.level, nullptr); t.appendChild (st, nullptr); }
         for (auto& f : m.fx)
         {
@@ -234,6 +262,15 @@ juce::ValueTree projectToTree (const Project& p)
         mix.appendChild (t, nullptr);
     }
     root.appendChild (mix, nullptr);
+    juce::ValueTree links ("CTLLINKS");
+    for (auto& L : p.ctlLinks)
+    {
+        juce::ValueTree t ("L");
+        t.setProperty ("st", L.srcTrack, nullptr); t.setProperty ("su", L.srcUid, nullptr); t.setProperty ("dt", L.dstTrack, nullptr);
+        t.setProperty ("du", L.dstUid, nullptr); t.setProperty ("par", L.param, nullptr); t.setProperty ("lo", L.lo, nullptr); t.setProperty ("hi", L.hi, nullptr);
+        links.appendChild (t, nullptr);
+    }
+    root.appendChild (links, nullptr);
     return root;
 }
 
@@ -261,10 +298,15 @@ Project projectFromTree (const juce::ValueTree& root)
             for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
             d.halfTime = t.getProperty ("drHt", d.halfTime); d.ride = t.getProperty ("drRi", d.ride); d.character = t.getProperty ("drCh", d.character);
             d.seed = t.getProperty ("drSe", d.seed); d.voicing = t.getProperty ("drVo", d.voicing); d.space = t.getProperty ("drSp", d.space); d.glow = t.getProperty ("drGw", d.glow);
+            for (auto [k, v] : { std::pair { "drKp", &d.kickPattern }, { "drSnp", &d.snarePattern }, { "drHp", &d.hatPattern }, { "drTp", &d.tomPattern }, { "drCp", &d.crashPattern } })
+                *v = t.getProperty (k, *v);
             {
                 const auto pc = juce::StringArray::fromTokens (t["drPc"].toString(), ",", "");
                 if (pc.size() == 20)
                     for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
+                const auto pd = juce::StringArray::fromTokens (t["drPd"].toString(), ",", "");
+                if (pd.size() == (int) d.partDb.size())
+                    for (int k = 0; k < pd.size(); ++k) d.partDb[(size_t) k] = pd[k].getFloatValue();
                 d.sectionMute.clear();
                 for (auto& v : juce::StringArray::fromTokens (t["drSM"].toString(), ",", "")) if (v.isNotEmpty()) d.sectionMute.push_back (v.getIntValue());
                 d.sectionVel.clear();
@@ -290,7 +332,9 @@ Project projectFromTree (const juce::ValueTree& root)
         c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
-        c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
+        c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpWarp = t.getProperty ("smpWarp", 0); c.smpWarpAmt = t.getProperty ("smpWarpAmt", 0.0f);
+        if (t.hasProperty ("layer")) c.smpLayerFile = readFile (t, "layer");
+        c.smpLayerMix = t.getProperty ("layerMix", 0.5f); c.smpLayerWarp = t.getProperty ("layerWarp", 0); c.smpLayerWarpAmt = t.getProperty ("layerWarpAmt", 0.0f); c.smpStart = t.getProperty ("smpStart", 0.0f); c.smpFadeIn = t["smpFadeIn"]; c.smpFadeOut = t["smpFadeOut"];
         c.stretchMode = t["stretchMode"]; c.stretchTime = t.getProperty ("stretchTime", 1.0f);
         c.tempoSync = t.getProperty ("tempoSync", true); c.sampleBpm = t.getProperty ("sampleBpm", 0.0f);
         // v1 projects turned KEY off for every non-808 sample, so Piano Roll notes all played the same pitch
@@ -303,6 +347,27 @@ Project projectFromTree (const juce::ValueTree& root)
         s.detune = t["det"]; s.unison = t.getProperty ("uni", 1); s.drive = t["drv"];
         s.fmRatio = t.getProperty ("fmr", 1.0f); s.fmIndex = t["fmi"]; s.morph = t["mor"];
         s.noise = t["noi"]; s.lfoRate = t["lfr"]; s.vibrato = t["vib"];
+        {
+            const auto x = juce::StringArray::fromTokens (t["x3"].toString(), ",", "");
+            if (x.size() == 12)
+                for (size_t o = 0; o < 3; ++o)
+                {
+                    s.xWave[o] = x[(int) o * 4].getIntValue(); s.xVol[o] = x[(int) o * 4 + 1].getFloatValue();
+                    s.xSemi[o] = x[(int) o * 4 + 2].getFloatValue(); s.xFine[o] = x[(int) o * 4 + 3].getFloatValue();
+                }
+            s.wtPos = t["wtPos"]; s.wtKind = t["wtKind"];
+            s.warp = t.getProperty ("wwp", 0); s.warpAmt = t.getProperty ("wwa", 0.0f); s.uniBlend = t.getProperty ("wub", 0.5f); s.sub = t.getProperty ("sub", 0.0f);
+            s.grain = t.getProperty ("wgr", 0.0f); s.evolve = t.getProperty ("wev", 0.0f);
+            s.bWarp = t.getProperty ("bwp", 0); s.bStart = t.getProperty ("bst", 0); s.bDrop = t.getProperty ("bdr", 0.5f); s.bClick = t.getProperty ("bck", 0.0f);
+            juce::MemoryBlock mb;
+            if (t.hasProperty ("wt") && mb.fromBase64Encoding (t["wt"].toString()) && mb.getSize() >= humWaveFrameSize * sizeof (float))
+            {
+                std::vector<float> v (mb.getSize() / sizeof (float));
+                std::memcpy (v.data(), mb.getData(), v.size() * sizeof (float));
+                s.wt = std::make_shared<const std::vector<float>> (std::move (v));
+                s.wtName = t["wtName"].toString();
+            }
+        }
         p.channels.push_back (c);
     }
     for (auto t : root.getChildWithName ("PATTERNS"))
@@ -314,7 +379,7 @@ Project projectFromTree (const juce::ValueTree& root)
     }
     for (auto t : root.getChildWithName ("LANES"))
     {
-        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.shiftMs = (float) t.getProperty ("shiftms", 0.0); l.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0)); l.armed = t["armed"]; l.nameColour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("ncol", (juce::int64) 0)); l.nameFont = t["nfont"].toString();
+        Lane l; l.name = t["name"].toString(); l.mixerTrack = t["mix"]; l.inputPair = t["in"]; l.inputCh = (int) t.getProperty ("inc", (int) t["in"] * 2); l.stereoIn = t.getProperty ("ist", false); l.autoNorm = t.getProperty ("norm", false); l.shiftMs = (float) t.getProperty ("shiftms", 0.0); l.compLane = t.getProperty ("comp", -1); l.muted = t.getProperty ("lmute", l.muted); l.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0)); l.armed = t["armed"]; l.nameColour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("ncol", (juce::int64) 0)); l.nameFont = t["nfont"].toString(); l.volumeDb = (float) t.getProperty ("lvol", 0.0);
         l.muted = t["mute"]; l.monitor = t.getProperty ("mon", true); l.height = t.getProperty ("h", 56.0f);
         p.lanes.push_back (l);
     }
@@ -340,8 +405,15 @@ Project projectFromTree (const juce::ValueTree& root)
         m.muted = t["mute"]; m.solo = t["solo"]; m.frozen = t["frozen"]; m.frozenFile = readFile (t, "frozenFile");
         m.routesToMaster = t.getProperty ("master", true);
         m.duck = t.getProperty ("duck", 0.0f); m.duckSource = t.getProperty ("duckSrc", -1); m.duckThreshold = t.getProperty ("duckTh", -40.0f);
+        m.stereoSep = t.getProperty ("msSep", 0.0f);
         m.duckRatio = t.getProperty ("duckRatio", 4.0f); m.duckAttack = t.getProperty ("duckAtt", 5.0f); m.duckRelease = t.getProperty ("duckRel", 150.0f);
         m.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff2a2f36));
+        {
+            juce::StringArray q; q.addTokens (t["meq"].toString(), ",", {});
+            if (q.size() == 15)
+                for (size_t b = 0; b < 5; ++b)
+                { m.meqFreq[b] = q[(int) b * 3].getFloatValue(); m.meqGain[b] = q[(int) b * 3 + 1].getFloatValue(); m.meqQ[b] = q[(int) b * 3 + 2].getFloatValue(); }
+        }
         for (auto c : t)
         {
             if (c.hasType ("SEND")) m.sends.push_back ({ (int) c["to"], (float) c["lvl"] });
@@ -361,6 +433,12 @@ Project projectFromTree (const juce::ValueTree& root)
         p.mixer.push_back (m);
     }
     if (p.mixer.empty()) { MixerTrack master; master.name = "Master"; master.routesToMaster = false; p.mixer.push_back (master); }
+    for (auto t : root.getChildWithName ("CTLLINKS"))
+    {
+        CtlLink L; L.srcTrack = t["st"]; L.srcUid = t["su"]; L.dstTrack = t["dt"]; L.dstUid = t["du"]; L.param = t["par"].toString();
+        L.lo = t.getProperty ("lo", 0.0f); L.hi = t.getProperty ("hi", 1.0f);
+        p.ctlLinks.push_back (L);
+    }
     // automation of the old AutoPitch "speed" (1 = fastest) -> "retune" (0 = fastest)
     for (auto& c : p.clips)
         if (c.isAuto() && c.autoTarget.kind == AutoFxParam && c.autoTarget.param == "speed"
@@ -404,6 +482,89 @@ juce::File writeBackup (const Project& p, int keep)
     std::sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
     for (int i = keep; i < all.size(); ++i) all.getReference (i).deleteFile();
     return f;
+}
+
+static juce::File freshTempDir()
+{
+    return juce::File::getSpecialLocation (juce::File::tempDirectory)
+        .getChildFile ("hhpack-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
+}
+
+bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
+{
+    const auto legal = juce::File::createLegalFileName (name.trim().isEmpty() ? juce::String ("Template") : name.trim());
+    auto stage = freshTempDir();
+    auto root = stage.getChildFile (legal);
+    auto sounds = root.getChildFile ("Sounds");
+    if (! sounds.createDirectory()) return false;
+    Project p = src;
+    std::map<juce::String, juce::File> copied;
+    auto take = [&] (juce::File& f)
+    {
+        if (f == juce::File() || ! f.existsAsFile()) return;
+        auto it = copied.find (f.getFullPathName());
+        if (it == copied.end())
+        {
+            auto dst = sounds.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+            if (! f.copyFileTo (dst)) return;
+            it = copied.emplace (f.getFullPathName(), dst).first;
+        }
+        f = it->second;
+    };
+    for (auto& c : p.channels) take (c.sampleFile);
+    for (auto& c : p.clips) take (c.audioFile);
+    for (auto& m : p.mixer) take (m.frozenFile);
+    for (auto& f : p.audioPool) take (f);
+    p.projectFile = root.getChildFile (legal + ".hhs");
+    bool ok = saveProject (p, p.projectFile);
+    if (ok)
+    {
+        juce::ZipFile::Builder zip;
+        for (auto& f : root.findChildFiles (juce::File::findFiles, true, "*"))
+            zip.addFile (f, f.hasFileExtension ("hhs") ? 9 : 6, f.getRelativePathFrom (stage).replaceCharacter ('\\', '/'));
+        auto tmp = out.getSiblingFile (out.getFileName() + ".tmp");
+        {
+            juce::FileOutputStream os (tmp);
+            ok = os.openedOk() && os.setPosition (0) && os.truncate().wasOk() && zip.writeToStream (os, nullptr);
+            os.flush();
+        }
+        ok = ok && tmp.moveFileTo (out);
+        tmp.deleteFile();
+    }
+    stage.deleteRecursively();
+    return ok;
+}
+
+juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDir)
+{
+    juce::ZipFile zip (pack);
+    juce::String top;
+    for (int i = 0; i < zip.getNumEntries(); ++i)
+    {
+        const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
+        if (n.startsWithChar ('/') || n.contains ("..") || n.containsChar (':')) return {};   // nothing may land outside the template's folder
+        if (top.isEmpty() && n.endsWithIgnoreCase (".hhs") && n.containsChar ('/'))
+            top = n.upToFirstOccurrenceOf ("/", false, false);
+    }
+    if (top.isEmpty()) return {};
+    auto stage = freshTempDir();
+    if (! stage.createDirectory() || zip.uncompressTo (stage, true).failed()) { stage.deleteRecursively(); return {}; }
+    auto from = stage.getChildFile (top);
+    auto inner = from.getChildFile (top + ".hhs");
+    Project check;
+    if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
+    templatesDir.createDirectory();
+    auto dest = templatesDir.getNonexistentChildFile (juce::File::createLegalFileName (top), {}, false);
+    const bool ok = from.copyDirectoryTo (dest);
+    stage.deleteRecursively();
+    if (! ok) return {};
+    auto hhs = dest.getChildFile (top + ".hhs");
+    if (dest.getFileName() != top)
+    {
+        auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
+        if (hhs.moveFileTo (renamed)) hhs = renamed;
+    }
+    return hhs.existsAsFile() ? hhs : juce::File();
 }
 
 void UndoHistory::push (const Project& p, const juce::String& desc)

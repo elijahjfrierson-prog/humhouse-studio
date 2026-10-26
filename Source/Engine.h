@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
@@ -107,6 +108,9 @@ public:
     int exportBits = 24; double exportRate = 0; int exportFormat = 0;
     float lastRenderPeak = 0;   // peak of the last render (stems: silent tracks are skipped)
     bool freezeTrack (int track);
+    // FL-style consolidate: renders just these clips (audio, pattern, Drummer) through their inserts, from the
+    // first one's start, into one WAV; master FX are left out so the new clip can play on the master
+    bool consolidateClips (const std::vector<int>& clipUids, const juce::File& out, double& fromBeat, double& lenBeats);
 
     // headless processing (tests / offline)
     void prepare (double sampleRate, int maxBlock);
@@ -139,12 +143,14 @@ private:
     void renderSegment (double b0, double b1, int off, int n);
     void renderChannels (int n);
     void mixTracks (const float* const* in, int numIn, int n);
-    void startRecordingWriters();
+    void startRecordingWriters (bool surprise = false);
     void primeClipReaders (double beat);
     void finishRecordingWriters();
     void click (float* l, float* r, int n, double b0, double b1);
     void updateSolo();
     void processTrack (int track);
+    void applyMiniEq (TrackRuntime&, const MixerTrack&, int n);
+    void applyCtlLinks();
     void applyAutomation (double beat);
     double loopLength() const;
 
@@ -159,6 +165,7 @@ private:
     std::map<int, std::unique_ptr<ClipRuntime>> clipRt;
     std::map<int, std::shared_ptr<const std::vector<DrumHit>>> drumHits;   // Drummer region uid -> what it plays
     std::map<juce::String, SharedSample> sampleCache;
+    std::set<juce::String> freshTakes;   // takes recorded this session: played from RAM
     std::vector<std::vector<int>> levels;
     std::vector<std::vector<std::pair<int, float>>> sources; // per track: (source track, gain)
     std::vector<char> soloMuted;
@@ -192,7 +199,7 @@ private:
     {
         int lane = 0; juce::File file; double startBeat = 0;
         std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> writer;
-        bool started = false;
+        bool started = false, surprise = false;   // surprise: armed + playing with record off (kept as a hidden take)
         juce::int64 samplesWritten = 0;
         std::array<std::pair<juce::int64, double>, 256> passes {}; int numPasses = 0; // loop-record pass boundaries
         std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform
@@ -209,6 +216,7 @@ private:
     PlayContext ctx;
     std::atomic<bool> offline { false };
     int renderTrackOnly = -1;
+    double renderFromBeats = 0.0, renderLenBeats = -1.0;   // consolidate: one range instead of the whole song
     friend struct EngineJobs;
 };
 // Plugin scanning runs in a child copy of the app so a crashing plugin can't take the DAW down.

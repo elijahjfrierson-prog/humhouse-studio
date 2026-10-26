@@ -33,6 +33,7 @@ set(HHS_CORE_SOURCES
     Source/AudioEncode.cpp
     Source/StemSplit.cpp
     Source/Purify.cpp
+    Source/HumLab.cpp
     Source/License.cpp
     Source/Drummer/DrummerCore.cpp
     Source/Drummer/GrooveCorpus.cpp
@@ -102,7 +103,7 @@ function(hhs_add_app target product bundle licensed)
         MICROPHONE_PERMISSION_ENABLED TRUE
         MICROPHONE_PERMISSION_TEXT "${product} records vocals and instruments from your audio input."
         HARDENED_RUNTIME_ENABLED FALSE
-        DOCUMENT_EXTENSIONS hhs
+        DOCUMENT_EXTENSIONS hhs hhpack hhpreset hhchain
     )
     target_sources(${target} PRIVATE
         ${HHS_CORE_SOURCES}

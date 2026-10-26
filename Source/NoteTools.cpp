@@ -48,18 +48,41 @@ void arpeggiate (NoteList& l, const ArpSettings& s)
         if (s.direction == 1) std::reverse (keys.begin(), keys.end());
         if (s.direction == 2 && keys.size() > 2) for (int i = (int) keys.size() - 2; i > 0; --i) keys.push_back (keys[(size_t) i]);
         if (s.direction == 3) { keys.clear(); for (auto& n : ch) keys.push_back (n.key); }
+        if (s.direction == 5 || s.direction == 6)   // converge: outside in / diverge: middle out
+        {
+            std::vector<int> o; int lo = 0, hi = (int) keys.size() - 1;
+            while (lo <= hi) { o.push_back (keys[(size_t) lo++]); if (lo <= hi) o.push_back (keys[(size_t) hi--]); }
+            if (s.direction == 6) std::reverse (o.begin(), o.end());
+            keys = o;
+        }
+        if ((s.direction == 7 || s.direction == 8) && keys.size() > 1)   // pinky: top note between every note / thumb: bottom note
+        {
+            const int pedal = s.direction == 7 ? keys.back() : keys.front();
+            std::vector<int> o;
+            for (size_t k = 0; k < keys.size(); ++k)
+                if (keys[k] != pedal || (s.direction == 7 ? k + 1 < keys.size() : k > 0)) { o.push_back (pedal); o.push_back (keys[k]); }
+            keys = o;
+        }
+        juce::uint32 rng = (juce::uint32) (s.seed * 2654435761u + (juce::uint32) ch.front().key * 40503u + (juce::uint32) (ch.front().start * 960.0));
+        auto rnd = [&rng] { rng = rng * 1664525u + 1013904223u; return rng >> 8; };
+        int seq = 0;
 
         double len = 0.0;
         for (auto& n : ch) len = std::max (len, n.length);
         const int count = std::max (1, (int) std::floor (len / step + 1.0e-6));
         for (int i = 0; i < count; ++i)
         {
+            if ((s.rests == 1 && i % 4 == 3) || (s.rests == 2 && i % 8 != 0 && i % 8 != 3 && i % 8 != 6)
+                || (s.rests == 3 && rnd() % 4 == 0) || (s.rests == 4 && i % 4 == 1)) continue;
             Note n = ch.front();
-            n.key = keys[(size_t) i % keys.size()];
-            n.start = ch.front().start + i * step;
+            n.start = ch.front().start + i * step + ((i & 1) ? 0.5 * step * s.swing : 0.0);
             n.length = std::max (0.01, step * s.gate);
+            n.slide = s.slide && (seq & 1);
             const float r = count > 1 ? (float) i / (float) (count - 1) : 0.0f;
             n.velocity = juce::jlimit (0.0f, 1.0f, ch.front().velocity * juce::jmap (r, s.velStart, s.velEnd));
+            if (s.direction == 9) { for (auto& c : ch) { Note k = n; k.key = c.key; rest.push_back (k); } ++seq; continue; }
+            n.key = s.direction == 4 ? keys[(size_t) (rnd() % keys.size())] : keys[(size_t) seq % keys.size()];
+            ++seq;
             rest.push_back (n);
         }
     }

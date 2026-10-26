@@ -24,6 +24,9 @@ struct Strip : public juce::Component
         pan.onDragEnd = [this] { s.commit ("Pan"); };
         duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! duck.isMouseButtonDown()) s.commit ("Duck"); };
         duck.onDragEnd = [this] { s.commit ("Duck"); };
+        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); }); if (! sep.isMouseButtonDown()) s.commit ("Stereo separation"); };
+        sep.onDragEnd = [this] { s.commit ("Stereo separation"); };
+        addAndMakeVisible (sep);
         setupButton (scBtn, "SC", "Sidechain: pick the source (default = armed vocal) + ratio / threshold / attack / release");
         scBtn.onClick = [this] { scMenu(); };
         addAndMakeVisible (duck); addAndMakeVisible (scBtn);
@@ -59,6 +62,7 @@ struct Strip : public juce::Component
         auto& t = p.mixer[(size_t) index];
         fader.setValue (t.volume, juce::dontSendNotification);
         pan.setValue (t.pan, juce::dontSendNotification);
+        sep.setValue (t.stereoSep, juce::dontSendNotification);
         duck.setValue (t.duck, juce::dontSendNotification);
         duck.setVisible (index > 0); scBtn.setVisible (index > 0);
         mute.setToggleState (t.muted, juce::dontSendNotification);
@@ -99,14 +103,15 @@ struct Strip : public juce::Component
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
         g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
-        if (index < (int) p.mixer.size() && p.mixer[(size_t) index].fx.size() > 0)
+        const int nfx = index < (int) p.mixer.size() ? (int) std::count_if (p.mixer[(size_t) index].fx.begin(), p.mixer[(size_t) index].fx.end(), [] (const FxSlot& f) { return f.type.isNotEmpty(); }) : 0;
+        if (nfx > 0)
         {
             g.setColour (col::accent); g.setFont (juce::FontOptions (10.0f));
-            g.drawText (juce::String ((int) p.mixer[(size_t) index].fx.size()) + " FX", 0, getHeight() - 58, getWidth(), 12, juce::Justification::centred);
+            g.drawText (juce::String (nfx) + " FX", fxLabel, juce::Justification::centred);
         }
     }
     juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 96, 8, getHeight() - 96 - 96 }; }
-    juce::Rectangle<int> scopeArea;
+    juce::Rectangle<int> scopeArea, fxLabel;
     void paintScope (juce::Graphics& g)
     {
         auto a = scopeArea.toFloat();
@@ -166,11 +171,12 @@ struct Strip : public juce::Component
         pan.setBounds (r.removeFromTop (32).withSizeKeepingCentre (32, 32));
         { auto row = r.removeFromTop (30); duck.setBounds (row.removeFromLeft (row.getWidth() / 2).withSizeKeepingCentre (28, 28)); scBtn.setBounds (row.reduced (2, 5)); }
         scopeArea = r.removeFromTop (28).reduced (0, 2);
-        auto bottom = r.removeFromBottom (90);
+        auto bottom = r.removeFromBottom (120);
         fader.setBounds (r.withTrimmedRight (14));
         auto ms = bottom.removeFromTop (22);
         mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (1)); solo.setBounds (ms.reduced (1));
-        bottom.removeFromTop (14);
+        fxLabel = bottom.removeFromTop (14);
+        sep.setBounds (bottom.removeFromTop (30).withSizeKeepingCentre (28, 28));
         name.setBounds (bottom.removeFromTop (22));
         route.setBounds (bottom.removeFromTop (24).reduced (12, 2));
     }
@@ -211,6 +217,7 @@ struct Strip : public juce::Component
     Studio& s; int index; float level = 0;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
+    Knob sep { "M/S", "stereo separation (FL): left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
     juce::TextButton scBtn;
     juce::TextButton mute, solo, route;
@@ -221,7 +228,23 @@ struct SlotButton : public juce::TextButton
 {
     std::function<void (bool popup)> onPress;
     float load = 0.0f;   // share of the audio block (CPU) this slot uses
-    void clicked (const juce::ModifierKeys& m) override { if (onPress) onPress (m.isPopupMenu()); }
+    std::function<void (juce::Point<int>)> onDragMove;   // parent coords
+    std::function<void (juce::Point<int>)> onDrop;
+    bool dragging = false;
+    void clicked (const juce::ModifierKeys& m) override { if (! dragging && onPress) onPress (m.isPopupMenu()); }
+    void mouseDown (const juce::MouseEvent& e) override { dragging = false; juce::TextButton::mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging && e.getDistanceFromDragStart() > 6 && ! e.mods.isPopupMenu() && onDragMove) dragging = true;
+        if (dragging) onDragMove (e.getEventRelativeTo (getParentComponent()).getPosition());
+        else juce::TextButton::mouseDrag (e);
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        juce::TextButton::mouseUp (e);
+        if (dragging && onDrop) onDrop (e.getEventRelativeTo (getParentComponent()).getPosition());
+        dragging = false;
+    }
     void paint (juce::Graphics& g) override
     {
         juce::TextButton::paint (g);
@@ -255,8 +278,10 @@ public:
         for (int i = 0; i < maxSlots; ++i)
         {
             auto* b = slots.add (new SlotButton());
-            b->setTooltip ("FX slot: click empty = open Plugin House, click = open editor, right-click = bypass / replace / move / remove");
+            b->setTooltip ("FX slot: click empty = open Plugin House, click = open editor, drag = move between slots (drop on an effect = replace it), right-click = bypass / replace / move / remove");
             b->onPress = [this, i] (bool popup) { slotPressed (i, popup); };
+            b->onDragMove = [this, i] (juce::Point<int> pt) { if (i < (int) s.p().mixer[(size_t) track()].fx.size()) { dragFrom = i; dropAt = dropTarget (pt.y); repaint(); } };
+            b->onDrop = [this, i] (juce::Point<int> pt) { const auto d = dropTarget (pt.y); dragFrom = -1; repaint(); dropEffect (i, d); };
             addAndMakeVisible (b);
             auto* byp = bypass.add (new juce::TextButton());
             setupButton (*byp, {}, "Slot on / bypass", true);
@@ -285,12 +310,35 @@ public:
         setupButton (house, "PLUGIN HOUSE", "Add an effect or plugin to this insert");
         house.onClick = [this] { showPluginHouseMenu (s, track()); };
         addAndMakeVisible (house);
+        eqLabel.setText ("MINI EQ  (5 bands: freq / gain / Q)", juce::dontSendNotification);
+        eqLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        eqLabel.setColour (juce::Label::textColourId, col::accent);
+        addAndMakeVisible (eqLabel);
+        static const char* bandName[] { "Low", "Lo-Mid", "Mid", "Hi-Mid", "High" };
+        for (int b = 0; b < 5; ++b)
+            for (int k = 0; k < 3; ++k)
+            {
+                auto* kn = eqKnobs.add (k == 0 ? new Knob ("Freq", juce::String (bandName[b]) + " band frequency (Hz)", 20.0, 20000.0, 1000.0, " Hz")
+                                      : k == 1 ? new Knob ("Gain", juce::String (bandName[b]) + " band boost / cut (dB)", -18.0, 18.0, 0.0, " dB")
+                                               : new Knob ("Q", juce::String (bandName[b]) + " band width: low = wide, high = narrow", 0.1, 18.0, b == 0 || b == 4 ? 0.7 : 1.0));
+                if (k == 0) kn->setSkewFactorFromMidPoint (630.0);
+                if (k == 2) kn->setSkewFactorFromMidPoint (1.5);
+                kn->onValueChange = [this, b, k, kn] {
+                    s.live ([&] (Project& p) {
+                        auto& mt = p.mixer[(size_t) track()];
+                        (k == 0 ? mt.meqFreq : k == 1 ? mt.meqGain : mt.meqQ)[(size_t) b] = (float) kn->getValue(); });
+                    if (! kn->isMouseButtonDown()) s.commit ("Mini EQ");
+                };
+                kn->onDragEnd = [this] { s.commit ("Mini EQ"); };
+                addAndMakeVisible (kn);
+            }
         sendsLabel.setText ("SENDS (click-to-route arrows on the strips)", juce::dontSendNotification);
         sendsLabel.setFont (juce::FontOptions (11.0f));
         sendsLabel.setColour (juce::Label::textColourId, col::dim);
         addAndMakeVisible (sendsLabel);
     }
-    int track() const { return juce::jlimit (0, juce::jmax (0, (int) const_cast<Studio&> (s).p().mixer.size() - 1), s.selectedTrack); }
+    int fixedTrack = -1;   // Patch Method: always this insert
+    int track() const { return juce::jlimit (0, juce::jmax (0, (int) const_cast<Studio&> (s).p().mixer.size() - 1), fixedTrack >= 0 ? fixedTrack : s.selectedTrack); }
     void refresh()
     {
         auto& p = s.p();
@@ -300,7 +348,7 @@ public:
         const auto& infos = builtinEffects();
         for (int i = 0; i < maxSlots; ++i)
         {
-            const bool has = i < (int) t.fx.size();
+            const bool has = i < (int) t.fx.size() && t.fx[(size_t) i].type.isNotEmpty();
             juce::String label = "(empty)";
             if (has)
             {
@@ -323,6 +371,12 @@ public:
         }
         freeze.setToggleState (t.frozen, juce::dontSendNotification);
         freeze.setEnabled (track() != 0);
+        for (int b = 0; b < 5; ++b)
+        {
+            eqKnobs[b * 3]->setValue (t.meqFreq[(size_t) b], juce::dontSendNotification);
+            eqKnobs[b * 3 + 1]->setValue (t.meqGain[(size_t) b], juce::dontSendNotification);
+            eqKnobs[b * 3 + 2]->setValue (t.meqQ[(size_t) b], juce::dontSendNotification);
+        }
         sendKnobs.clear();
         for (size_t k = 0; k < t.sends.size(); ++k)
         {
@@ -368,14 +422,75 @@ public:
             mixes[i]->setBounds (row.removeFromRight (28));
             slots[i]->setBounds (row.reduced (0, 2));
         }
-        r.removeFromTop (8);
+        r.removeFromTop (4);
+        eqLabel.setBounds (r.removeFromTop (16));
+        {
+            const int w = r.getWidth() / 5;
+            for (int k = 0; k < 3; ++k)
+            {
+                auto row = r.removeFromTop (32);
+                for (int b = 0; b < 5; ++b) eqKnobs[b * 3 + k]->setBounds (row.removeFromLeft (w).withSizeKeepingCentre (30, 30));
+            }
+        }
+        r.removeFromTop (4);
         sendsLabel.setBounds (r.removeFromTop (18));
         for (auto* k : sendKnobs) k->setBounds (r.removeFromTop (30).removeFromLeft (30));
     }
 
+    void paintOverChildren (juce::Graphics& g) override
+    {
+        if (dragFrom < 0 || dropAt.first < 0) return;
+        g.setColour (col::accent);
+        if (dropAt.second)
+            g.drawRect (slots[dropAt.first]->getBounds().expanded (2), 2);
+        else
+        {
+            const int y = dropAt.first < slots.size() ? slots[dropAt.first]->getY() - 2 : slots.getLast()->getBottom() + 2;
+            g.fillRect (slots[0]->getX() - 16, y - 1, slots[0]->getWidth() + 48, 3);
+        }
+    }
+
 private:
+    int dragFrom = -1;
+    std::pair<int, bool> dropAt { -1, false };   // slot index, true = replace it, false = insert before it
+    // middle of a slot = replace that effect; near its edges = drop in the line between slots
+    std::pair<int, bool> dropTarget (int y) const
+    {
+        const int used = (int) s.p().mixer[(size_t) track()].fx.size();
+        for (int k = 0; k < slots.size(); ++k)
+        {
+            const auto b = slots[k]->getBounds();
+            if (k < used && y < b.getY() + b.getHeight() / 4) return { k, false };
+            if (y < b.getBottom() - b.getHeight() / 4 || k >= used) return { k, true };   // any slot 1-10, empty or not
+        }
+        return { used, false };
+    }
+    void dropEffect (int from, std::pair<int, bool> to)
+    {
+        if (to.first < 0 || (to.second && to.first == from) || (! to.second && (to.first == from || to.first == from + 1))) return;
+        const int t = track();
+        s.edit (to.second ? "Replace effect" : "Move effect", [t, from, to] (Project& p) {
+            auto& f = p.mixer[(size_t) t].fx;
+            if (from >= (int) f.size() || (! to.second && to.first > (int) f.size())) return;
+            const auto moved = f[(size_t) from];
+            if (to.second)
+            {
+                while ((int) f.size() <= to.first) { FxSlot e; e.uid = p.newUid(); f.push_back (e); }
+                f[(size_t) to.first] = moved;
+                FxSlot e; e.uid = p.newUid(); f[(size_t) from] = e;
+                while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
+            }
+            else
+            {
+                f.erase (f.begin() + from);
+                const int at = to.first > from ? to.first - 1 : to.first;
+                f.insert (f.begin() + juce::jlimit (0, (int) f.size(), at), moved);
+            }
+        });
+    }
     Studio& s;
-    juce::Label title, sendsLabel;
+    juce::Label title, sendsLabel, eqLabel;
+    juce::OwnedArray<Knob> eqKnobs;   // band b: [b*3] freq, [b*3+1] gain, [b*3+2] Q
     juce::OwnedArray<SlotButton> slots;
     juce::OwnedArray<juce::TextButton> bypass;
     juce::OwnedArray<Knob> mixes, sendKnobs;
@@ -385,7 +500,16 @@ private:
     {
         const int t = track();
         auto& fx = s.p().mixer[(size_t) t].fx;
-        if (i >= (int) fx.size()) { showPluginHouseMenu (s, t); return; }
+        if (i >= (int) fx.size() || fx[(size_t) i].type.isEmpty())   // any slot, even with nothing above it: the chain runs in slot order
+        {
+            int uid = -1;
+            s.edit ("FX slot", [&] (Project& p) {
+                auto& f = p.mixer[(size_t) t].fx;
+                while ((int) f.size() <= i) { FxSlot e; e.uid = p.newUid(); f.push_back (e); }
+                uid = f[(size_t) i].uid; });
+            showPluginHouseMenu (s, t, uid);
+            return;
+        }
         const int uid = fx[(size_t) i].uid;
         if (! popup) { openEffectEditor (s, t, uid); return; }
         juce::PopupMenu m;
@@ -413,7 +537,8 @@ private:
                     if (r == 2) f[(size_t) i].bypass = ! f[(size_t) i].bypass;
                     else if (r == 4) std::swap (f[(size_t) i], f[(size_t) i - 1]);
                     else if (r == 5) std::swap (f[(size_t) i], f[(size_t) i + 1]);
-                    else if (r == 6) f.erase (f.begin() + i);
+                    else if (r == 6) { FxSlot e; e.uid = p.newUid(); f[(size_t) i] = e; }   // the slot empties; the others keep their place
+                    while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
                 });
         });
     }
@@ -527,6 +652,154 @@ private:
         fx.updateLoads();
     }
 };
+}
+
+// ---------------------------------------------------------------- Patch Method (HumHouse patcher)
+namespace
+{
+struct PatchChain { const char* name; std::vector<const char*> fx; };
+const std::vector<PatchChain>& patchChains()
+{
+    static const std::vector<PatchChain> c {
+        { "Punchy drum (comp > clip > EQ)", { "comp", "clip", "eq" } },
+        { "Hard 808 (saturate > clip > limit)", { "satur", "clip", "limiter" } },
+        { "Lo-fi one-shot (crush > filter > room)", { "crush", "filter", "verb" } },
+        { "Wide synth (chorus > wide > echo)", { "chorus", "wide", "delay" } },
+        { "Space pad (phase > echo > room)", { "phaser", "delay", "verb" } },
+        { "Pumping (pump > comp)", { "pump", "comp" } },
+        { "Glitch stutter (glitch > crush > echo)", { "glitch", "crush", "delay" } },
+        { "Grit lead (grit > flanger > EQ)", { "grit", "flanger", "eq" } },
+        { "Peak-driven filter (Peak Controller > sweep)", { "peakctl", "filter" } },
+        { "Mix bus polish (strip > EQ > Purify)", { "strip", "steq7", "purify" } },
+        { "Vocal lead (EQ > 1176 > comp > echo)", { "steq7", "fet76", "comp", "delay" } },
+        { "Vocal space (EQ > chorus > room)", { "eq", "chorus", "verb" } },
+        { "Ad-lib phone (filter > crush > echo)", { "filter", "crush", "delay" } },
+        { "Rage lead (grit > wide > room)", { "grit", "wide", "verb" } },
+        { "Dirty 808 (grit > satur > limit)", { "grit", "satur", "limiter" } },
+        { "Clean 808 glue (EQ > comp > clip)", { "eq", "comp", "clip" } },
+        { "Hat sparkle (EQ > wide)", { "steq7", "wide" } },
+        { "Snare crack (gate > comp > clip)", { "stgate", "comp", "clip" } },
+        { "Dream keys (chorus > phase > room)", { "chorus", "phaser", "verb" } },
+        { "Glitter pad (flanger > echo > room)", { "flanger", "delay", "verb" } },
+        { "Tape lo-fi (satur > filter > echo)", { "satur", "filter", "delay" } },
+        { "Sidechain pump pad (pump > wide > room)", { "pump", "wide", "verb" } },
+        { "Master loud (dyn > max > limit)", { "stdyn", "stmax", "stlimit" } } };
+    return c;
+}
+
+class PatchMethodView : public juce::Component, private juce::ChangeListener, private juce::Timer
+{
+public:
+    PatchMethodView (Studio& st, int channelId, int track) : s (st), fx (st), chId (channelId)
+    {
+        fx.fixedTrack = track;
+        title.setFont (juce::FontOptions (17.0f, juce::Font::bold));
+        title.setColour (juce::Label::textColourId, col::accent);
+        addAndMakeVisible (title);
+        setupButton (chains, "CHAINS", "Add a ready-made stack of effects in one click");
+        chains.onClick = [this] { chainMenu(); };
+        addAndMakeVisible (chains);
+        setupButton (clear, "CLEAR", "Remove every effect in this patch");
+        clear.onClick = [this] { s.edit ("Patch Method clear", [&] (Project& p) { p.mixer[(size_t) fx.track()].fx.clear(); }); };
+        addAndMakeVisible (clear);
+        setupButton (closeBtn, "X  CLOSE", "Close Patch Method (your effects stay on this sound)");
+        closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
+        addAndMakeVisible (closeBtn);
+        addAndMakeVisible (fx);
+        s.addChangeListener (this);
+        setSize (320, 700);
+        refresh();
+        startTimer (200);
+    }
+    ~PatchMethodView() override { s.removeChangeListener (this); }
+    void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        title.setBounds (r.removeFromTop (24));
+        auto b = r.removeFromTop (28);
+        chains.setBounds (b.removeFromLeft (100)); b.removeFromLeft (6); clear.setBounds (b.removeFromLeft (70)); closeBtn.setBounds (b.removeFromRight (90));
+        fx.setBounds (r);
+    }
+    bool valid() const { auto* c = const_cast<Studio&> (s).channel (chId); return c != nullptr && c->mixerTrack == fx.fixedTrack; }
+private:
+    Studio& s;
+    FxPanel fx;
+    int chId;
+    juce::Label title;
+    juce::TextButton chains, clear, closeBtn;
+    void refresh()
+    {
+        auto* c = s.channel (chId);
+        title.setText ("PATCH METHOD  |  " + (c != nullptr ? c->name : juce::String()), juce::dontSendNotification);
+        if (fx.fixedTrack < (int) s.p().mixer.size()) fx.refresh();
+    }
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
+    void timerCallback() override { if (fx.fixedTrack < (int) s.p().mixer.size()) fx.updateLoads(); }
+    void chainMenu()
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader ("Add a chain (stacks after what's there)");
+        for (size_t i = 0; i < patchChains().size(); ++i) m.addItem ((int) i + 1, patchChains()[i].name);
+        m.addSeparator();
+        m.addItem (999, "Single effect / plugin (Plugin House)...");
+        m.showMenuAsync ({}, [this] (int r) {
+            const int t = fx.track();
+            if (r == 999) { showPluginHouseMenu (s, t); return; }
+            if (r < 1 || r > (int) patchChains().size()) return;
+            const auto& ch = patchChains()[(size_t) r - 1];
+            s.edit ("Patch Method chain", [&] (Project& p) {
+                int ctl = 0, flt = 0;
+                for (auto* id : ch.fx)
+                {
+                    if (p.mixer[(size_t) t].fx.size() >= (size_t) maxSlots) break;
+                    auto& f = p.addFx (t, id);
+                    if (juce::String (id) == "peakctl") ctl = f.uid;
+                    if (juce::String (id) == "filter") flt = f.uid;
+                }
+                if (ctl != 0 && flt != 0)
+                {
+                    CtlLink L; L.srcTrack = t; L.srcUid = ctl; L.dstTrack = t; L.dstUid = flt; L.param = "cutoff"; L.lo = 0.2f; L.hi = 0.9f;
+                    p.ctlLinks.push_back (L);
+                }
+            });
+        });
+    }
+};
+
+struct PatchWindow : juce::DocumentWindow, private juce::Timer
+{
+    PatchWindow (const juce::String& t, PatchMethodView* v, int id) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton), view (v), chId (id)
+    {
+        setUsingNativeTitleBar (true);
+        setContentOwned (v, true);
+        setResizable (true, false);
+        centreWithSize (getWidth(), getHeight());
+        setVisible (true);
+        makeCaptureFriendly (*this);
+        markFloating (*this);
+        startTimer (500);
+    }
+    void closeButtonPressed() override { close (this); }
+    void timerCallback() override { if (! view->valid()) { stopTimer(); close (this); } }
+    static void close (PatchWindow* w) { juce::MessageManager::callAsync ([w] { all().removeObject (w); }); }
+    static juce::OwnedArray<PatchWindow>& all() { static juce::OwnedArray<PatchWindow> w; return w; }
+    PatchMethodView* view; int chId;
+};
+}
+
+void openPatchMethod (Studio& s, int channelId)
+{
+    auto* c = s.channel (channelId);
+    if (c == nullptr) return;
+    for (auto* w : PatchWindow::all()) if (w->chId == channelId) { w->toFront (true); return; }
+    bool shared = c->mixerTrack <= 0 || c->mixerTrack >= (int) s.p().mixer.size();
+    for (auto& o : s.p().channels) shared |= o.id != channelId && o.mixerTrack == c->mixerTrack;
+    if (shared)
+        s.edit ("Patch Method", [&] (Project& p) { if (auto* ch = s.channel (channelId)) ch->mixerTrack = p.addMixerTrack ("PM " + ch->name); });
+    c = s.channel (channelId);
+    s.selectedTrack = c->mixerTrack;
+    PatchWindow::all().add (new PatchWindow ("Patch Method - " + c->name, new PatchMethodView (s, channelId, c->mixerTrack), channelId));
 }
 
 std::unique_ptr<juce::Component> createMixer (Studio& s) { return std::make_unique<MixerView> (s); }

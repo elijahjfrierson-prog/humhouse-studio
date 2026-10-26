@@ -43,8 +43,11 @@ public:
                                  "Zoom (Z) - click to zoom in, Shift-click to zoom out" };
             for (int i = 0; i < 7; ++i)
             {
-                auto* b = toolBtns.add (new juce::TextButton());
-                setupButton (*b, labels[i], tips[i], true);
+                auto* b = new IconTextButton();
+                toolBtns.add (b);
+                setupButton (*b, {}, tips[i], true);
+                (void) labels;
+                b->icon = (int) std::array<CursorIcon, 7> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom }[(size_t) i];
                 b->setRadioGroupId (4201);
                 b->onClick = [this, i] { editTool = (EditTool) i; };
                 addAndMakeVisible (b);
@@ -58,6 +61,9 @@ public:
         setupButton (lockBtn, "LOCK", "Scale lock: notes you draw, drag or stamp snap to the chosen key and scale", true);
         lockBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prScaleLock", false), juce::dontSendNotification);
         lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
+        setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the FL-like default). Alt + scroll fine-tunes", false);
+        sizeBtn.onClick = [this] { setNoteSize ((noteSize + 1) % 4); };
+        setNoteSize (s.settings != nullptr ? juce::jlimit (0, 3, s.settings->getIntValue ("prNoteSize", 1)) : 1, false);
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
@@ -66,7 +72,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &quantBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &quantBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &sizeBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -92,8 +98,8 @@ public:
         struct Item { juce::Component* c; int w, gap; };
         std::vector<Item> items { { &chLabel, 150, 6 }, { &rootBox, 60, 4 }, { &scaleBox, 150, 4 }, { &highlightBtn, 60, 10 },
                                   { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &quantBtn, 62, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
-                                  { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
-        for (auto* b : toolBtns) items.push_back ({ b, 46, 2 });
+                                  { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 4 }, { &sizeBtn, 64, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
+        for (auto* b : toolBtns) items.push_back ({ b, 30, 2 });
         const int avail = juce::jmax (100, getWidth() - 12);
         auto layout = [&] (bool apply)
         {
@@ -455,7 +461,7 @@ public:
             pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * std::pow (1.15f, juce::jlimit (-4.0f, 4.0f, w.deltaY * 8.0f)));
             scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
         }
-        else if (e.mods.isAltDown()) rowH = juce::jlimit (6.0f, 30.0f, rowH + (w.deltaY > 0 ? 1.0f : -1.0f));
+        else if (e.mods.isAltDown()) rowH = juce::jlimit (6.0f, 40.0f, rowH + (w.deltaY > 0 ? 1.0f : -1.0f));
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
             scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
         else scrollY = juce::jlimit (0.0f, 128 * rowH - (float) gridArea().getHeight(), scrollY - w.deltaY * 300.0f);
@@ -523,6 +529,8 @@ public:
         if (is ('v', cmd) && ! clipboard().empty())
         {
             double at = floorSnap (s.engine.isPlaying() ? 0.0 : std::fmod (s.engine.positionBeats(), s.p().patterns[(size_t) s.p().currentPattern].lengthBeats()));
+            if (const auto m = getMouseXYRelative(); isMouseOver (true) && gridArea().contains (m))
+                at = juce::jmax (0.0, floorSnap (xToBeat ((float) m.x)));   // FL: paste where the mouse is
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
             if (clipFrom() >= 0.0)
@@ -549,7 +557,7 @@ private:
     Studio& s;
     int channelId = -1;
     double scrollX = 0;
-    float scrollY = 0, pxPerBeat = 96.0f, rowH = 14.0f;
+    float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
     static constexpr int keyW = 64, rulerH = 18, velH = 70;
     int barH = 34;   // 64 when the toolbar wraps to two rows
     double lastLength = 0.25; float lastVelocity = 0.78f;
@@ -559,7 +567,20 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, quantBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn;
+    juce::TextButton highlightBtn, toolsBtn, quantBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn, sizeBtn;
+    int noteSize = 1;
+    void setNoteSize (int level, bool keepView = true)
+    {
+        static constexpr float rows[] { 14.0f, 20.0f, 26.0f, 32.0f };
+        static const char* names[] { "SIZE S", "SIZE M", "SIZE L", "SIZE XL" };
+        noteSize = juce::jlimit (0, 3, level);
+        const float mid = (scrollY + (float) gridArea().getHeight() * 0.5f) / rowH;   // the key row in the middle of the view stays put
+        rowH = rows[noteSize];
+        if (keepView) scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) gridArea().getHeight()), mid * rowH - (float) gridArea().getHeight() * 0.5f);
+        sizeBtn.setButtonText (names[noteSize]);
+        if (s.settings) s.settings->setValue ("prNoteSize", noteSize);
+        repaint();
+    }
     int scaleKey (int k) const { int r = snapToScale (k, s.p().keyRoot, s.p().scaleIndex); if (r < 0) r += 12; if (r > 127) r -= 12; return r; }   // octave-wrap at the edges stays in scale
     int lockKey (int k) const { return lockBtn.getToggleState() ? scaleKey (k) : k; }
     Knob glide { "Glide", "slide time between notes for this channel; 0 = off", 0.0, 1.0, 0.0, " s" };

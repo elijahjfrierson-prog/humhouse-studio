@@ -11,8 +11,10 @@ template <typename F> void forTargets (NoteList& notes, F&& f)
     for (auto& n : notes) if (! sel || n.selected) f (n);
 }
 
-struct ArpSettings  { double rate = 0.125; bool triplet = false; int range = 1; int direction = 0; /*0 up 1 down 2 up-down 3 as played*/
-                      float gate = 0.9f; float velStart = 1.0f, velEnd = 1.0f; };
+struct ArpSettings  { double rate = 0.125; bool triplet = false; int range = 1;
+                      int direction = 0; /*0 up 1 down 2 up-down 3 as played 4 random 5 converge 6 diverge 7 pinky 8 thumb 9 chord stabs*/
+                      float gate = 0.9f; float velStart = 1.0f, velEnd = 1.0f;
+                      int rests = 0; /*0 off 1 every 4th 2 3-3-2 3 random 4 gallop*/ float swing = 0.0f; bool slide = false; int seed = 1; };
 struct StrumSettings{ double time = 0.03; float tension = 0.0f; float velocity = 0.0f; bool preserveEnd = true; bool alternate = false; };
 struct ChopSettings { double rate = 0.125; bool triplet = false; float gate = 1.0f; };
 struct FlamSettings { double time = 0.02; float velocity = 0.6f; };

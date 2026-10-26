@@ -54,7 +54,25 @@ struct SynthParams
     float morph = 0.0f;                     // morph wave: sine > triangle > saw > square
     float noise = 0.0f;                     // breath / air mixed into any wave
     float lfoRate = 0.0f, vibrato = 0.0f;   // Hz, semitones (also sweeps the morph)
+    // wave 9 = 3x Oscillation: three oscillators, each its own shape (saw, square, triangle, sine, noise), tune and level
+    std::array<int, 3>   xWave { 0, 1, 3 };
+    std::array<float, 3> xVol { 1.0f, 0.0f, 0.0f }, xSemi { 0, 0, 0 }, xFine { 0, 0, 0 };
+    // wave 10 = HumWave wavetable: frames of humWaveFrameSize samples, scanned by wtPos (Morph = LFO sweep depth)
+    float wtPos = 0.0f;
+    int   wtKind = 0;                                   // factory table, used when no custom table is loaded
+    int   warp = 0; float warpAmt = 0.0f;                 // Serum-style warp of the HumWave read (see humWarpNames)
+    float uniBlend = 0.5f, sub = 0.0f;                   // unison side-voice level, sine sub one octave down
+    float grain = 0.0f, evolve = 0.0f;                   // HumWave: granular scatter of the table read, and a note that grows / evolves while held
+    int   bWarp = 0, bStart = 0; float bDrop = 0.5f, bClick = 0.0f;   // bStart: 808 start wave (Sine, Triangle, Saw, Square)
+     // HitMaker (wave 4 = 808): warp mode (amount = warpAmt), pitch drop, click / punch
+    std::shared_ptr<const std::vector<float>> wt;       // custom table (picture to sound, sample to wavetable)
+    juce::String wtName;
 };
+constexpr int humWaveFrameSize = 256;
+juce::File bundledSoundsRoot();
+struct Project;
+// drag-in drum MIDI (GM keys: 36 kick, 38 snare, 39 clap, 42 hat, 46 open hat, rest perc) -> new pattern on matching channels; returns its index or -1
+int importMidiPattern (Project& p, const juce::File& midiFile);
 
 // Session Drummer (Logic-style): how the drummer plays, and how the kit is mixed
 struct DrummerParams
@@ -63,9 +81,11 @@ struct DrummerParams
     float swing = 0.0f, humanize = 0.5f, ghost = 0.5f, hatOpen = 0.0f;
     bool  halfTime = false, ride = false;
     int   character = 1, seed = 1;
+    int   kickPattern = 0, snarePattern = 0, hatPattern = 0, tomPattern = 0, crashPattern = 0;   // 0 = Auto (the recorded take)
     int   voicing = 1, space = 1, glow = 0;   // mix voicing (Raw, Modern, Punch, Room, Vintage), room space, squeeze glow
     float punch = 0.55f, glue = 0.45f, drive = 0.2f, micBlend = 0.45f, roomMix = 0.22f, squeeze = 0.0f;
     // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
+    std::array<float, 17> partDb {};   // per kit piece (kitPieceOf), on top of the group level
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
@@ -103,6 +123,10 @@ struct Channel
     // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
     bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = false, smpTrim = false;   // defaults: the sample plays exactly like the WAV
     float smpBoostDb = 0.0f, smpFadeIn = 0.0f, smpFadeOut = 0.0f;   // fades in seconds
+    float smpStart = 0.0f;                                           // trim knob: seconds cut off the beginning of the sample
+    int   smpWarp = 0; float smpWarpAmt = 0.0f;                     // HitMaker: warp a sampled 808 (same modes as the 808 engine)
+    juce::File smpLayerFile;                                         // HitMaker: optional 2nd 808 merged in (cut / stretched to this one)
+    float smpLayerMix = 0.5f; int smpLayerWarp = 0; float smpLayerWarpAmt = 0.0f;
     int   stretchMode = 0;                 // 0 Resample (tape: pitch + speed), 1 Stretch (keep pitch), 2 Stretch X (fine time, pitch without length)
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
     bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
@@ -121,12 +145,12 @@ struct Pattern
 };
 
 // ---------------------------------------------------------------- automation (FL-style automation clips)
-enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch };
+enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch, AutoSendLevel };
 struct AutoTarget
 {
     int kind = AutoNone;
     int track = 0, fxUid = 0, channel = 0;   // mixer insert + FX slot uid, or channel id
-    juce::String param;                      // built-in param id, or "#n" = plugin parameter n
+    juce::String param;                      // built-in param id, "#n" = plugin parameter n, or send target bus (AutoSendLevel)
     juce::String name;                       // label, e.g. "Room Verb - Mix"
 };
 struct AutoPoint { double beat = 0.0; float value = 0.5f; };   // beat into the clip's content, value 0..1
@@ -168,11 +192,13 @@ struct Lane
     int  inputPair = 0;            // stereo input pair (0 = in 1/2)
     int  inputCh = 0;              // mono input channel (0 = in 1)
     bool stereoIn = false;         // false: mono input centred in both ears
+    float volumeDb = 0.0f;         // this track's own volume (only its clips, not the shared insert)
     float shiftMs = 0.0f;          // Soft: shift the whole track later (+) / earlier (-) in ms to line vocals up
     bool autoNorm = false;         // zero-latency leveler: brings the voice to a steady strong level
     int  mixerTrack = 0;
     bool armed = false, muted = false;
     bool monitor = true;
+    int  compLane = -1;            // take lane made by Comp takes: the comp track it feeds
     float height = 56.0f;
     juce::Colour colour {};        // track colour for its clips (transparent = pattern / audio defaults)
     juce::Colour nameColour {};    // track name color (transparent = automatic, opposite of what it sits on)
@@ -197,6 +223,7 @@ struct MixerTrack
 {
     juce::String name;
     float volume = 0.8f, pan = 0.0f;
+    float stereoSep = 0.0f;        // FL stereo separation (M/S): -1 = mono (merge) .. 0 = as is .. +1 = wider (separate)
     bool  muted = false, solo = false, frozen = false;
     juce::File frozenFile;
     int   inputPair = -1;          // recording input for this insert (-1 none)
@@ -208,6 +235,16 @@ struct MixerTrack
     float duck = 0.0f;             // 0 = off .. 1 = full
     int   duckSource = -1;         // -1 = auto (first armed vocal track)
     float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
+    // FL-style mini EQ under the FX slots: low shelf, 3 peaks, high shelf; each band has freq / gain / Q
+    std::array<float, 5> meqFreq { 80.0f, 300.0f, 1000.0f, 3500.0f, 10000.0f }, meqGain { 0, 0, 0, 0, 0 }, meqQ { 0.7f, 1.0f, 1.0f, 1.0f, 0.7f };
+};
+
+// Link to controller: a controller effect (Peak Controller) drives one knob of another effect
+struct CtlLink
+{
+    int srcTrack = 0, srcUid = 0, dstTrack = 0, dstUid = 0;
+    juce::String param;
+    float lo = 0.0f, hi = 1.0f;   // controller 0..1 maps onto this part of the knob's range
 };
 
 // ---------------------------------------------------------------- project
@@ -235,6 +272,7 @@ struct Project
     std::vector<Lane>       lanes;
     std::vector<Clip>       clips;
     std::vector<MixerTrack> mixer;   // [0] master
+    std::vector<CtlLink>    ctlLinks;
     std::vector<juce::File> audioPool;   // every audio clip ever used, kept until "Clear unused / Clear all"
     int  insertPatternAfter (int after, Pattern pt);                 // returns the new index; clip indices are remapped
     void removePatterns (const std::function<bool (int)>& drop);    // drops patterns + their clips, remaps the rest

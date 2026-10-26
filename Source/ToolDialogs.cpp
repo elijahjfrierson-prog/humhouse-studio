@@ -20,13 +20,18 @@ ToolDef getDef (Tool t)
         case Tool::Arp: return { "Arpeggiator / Roll (Alt+A)", {
             { "Rate", 0, 6, 2, 1, rateNames, "repeat speed - 1/32 and 1/64 for hi-hat and snare rolls" },
             { "Range", 1, 4, 1, 1, {}, "octaves the arp climbs (1 = same note, for rolls)" },
-            { "Direction", 0, 3, 0, 1, { "Up", "Down", "Up-Down", "As played" }, "order of chord notes" },
+            { "Direction", 0, 9, 0, 1, { "Up", "Down", "Up-Down", "As played", "Random", "Converge", "Diverge", "Pinky (top note)", "Thumb (low note)", "Chord stabs" }, "order of chord notes" },
             { "Gate", 0.1f, 1, 0.9f, 0, {}, "note length relative to the rate" },
             { "Vel start", 0, 1, 0.6f, 0, {}, "velocity of the first hit (ramp for rolls)" },
-            { "Vel end", 0, 1, 1, 0, {}, "velocity of the last hit" } },
+            { "Vel end", 0, 1, 1, 0, {}, "velocity of the last hit" },
+            { "Rests", 0, 4, 0, 1, { "Off", "Every 4th", "3-3-2", "Random", "Gallop" }, "rhythm: leave steps out for bounce" },
+            { "Swing", 0, 1, 0, 0, {}, "push every 2nd step late" },
+            { "Slide", 0, 1, 0, 1, offOn, "every 2nd note glides into the next (808 / lead slides)" },
+            { "Seed", 1, 99, 1, 1, {}, "new random order / rests" } },
             [] (NoteList& n, const std::vector<float>& v, const Project&) {
                 tools::ArpSettings a; a.rate = rates[(int) v[0]]; a.range = (int) v[1]; a.direction = (int) v[2];
-                a.gate = v[3]; a.velStart = v[4]; a.velEnd = v[5]; tools::arpeggiate (n, a); } };
+                a.gate = v[3]; a.velStart = v[4]; a.velEnd = v[5];
+                a.rests = (int) v[6]; a.swing = v[7]; a.slide = v[8] > 0.5f; a.seed = (int) v[9]; tools::arpeggiate (n, a); } };
         case Tool::Strum: return { "Strum (Alt+S)", {
             { "Time", -0.5f, 0.5f, 0.06f, 0, {}, "offset between chord notes in beats (+ low to high, - high to low)" },
             { "Tension", -1, 1, 0, 0, {}, "accelerate / decelerate the offsets" },

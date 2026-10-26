@@ -91,6 +91,9 @@ public:
         }
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
         window = std::make_unique<MainWindow>();
+        openFromCommandLine (commandLine);
+        for (auto& f : pendingOpen) openFromCommandLine (f);
+        pendingOpen.clear();
        #if HHS_LICENSED
         if (! WelcomePanel::offFile().existsAsFile())
         {
@@ -102,6 +105,21 @@ public:
             welcomeWindow = std::move (w);
         }
        #endif
+    }
+    void anotherInstanceStarted (const juce::String& commandLine) override
+    {
+        if (window == nullptr) { pendingOpen.add (commandLine); return; }   // macOS hands over a double-clicked file before the window exists
+        openFromCommandLine (commandLine);
+    }
+    void openFromCommandLine (const juce::String& commandLine)
+    {
+        for (auto& arg : juce::StringArray::fromTokens (commandLine, true))
+        {
+            const juce::File f (arg.unquoted().trim());
+            if (! juce::File::isAbsolutePath (arg.unquoted().trim()) || ! f.existsAsFile() || ! hhs::isHumHouseShareFile (f.getFullPathName())) continue;
+            juce::Component::SafePointer<juce::Component> main (window->getContentComponent());
+            juce::MessageManager::callAsync ([main, f] { if (main != nullptr) hhs::openFileInMain (main, f); });
+        }
     }
     void shutdown() override
     {
@@ -136,6 +154,7 @@ public:
 private:
     hhs::HHLookAndFeel laf;
     std::unique_ptr<MainWindow> window;
+    juce::StringArray pendingOpen;
     std::unique_ptr<juce::DocumentWindow> welcomeWindow;
 };
 

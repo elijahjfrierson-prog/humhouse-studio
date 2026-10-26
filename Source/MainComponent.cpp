@@ -39,6 +39,24 @@ void setFontStyle (int st)
     for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
         if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i)) { w->sendLookAndFeelChange(); w->repaint(); }
 }
+// combo boxes marked "smallArrow" (Playlist track routing) get a slim arrow so the name gets the room
+void HHLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox& box)
+{
+    if (! box.getProperties().contains ("smallArrow")) { LookAndFeel_V4::drawComboBox (g, w, h, down, bx, by, bw, bh, box); return; }
+    const auto b = juce::Rectangle<int> (0, 0, w, h).toFloat();
+    g.setColour (box.findColour (juce::ComboBox::backgroundColourId)); g.fillRoundedRectangle (b, 2.0f);
+    g.setColour (box.findColour (juce::ComboBox::outlineColourId)); g.drawRoundedRectangle (b.reduced (0.5f), 2.0f, 1.0f);
+    const float cx = (float) w - 7.0f, cy = (float) h * 0.5f;
+    juce::Path a; a.startNewSubPath (cx - 2.5f, cy - 1.2f); a.lineTo (cx, cy + 1.3f); a.lineTo (cx + 2.5f, cy - 1.2f);
+    g.setColour (box.findColour (juce::ComboBox::arrowColourId).withAlpha (box.isEnabled() ? 0.8f : 0.2f));
+    g.strokePath (a, juce::PathStrokeType (1.2f));
+}
+void HHLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& label)
+{
+    if (! box.getProperties().contains ("smallArrow")) { LookAndFeel_V4::positionComboBoxText (box, label); return; }
+    label.setBounds (1, 1, box.getWidth() - 13, box.getHeight() - 2);
+    label.setFont (getComboBoxFont (box));
+}
 juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
     static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
@@ -180,8 +198,7 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
 void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
 {
     const auto font = getTextButtonFont (b, b.getHeight());
-    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
-        return LookAndFeel_V4::drawButtonText (g, b, over, down);
+    juce::ignoreUnused (over, down);
     g.setFont (font);
     const int yIndent = juce::jmin (4, b.proportionOfHeight (0.3f)), cornerSize = juce::jmin (b.getHeight(), b.getWidth()) / 2;
     const int fontHeight = juce::roundToInt (font.getHeight() * 0.6f);
@@ -189,21 +206,42 @@ void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool
     const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
     const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
     if (area.getWidth() <= 0) return;
-    col::setFontGradientFill (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, b.isEnabled() ? 1.0f : 0.5f);
-    g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+    if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
+    {
+        // plain text: never the same color as the button it sits on (custom on-colors, user font color, theme accents)
+        const auto bg = b.findColour (b.getToggleState() ? juce::TextButton::buttonOnColourId : juce::TextButton::buttonColourId);
+        const auto txt = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
+        g.setColour (col::readableOn (txt, bg).withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
+        g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+        return;
+    }
+    col::drawWithHalo (g, b.isEnabled() ? 1.0f : 0.5f, [&] (int dx, int dy) { g.drawFittedText (b.getButtonText(), area.translated (dx, dy), juce::Justification::centred, 2); });
+    col::fillGradientText (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, 2, 0.0f, b.isEnabled() ? 1.0f : 0.5f);
 }
 
 void HHLookAndFeel::drawLabel (juce::Graphics& g, juce::Label& l)
 {
     const auto font = getLabelFont (l);
     if (! col::fontGradient || l.isBeingEdited() || ! col::isHeadline (font) || l.findColour (juce::Label::textColourId) != col::text)
-        return LookAndFeel_V4::drawLabel (g, l);
+    {
+        const auto bg = l.findColour (juce::Label::backgroundColourId);
+        const auto txt = l.findColour (juce::Label::textColourId);
+        const auto fixedTxt = col::readableOn (txt, bg.getAlpha() >= 40 ? bg : col::panel);
+        if (l.isBeingEdited() || fixedTxt == txt) return LookAndFeel_V4::drawLabel (g, l);
+        g.fillAll (bg);
+        g.setFont (font);
+        g.setColour (fixedTxt.withMultipliedAlpha (l.isEnabled() ? 1.0f : 0.5f));
+        const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
+        g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+        return;
+    }
     g.fillAll (l.findColour (juce::Label::backgroundColourId));
     g.setFont (font);
     const auto area = getLabelBorderSize (l).subtractedFrom (l.getLocalBounds());
     const float alpha = l.isEnabled() ? 1.0f : 0.5f;
-    col::setFontGradientFill (g, l.getText(), area.toFloat(), l.getJustificationType(), alpha);
-    g.drawFittedText (l.getText(), area, l.getJustificationType(), juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight())), l.getMinimumHorizontalScale());
+    const int lines = juce::jmax (1, (int) ((float) area.getHeight() / font.getHeight()));
+    col::drawWithHalo (g, alpha, [&] (int dx, int dy) { g.drawFittedText (l.getText(), area.translated (dx, dy), l.getJustificationType(), lines, l.getMinimumHorizontalScale()); });
+    col::fillGradientText (g, l.getText(), area.toFloat(), l.getJustificationType(), lines, l.getMinimumHorizontalScale(), alpha);
     g.setColour (l.findColour (juce::Label::outlineColourId).withMultipliedAlpha (alpha));
     g.drawRect (l.getLocalBounds());
 }
@@ -282,12 +320,21 @@ void askText (const juce::String& title, const juce::String& initial, std::funct
 }
 
 // ------------------------------------------------------------------ studio
+// auto-backups write the .hhs on a background thread: serialising + disk writes on the message thread froze the
+// waveforms / meters for a moment every few edits while the song played
+static void writeBackupAsync (const Project& p)
+{
+    static juce::ThreadPool pool (1);
+    if (pool.getNumJobs() > 1) return;   // one queued is enough
+    pool.addJob ([copy = std::make_shared<Project> (p)] { writeBackup (*copy); });
+}
+
 void Studio::commit (const juce::String& what)
 {
     undo.push (p(), what);
     engine.sync();
     dirty = true;
-    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackup (p()); }   // auto-backup every few edits
+    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits
     sendChangeMessage();
 }
 
@@ -418,7 +465,7 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 };
 }
 
-class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
+class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
     MainComponent()
@@ -522,6 +569,10 @@ public:
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
         mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
+        setupButton (rackPopBtn, "RACK", "Channel Rack: pop it out into its own window so you can edit samples and one-shots on Rec and in full screen (click again to dock it)", true);
+        rackPopBtn.onClick = [this] { if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
+        addAndMakeVisible (rackPopBtn);
+        rackPopOut = [this] { toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
@@ -573,6 +624,7 @@ public:
 
     ~MainComponent() override
     {
+        rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         stopTimer();
         engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
@@ -622,6 +674,8 @@ public:
         scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
         mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
         mixPopBtn.setBounds (t.removeFromRight (40)); t.removeFromRight (6);
+        rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+        rackPopBtn.setBounds (t.removeFromRight (52)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
@@ -705,7 +759,9 @@ public:
     std::map<int, std::pair<double, float>> heldNotes;
 
     juce::Array<juce::MidiDeviceInfo> midiDevs;
-    int midiSeen = -1, midiPoll = 0;
+    int midiSeen = -1;
+    // hot-plug from the OS device-list notification: polling the device list every 2 s stalled the screen on Windows
+    juce::MidiDeviceListConnection midiConn = juce::MidiDeviceListConnection::make ([this] { enableMidiInputs(); });
     // the chosen device (or every connected one when none is chosen) plays live; a keyboard plugged in later just works
     void enableMidiInputs()
     {
@@ -783,6 +839,15 @@ public:
                 tm.addSeparator();
                 tm.addItem (396, "Add a templates folder (e.g. Desktop)...");
                 tm.addItem (397, "Show templates folder");
+                tm.addSeparator();
+                tm.addItem (398, "Share this project as a template file (sounds inside)...");
+                if (! ts.isEmpty())
+                {
+                    juce::PopupMenu share;
+                    for (int i = 0; i < ts.size() && i < 90; ++i) share.addItem (700 + i, ts[i].getFileNameWithoutExtension());
+                    tm.addSubMenu ("Share a saved template as a file", share);
+                }
+                tm.addItem (399, "Import a template / preset / FX chain file someone sent you...");
                 m.addSubMenu ("New from template", tm);
             }
             add (mSaveTemplate, "Save as template...");
@@ -888,6 +953,15 @@ public:
         if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
         if (id == 396) { addTemplateFolder(); return; }
         if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
+        if (id == 398) { shareProjectAsTemplate(); return; }
+        if (id == 399) { importSharedFile(); return; }
+        if (id >= 700 && id < 790)
+        {
+            auto ts = templateFiles();
+            Project q;
+            if (id - 700 < ts.size() && loadProject (q, ts[id - 700])) shareTemplatePack (q, ts[id - 700].getFileNameWithoutExtension());
+            return;
+        }
         if (id >= 300 && id < 390)
         {
             auto ts = templateFiles();
@@ -1017,6 +1091,7 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
+    juce::TextButton rackPopBtn;
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
@@ -1049,11 +1124,47 @@ private:
     // FL-style detached windows: any panel can pop out into its own resizable window (multi-monitor)
     struct PopOut : public juce::DocumentWindow, private juce::Timer
     {
-        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons) { markFloating (*this); startTimer (300); }
+        PopOut (const juce::String& t) : juce::DocumentWindow ("HumHouse Studio - " + t, col::bg, juce::DocumentWindow::allButtons)
+        {
+            markFloating (*this);
+            fsBtn.setTooltip ("Full screen on / off (F11)");
+            fsBtn.onClick = [this] { toggleFull(); };
+            juce::Component::addAndMakeVisible (fsBtn);
+            startTimer (300);
+        }
         std::function<void()> onClose;
+        juce::TextButton fsBtn { "FULL SCREEN" };
+        // fills the screen in the same desktop space as the main window, so it stays in view while you record
+        juce::Rectangle<int> normalBounds; bool filled = false;
+        bool isFull() const { return filled || isFullScreen(); }
+        void toggleFull()
+        {
+            if (isFullScreen()) { setFullScreen (false); return; }
+            if (filled) { filled = false; setBounds (normalBounds); toFront (true); return; }
+            const auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds());
+            if (d == nullptr) return;
+            normalBounds = getBounds();
+            auto area = d->userArea;
+            if (auto* peer = getPeer())
+                if (auto f = peer->getFrameSizeIfPresent()) area = f->subtractedFrom (area);
+            filled = true;
+            setBounds (area);
+            toFront (true);
+        }
         void closeButtonPressed() override { if (onClose) onClose(); }
-        bool keyPressed (const juce::KeyPress& k) override { return hostKeyHandler && hostKeyHandler (k); }
-        void timerCallback() override { updateFloating (*this); }   // stays visible over the main window while you work, not over other apps
+        void resized() override { juce::DocumentWindow::resized(); fsBtn.setBounds (getWidth() - 104, getHeight() - 28, 96, 22); fsBtn.toFront (false); }
+        bool keyPressed (const juce::KeyPress& k) override
+        {
+            if (k.getKeyCode() == juce::KeyPress::F11Key || k == juce::KeyPress ('f', juce::ModifierKeys::commandModifier | juce::ModifierKeys::ctrlModifier, 0)) { toggleFull(); return true; }
+            return hostKeyHandler && hostKeyHandler (k);
+        }
+        void timerCallback() override   // stays visible over the main window while you work, not over other apps
+        {
+            updateFloating (*this);
+            if (! floatWithTopmost)   // Mac: a pop-out (full screen or not) stays over the Beat / Rec screens while the app is in front, so it never drops behind
+                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
+            fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
+        }
     };
     std::map<juce::Component*, std::unique_ptr<PopOut>> popouts;
 
@@ -1084,6 +1195,7 @@ private:
         popouts.erase (it);
         addAndMakeVisible (c);
         resized();
+        c->resized();
     }
 
     void setView (int v)
@@ -1092,6 +1204,7 @@ private:
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab };
         tabs[v]->setToggleState (true, juce::dontSendNotification);
         resized();
+        if (! popouts.empty()) juce::MessageManager::callAsync ([] { raiseFloatingWindows(); });
     }
 
     void syncControls()
@@ -1119,11 +1232,11 @@ private:
         const bool on = ! engine.isRecording();
         engine.setRecording (on);
         if (on && ! engine.isPlaying()) engine.play();
+        if (! popouts.empty()) raiseFloatingWindows();
     }
 
     void timerCallback() override
     {
-        if (++midiPoll >= 60) { midiPoll = 0; if (juce::MidiInput::getAvailableDevices().size() != midiSeen) enableMidiInputs(); }   // hot-plug
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
@@ -1153,7 +1266,8 @@ private:
             if (autoBackup() && studio.dirty)
             {
                 engine.storePluginStates();
-                if (writeBackup (engine.project()).existsAsFile()) flash ("Auto-backup saved");
+                writeBackupAsync (engine.project());
+                flash ("Auto-backup saved");
             }
         }
     }
@@ -1166,28 +1280,44 @@ private:
         if (p.projectFile == juce::File()) return;
         const auto base = p.projectFile.getParentDirectory();
         const auto app = juce::File::getSpecialLocation (juce::File::currentApplicationFile), exeDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
-        std::map<juce::String, juce::File> moved;
+        std::vector<std::pair<juce::File, juce::File>> jobs;
+        std::set<juce::String> seen;
         auto take = [&] (const juce::File& f, const juce::File& dest) {
-            if (! f.existsAsFile() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || moved.count (f.getFullPathName())) return;
-            dest.createDirectory();
-            auto t = dest.getChildFile (f.getFileName());
-            if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
-            if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+            if (f == juce::File() || f.isAChildOf (base) || f.isAChildOf (app) || f.isAChildOf (exeDir) || ! seen.insert (f.getFullPathName()).second) return;
+            jobs.push_back ({ f, dest });
         };
         const auto shared = docsDir().getChildFile ("Recordings");
         for (auto& c : p.clips) take (c.audioFile, base.getChildFile (c.audioFile.isAChildOf (shared) ? "Recordings" : "Audio Files"));
         for (auto& f : p.audioPool) take (f, base.getChildFile ("Audio Files"));
         for (auto& c : p.channels) take (c.sampleFile, base.getChildFile ("Samples"));
         for (auto& m : p.mixer) take (m.frozenFile, base.getChildFile ("Recordings").getChildFile ("Freeze"));
-        if (moved.empty()) return;
-        studio.live ([&moved] (Project& pr) {
-            auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
-            for (auto& c : pr.clips) re (c.audioFile);
-            for (auto& f : pr.audioPool) re (f);
-            for (auto& c : pr.channels) re (c.sampleFile);
-            for (auto& m : pr.mixer) re (m.frozenFile);
+        if (jobs.empty()) return;
+        // copying a project's sounds next to it runs in the background: the project is open and playable at once
+        juce::Component::SafePointer<MainComponent> sp (this);
+        const auto projFile = p.projectFile;
+        juce::Thread::launch ([sp, jobs, projFile] {
+            std::map<juce::String, juce::File> moved;
+            for (auto& [f, dest] : jobs)
+            {
+                if (! f.existsAsFile()) continue;
+                dest.createDirectory();
+                auto t = dest.getChildFile (f.getFileName());
+                if (t.existsAsFile() && t.getSize() != f.getSize()) t = dest.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension());
+                if (t.existsAsFile() || f.copyFileTo (t)) moved[f.getFullPathName()] = t;
+            }
+            if (moved.empty()) return;
+            juce::MessageManager::callAsync ([sp, moved, projFile] {
+                if (sp == nullptr || sp->engine.project().projectFile != projFile) return;
+                sp->studio.live ([&moved] (Project& pr) {
+                    auto re = [&moved] (juce::File& f) { if (auto it = moved.find (f.getFullPathName()); it != moved.end()) f = it->second; };
+                    for (auto& c : pr.clips) re (c.audioFile);
+                    for (auto& f : pr.audioPool) re (f);
+                    for (auto& c : pr.channels) re (c.sampleFile);
+                    for (auto& m : pr.mixer) re (m.frozenFile);
+                });
+                sp->engine.sync();
+            });
         });
-        engine.sync();
     }
 
     void locateMissingAudio()
@@ -1411,6 +1541,73 @@ private:
         else tmp.deleteFile();
     }
 
+    void shareTemplatePack (const Project& p, const juce::String& name)
+    {
+        auto proj = std::make_shared<Project> (p);
+        chooser = std::make_unique<juce::FileChooser> ("Share template (one file with its sounds inside - email it, AirDrop it, text it)",
+            juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile (juce::File::createLegalFileName (name) + ".hhpack"), "*.hhpack");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+            [safe, proj, name] (const juce::FileChooser& fc) {
+                auto f = fc.getResult();
+                if (safe == nullptr || f == juce::File()) return;
+                f = f.withFileExtension ("hhpack");
+                if (packTemplate (*proj, name, f)) { safe->flash ("Template file ready: " + f.getFileName()); f.revealToUser(); }
+                else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Share template", "Couldn't write " + f.getFullPathName());
+            });
+    }
+    void shareProjectAsTemplate()
+    {
+        engine.storePluginStates();
+        auto& p = engine.project();
+        shareTemplatePack (p, lastTemplate.isNotEmpty() ? lastTemplate
+                            : p.projectFile.existsAsFile() ? p.projectFile.getFileNameWithoutExtension() : juce::String ("My template"));
+    }
+    void importSharedFile()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Import a HumHouse file", juce::File::getSpecialLocation (juce::File::userDesktopDirectory), "*.hhpack;*.hhpreset;*.hhchain;*.hhs");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+            if (safe != nullptr && fc.getResult().existsAsFile()) safe->openFile (fc.getResult());
+        });
+    }
+
+public:
+    // a file opened from Finder / Explorer / an email, or dropped on the window
+    void openFile (const juce::File& f)
+    {
+        auto fail = [] (const juce::String& what) {
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "That file isn't a HumHouse " + what + ".");
+        };
+        if (f.hasFileExtension ("hhpack"))
+        {
+            auto t = unpackTemplate (f, templatesDir());
+            if (t == juce::File()) { fail ("template"); return; }
+            flash ("Template added: " + t.getFileNameWithoutExtension() + " (File > New from template)");
+            newProject (t);
+        }
+        else if (f.hasFileExtension ("hhpreset"))
+        {
+            auto t = installSharedPreset (f);
+            if (t == juce::File()) fail ("preset");
+            else flash ("Preset added: " + t.getFileNameWithoutExtension() + " (in that effect's PRESETS menu)");
+        }
+        else if (f.hasFileExtension ("hhchain"))
+        {
+            auto t = installSharedChain (f);
+            if (t == juce::File()) fail ("FX chain");
+            else flash ("FX chain added: " + t.getFileNameWithoutExtension() + " (right-click a track > FX chain presets)");
+        }
+        else if (f.hasFileExtension ("hhs"))
+            askToSave ([this, f] { load (f); });
+    }
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { return allHumHouseShareFiles (files); }
+    void filesDropped (const juce::StringArray& files, int, int) override
+    {
+        for (auto& p : files) openFile (juce::File (p));
+    }
+private:
+
     void newProject (juce::File templ = {}) { askToSave ([this, templ] { startNewProject (templ); }); }
     void startNewProject (juce::File templ)
     {
@@ -1567,6 +1764,10 @@ private:
 };
 
 std::unique_ptr<juce::Component> createMainComponent() { return std::make_unique<MainComponent>(); }
+void openFileInMain (juce::Component* main, const juce::File& f)
+{
+    if (auto* m = dynamic_cast<MainComponent*> (main)) m->openFile (f);
+}
 void requestQuit (juce::Component* main)
 {
     if (auto* m = dynamic_cast<MainComponent*> (main)) m->requestQuit();

@@ -273,7 +273,12 @@ class SynthInstrument : public ChannelInstrument
 {
 public:
     void prepare (double sr, int) override { sampleRate = sr; }
-    void update (const Channel& c) override { p = c.synth; glide = c.glide; mono = c.mono; pitch = c.pitch; }
+    void update (const Channel& c) override
+    {
+        p = c.synth; glide = c.glide; mono = c.mono; pitch = c.pitch;
+        table = p.wave == 10 ? (p.wt != nullptr && p.wt->size() >= (size_t) humWaveFrameSize ? p.wt : humWaveFactory (p.wtKind)) : nullptr;
+        for (int o = 0; o < 3; ++o) xRatio[(size_t) o] = std::pow (2.0f, (p.xSemi[(size_t) o] + p.xFine[(size_t) o] / 100.0f) / 12.0f);
+    }
 
     void noteOn (int key, float vel, bool slide) override
     {
@@ -362,13 +367,25 @@ public:
                 }
                 if (! v.active) break;
                 double hz = keyToHz (v.current);
-                if (p.wave == 4) hz *= 1.0 + 1.5 * std::exp (-v.age * 40.0 / sampleRate); // 808 pitch drop
+                if (p.wave == 4) hz *= 1.0 + 3.0 * p.bDrop * std::exp (-v.age * 40.0 / sampleRate); // 808 pitch drop (HitMaker Drop)
                 if (p.vibrato > 0.0f && p.lfoRate > 0.0f)
                     hz *= std::pow (2.0, p.vibrato * std::sin (juce::MathConstants<double>::twoPi * p.lfoRate * v.age / sampleRate) / 12.0);
                 const float dt = (float) (hz / sampleRate);
                 float s = p.wave >= 5 ? voiceOsc (v, dt) : osc (v.ph1, dt);
                 if (p.wave < 5 && (p.detune != 0.0f || p.unison > 1)) s = 0.5f * (s + osc (v.ph2, dt * detRatio));
+                if (p.wave == 4)
+                {
+                    const float ageS = (float) (v.age / sampleRate);
+                    if (p.bClick > 0.0f && ageS < 0.012f)
+                        s += p.bClick * (1.0f - ageS / 0.012f) * (0.5f * nextNoise (v) + std::sin (juce::MathConstants<float>::twoPi * 1600.0f * ageS));
+                    {   // warp the top, keep the 808's own sub under ~150 Hz (no over-warp: the low end never folds away)
+                        const float w = warp808 (p.bWarp, p.warpAmt, s, v.ph1);
+                        v.lpW += 0.02f * (w - v.lpW); v.lpS += 0.02f * (s - v.lpS);
+                        s = p.bWarp > 0 ? w - v.lpW + v.lpS : w;
+                    }
+                }
                 if (p.noise > 0.0f) s += p.noise * nextNoise (v);
+                if (p.sub > 0.0f) { s += p.sub * std::sin (juce::MathConstants<float>::twoPi * v.subPh); v.subPh += 0.5f * dt; v.subPh -= std::floor (v.subPh); }
                 v.ph1 += dt; if (v.ph1 >= 1.0f) v.ph1 -= 1.0f;
                 v.ph2 += dt * detRatio; if (v.ph2 >= 1.0f) v.ph2 -= 1.0f;
                 if (p.drive > 0.0f) s = std::tanh (s * (1.0f + p.drive * 8.0f)) / std::tanh (1.0f + p.drive * 8.0f) ;
@@ -383,8 +400,10 @@ public:
     }
 private:
     struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
-                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0;
+                   float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0, subPh = 0;
+                   std::array<float, 3> xph { 0.0f, 0.31f, 0.67f };
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
+                   float gA = 0, gB = 0, gjA = 0, gjB = 0, lpW = 0, lpS = 0; int gCnt = 0;
                    uint32_t rng = 0x9e3779b9u; };
     static float nextNoise (Voice& v)
     {
@@ -426,8 +445,107 @@ private:
                 const int i0 = juce::jmin (2, (int) m);
                 return w[i0] + (w[i0 + 1] - w[i0]) * (m - (float) i0);
             }
+            case 9: // 3x Oscillation
+            {
+                float s = 0.0f;
+                for (size_t o = 0; o < 3; ++o)
+                {
+                    if (p.xVol[o] <= 0.0f) continue;
+                    const float d = dt * xRatio[o];
+                    float& ph = v.xph[o];
+                    float y;
+                    switch (p.xWave[o])
+                    {
+                        case 0: y = 2.0f * ph - 1.0f - blep (ph, d); break;
+                        case 1: { y = ph < 0.5f ? 1.0f : -1.0f; y += blep (ph, d); float t2 = ph + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f; y -= blep (t2, d); break; }
+                        case 2: y = 4.0f * std::abs (ph - 0.5f) - 1.0f; break;
+                        case 3: y = std::sin (tp * ph); break;
+                        default: y = nextNoise (v); break;
+                    }
+                    s += p.xVol[o] * y;
+                    ph += d; ph -= std::floor (ph);
+                }
+                return 0.6f * s;
+            }
+            case 10: // HumWave wavetable
+            {
+                if (table == nullptr) return std::sin (tp * v.ph1);
+                const auto& t = *table;
+                const int frames = (int) t.size() / humWaveFrameSize;
+                const float tsec = (float) t0 (v);
+                float pos = p.wtPos + (p.lfoRate > 0.0f ? 0.5f * p.morph * std::sin (tp * (float) (p.lfoRate * tsec)) : 0.0f);
+                if (p.evolve > 0.0f)   // the held note grows: the table position climbs and keeps drifting
+                {
+                    const float grow = 1.0f - std::exp (-tsec / (0.5f + 3.5f * p.evolve));
+                    pos += p.evolve * (grow * (1.0f - p.wtPos) + 0.08f * std::sin (0.9f * tsec + 0.37f * (float) v.key));
+                }
+                pos = juce::jlimit (0.0f, 1.0f, pos);
+                auto one = [&] (float ps, float phase)
+                {
+                    const float fp = juce::jlimit (0.0f, 1.0f, ps) * (float) (frames - 1);
+                    const int f0 = juce::jmin (frames - 1, (int) fp), f1 = juce::jmin (frames - 1, f0 + 1);
+                    const float ff = fp - (float) f0;
+                    auto read = [&] (float ph)
+                    {
+                        const float x = ph * humWaveFrameSize;
+                        const int i0 = (int) x & (humWaveFrameSize - 1), i1 = (i0 + 1) & (humWaveFrameSize - 1);
+                        const float fx = x - std::floor (x);
+                        const float* a = t.data() + (size_t) f0 * humWaveFrameSize;
+                        const float* b = t.data() + (size_t) f1 * humWaveFrameSize;
+                        const float ya = a[i0] + (a[i1] - a[i0]) * fx, yb = b[i0] + (b[i1] - b[i0]) * fx;
+                        return ya + (yb - ya) * ff;
+                    };
+                    return humWarpRead (p.warp, p.warpAmt, phase, p.fmRatio, read);
+                };
+                auto warped = [&] (float ph) { return one (pos, ph); };
+                float s;
+                if (p.grain > 0.0f)   // granular: overlapping grains, each from a scattered table position and phase
+                {
+                    const int len = juce::jmax (64, (int) (sampleRate * (0.09f - 0.07f * p.grain)));
+                    if (++v.gCnt >= len)
+                    {
+                        v.gCnt = 0; v.gA = v.gB; v.gjA = v.gjB;
+                        v.gB = 0.35f * p.grain * nextNoise (v); v.gjB = 0.25f * p.grain * (nextNoise (v) + 1.0f);
+                    }
+                    const float f = (float) v.gCnt / (float) len * juce::MathConstants<float>::halfPi;
+                    auto wrap = [] (float x) { return x - std::floor (x); };
+                    s = std::cos (f) * one (pos + v.gA, wrap (v.ph1 + v.gjA)) + std::sin (f) * one (pos + v.gB, wrap (v.ph1 + v.gjB));
+                }
+                else s = warped (v.ph1);
+                if (p.unison > 1)
+                {
+                    static constexpr float spread[6] { -1.0f, 1.0f, -0.62f, 0.62f, -0.3f, 0.3f };
+                    const int extra = juce::jmin (6, p.unison - 1);
+                    const float amt = 0.002f + p.detune * 0.025f;
+                    float side = 0.0f;
+                    for (int k = 0; k < extra; ++k)
+                    {
+                        float& ph = v.sx[(size_t) k];
+                        side += warped (ph);
+                        ph += dt * (1.0f + spread[k] * amt); ph -= std::floor (ph);
+                    }
+                    s = (s + p.uniBlend * side) / std::sqrt (1.0f + p.uniBlend * p.uniBlend * (float) extra);
+                }
+                else if (p.detune > 0.0f) s = 0.5f * (s + warped (v.ph2));
+                return s;
+            }
             default: // air: noise over a sine body
                 return 0.5f * std::sin (tp * v.ph1) + 0.5f * nextNoise (v);
+        }
+    }
+    double t0 (const Voice& v) const { return v.age / sampleRate; }
+    static float warp808 (int m, float a, float s, float ph)
+    {
+        constexpr float tp = juce::MathConstants<float>::twoPi;
+        switch (m)
+        {
+            case 1: { const float k = 1.0f + 9.0f * a; return std::tanh (s * k) / std::tanh (k); }                 // Saturate
+            case 2: return std::sin (s * (1.0f + 5.0f * a) * juce::MathConstants<float>::halfPi);                   // Fold
+            case 3: return juce::jlimit (-1.0f, 1.0f, s * (1.0f + 20.0f * a));                                       // Hard clip
+            case 4: { const float lv = std::round (2.0f + (1.0f - a) * (1.0f - a) * 62.0f); return std::round (s * lv) / lv; }   // Bitcrush
+            case 5: return std::sin (tp * ph + 3.0f * a * std::sin (2.0f * tp * ph));                               // Growl (FM)
+            case 6: { const float x = s + 0.35f * a * s * s; return std::tanh (x * (1.0f + 3.0f * a)) / std::tanh (1.0f + 3.0f * a); }   // Tape
+            default: return s;
         }
     }
     static inline float blep (float t, float dt)
@@ -438,7 +556,8 @@ private:
     }
     inline float osc (float ph, float dt) const
     {
-        switch (p.wave)
+        const int w = p.wave == 4 ? (p.bStart == 1 ? 2 : p.bStart == 2 ? 0 : p.bStart == 3 ? 1 : 3) : p.wave;   // HitMaker start wave
+        switch (w)
         {
             case 0: return 2.0f * ph - 1.0f - blep (ph, dt);
             case 1: { float s = ph < 0.5f ? 1.0f : -1.0f; s += blep (ph, dt); float t2 = ph + 0.5f; if (t2 >= 1.0f) t2 -= 1.0f; return s - blep (t2, dt); }
@@ -447,9 +566,161 @@ private:
         }
     }
     SynthParams p;
+    std::shared_ptr<const std::vector<float>> table;
+    std::array<float, 3> xRatio { 1, 1, 1 };
     std::array<Voice, 24> voices {};
     int next = 0; double sampleRate = 44100.0, lastKey = -1; float glide = 0, pitch = 0; bool mono = false;
 };
+
+static void bandLimitFrames (std::vector<float>& t)
+{
+    constexpr int N = humWaveFrameSize, H = 64;
+    const int F = (int) t.size() / N;
+    std::vector<float> cs ((size_t) N), sn ((size_t) N);
+    std::vector<double> a ((size_t) H + 1), b ((size_t) H + 1);
+    for (int f = 0; f < F; ++f)
+    {
+        float* x = t.data() + (size_t) f * N;
+        for (int k = 1; k <= H; ++k)
+        {
+            double sa = 0, sb = 0;
+            for (int i = 0; i < N; ++i)
+            {
+                const double ph = juce::MathConstants<double>::twoPi * k * i / N;
+                sa += x[i] * std::cos (ph); sb += x[i] * std::sin (ph);
+            }
+            a[(size_t) k] = 2.0 * sa / N; b[(size_t) k] = 2.0 * sb / N;
+        }
+        float pk = 0.0f;
+        for (int i = 0; i < N; ++i)
+        {
+            double y = 0;
+            for (int k = 1; k <= H; ++k)
+            {
+                const double ph = juce::MathConstants<double>::twoPi * k * i / N;
+                y += a[(size_t) k] * std::cos (ph) + b[(size_t) k] * std::sin (ph);
+            }
+            x[i] = (float) y; pk = std::max (pk, std::abs (x[i]));
+        }
+        if (pk > 1.0e-6f) for (int i = 0; i < N; ++i) x[i] /= pk;
+    }
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFromRaw (std::vector<float> t)
+{
+    t.resize ((size_t) std::max (1, (int) t.size() / humWaveFrameSize) * humWaveFrameSize, 0.0f);
+    bandLimitFrames (t);
+    return std::make_shared<const std::vector<float>> (std::move (t));
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFromAudio (const juce::AudioBuffer<float>& in, int frames)
+{
+    constexpr int N = humWaveFrameSize, L = 2048;
+    const int len = in.getNumSamples();
+    std::vector<float> t ((size_t) (frames * N), 0.0f);
+    if (len <= 0 || in.getNumChannels() == 0) return humWaveFromRaw (std::move (t));
+    // skip the silent lead-in, then spread the frames over the sound
+    int first = 0;
+    while (first < len - 1 && std::abs (in.getSample (0, first)) < 0.01f) ++first;
+    const int span = std::max (1, len - first - L);
+    for (int f = 0; f < frames; ++f)
+    {
+        const int at = first + (frames > 1 ? (int) ((double) span * f / (frames - 1)) : 0);
+        for (int i = 0; i < N; ++i)
+        {
+            double sum = 0; int cnt = 0;
+            for (int j = i * L / N; j < (i + 1) * L / N; ++j)
+                if (at + j < len) { for (int c = 0; c < in.getNumChannels(); ++c) sum += in.getSample (c, at + j); ++cnt; }
+            t[(size_t) (f * N + i)] = cnt > 0 ? (float) (sum / (cnt * in.getNumChannels())) : 0.0f;
+        }
+    }
+    return humWaveFromRaw (std::move (t));
+}
+
+const juce::StringArray& humWaveFactoryNames()
+{
+    static const juce::StringArray n { "Harmonic Sweep", "Pulse Width", "Vowel Morph", "Wave Fold", "Digital Steps", "Sync Sweep", "Organ Draw", "Metal FM", "Alien Speak", "Bit Rot", "Rubber Fold", "Chaos Harmonics" };
+    return n;
+}
+
+const juce::StringArray& humWarpNames()
+{
+    static const juce::StringArray n { "Off", "Sync", "Bend +", "Bend -", "PWM", "Asym", "Mirror", "Flip", "Quantize", "FM", "Remap", "Fold", "Downsample" };
+    return n;
+}
+
+std::shared_ptr<const std::vector<float>> humWaveFactory (int kind)
+{
+    static const std::vector<std::shared_ptr<const std::vector<float>>> tables = []
+    {
+        std::vector<std::shared_ptr<const std::vector<float>>> out;
+        constexpr int N = humWaveFrameSize, F = 32;
+        constexpr double tp = juce::MathConstants<double>::twoPi;
+        for (int kd = 0; kd < 12; ++kd)
+        {
+            std::vector<float> t ((size_t) (F * N));
+            for (int f = 0; f < F; ++f)
+            {
+                const double fr = f / (double) (F - 1);
+                for (int i = 0; i < N; ++i)
+                {
+                    const double p = i / (double) N;
+                    double y = 0;
+                    switch (kd)
+                    {
+                        case 0: { const int hm = 1 + (int) (fr * 63); for (int k = 1; k <= hm; ++k) y += std::sin (tp * k * p) / k; break; }
+                        case 1: y = p < 0.5 - 0.45 * fr ? 1.0 : -1.0; break;
+                        case 2:
+                        {
+                            const double f1 = 3.0 - 1.6 * fr, f2 = 7.0 + 6.0 * fr;
+                            for (int k = 1; k <= 40; ++k)
+                                y += (std::exp (-0.5 * std::pow ((k - f1) / 1.2, 2)) + 0.6 * std::exp (-0.5 * std::pow ((k - f2) / 2.0, 2)) + 0.05 / k) * std::sin (tp * k * p);
+                            break;
+                        }
+                        case 3: y = std::sin (std::sin (tp * p) * (1.0 + 7.0 * fr) * juce::MathConstants<double>::halfPi); break;
+                        case 4: { const double lv = 32.0 - 29.0 * fr; y = std::floor ((2.0 * p - 1.0) * lv) / lv; break; }
+                        case 5: { const double q = p * (1.0 + 7.0 * fr); y = 2.0 * (q - std::floor (q)) - 1.0; y *= 1.0 - p; break; }
+                        case 6: { static const double bars[9] { 1, 2, 3, 4, 6, 8, 10, 12, 16 };
+                                  for (int k = 0; k < 9; ++k) y += std::sin (tp * bars[k] * p) * (k == 0 ? 1.0 : std::max (0.0, std::sin ((fr * 3.0 + k * 0.7))) * 0.6); break; }
+                        case 7: y = std::sin (tp * p + 6.0 * fr * std::sin (tp * 3.0 * p)); break;
+                        case 8:   // Alien Speak: two formants sliding past each other, odd partials flipped
+                        {
+                            const double f1 = 2.0 + 10.0 * fr, f2 = 16.0 - 9.0 * fr;
+                            for (int k = 1; k <= 48; ++k)
+                                y += (std::exp (-0.5 * std::pow ((k - f1) / 1.5, 2)) + 0.8 * std::exp (-0.5 * std::pow ((k - f2) / 1.0, 2)) + 0.03 / k)
+                                     * std::sin (tp * k * p) * (k % 3 == 0 ? -1.0 : 1.0);
+                            break;
+                        }
+                        case 9:   // Bit Rot: crushed sine gated by a rising square
+                        {
+                            const double lv = 8.0 - 6.5 * fr;
+                            y = std::floor (std::sin (tp * p) * lv + 0.5) / lv * (std::sin (tp * p * (1.0 + std::floor (fr * 7.0))) >= 0.0 ? 1.0 : -0.6);
+                            break;
+                        }
+                        case 10:  // Rubber Fold: triangle folded harder with a wobble
+                        {
+                            const double tri = 4.0 * std::abs (p - 0.5) - 1.0;
+                            y = std::sin (tri * (1.0 + 9.0 * fr) * juce::MathConstants<double>::halfPi + fr * std::sin (3.0 * tp * p));
+                            break;
+                        }
+                        default:  // Chaos Harmonics: a new random partial mix on every frame (gritty, bright)
+                            for (int k = 1; k <= 64; ++k)
+                            {
+                                const double h = std::sin (k * 12.9898 + f * 78.233) * 43758.5453, amp = h - std::floor (h);
+                                y += amp * amp / std::pow ((double) k, 0.6) * std::sin (tp * k * p + k * 1.3);
+                            }
+                            break;
+                    }
+                    t[(size_t) (f * N + i)] = (float) y;
+                }
+            }
+            bandLimitFrames (t);
+            out.push_back (std::make_shared<const std::vector<float>> (std::move (t)));
+        }
+        return out;
+    }();
+    return tables[(size_t) juce::jlimit (0, (int) tables.size() - 1, kind)];
+}
 
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel& c, SharedSample sample, double sr)
 {
@@ -586,15 +857,29 @@ double sampleTempo (const Channel& c)
     return 0.0;
 }
 
-SharedSample processSample (SharedSample src, const Channel& c, double sr, double songBpm)
+static float warpSampled808 (int m, float a, float s)
 {
+    switch (m)
+    {
+        case 1: { const float k = 1.0f + 9.0f * a; return std::tanh (s * k) / std::tanh (k); }
+        case 2: return std::sin (s * (1.0f + 5.0f * a) * juce::MathConstants<float>::halfPi);
+        case 3: return juce::jlimit (-1.0f, 1.0f, s * (1.0f + 20.0f * a));
+        case 4: { const float lv = std::round (2.0f + (1.0f - a) * (1.0f - a) * 62.0f); return std::round (s * lv) / lv; }
+        case 5: return std::sin (s * juce::MathConstants<float>::halfPi + 3.0f * a * std::sin (juce::MathConstants<float>::pi * s));
+        case 6: { const float x = s + 0.35f * a * s * s; return std::tanh (x * (1.0f + 3.0f * a)) / std::tanh (1.0f + 3.0f * a); }
+        default: return s;
+    }
+}
+SharedSample processSample (SharedSample src, const Channel& c, double sr, double songBpm, SharedSample layer)
+{
+    const bool merge = layer && layer->getNumSamples() > 0 && c.smpLayerMix > 0.0f;
     if (! src || src->getNumSamples() == 0) return src;
     const double own = c.tempoSync && songBpm > 0.0 ? sampleTempo (c) : 0.0;
     const double syncMul = own > 0.0 ? own / songBpm : 1.0;   // 140 BPM loop in a 70 BPM song = twice as long, same pitch
     const bool stretch = (c.stretchMode != 0 && (std::abs (c.stretchTime - 1.0f) > 1.0e-3f || std::abs (c.pitch) > 1.0e-3f))
                       || std::abs (syncMul - 1.0) > 1.0e-4;
     if (! (c.smpNormalize || c.smpReverse || c.smpInvert || c.smpDeclick || c.smpTrim || c.smpBoostDb != 0.0f
-           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || stretch))
+           || c.smpFadeIn > 0.0f || c.smpFadeOut > 0.0f || c.smpStart > 0.0f || stretch || merge || (c.smpWarp > 0 && c.smpWarpAmt > 0.0f)))
         return src;
     juce::AudioBuffer<float> b (*src);
     const int nch = b.getNumChannels();
@@ -609,6 +894,16 @@ SharedSample processSample (SharedSample src, const Channel& c, double sr, doubl
         for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, s0, t.getNumSamples());
         b = std::move (t);
     }
+    if (c.smpStart > 0.0f)   // trim knob: cut the beginning off
+    {
+        const int cut = juce::jmin (b.getNumSamples() - 1, (int) (c.smpStart * sr));
+        if (cut > 0)
+        {
+            juce::AudioBuffer<float> t (nch, b.getNumSamples() - cut);
+            for (int ch = 0; ch < nch; ++ch) t.copyFrom (ch, 0, b, ch, cut, t.getNumSamples());
+            b = std::move (t);
+        }
+    }
     if (c.smpReverse) b.reverse (0, b.getNumSamples());
     float gain = juce::Decibels::decibelsToGain (c.smpBoostDb) * (c.smpInvert ? -1.0f : 1.0f);
     if (c.smpNormalize)
@@ -618,6 +913,50 @@ SharedSample processSample (SharedSample src, const Channel& c, double sr, doubl
         if (peak > 1.0e-6f) gain *= 0.98f / peak;
     }
     b.applyGain (gain);
+    auto rms = [] (const juce::AudioBuffer<float>& x) { float r = 0; for (int ch = 0; ch < x.getNumChannels(); ++ch) r = juce::jmax (r, x.getRMSLevel (ch, 0, x.getNumSamples())); return r; };
+    if (merge)   // 2nd 808: cut / stretched to this one's length (pitch kept), its own warp, matched loudness, mixed by %
+    {
+        juce::AudioBuffer<float> l (*layer);
+        if (l.getNumSamples() != b.getNumSamples())
+        {
+            auto st = olaStretch (l, juce::jlimit (0.05, 20.0, (double) b.getNumSamples() / (double) l.getNumSamples()));
+            l.setSize (l.getNumChannels(), b.getNumSamples(), true, true);
+            for (int ch = 0; ch < l.getNumChannels(); ++ch) l.copyFrom (ch, 0, st, juce::jmin (ch, st.getNumChannels() - 1), 0, juce::jmin (st.getNumSamples(), l.getNumSamples()));
+            if (st.getNumSamples() < l.getNumSamples()) for (int ch = 0; ch < l.getNumChannels(); ++ch) l.clear (ch, st.getNumSamples(), l.getNumSamples() - st.getNumSamples());
+        }
+        if (c.smpLayerWarp > 0 && c.smpLayerWarpAmt > 0.0f)
+        {
+            float pk = 0; for (int ch = 0; ch < l.getNumChannels(); ++ch) pk = juce::jmax (pk, l.getMagnitude (ch, 0, l.getNumSamples()));
+            const float in = pk > 1.0e-6f ? 1.0f / pk : 1.0f;
+            for (int ch = 0; ch < l.getNumChannels(); ++ch) { auto* d = l.getWritePointer (ch); for (int i = 0; i < l.getNumSamples(); ++i) d[i] = warpSampled808 (c.smpLayerWarp, juce::jmin (0.85f, c.smpLayerWarpAmt), d[i] * in) * pk; }
+        }
+        const float rb = rms (b), rl = rms (l), match = rl > 1.0e-6f && rb > 1.0e-6f ? rb / rl : 1.0f;
+        const float m = juce::jlimit (0.0f, 1.0f, c.smpLayerMix);
+        for (int ch = 0; ch < nch; ++ch)
+        {
+            auto* d = b.getWritePointer (ch); const auto* s = l.getReadPointer (juce::jmin (ch, l.getNumChannels() - 1));
+            for (int i = 0; i < b.getNumSamples(); ++i) d[i] = (1.0f - m) * d[i] + m * match * s[i];
+        }
+    }
+    if (c.smpWarp > 0 && c.smpWarpAmt > 0.0f)   // HitMaker warp on a sampled 808, peak kept where it was
+    {
+        float peak = 0.0f, peak2 = 0.0f;
+        for (int ch = 0; ch < nch; ++ch) peak = juce::jmax (peak, b.getMagnitude (ch, 0, b.getNumSamples()));
+        const float in = peak > 1.0e-6f ? 1.0f / peak : 1.0f;
+        for (int ch = 0; ch < nch; ++ch)
+        {
+            auto* d = b.getWritePointer (ch);
+            const float k = 1.0f - std::exp (-juce::MathConstants<float>::twoPi * 150.0f / (float) sr);
+            float lw = 0, ls = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const float x = d[i] * in, w = warpSampled808 (c.smpWarp, juce::jmin (0.85f, c.smpWarpAmt), x);
+                lw += k * (w - lw); ls += k * (x - ls);
+                d[i] = w - lw + ls; peak2 = juce::jmax (peak2, std::abs (d[i]));
+            }
+        }
+        if (peak2 > 1.0e-6f) b.applyGain (peak / peak2);
+    }
     if (stretch)
     {
         const double ratio = c.stretchMode != 0 ? std::pow (2.0, c.pitch / 12.0) : 1.0;

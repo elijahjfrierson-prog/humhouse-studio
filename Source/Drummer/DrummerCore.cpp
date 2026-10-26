@@ -12,7 +12,8 @@ juce::String DrummerParams::performanceKey() const
 {
     juce::String k;
     for (float v : { complexity, loudness, intensity, fills, swing, humanize, ghost, hatOpen }) k << juce::String (v, 3) << ",";
-    return k + juce::String ((int) halfTime) + juce::String ((int) ride) + "," + juce::String (character) + "," + juce::String (seed);
+    return k + juce::String ((int) halfTime) + juce::String ((int) ride) + "," + juce::String (character) + "," + juce::String (seed)
+         + "," + juce::String (kickPattern) + juce::String (snarePattern) + juce::String (hatPattern) + juce::String (tomPattern) + juce::String (crashPattern);
 }
 
 const char* drumGroupName (int g)
@@ -28,6 +29,32 @@ int drumGroupOf (int lane)
     if (lane <= hhx::LaneHatBell) return GroupHats;
     if (lane >= hhx::LaneTom1 && lane <= hhx::LaneTom4) return GroupToms;
     return GroupCymbals;   // ride, crashes, china, splash, perc
+}
+
+int kitPieceOf (int lane)
+{
+    using namespace hhx;
+    switch (lane)
+    {
+        case LaneKick: return 0;
+        case LaneSnareRim: return 2;
+        case LaneSideStick: return 3;
+        case LaneHatClosed: case LaneHatTight: case LaneHatPedal: return 4;
+        case LaneTom1: return 7; case LaneTom2: return 8; case LaneTom3: return 9; case LaneTom4: return 10;
+        case LaneCrashL: return 11; case LaneCrashR: return 12; case LaneCrash3: return 13;
+        case LaneChina: return 14; case LaneSplash: return 15; case LanePerc: return 16;
+        default: break;
+    }
+    if (lane <= LaneSnareRoll) return 1;
+    if (lane <= LaneHatBell) return 5;
+    return 6;   // ride bow, bell, edge, crash
+}
+
+const char* kitPieceName (int piece)
+{
+    static const char* n[] { "Kick", "Snare", "Rim shot", "Side stick", "Hat closed", "Hat open", "Ride",
+                             "Tom 1", "Tom 2", "Tom 3", "Tom 4", "Crash L", "Crash R", "Crash 3", "China", "Splash", "Percussion" };
+    return piece >= 0 && piece < NumKitPieces ? n[piece] : "";
 }
 
 static const hhx::GrooveCorpus& corpus()
@@ -57,6 +84,8 @@ static std::vector<DrumHit> render (const DrummerParams& p, double bpm, int bars
     s.fillAmount = p.fills; s.swing = p.swing; s.humanize = p.humanize; s.ghostAmount = p.ghost; s.hatOpenness = p.hatOpen;
     s.halfTime = p.halfTime; s.rideInsteadOfHat = p.ride; s.character = p.character; s.tempoBpm = (float) bpm;
     s.seed = (std::uint64_t) juce::jmax (1, p.seed);
+    s.kickPattern = p.kickPattern; s.snarePattern = p.snarePattern; s.hatPattern = p.hatPattern;
+    s.tomPattern = p.tomPattern; s.crashPattern = p.crashPattern;
     s.phraseBars = (bars % 2) != 0 ? 1 : 2;   // a phrase always ends on the region's last bar, so the fill lands there
     hhx::ArrangementSection a;
     a.id = 1; a.numBars = bars; a.section = hhx::SectionVerse;
@@ -190,7 +219,7 @@ public:
         for (int l = 0; l < hhx::NumLanes; ++l)
         {
             const int g = drumGroupOf (l);
-            kit->setLaneGainDb (l, d.pieceDb[(size_t) g]); kit->setLanePan (l, d.piecePan[(size_t) g]);
+            kit->setLaneGainDb (l, d.pieceDb[(size_t) g] + d.partDb[(size_t) kitPieceOf (l)]); kit->setLanePan (l, d.piecePan[(size_t) g]);
             kit->setLaneTune (l, d.pieceTune[(size_t) g]); kit->setLaneDamp (l, d.pieceDamp[(size_t) g]);
         }
     }
