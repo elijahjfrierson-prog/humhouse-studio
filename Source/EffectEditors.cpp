@@ -1632,7 +1632,6 @@ void openChannelEditor (Studio& s, int channelId)
         smp.push_back ({ "smpRev", "Reverse", 0, 1, 0, ch->smpReverse ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpInv", "Polarity", 0, 1, 0, ch->smpInvert ? 1.0f : 0.0f, { "Normal", "Inverted" } });
         smp.push_back ({ "smpDeclick", "Declick", 0, 1, 0, ch->smpDeclick ? 1.0f : 0.0f, { "Off", "On" } });
-        smp.push_back ({ "smpStart", "Trim start (s)", 0, 2, 0, ch->smpStart, {} });
         smp.push_back ({ "smpTrim", "Trim silence", 0, 1, 0, ch->smpTrim ? 1.0f : 0.0f, { "Off", "On" } });
         smp.push_back ({ "smpFadeIn", "Fade in (s)", 0, 2, 0, ch->smpFadeIn, {} });
         smp.push_back ({ "smpFadeOut", "Fade out (s)", 0, 2, 0, ch->smpFadeOut, {} });
@@ -1797,15 +1796,46 @@ void openClipEditor (Studio& s, int clipUid)
     const auto key = "clip:" + juce::String (clipUid);
     if (focusExisting (key)) return;
     const juce::String name = c0->audioFile.getFileNameWithoutExtension();
-    double fileSecs = 30.0;
-    {
-        juce::AudioFormatManager fm; fm.registerBasicFormats();
-        if (std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (c0->audioFile)); rd != nullptr && rd->sampleRate > 0)
-            fileSecs = juce::jmax (0.1, (double) rd->lengthInSamples / rd->sampleRate);
-    }
     auto link = std::make_shared<bool> (true);
-    auto setter = [&s, clipUid, link] (const juce::String& id, float v)
+    auto base = std::make_shared<std::map<int, std::pair<double, double>>>();   // clip uid -> untrimmed (offset, length)
+    auto setter = [&s, clipUid, link, base] (const juce::String& id, float v)
     {
+        if (id == "trim")   // FL Trim: cut the silence in front of the audio (louder knob = higher threshold); the clip's end stays put
+        {
+            const float thr = v > 0.001f ? juce::Decibels::decibelsToGain (-60.0f + 40.0f * v) : 0.0f;
+            const double bpm = s.p().bpm;
+            s.live ([&] (Project& p) {
+                juce::File src; for (auto& c : p.clips) if (c.uid == clipUid) src = c.audioFile;
+                juce::AudioFormatManager fm; fm.registerBasicFormats();
+                std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (src));
+                for (auto& c : p.clips)
+                {
+                    if (! (c.uid == clipUid || (*link && c.isAudio() && c.audioFile == src))) continue;
+                    if (base->count (c.uid) == 0) (*base)[c.uid] = { c.sourceOffset, c.length };
+                    const auto [off0, len0] = (*base)[c.uid];
+                    double lead = 0.0;
+                    if (thr > 0.0f && rd != nullptr && rd->sampleRate > 0)
+                    {
+                        const auto a = (juce::int64) (off0 * rd->sampleRate);
+                        const int n = (int) juce::jmin ((juce::int64) (rd->sampleRate * 4.0), rd->lengthInSamples - a);
+                        if (n > 0)
+                        {
+                            juce::AudioBuffer<float> b ((int) juce::jmax (1u, rd->numChannels), n);
+                            rd->read (&b, 0, n, a, true, true);
+                            int first = n;
+                            for (int ch = 0; ch < b.getNumChannels(); ++ch)
+                                for (int i = 0; i < first; ++i) if (std::abs (b.getSample (ch, i)) >= thr) { first = i; break; }
+                            if (first < n) lead = juce::jmax (0.0, (first - 0.002 * rd->sampleRate) / rd->sampleRate);   // keep 2 ms before the attack
+                        }
+                    }
+                    const double cut = juce::jmin (lead, beatsToSeconds (len0, bpm) * 0.9);
+                    c.sourceOffset = off0 + cut;
+                    c.length = len0 - secondsToBeats (cut, bpm);
+                }
+            });
+            s.engine.sync();
+            return;
+        }
         if (id == "link") { *link = v > 0.5f; return; }
         if (id == "reverse" || id == "normalize" || id == "humlab" || id == "humtime" || id == "humtone")
         {
@@ -1823,7 +1853,6 @@ void openClipEditor (Studio& s, int clipUid)
             {
                 if (! (c.uid == clipUid || (*link && c.isAudio() && c.audioFile == src))) continue;
                 if (id == "gain") c.gain = juce::Decibels::decibelsToGain (v, -60.0f);
-                else if (id == "start") c.sourceOffset = juce::jmax (0.0, (double) v);
                 else if (id == "fadeIn") c.fadeIn = v; else if (id == "fadeOut") c.fadeOut = v;
                 else if (id == "curve") c.fadeCurve = v; else if (id == "mute") c.muted = v > 0.5f;
             }
@@ -1834,7 +1863,7 @@ void openClipEditor (Studio& s, int clipUid)
     std::vector<ParamGrid::P> mainP, func;
     mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (FL link)" } });
     mainP.push_back ({ "gain", "Volume (dB)", -24, 12, 0, juce::Decibels::gainToDecibels (c0->gain, -60.0f), {} });
-    mainP.push_back ({ "start", "Trim start (s)", 0, (float) fileSecs, 0, (float) c0->sourceOffset, {} });
+    mainP.push_back ({ "trim", "Trim (cut silence in front)", 0, 1, 0, 0.0f, {} });
     mainP.push_back ({ "fadeIn", "Fade in (beats)", 0, 8, 0, (float) c0->fadeIn, {} });
     mainP.push_back ({ "fadeOut", "Fade out (beats)", 0, 8, 0, (float) c0->fadeOut, {} });
     mainP.push_back ({ "curve", "Fade curve", -1, 1, 0, c0->fadeCurve, {} });
