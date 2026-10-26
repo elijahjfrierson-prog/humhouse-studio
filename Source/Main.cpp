@@ -90,12 +90,12 @@ public:
             return;
         }
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
-       #if JUCE_IOS   // phone / tablet: scale the studio so the whole desktop layout fits the screen
+       #if JUCE_IOS   // phone / tablet: scale so the full top bar (~1600 px wide) fits the screen
         if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
         {
             const auto a = d->totalArea;
             const float w = (float) juce::jmax (a.getWidth(), a.getHeight()), h = (float) juce::jmin (a.getWidth(), a.getHeight());
-            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jmin (1.0f, w / 1100.0f, h / 660.0f));
+            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jmin (1.0f, w / 1620.0f, h / 760.0f));
         }
        #endif
         window = std::make_unique<MainWindow>();
