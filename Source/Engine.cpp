@@ -181,6 +181,7 @@ juce::String dec (const juce::String& s)
     return m.toString();
 }
 
+#if ! JUCE_IOS   // iOS can't launch child processes: AUv3 plug-ins are scanned in-process there
 class ChildProcessScanner : public juce::KnownPluginList::CustomScanner
 {
 public:
@@ -211,6 +212,7 @@ public:
         return ok;   // false = plugin crashed or hung while scanning: it lands on the failed list
     }
 };
+#endif
 }
 
 bool isPluginScanChild (const juce::String& cmd) { return cmd.contains ("--hhs-scan"); }
@@ -355,7 +357,9 @@ static void tpdfDither (juce::AudioBuffer<float>& b, int n, int bits, juce::Rand
 Engine::Engine()
 {
     formats.addDefaultFormats();
+   #if ! JUCE_IOS
     knownPlugins.setCustomScanner (std::make_unique<ChildProcessScanner>());
+   #endif
     proj = Project::createDefault();
     const int hw = (int) std::thread::hardware_concurrency();
     pool = std::make_unique<WorkerPool> (juce::jlimit (0, 31, hw - 1));

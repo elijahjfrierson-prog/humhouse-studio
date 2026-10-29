@@ -90,6 +90,14 @@ public:
             return;
         }
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
+       #if JUCE_IOS   // phone / tablet: scale so the full top bar (~1600 px wide) fits the screen
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
+        {
+            const auto a = d->totalArea;
+            const float w = (float) juce::jmax (a.getWidth(), a.getHeight()), h = (float) juce::jmin (a.getWidth(), a.getHeight());
+            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jmin (1.0f, w / 1620.0f, h / 760.0f));
+        }
+       #endif
         window = std::make_unique<MainWindow>();
         openFromCommandLine (commandLine);
         for (auto& f : pendingOpen) openFromCommandLine (f);
@@ -139,9 +147,13 @@ public:
         {
             setUsingNativeTitleBar (true);
             setContentOwned (hhs::createMainComponent().release(), true);
+           #if JUCE_IOS || JUCE_ANDROID
+            setFullScreen (true);
+           #else
             setResizable (true, true);
             setResizeLimits (1000, 640, 10000, 8000);
             centreWithSize (1440, 900);
+           #endif
             setVisible (true);
             hhs::makeCaptureFriendly (*this);
            #if ! HHS_LICENSED
