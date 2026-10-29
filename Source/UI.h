@@ -172,6 +172,18 @@ inline constexpr bool floatWithTopmost = false;
 #else
 inline constexpr bool floatWithTopmost = true;
 #endif
+// horizontal scroll bar for the Playlist / Piano Roll (drag it, or use the wheel)
+struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
+{
+    std::function<void (double)> onMove;
+    HScroll() : juce::ScrollBar (false) { addListener (this); setAutoHide (false); }
+    void scrollBarMoved (juce::ScrollBar*, double start) override { if (onMove) onMove (start); }
+    void sync (double total, double start, double visible)
+    {
+        setRangeLimits (0.0, juce::jmax (total, start + visible), juce::dontSendNotification);
+        setCurrentRange (start, visible, juce::dontSendNotification);
+    }
+};
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
