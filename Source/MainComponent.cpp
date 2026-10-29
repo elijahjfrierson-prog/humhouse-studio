@@ -606,8 +606,18 @@ public:
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
 #else
-        addAndMakeVisible (menuBar);
+        if (! phoneUI) addAndMakeVisible (menuBar);
 #endif
+        if (phoneUI)
+        {
+            closeAllBtn.setTooltip ("Close everything that's open (windows, pop-outs, menus, Browser)");
+            menuBtn.setTooltip ("File, Edit, View, Options (audio buffer etc.) and Help in one folder");
+            importBtn.setTooltip ("Import audio, MIDI or a HumHouse file");
+            closeAllBtn.onClick = [this] { closeEverything(); };
+            menuBtn.onClick = [this] { showAllMenus(); };
+            importBtn.onClick = [this] { importFiles(); };
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn }) addAndMakeVisible (b);
+        }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
         setView (0);
@@ -653,6 +663,30 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
+if (phoneUI)
+        {   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
+            const std::pair<juce::Component*, int> items[] {
+                { &closeAllBtn, 44 }, { &menuBtn, 64 }, { &beatTab, 64 }, { &recordTab, 64 }, { &mixTab, 64 }, { &importBtn, 72 },
+                { &songBtn, 48 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &bpm, 110 }, { &posLabel, 110 },
+                { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
+                { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
+            const int rowH = 40, avail = juce::jmax (200, r.getWidth() - 16);
+            int x = 0, rows = 1;
+            for (auto& it : items) { if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
+            topBar = r.removeFromTop (rows * rowH + 8);
+            logoArea = {};
+            int y = topBar.getY() + 4; x = 0;
+            for (auto& it : items)
+            {
+                if (x > 0 && x + it.second > avail) { y += rowH; x = 0; }
+                it.first->setBounds (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
+                x += it.second + 4;
+            }
+            mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
+            rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+        }
+        else
+        {
 #if ! JUCE_MAC
         menuBar.setBounds (r.removeFromTop (22));
 #endif
@@ -677,6 +711,7 @@ public:
         rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
         rackPopBtn.setBounds (t.removeFromRight (52)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
+        }
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
         if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (260)); }
@@ -1105,7 +1140,52 @@ private:
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
-    std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::FileChooser> chooser, importChooser;
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" };
+    void showAllMenus()
+    {
+        juce::PopupMenu m;
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], getMenuForIndex (i, names[i]));
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
+                         [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
+    }
+    void importFiles()
+    {
+        importChooser = std::make_unique<juce::FileChooser> ("Import audio, MIDI or a HumHouse file",
+            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+            "*.wav;*.mp3;*.aif;*.aiff;*.flac;*.ogg;*.m4a;*.mid;*.midi;*.hhpack;*.hhpreset;*.hhchain;*.hhs");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        importChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr) return;
+                juce::StringArray paths;
+                for (auto& f : fc.getResults()) if (f.existsAsFile()) paths.add (f.getFullPathName());
+                if (! paths.isEmpty()) safe->filesDropped (paths, safe->getWidth() / 2, safe->getHeight() / 2);
+            });
+    }
+    void closeEverything()
+    {
+        juce::PopupMenu::dismissAllActiveMenus();
+        juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+        closeAllEditorWindows();
+        std::vector<juce::Component*> pops;
+        for (auto& p : popouts) pops.push_back (p.first);
+        for (auto* c : pops) reattach (c);
+        juce::Array<juce::Component::SafePointer<juce::TopLevelWindow>> others;
+        for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+            if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i); w != nullptr && w != getTopLevelComponent() && w->isVisible()) others.add (w);
+        for (auto& w : others)
+        {
+            if (w == nullptr) continue;
+            if (auto* dw = dynamic_cast<juce::DocumentWindow*> (w.getComponent())) dw->closeButtonPressed();
+            else w->setVisible (false);
+        }
+        showBrowser = false;
+        resized();
+    }
     int view = 0, ticks = 0;
     bool showBrowser = true;
     juce::String flashText;

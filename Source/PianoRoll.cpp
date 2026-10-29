@@ -66,6 +66,8 @@ public:
         velH = s.settings != nullptr ? juce::jlimit (40, 600, s.settings->getIntValue ("prVelH", 70)) : 70;
         hbar.onMove = [this] (double v) { scrollX = juce::jmax (0.0, v); repaint(); };
         addAndMakeVisible (hbar);
+        vbar.onMove = [this] (double v) { scrollY = (float) juce::jlimit (0.0, juce::jmax (0.0, 128.0 * rowH - gridArea().getHeight()), v); repaint(); };
+        addAndMakeVisible (vbar);
         setNoteSize (s.settings != nullptr ? juce::jlimit (0, 3, s.settings->getIntValue ("prNoteSize", 1)) : 1, false);
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
@@ -285,6 +287,10 @@ public:
         auto ga = gridArea();
         dragStart = e.position; changed = false;
         if (s.channel (channelId) == nullptr) return;
+        if (phoneUI && (e.source.getIndex() > 0 || (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom())))
+        {   // touch: drag the keyboard strip (or use a second finger) to scroll freely up/down and side to side
+            drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
         if (e.y > barH && e.y < ga.getY())   // bar numbers: drag = select bars (FL), click or the handle = playhead
         {
@@ -372,6 +378,13 @@ public:
         lastMouse = e.getPosition();
         auto& p = s.p();
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
+        if (drag == Drag::Pan)
+        {
+            if (e.source.getIndex() != panSrc) return;
+            scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
+            scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) gridArea().getHeight()), panY0 - (e.position.y - panFrom.y));
+            syncHBar(); repaint(); return;
+        }
         if (drag == Drag::Scrub) { scrubTo (e); return; }
         if (drag == Drag::TimeSel)
         {
@@ -559,7 +572,8 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0;
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -571,9 +585,12 @@ private:
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
     static constexpr int keyW = 64, rulerH = 18, hbarH = 12;
     int velH = 70;   // drag the line above the velocity lane to resize it (saved)
-    HScroll hbar;
+    HScroll hbar, vbar { true };
     void syncHBar()
     {
+        const auto vga = gridArea();
+        vbar.setBounds (getWidth() - hbarH, vga.getY(), hbarH, vga.getHeight());
+        vbar.sync (128.0 * rowH, scrollY, vga.getHeight());
         hbar.setBounds (keyW, getHeight() - hbarH, getWidth() - keyW, hbarH);
         hbar.sync (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX, gridArea().getWidth() / (double) pxPerBeat);
     }
@@ -613,7 +630,7 @@ private:
         s.live ([this] (Project&) { for (auto& n : s.notes (channelId)) n.selected = n.start >= timeSelA - 1e-9 && n.start < timeSelB - 1e-9; });
     }
 
-    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedBottom (velH + hbarH); }
+    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedRight (hbarH).withTrimmedBottom (velH + hbarH); }
     float beatToX (double b) const { return (float) gridArea().getX() + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) gridArea().getX()) / pxPerBeat; }
     float keyToY (int key) const { return (float) gridArea().getY() + (127 - key) * rowH - scrollY; }

@@ -8,6 +8,12 @@
 
 namespace hhs
 {
+#if JUCE_IOS
+inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one MENU folder, X close-all, finger panning
+#else
+inline constexpr bool phoneUI = false;
+#endif
+
 namespace col
 {
     // mutable so the theme color wheel can recolor the whole DAW
@@ -176,7 +182,7 @@ inline constexpr bool floatWithTopmost = true;
 struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
 {
     std::function<void (double)> onMove;
-    HScroll() : juce::ScrollBar (false) { addListener (this); setAutoHide (false); }
+    explicit HScroll (bool vertical = false) : juce::ScrollBar (vertical) { addListener (this); setAutoHide (false); }
     void scrollBarMoved (juce::ScrollBar*, double start) override { if (onMove) onMove (start); }
     void sync (double total, double start, double visible)
     {

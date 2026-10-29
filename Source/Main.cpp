@@ -94,9 +94,10 @@ public:
         if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
         {
             const auto a = d->totalArea;
-            const float w = (float) juce::jmax (a.getWidth(), a.getHeight()), h = (float) juce::jmin (a.getWidth(), a.getHeight());
-            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jmin (1.0f, w / 1620.0f, h / 760.0f));
+            const float shortSide = (float) juce::jmin (a.getWidth(), a.getHeight());
+            juce::Desktop::getInstance().setGlobalScaleFactor (juce::jmin (1.0f, shortSide / 640.0f));   // the top bar wraps into rows, so portrait works too
         }
+        juce::Desktop::getInstance().setOrientationsEnabled (juce::Desktop::allOrientations);
        #endif
         window = std::make_unique<MainWindow>();
         openFromCommandLine (commandLine);
