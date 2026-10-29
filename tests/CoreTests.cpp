@@ -83,6 +83,7 @@ static VoiceProbe probeAutoPitchVoice (int style, unsigned seed, float speed = 0
     float pk = 0; for (auto s : in) pk = std::max (pk, std::abs (s));
     for (auto& s : in) s *= 0.5f / pk;
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed); ap->setParam ("natvib", natvib); ap->setParam ("snap", snap);
     ap->prepare (fs, 512);
@@ -169,6 +170,7 @@ static SyllableProbe probeSyllables (int style, double centsOff, float speed = 0
         }
     }
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style); ap->setParam ("retune", 1.0f - speed);
     ap->prepare (fs, 512);
@@ -255,6 +257,7 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
         in.push_back ((float) (y * 6.0));
     }
     auto ap = createBuiltinEffect ("autopitch");
+    ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
     ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
     ap->setParam ("style", (float) style);
     ap->prepare (fs, 512);
@@ -315,6 +318,7 @@ int main()
         const int len = (int) rd->lengthInSamples;
         juce::AudioBuffer<float> all (2, len); rd->read (&all, 0, len, 0, true, true);
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", f[2].getFloatValue()); ap->setParam ("key", f[3].getFloatValue());
         ap->setParam ("scale", f[4].getFloatValue()); ap->setParam ("tuning", f[5].getFloatValue());
         if (f.size() > 6) ap->setParam ("retune", f[6].getFloatValue());
@@ -954,6 +958,7 @@ int main()
     for (int style : { 0, 1, 3 })
     {
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", (float) style);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -972,6 +977,7 @@ int main()
     {
         auto crossings = [] (float pitchSt, float cents) {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("pitch", pitchSt); ap->setParam ("detune", cents);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -989,6 +995,7 @@ int main()
         CHECK (cents > base * 1.03 && cents < base * 1.09);
         // A4 = 415 Hz: a 440-tuned C is re-tuned onto the 415 grid (about a semitone away)
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("tuning", 415.0f); ap->setParam ("style", 3.0f);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1004,6 +1011,7 @@ int main()
     // AutoPitch: a 452 Hz tone snaps to A 440, stays at full level
     {
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f);   // tuner core alone
         ap->setParam ("style", 3.0f);
         ap->prepare (48000, 512);
@@ -1020,12 +1028,61 @@ int main()
         CHECK (std::abs (hz - 440.0) < 3.0);
         CHECK (std::abs (10.0 * std::log10 (outE / inE)) < 0.5);
     }
+    // AutoPitch Coat: hard compression packs the tuned vocal (quiet syllables come up, loud ones held), tune unchanged
+    {
+        auto crest = [] (float coat, double& hzOut)
+        {
+            auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("style", 3.0f); ap->setParam ("coat", coat);
+            ap->prepare (48000, 512);
+            juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
+            double ph = 0; float loud = 0, quiet = 0; int zc = 0, counted = 0; float prev = 0;
+            for (int k = 0; k < 400; ++k)
+            {
+                const float amp = (k / 25) % 2 ? 0.05f : 0.5f;
+                for (int i = 0; i < 512; ++i) { const float v = amp * (float) std::sin (ph); ph += juce::MathConstants<double>::twoPi * 452.0 / 48000.0; b.setSample (0, i, v); b.setSample (1, i, v); }
+                ap->process (b, 512, ctx);
+                if (k >= 100 && k % 25 > 5)
+                    for (int i = 0; i < 512; ++i) { const float y = b.getSample (0, i); ((k / 25) % 2 ? quiet : loud) = std::max ((k / 25) % 2 ? quiet : loud, std::abs (y)); if (prev <= 0 && y > 0) ++zc; prev = y; ++counted; }
+            }
+            hzOut = zc * 48000.0 / counted;
+            return 20.0 * std::log10 (loud / quiet);
+        };
+        double hz0 = 0, hz1 = 0;
+        const double off = crest (0.0f, hz0), on = crest (1.0f, hz1);
+        std::printf ("autopitch coat: loud/quiet %.1f dB -> %.1f dB, tune %.1f -> %.1f Hz\n", off, on, hz0, hz1);
+        CHECK (on < off - 6.0);
+        CHECK (std::abs (hz1 - 440.0) < 3.0 && std::abs (hz0 - 440.0) < 3.0);
+    }
+    // BPM finder: kick / snare / eighth hats read at the real tempo, never half, double or 3:2
+    for (double bpm : { 100.0, 127.0, 142.0, 160.0 })
+    {
+        const double sr = 44100; const int n = (int) (sr * 24);
+        std::vector<float> x ((size_t) n, 0.0f); juce::Random rnd (7);
+        const double spb = sr * 60.0 / bpm;
+        for (int e = 0; e * spb / 2 < n; ++e)
+        {
+            const int at = (int) (e * spb / 2);
+            const bool beat = e % 2 == 0, snare = e % 8 == 2 || e % 8 == 6;
+            for (int i = 0; i < 6000 && at + i < n; ++i)
+            {
+                float v = 0.25f * (rnd.nextFloat() * 2 - 1) * std::exp (-i / 300.0f);                              // hat
+                if (beat && ! snare) v += 0.9f * (float) std::sin (juce::MathConstants<double>::twoPi * 55.0 * i / sr) * std::exp (-i / 4000.0f);   // kick
+                if (snare) v += 0.6f * (rnd.nextFloat() * 2 - 1) * std::exp (-i / 2500.0f);                       // snare
+                x[(size_t) (at + i)] += v;
+            }
+        }
+        const auto g = findKey (x.data(), n, sr);
+        std::printf ("bpm finder: %.0f -> %.0f\n", bpm, g.bpm);
+        CHECK (std::abs (g.bpm - bpm) < 1.01);
+    }
     // AutoPitch holds the note meant when it's sung flat on purpose: E4 / B4 sung 60 cents flat in C major
     // land on E / B (nearest scale note to what was sung), not the note below
     for (const double sung : { 329.63 * std::pow (2.0, -0.6 / 12.0), 493.88 * std::pow (2.0, -0.6 / 12.0) })
         for (int style = 0; style < 4; ++style)
         {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("body", 0.0f); ap->setParam ("character", 0.0f); ap->setParam ("style", (float) style);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1046,6 +1103,7 @@ int main()
         for (int style : { 0, 3 })
         {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("style", (float) style);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1102,6 +1160,7 @@ int main()
             in[(size_t) i] = (float) (0.12 * y);
         }
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", (float) style);
         ap->prepare (sr, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1142,6 +1201,7 @@ int main()
     for (int style = 0; style < 4; ++style)
     {
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", (float) style);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1189,6 +1249,7 @@ int main()
         migrateFxParams ("verb", oldVerb); migrateFxParams ("verb", newVerb); migrateFxParams ("verb", one);
         CHECK (oldVerb["revroom"] == 0.0f && newVerb["revroom"] == 5.0f && one.size() == 1);   // old projects keep the classic reverse
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", 1.0f); ap->setParam ("body", 0.4f); ap->setParam ("character", 0.3f);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1206,6 +1267,7 @@ int main()
     {
         auto run = [] (int scenario) {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("style", 3.0f);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1240,6 +1302,7 @@ int main()
         for (int style : { 3, 1 })
         {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("style", (float) style);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1277,6 +1340,7 @@ int main()
         for (int style : { 3, 1 })
         {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("style", (float) style);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1343,6 +1407,7 @@ int main()
     {
         auto run = [] (double hz, double vibCents, float natvib, std::vector<float>& out) {
             auto ap = createBuiltinEffect ("autopitch");
+            ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
             ap->setParam ("style", 3.0f); ap->setParam ("natvib", natvib);
             ap->prepare (48000, 512);
             juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;
@@ -1443,6 +1508,7 @@ int main()
     // AutoPitch: singing on/off (breaths, gaps) must not crack - no sample jumps
     {
         auto ap = createBuiltinEffect ("autopitch");
+        ap->setParam ("coat", 0.0f);   // tuner core alone: Coat compression tested on its own
         ap->setParam ("style", 3.0f);
         ap->prepare (48000, 512);
         juce::AudioBuffer<float> b (2, 512); PlayContext ctx; ctx.keyRoot = 0; ctx.scaleIndex = 0;

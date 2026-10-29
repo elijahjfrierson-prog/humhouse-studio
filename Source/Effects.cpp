@@ -1498,7 +1498,8 @@ public:
             { "vibDepth", "Add Vibrato (cents)", 0, 100, 0 }, { "vibRate", "Vibrato Rate (Hz)", 3, 9, 5.5f },
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
             { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f },   // off by default: just the tune, no tone change
-            { "glow", "Glow", 0, 1, 0.0f }, { "canvas", "Canvas", 0, 1, 0.0f } };
+            { "glow", "Glow", 0, 1, 0.0f }, { "canvas", "Canvas", 0, 1, 0.0f },
+            { "coat", "Coat (vocal compression)", 0, 1, 0.6f } };   // hard, fast compression that sits the tune on top of the vocal
         return ps;
     }
     int latencySamples() const override { return 0; }
@@ -1510,7 +1511,7 @@ public:
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         for (auto& f : tone) f.clear();
         dcX[0] = dcX[1] = dcY[0] = dcY[1] = 0.0f;
-        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; youngHops = 1 << 20; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; detectedMidi.store (0); correctedMidi.store (0);
+        currentRatio = 1.0f; targetRatio = 1.0f; heldNote = 0; missHops = 0; octSlip = 0; lastMidi = 0; centre = 0; slope = 0; jumpHops = 0; tailHops = 0; youngHops = 1 << 20; releasing = false; consonant = false; vibPhase = 0; voiceLvl = 0; pendingMidi = 0; histN = 0; wetTarget = wetG = wetS1 = 0; coatEnv = 0; detectedMidi.store (0); correctedMidi.store (0);
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
@@ -1548,6 +1549,10 @@ public:
             tone[2].set (Biquad::Peak, sr, 2900.0, 0.9, 2.0 * chr);
         }
         // Glow: air on the tuned vowels (brings back the brightness the tune takes off). Canvas: clears the low-mid mud
+        const float coat = p (17);
+        const float coatThr = -18.0f - 10.0f * coat, coatRatio = 1.0f + 7.0f * coat;
+        const float coatMakeup = juce::jmax (0.0f, 0.4f * (-12.0f - coatThr) * (1.0f - 1.0f / coatRatio));
+        const float coatAtt = 1.0f - std::exp (-1.0f / (0.003f * (float) sr)), coatRel = 1.0f - std::exp (-1.0f / (0.08f * (float) sr));
         const float glow = p (15), canvas = p (16);
         const bool glowOn = glow > 0.001f || canvas > 0.001f;
         if (glowOn)
@@ -1747,6 +1752,14 @@ public:
             }
             if (colourOn) { const float cl = colour (wl, 0), cr = colour (wr, 1); wl += wetG * (cl - wl); wr += wetG * (cr - wr); }   // sung vowels only: consonants stay crisp
             if (glowOn) { const float gl = glowF.tick (canvasF.tick (wl, 0), 0), gr = glowF.tick (canvasF.tick (wr, 1), 1); wl += wetG * (gl - wl); wr += wetG * (gr - wr); }
+            if (coat > 0.001f)
+            {
+                const float lv = std::max (std::abs (wl), std::abs (wr));
+                coatEnv += (lv - coatEnv) * (lv > coatEnv ? coatAtt : coatRel);
+                const float over = juce::Decibels::gainToDecibels (coatEnv, -120.0f) - coatThr;
+                const float gn = juce::Decibels::decibelsToGain (coatMakeup - (over > 0.0f ? over * (1.0f - 1.0f / coatRatio) : 0.0f));
+                wl *= gn; wr *= gn;
+            }
             l[i] = l[i] * (1 - mix) + wl * mix;
             r[i] = r[i] * (1 - mix) + wr * mix;
         }
@@ -1758,7 +1771,7 @@ private:
     float currentRatio = 1, targetRatio = 1, roughMidi = 0;
     std::array<float, 3> hist {}; int histN = 0;
     int heldNote = 0, missHops = 0, octSlip = 0, jumpHops = 0, tailHops = 0, youngHops = 1 << 20; static constexpr float youngSec = 0.08f, yTau = 0.05f, yHys = 0.55f; float voiceLvl = 0, pendingMidi = 0; bool pendingRough = false, releasing = false, consonant = false;
-    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0;
+    float lastMidi = 0, centre = 0, slope = 0, vibPhase = 0, wetTarget = 0, wetG = 0, wetS1 = 0, coatEnv = 0;
     float period = 350;
     Biquad tone[3], glowF, canvasF; float dcX[2] {}, dcY[2] {};
     std::atomic<float> detectedMidi { 0 }, correctedMidi { 0 };
@@ -1924,18 +1937,24 @@ KeyGuess findKey (const float* x, int n, double sr)
         std::vector<double> ac ((size_t) maxLag + 1, 0.0);
         for (int L = 1; L <= maxLag; ++L) for (int i = L; i < F; ++i) ac[(size_t) L] += on[(size_t) i] * on[(size_t) i - L];
         auto at = [&] (double lag) { const int i = (int) lag; const double f = lag - i; return i + 1 > maxLag ? 0.0 : ac[(size_t) i] * (1 - f) + ac[(size_t) i + 1] * f; };
-        auto score = [&] (double bpm) { const double lag = fr * 60.0 / bpm; double sc = 0; for (int h = 1; h <= 4; ++h) sc += at (lag * h); return sc; };
+        // beat + its bar multiples (weighted down) + the eighth-note grid in between
+        auto score = [&] (double bpm) { const double lag = fr * 60.0 / bpm; double sc = 0.5 * at (lag * 0.5); for (int h = 1; h <= 4; ++h) sc += at (lag * h) / h; return sc; };
+        // tempo prior round 120 BPM: settles the half / double / 3:2 ambiguity (127 never reads as 63 or 190)
+        auto prior = [] (double bpm) { const double o = std::log2 (bpm / 120.0) / 0.9; return std::exp (-0.5 * o * o); };
         double bestS = -1;
         for (double bpm = 70.0; bpm <= 180.0; bpm += 0.1)
-            if (const double sc = score (bpm); sc > bestS) { bestS = sc; g.bpm = bpm; }
-        // half-time reads (71 for a 142 beat): take the double tempo when it is nearly as strong (FL / trap convention)
-        if (g.bpm < 90.0)
+            if (const double sc = score (bpm) * prior (bpm); sc > bestS) { bestS = sc; g.bpm = bpm; }
+        double fine = g.bpm, fineS = -1;   // refine on the raw score so the prior never drags 127 to 126
+        for (double bpm = g.bpm - 1.0; bpm <= g.bpm + 1.0; bpm += 0.02) if (const double sc = score (bpm); sc > fineS) { fineS = sc; fine = bpm; }
+        // kick-only half-time read (71 for a 142 beat): take the double tempo when it is nearly as strong (FL / trap convention)
+        if (fine < 90.0)
         {
-            double b2 = g.bpm * 2, s2 = -1;
-            for (double bpm = g.bpm * 2 - 1.0; bpm <= g.bpm * 2 + 1.0; bpm += 0.1) if (const double sc = score (bpm); sc > s2) { s2 = sc; b2 = bpm; }
-            if (s2 > 0.6 * bestS) g.bpm = b2;
+            auto barScore = [&] (double bpm) { const double lag = fr * 60.0 / bpm; double sc = 0; for (int h = 1; h <= 4; ++h) sc += at (lag * h); return sc; };
+            double b2 = fine * 2, s2 = -1;
+            for (double bpm = fine * 2 - 1.0; bpm <= fine * 2 + 1.0; bpm += 0.02) if (const double sc = barScore (bpm); sc > s2) { s2 = sc; b2 = bpm; }
+            if (s2 > 0.6 * barScore (fine)) fine = b2;
         }
-        g.bpm = std::round (g.bpm);
+        g.bpm = std::round (fine);
     }
     return g;
 }

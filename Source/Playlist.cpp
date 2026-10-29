@@ -1204,6 +1204,8 @@ class Playlist : public juce::Component, public juce::FileDragAndDropTarget, pub
 public:
     explicit Playlist (Studio& st) : s (st)
     {
+        hbar.onMove = [this] (double v) { lastUserView = juce::Time::getMillisecondCounter(); scrollX = juce::jmax (0.0, v); repaint(); };
+        addAndMakeVisible (hbar);
         s.addChangeListener (this);
         setupButton (addDrummer, "HumHouse Drums", "HumHouse Drums: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
         addDrummer.onClick = [this] {
@@ -1303,6 +1305,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        syncHBar();
         auto& p = s.p();
         g.fillAll (col::bg);
         g.setColour (col::panel); g.fillRect (0, 0, getWidth(), toolbarH);
@@ -1510,10 +1513,9 @@ public:
                 auto it = std::find_if (pr.clips.begin(), pr.clips.end(), [uid] (const Clip& c) { return c.uid == uid; });
                 if (it == pr.clips.end() || at <= it->start || at >= it->start + it->length) return;
                 Clip b = *it; b.uid = pr.newUid();
-                const double shortFade = secondsToBeats (0.005, pr.bpm);
                 b.start = at; b.length = it->start + it->length - at; b.sourceOffset += beatsToSeconds (at - it->start, pr.bpm); b.patOffset += at - it->start;
-                b.fadeIn = shortFade; b.selected = false;
-                it->length = at - it->start; it->fadeOut = shortFade;
+                b.fadeIn = 0; b.selected = false;   // C cuts stay sharp: no fades at the cut
+                it->length = at - it->start; it->fadeOut = 0;
                 pr.clips.push_back (b);
             });
             return;
@@ -1739,12 +1741,14 @@ public:
     {
         if (e.position.x < headerW) return;
         const double at = xToBeat (e.position.x);
-        pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * scale);
+        lastUserView = juce::Time::getMillisecondCounter();   // playhead follow waits while you zoom
+        pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * juce::jlimit (0.85f, 1.18f, scale));   // capped per event: no jumpy pinch
         scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
         repaint();
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
+        lastUserView = juce::Time::getMillisecondCounter();
         if (e.mods.isAltDown())   // Alt+wheel: all tracks taller / thinner
         {
             zoomH = juce::jlimit (0.4f, 4.0f, zoomH * (w.deltaY > 0 ? 1.1f : 1.0f / 1.1f));
@@ -1759,10 +1763,10 @@ public:
             scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
-            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
+            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
         else
         {
-            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 200));
+            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 420));
             layoutHeaders();
         }
         repaint();
@@ -1836,7 +1840,7 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
-            if (timeSelB > timeSelA) clipLo = std::min (clipLo, timeSelA);   // time selection: paste keeps the empty space before the first clip
+            if (timeSelB > timeSelA && timeSelA <= clipLo + 1.0e-6 && timeSelB > clipLo) clipLo = timeSelA;   // time selection round the clips: paste keeps the empty space before the first one
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
@@ -1844,8 +1848,7 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const bool overGrid = isMouseOver (true) && lastMouse.x > headerW && lastMouse.y > toolbarH + rulerH;
-            const double at = cellStart (overGrid ? xToBeat ((float) lastMouse.x) : s.engine.positionBeats());   // FL: paste where the mouse is
+            const double at = cellStart (s.engine.positionBeats() + 1.0e-6);   // always at the playhead marker: set it to bar 49, it pastes on bar 49
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -1986,7 +1989,7 @@ private:
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
-    double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f;
+    double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     Drag drag = Drag::None; int dragClip = -1; bool changed = false;
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
@@ -1996,7 +1999,14 @@ private:
     double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
     std::vector<Clip> clipboard; double clipLo = 0; bool cloneOnDrag = false, cloned = false;
 
-    juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW); }
+    juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
+    static constexpr int hbarH = 12;
+    HScroll hbar;
+    void syncHBar()
+    {
+        hbar.setBounds (headerW, getHeight() - hbarH, juce::jmax (10, getWidth() - headerW - 18), hbarH);
+        hbar.sync (s.p().songLengthBeats() + 32.0 * s.p().beatsPerBar, scrollX, clipArea().getWidth() / (double) pxPerBeat);
+    }
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }
     std::map<int, float> laneMul;   // per-track height (drag a header's bottom edge)
@@ -2312,7 +2322,7 @@ private:
                         if (! starts.empty()) q = std::max (q, starts.back() + 1.0 / 64.0);
                         starts.push_back (std::max (0.0, q));
                     }
-                    const double fade = secondsToBeats (0.004, bpm);
+                    const double fade = 0.0;   // chops stay sharp, no mini fades
                     for (size_t k = 0; k < cuts.size(); ++k)
                     {
                         Clip n = src; n.uid = p.newUid(); n.selected = false;
@@ -2928,7 +2938,7 @@ private:
         wasPlaying = true;
         const double pos = s.engine.positionBeats();
         float px = beatToX (pos);
-        if (px > getWidth() - 40 || px < headerW) { scrollX = juce::jmax (0.0, pos - 2.0); repaint(); lastPx = beatToX (pos); }
+        if ((px > getWidth() - 40 || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500) { scrollX = juce::jmax (0.0, pos - 2.0); repaint(); lastPx = beatToX (pos); }
         else
         {
             // only redraw what moves: the old + new playhead strips, and the growing take while recording

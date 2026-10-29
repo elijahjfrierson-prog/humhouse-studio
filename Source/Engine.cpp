@@ -385,6 +385,11 @@ Engine::~Engine()
 void Engine::initialiseAudio (const juce::XmlElement* saved)
 {
     deviceManager.initialise (2, 2, saved, true);
+    if (saved == nullptr)   // first run: a 512-sample buffer keeps big sessions (and OBS capture) glitch-free; change it in Audio settings
+    {
+        auto setup = deviceManager.getAudioDeviceSetup();
+        if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+    }
     deviceManager.addAudioCallback (this);
 }
 

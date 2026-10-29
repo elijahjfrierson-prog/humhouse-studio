@@ -63,6 +63,9 @@ public:
         lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
         setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the FL-like default). Alt + scroll fine-tunes", false);
         sizeBtn.onClick = [this] { setNoteSize ((noteSize + 1) % 4); };
+        velH = s.settings != nullptr ? juce::jlimit (40, 600, s.settings->getIntValue ("prVelH", 70)) : 70;
+        hbar.onMove = [this] (double v) { scrollX = juce::jmax (0.0, v); repaint(); };
+        addAndMakeVisible (hbar);
         setNoteSize (s.settings != nullptr ? juce::jlimit (0, 3, s.settings->getIntValue ("prNoteSize", 1)) : 1, false);
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
@@ -119,6 +122,7 @@ public:
 
     void paint (juce::Graphics& g) override
     {
+        syncHBar();
         auto& p = s.p();
         g.fillAll (col::bg);
         g.setColour (col::panel); g.fillRect (0, 0, getWidth(), barH);
@@ -246,6 +250,7 @@ public:
         juce::Rectangle<int> vel (keyW, ga.getBottom(), getWidth() - keyW, velH);
         g.setColour (col::panel); g.fillRect (vel);
         g.setColour (col::gridBar); g.drawHorizontalLine (vel.getY(), 0.0f, (float) getWidth());
+        g.setColour (col::gridBar.brighter (0.5f)); g.fillRoundedRectangle ((float) vel.getCentreX() - 24.0f, (float) vel.getY() - 2.0f, 48.0f, 4.0f, 2.0f);   // resize grip
         for (auto& n : s.notes (channelId))
         {
             const float x = beatToX (n.start);
@@ -260,6 +265,7 @@ public:
     void mouseMove (const juce::MouseEvent& e) override
     {
         lastMouse = e.getPosition();
+        if (e.x >= keyW && std::abs (e.y - gridArea().getBottom()) <= 3) { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); return; }
         int hit; bool edge;
         hitNote (e.position, hit, edge);
         const bool sizes = hit >= 0 && edge && (editTool == EditTool::Draw || editTool == EditTool::Select || editTool == EditTool::Paint);
@@ -286,6 +292,7 @@ public:
             if (ph >= 0.0 && std::abs (beatToX (ph) - e.position.x) <= 8.0f) { drag = Drag::Scrub; scrubTo (e); return; }
             drag = Drag::TimeSel; timeMoved = false; return;
         }
+        if (e.x >= keyW && std::abs (e.y - ga.getBottom()) <= 3) { drag = Drag::VelSize; return; }
         if (e.y >= ga.getBottom()) { drag = Drag::Velocity; setVelocityAt (e.position); return; }
         if (! ga.contains (e.getPosition())) return;
         if (timeSelB > timeSelA) { timeSelA = timeSelB = -1; repaint(); }
@@ -378,6 +385,12 @@ public:
             selectTimeRange();
             repaint(); return;
         }
+        if (drag == Drag::VelSize)
+        {
+            velH = juce::jlimit (40, juce::jmax (40, getHeight() - barH - rulerH - hbarH - 80), getHeight() - hbarH - e.y);
+            if (s.settings) s.settings->setValue ("prVelH", velH);
+            repaint(); return;
+        }
         if (drag == Drag::Velocity) { setVelocityAt (e.position); return; }
         if (drag == Drag::Delete) { deleteAt (e.position); return; }
         if (drag == Drag::Paint)
@@ -449,7 +462,7 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         const double at = xToBeat (e.position.x);
-        pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * scale);
+        pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * juce::jlimit (0.85f, 1.18f, scale));   // capped per event: no jumpy pinch
         scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
         repaint();
     }
@@ -463,8 +476,8 @@ public:
         }
         else if (e.mods.isAltDown()) rowH = juce::jlimit (6.0f, 40.0f, rowH + (w.deltaY > 0 ? 1.0f : -1.0f));
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
-            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 600.0 / pxPerBeat);
-        else scrollY = juce::jlimit (0.0f, 128 * rowH - (float) gridArea().getHeight(), scrollY - w.deltaY * 300.0f);
+            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
+        else scrollY = juce::jlimit (0.0f, 128 * rowH - (float) gridArea().getHeight(), scrollY - w.deltaY * 600.0f);
         repaint();
     }
 
@@ -528,15 +541,13 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            double at = floorSnap (s.engine.isPlaying() ? 0.0 : std::fmod (s.engine.positionBeats(), s.p().patterns[(size_t) s.p().currentPattern].lengthBeats()));
-            if (const auto m = getMouseXYRelative(); isMouseOver (true) && gridArea().contains (m))
-                at = juce::jmax (0.0, floorSnap (xToBeat ((float) m.x)));   // FL: paste where the mouse is
+            const double ph = playheadLocal();   // always at the playhead marker
+            double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
             if (clipFrom() >= 0.0)
             {
                 first = clipFrom();
-                if (timeSelB > timeSelA) at = timeSelB;   // highlighted bars: paste right after them
                 timeSelA = at; timeSelB = at + clipLen();
             }
             return op ("Paste", [this, at, first] (NoteList& n) {
@@ -548,7 +559,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize };
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -558,7 +569,14 @@ private:
     int channelId = -1;
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
-    static constexpr int keyW = 64, rulerH = 18, velH = 70;
+    static constexpr int keyW = 64, rulerH = 18, hbarH = 12;
+    int velH = 70;   // drag the line above the velocity lane to resize it (saved)
+    HScroll hbar;
+    void syncHBar()
+    {
+        hbar.setBounds (keyW, getHeight() - hbarH, getWidth() - keyW, hbarH);
+        hbar.sync (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX, gridArea().getWidth() / (double) pxPerBeat);
+    }
     int barH = 34;   // 64 when the toolbar wraps to two rows
     double lastLength = 0.25; float lastVelocity = 0.78f;
     Drag drag = Drag::None;
@@ -595,7 +613,7 @@ private:
         s.live ([this] (Project&) { for (auto& n : s.notes (channelId)) n.selected = n.start >= timeSelA - 1e-9 && n.start < timeSelB - 1e-9; });
     }
 
-    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedBottom (velH); }
+    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedBottom (velH + hbarH); }
     float beatToX (double b) const { return (float) gridArea().getX() + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) gridArea().getX()) / pxPerBeat; }
     float keyToY (int key) const { return (float) gridArea().getY() + (127 - key) * rowH - scrollY; }
