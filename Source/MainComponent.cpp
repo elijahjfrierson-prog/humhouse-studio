@@ -561,6 +561,13 @@ public:
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
+        if (phoneUI)
+        {
+            browserBtn.setToggleState (showBrowser, juce::dontSendNotification);
+            browserTab.setTooltip ("Samples / Patterns / Plugin House: tap to bring it out or tuck it back in");
+            browserTab.onClick = [this] { browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); };
+            addAndMakeVisible (browserTab);
+        }
         setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
         themeBtn.onClick = [this] { showThemeDialog (studio); };
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
@@ -670,7 +677,10 @@ public:
     {
         auto r = getLocalBounds();
 if (phoneUI)
-        {   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
+        {
+            if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
+                r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
+            r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             const std::pair<juce::Component*, int> items[] {
                 { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
                 { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 },
@@ -722,6 +732,12 @@ if (phoneUI)
         }
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
+        if (phoneUI)
+        {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
+            auto tab = r.removeFromLeft (34);
+            browserTab.setButtonText (showBrowser ? "<" : ">");
+            browserTab.setBounds (tab.withSizeKeepingCentre (32, juce::jmin (140, tab.getHeight())));
+        }
         if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
         const bool rackHere = here (rack), pianoHere = here (piano);
         if (rackHere) rack->setVisible (view == 0);
@@ -1218,7 +1234,8 @@ private:
         resized();
     }
     int view = 0, ticks = 0;
-    bool showBrowser = true;
+    bool showBrowser = ! phoneUI;
+    juce::TextButton browserTab { ">" };
     juce::String flashText;
     juce::uint32 flashUntil = 0;
 

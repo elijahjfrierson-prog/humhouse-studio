@@ -1258,6 +1258,13 @@ public:
             vZoom.setColour (juce::Slider::thumbColourId, col::accent); vZoom.setColour (juce::Slider::trackColourId, col::panel2);
             vZoom.onValueChange = [this] { zoomH = (float) vZoom.getValue(); layoutHeaders(); repaint(); };
             addAndMakeVisible (vZoom);
+            if (phoneUI)
+            {
+                vZoom.setVisible (false);
+                zoomInBtn.onClick = [this] { zoomBy (1.4f); };  zoomOutBtn.onClick = [this] { zoomBy (1.0f / 1.4f); };
+                tallBtn.onClick = [this] { heightBy (1.25f); }; slimBtn.onClick = [this] { heightBy (0.8f); };
+                for (auto* b : { &zoomInBtn, &zoomOutBtn, &tallBtn, &slimBtn }) addAndMakeVisible (*b);
+            }
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
@@ -1300,6 +1307,11 @@ public:
         if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
         t.removeFromLeft (4); rackPop.setBounds (t.removeFromLeft (32));
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
+        if (phoneUI)
+        {
+            int y = getHeight() - hbarH - 4 - 4 * 48;
+            for (auto* b : { &zoomInBtn, &zoomOutBtn, &tallBtn, &slimBtn }) { b->setBounds (getWidth() - 56, y, 52, 44); b->toFront (false); y += 48; }
+        }
         layoutHeaders();
     }
 
@@ -1472,6 +1484,10 @@ public:
             }
         }
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
+        if (phoneUI && ! tapReplay && i < 0)
+        {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
+            drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
             if (! e.mods.isShiftDown()) { timeSelA = timeSelB = -1; s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; }); }
@@ -1658,6 +1674,13 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     {
         auto& p = s.p();
+        if (drag == Drag::Pan)
+        {
+            const bool tap = panTap && e.position.getDistanceFrom (panFrom) < 10.0f;
+            drag = Drag::None; panTap = false;
+            if (tap) { tapReplay = true; mouseDown (e); mouseUp (e); tapReplay = false; }
+            return;
+        }
         if (drag == Drag::AutoPt)
         {
             if (changed) s.edit ("Move automation point", [] (Project&) {});
@@ -1967,7 +1990,10 @@ public:
 
 private:
     enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, Pan };
-    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0;
+    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false;
+    juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" };
+    void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
+    void heightBy (float f) { zoomH = juce::jlimit (0.35f, 4.0f, zoomH * f); vZoom.setValue (zoomH, juce::dontSendNotification); layoutHeaders(); repaint(); }
     int dragPt = -1;
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
@@ -2013,7 +2039,7 @@ private:
     std::vector<Clip> clipboard; double clipLo = 0; bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
-    static constexpr int hbarH = 12;
+    static constexpr int hbarH = phoneUI ? 26 : 12;
     HScroll hbar;
     void syncHBar()
     {

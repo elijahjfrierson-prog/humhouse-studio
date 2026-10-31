@@ -308,6 +308,10 @@ public:
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
+        if (phoneUI && ! tapReplay && hit < 0 && ! e.mods.isPopupMenu() && (editTool == EditTool::Draw || editTool == EditTool::Paint))
+        {   // phone: drag empty space to scroll (BandLab), a quick tap still adds a note
+            drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Delete) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Mute)
@@ -465,6 +469,13 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (drag == Drag::Pan)
+        {
+            const bool tap = panTap && e.position.getDistanceFrom (panFrom) < 10.0f;
+            drag = Drag::None; panTap = false;
+            if (tap) { tapReplay = true; mouseDown (e); mouseUp (e); tapReplay = false; }
+            return;
+        }
         if (drag == Drag::TimeSel && ! timeMoved) { timeSelA = timeSelB = -1; scrubTo (e); }
         if (previewKey >= 0) { s.engine.previewNote (channelId, previewKey, 0, false); previewKey = -1; }
         if (changed || drag == Drag::Velocity || drag == Drag::Delete)
@@ -582,7 +593,7 @@ public:
 
 private:
     enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
-    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0;
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false;
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -592,7 +603,7 @@ private:
     int channelId = -1;
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
-    static constexpr int keyW = 64, rulerH = 18, hbarH = 12;
+    static constexpr int keyW = 64, rulerH = 18, hbarH = phoneUI ? 26 : 12;
     int velH = 70;   // drag the line above the velocity lane to resize it (saved)
     HScroll hbar, vbar { true };
     void syncHBar()
