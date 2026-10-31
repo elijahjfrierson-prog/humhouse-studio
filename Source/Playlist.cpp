@@ -1439,6 +1439,10 @@ public:
         auto& p = s.p();
         changed = false;
         dragStart = e.position;
+        if (phoneUI && e.source.getIndex() > 0)   // touch: a second finger scrolls freely up/down and side to side
+        {
+            drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
             // handle = drag the playhead; drag on the numbers = loop range (E: also selects clips in it); click = move playhead
@@ -1546,6 +1550,13 @@ public:
     {
         auto& p = s.p();
         lastMouse = e.getPosition();
+        if (drag == Drag::Pan)
+        {
+            if (e.source.getIndex() != panSrc) return;
+            scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
+            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), panY0 - (int) (e.position.y - panFrom.y));
+            lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
+        }
         if (drag == Drag::Scrub)
         {
             const double b = xToBeat (e.position.x);
@@ -1954,7 +1965,8 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt };
+    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, Pan };
+    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0;
     int dragPt = -1;
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;

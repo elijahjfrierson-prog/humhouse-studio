@@ -616,7 +616,13 @@ public:
             closeAllBtn.onClick = [this] { closeEverything(); };
             menuBtn.onClick = [this] { showAllMenus(); };
             importBtn.onClick = [this] { importFiles(); };
-            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn }) addAndMakeVisible (b);
+            copyBtn.setTooltip ("Copy the selected clips / notes (lights up when copied)");
+            pasteBtn.setTooltip ("Paste at the playhead");
+            copyBtn.setClickingTogglesState (false);
+            copyBtn.setColour (juce::TextButton::buttonOnColourId, col::accent);
+            copyBtn.onClick = [this] { phoneCopyPaste ('c'); };
+            pasteBtn.onClick = [this] { phoneCopyPaste ('v'); };
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn }) addAndMakeVisible (b);
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -666,8 +672,9 @@ public:
 if (phoneUI)
         {   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             const std::pair<juce::Component*, int> items[] {
-                { &closeAllBtn, 44 }, { &menuBtn, 64 }, { &beatTab, 64 }, { &recordTab, 64 }, { &mixTab, 64 }, { &importBtn, 72 },
-                { &songBtn, 48 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &bpm, 110 }, { &posLabel, 110 },
+                { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
+                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 },
+                { &bpm, 110 }, { &posLabel, 110 },
                 { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
                 { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
             const int rowH = 40, avail = juce::jmax (200, r.getWidth() - 16);
@@ -679,7 +686,8 @@ if (phoneUI)
             for (auto& it : items)
             {
                 if (x > 0 && x + it.second > avail) { y += rowH; x = 0; }
-                it.first->setBounds (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
+                const juce::Rectangle<int> cell (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
+                if (it.first != nullptr) it.first->setBounds (cell); else logoArea = cell;
                 x += it.second + 4;
             }
             mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
@@ -714,7 +722,7 @@ if (phoneUI)
         }
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
-        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (260)); }
+        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
         const bool rackHere = here (rack), pianoHere = here (piano);
         if (rackHere) rack->setVisible (view == 0);
         if (pianoHere) piano->setVisible (view == 0);
@@ -1141,7 +1149,24 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" };
+    void phoneCopyPaste (int key)
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (target == nullptr) return;
+        int n = 0;
+        if (view == 1) for (auto& c : studio.p().clips) n += c.selected ? 1 : 0;
+        if (key == 'c' && view == 1 && n == 0) { hintBar.setText ("Nothing selected: tap clips or patterns first, then COPY", juce::dontSendNotification); return; }
+        target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
+        if (key == 'c')
+        {
+            copyBtn.setToggleState (true, juce::dontSendNotification);
+            copyBtn.setButtonText (view == 1 ? "COPIED " + juce::String (n) : "COPIED");
+            hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - PASTE puts them at the playhead"
+                                       : "Copied the selected notes - PASTE puts them at the playhead", juce::dontSendNotification);
+        }
+        else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
+    }
     void showAllMenus()
     {
         juce::PopupMenu m;

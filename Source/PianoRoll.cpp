@@ -36,18 +36,19 @@ public:
         stampBtn.onClick = [this] { stampBtn.setToggleState (stampChord >= 0, juce::dontSendNotification); stampMenu(); };
         setupButton (ghostBtn, "GHOST", "Show other channels' notes faintly (Alt+V)", true);
         {
-            const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM" };
+            const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM", "GRAB" };
             const char* tips[] { "Draw (P) - click to add, drag to move / resize", "Paint (B) - drag to paint a run of notes",
                                  "Delete (D) - click or drag over notes to erase", "Mute (T) - click a note to mute / unmute it",
                                  "Slice (C) - click a note to cut it at the snap line", "Select (E) - drag a box to select notes",
-                                 "Zoom (Z) - click to zoom in, Shift-click to zoom out" };
-            for (int i = 0; i < 7; ++i)
+                                 "Zoom (Z) - click to zoom in, Shift-click to zoom out",
+                                 "Grab (G) - drag a note to move it, drag its right half to stretch it, drag empty space to scroll" };
+            for (int i = 0; i < 8; ++i)
             {
                 auto* b = new IconTextButton();
                 toolBtns.add (b);
                 setupButton (*b, {}, tips[i], true);
                 (void) labels;
-                b->icon = (int) std::array<CursorIcon, 7> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom }[(size_t) i];
+                b->icon = (int) std::array<CursorIcon, 8> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom, CursorIcon::Hand }[(size_t) i];
                 b->setRadioGroupId (4201);
                 b->onClick = [this, i] { editTool = (EditTool) i; };
                 addAndMakeVisible (b);
@@ -278,6 +279,7 @@ public:
                         : editTool == EditTool::Mute   ? toolCursor (CursorIcon::Mute)
                         : editTool == EditTool::Slice  ? toolCursor (CursorIcon::Scissors)
                         : editTool == EditTool::Zoom   ? toolCursor (CursorIcon::Zoom)
+                        : editTool == EditTool::Grab   ? toolCursor (CursorIcon::Hand)
                         : juce::MouseCursor (juce::MouseCursor::NormalCursor));
     }
 
@@ -335,6 +337,12 @@ public:
             scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
             repaint();
             return;
+        }
+        if (editTool == EditTool::Grab)
+        {
+            if (hit < 0) { drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return; }
+            const auto nr = noteRect (notes[(size_t) hit]);
+            edge = e.position.x > nr.getCentreX();   // finger-sized stretch zone: the right half of the note
         }
         if (e.mods.isCommandDown() || editTool == EditTool::Select)
         {
@@ -507,7 +515,7 @@ public:
         if (is ('t', alt)) { stampMenu(); return true; }
         {
             const std::pair<int, EditTool> keys[] { { 'p', EditTool::Draw }, { 'b', EditTool::Paint }, { 'd', EditTool::Delete }, { 't', EditTool::Mute },
-                                                    { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom } };
+                                                    { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom }, { 'g', EditTool::Grab } };
             for (auto& [key, tool] : keys) if (is (key, 0)) { setTool (tool); return true; }
         }
         const double snap = s.p().snap > 0 ? s.p().snap : 0.25;
@@ -574,7 +582,7 @@ public:
 private:
     enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
     juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0;
-    enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
+    enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
     double paintLast = 0;
