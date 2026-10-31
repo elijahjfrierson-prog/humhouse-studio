@@ -1157,7 +1157,8 @@ private:
         int n = 0;
         if (view == 1) for (auto& c : studio.p().clips) n += c.selected ? 1 : 0;
         if (key == 'c' && view == 1 && n == 0) { hintBar.setText ("Nothing selected: tap clips or patterns first, then COPY", juce::dontSendNotification); return; }
-        target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
+        const bool handled = target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
+        if (key == 'c' && ! handled) { hintBar.setText ("Nothing selected: select notes first, then COPY", juce::dontSendNotification); return; }
         if (key == 'c')
         {
             copyBtn.setToggleState (true, juce::dontSendNotification);
@@ -1185,9 +1186,15 @@ private:
             [safe] (const juce::FileChooser& fc)
             {
                 if (safe == nullptr) return;
-                juce::StringArray paths;
-                for (auto& f : fc.getResults()) if (f.existsAsFile()) paths.add (f.getFullPathName());
-                if (! paths.isEmpty()) safe->filesDropped (paths, safe->getWidth() / 2, safe->getHeight() / 2);
+                juce::StringArray share, media;
+                for (auto& f : fc.getResults())
+                    if (f.existsAsFile()) (allHumHouseShareFiles ({ f.getFullPathName() }) ? share : media).add (f.getFullPathName());
+                if (! share.isEmpty()) safe->filesDropped (share, 0, 0);
+                if (auto* t = dynamic_cast<juce::FileDragAndDropTarget*> (safe->playlist.get()); t != nullptr && ! media.isEmpty())
+                {
+                    safe->setView (1);
+                    t->filesDropped (media, -1, -1);   // at the playhead, on new tracks
+                }
             });
     }
     void closeEverything()
