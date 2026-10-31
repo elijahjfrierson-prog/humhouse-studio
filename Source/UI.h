@@ -8,6 +8,12 @@
 
 namespace hhs
 {
+#if JUCE_IOS
+inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one MENU folder, X close-all, finger panning
+#else
+inline constexpr bool phoneUI = false;
+#endif
+
 namespace col
 {
     // mutable so the theme color wheel can recolor the whole DAW
@@ -176,7 +182,7 @@ inline constexpr bool floatWithTopmost = true;
 struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
 {
     std::function<void (double)> onMove;
-    HScroll() : juce::ScrollBar (false) { addListener (this); setAutoHide (false); }
+    explicit HScroll (bool vertical = false) : juce::ScrollBar (vertical) { addListener (this); setAutoHide (false); }
     void scrollBarMoved (juce::ScrollBar*, double start) override { if (onMove) onMove (start); }
     void sync (double total, double start, double visible)
     {
@@ -209,7 +215,7 @@ inline int rulerLabelStep (float barPx)
 }
 
 // FL-style tool cursors (white icon, dark outline so it reads on any background)
-enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom, Select, Rack };
+enum class CursorIcon { Pencil, Brush, Bin, Mute, Scissors, Zoom, Select, Rack, Hand };
 inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
 {
     constexpr int S = 32;
@@ -253,6 +259,10 @@ inline juce::Image toolCursorImage (CursorIcon k, int& hx, int& hy)
         case CursorIcon::Rack:     // 3 lines going down (channel rack rows)
             for (int i = 0; i < 3; ++i) p.addRoundedRectangle (5.0f, 6.0f + 7.0f * (float) i, 18.0f, 3.5f, 1.5f);
             hx = 14; hy = 14; break;
+        case CursorIcon::Hand:     // grab: palm + four fingers
+            p.addRoundedRectangle (8.0f, 14.0f, 15.0f, 13.0f, 4.0f);
+            for (int i = 0; i < 4; ++i) p.addRoundedRectangle (8.0f + 4.0f * (float) i, 5.0f + (i == 0 || i == 3 ? 3.0f : 0.0f), 3.2f, 12.0f, 1.5f);
+            hx = 15; hy = 15; break;
         case CursorIcon::Zoom:
             p.addEllipse (3.0f, 3.0f, 15.0f, 15.0f); p.addLineSegment ({ 16.0f, 16.0f, 26.0f, 26.0f }, 4.0f);
             hx = 10; hy = 10; break;

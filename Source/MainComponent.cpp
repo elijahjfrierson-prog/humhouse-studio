@@ -561,6 +561,13 @@ public:
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
+        if (phoneUI)
+        {
+            browserBtn.setToggleState (showBrowser, juce::dontSendNotification);
+            browserTab.setTooltip ("Samples / Patterns / Plugin House: tap to bring it out or tuck it back in");
+            browserTab.onClick = [this] { browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); };
+            addAndMakeVisible (browserTab);
+        }
         setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
         themeBtn.onClick = [this] { showThemeDialog (studio); };
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
@@ -606,8 +613,24 @@ public:
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
 #else
-        addAndMakeVisible (menuBar);
+        if (! phoneUI) addAndMakeVisible (menuBar);
 #endif
+        if (phoneUI)
+        {
+            closeAllBtn.setTooltip ("Close everything that's open (windows, pop-outs, menus, Browser)");
+            menuBtn.setTooltip ("File, Edit, View, Options (audio buffer etc.) and Help in one folder");
+            importBtn.setTooltip ("Import audio, MIDI or a HumHouse file");
+            closeAllBtn.onClick = [this] { closeEverything(); };
+            menuBtn.onClick = [this] { showAllMenus(); };
+            importBtn.onClick = [this] { importFiles(); };
+            copyBtn.setTooltip ("Copy the selected clips / notes (lights up when copied)");
+            pasteBtn.setTooltip ("Paste at the playhead");
+            copyBtn.setClickingTogglesState (false);
+            copyBtn.setColour (juce::TextButton::buttonOnColourId, col::accent);
+            copyBtn.onClick = [this] { phoneCopyPaste ('c'); };
+            pasteBtn.onClick = [this] { phoneCopyPaste ('v'); };
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn }) addAndMakeVisible (b);
+        }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
         setView (0);
@@ -653,6 +676,35 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
+if (phoneUI)
+        {
+            if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
+                r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
+            r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
+            const std::pair<juce::Component*, int> items[] {
+                { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
+                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 },
+                { &bpm, 110 }, { &posLabel, 110 },
+                { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
+                { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
+            const int rowH = 40, avail = juce::jmax (200, r.getWidth() - 16);
+            int x = 0, rows = 1;
+            for (auto& it : items) { if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
+            topBar = r.removeFromTop (rows * rowH + 8);
+            logoArea = {};
+            int y = topBar.getY() + 4; x = 0;
+            for (auto& it : items)
+            {
+                if (x > 0 && x + it.second > avail) { y += rowH; x = 0; }
+                const juce::Rectangle<int> cell (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
+                if (it.first != nullptr) it.first->setBounds (cell); else logoArea = cell;
+                x += it.second + 4;
+            }
+            mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
+            rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+        }
+        else
+        {
 #if ! JUCE_MAC
         menuBar.setBounds (r.removeFromTop (22));
 #endif
@@ -677,9 +729,16 @@ public:
         rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
         rackPopBtn.setBounds (t.removeFromRight (52)); t.removeFromRight (6);
         cpuLabel.setBounds (t.removeFromRight (86));
+        }
         hintBar.setBounds (r.removeFromBottom (22));
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
-        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (260)); }
+        if (phoneUI)
+        {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
+            auto tab = r.removeFromLeft (34);
+            browserTab.setButtonText (showBrowser ? "<" : ">");
+            browserTab.setBounds (tab.withSizeKeepingCentre (32, juce::jmin (140, tab.getHeight())));
+        }
+        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
         const bool rackHere = here (rack), pianoHere = here (piano);
         if (rackHere) rack->setVisible (view == 0);
         if (pianoHere) piano->setVisible (view == 0);
@@ -1105,9 +1164,78 @@ private:
     BpmSlider bpm;
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
-    std::unique_ptr<juce::FileChooser> chooser;
+    std::unique_ptr<juce::FileChooser> chooser, importChooser;
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" };
+    void phoneCopyPaste (int key)
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (target == nullptr) return;
+        int n = 0;
+        if (view == 1) for (auto& c : studio.p().clips) n += c.selected ? 1 : 0;
+        if (key == 'c' && view == 1 && n == 0) { hintBar.setText ("Nothing selected: tap clips or patterns first, then COPY", juce::dontSendNotification); return; }
+        const bool handled = target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
+        if (key == 'c' && ! handled) { hintBar.setText ("Nothing selected: select notes first, then COPY", juce::dontSendNotification); return; }
+        if (key == 'c')
+        {
+            copyBtn.setToggleState (true, juce::dontSendNotification);
+            copyBtn.setButtonText (view == 1 ? "COPIED " + juce::String (n) : "COPIED");
+            hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - PASTE puts them at the playhead"
+                                       : "Copied the selected notes - PASTE puts them at the playhead", juce::dontSendNotification);
+        }
+        else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
+    }
+    void showAllMenus()
+    {
+        juce::PopupMenu m;
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], getMenuForIndex (i, names[i]));
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
+                         [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
+    }
+    void importFiles()
+    {
+        importChooser = std::make_unique<juce::FileChooser> ("Import any file (Downloads, iCloud, On My iPhone, connected drives)",
+            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        importChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
+            [safe] (const juce::FileChooser& fc)
+            {
+                if (safe == nullptr) return;
+                juce::StringArray share, media;
+                for (auto& f : fc.getResults())
+                    if (f.existsAsFile()) (allHumHouseShareFiles ({ f.getFullPathName() }) ? share : media).add (f.getFullPathName());
+                if (! share.isEmpty()) safe->filesDropped (share, 0, 0);
+                if (auto* t = dynamic_cast<juce::FileDragAndDropTarget*> (safe->playlist.get()); t != nullptr && ! media.isEmpty())
+                {
+                    safe->setView (1);
+                    t->filesDropped (media, -1, -1);   // at the playhead, on new tracks
+                }
+            });
+    }
+    void closeEverything()
+    {
+        juce::PopupMenu::dismissAllActiveMenus();
+        juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
+        closeAllEditorWindows();
+        std::vector<juce::Component*> pops;
+        for (auto& p : popouts) pops.push_back (p.first);
+        for (auto* c : pops) reattach (c);
+        juce::Array<juce::Component::SafePointer<juce::TopLevelWindow>> others;
+        for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+            if (auto* w = juce::TopLevelWindow::getTopLevelWindow (i); w != nullptr && w != getTopLevelComponent() && w->isVisible()) others.add (w);
+        for (auto& w : others)
+        {
+            if (w == nullptr) continue;
+            if (auto* dw = dynamic_cast<juce::DocumentWindow*> (w.getComponent())) dw->closeButtonPressed();
+            else w->setVisible (false);
+        }
+        showBrowser = false;
+        resized();
+    }
     int view = 0, ticks = 0;
-    bool showBrowser = true;
+    bool showBrowser = ! phoneUI;
+    juce::TextButton browserTab { ">" };
     juce::String flashText;
     juce::uint32 flashUntil = 0;
 

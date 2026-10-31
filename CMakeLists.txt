@@ -110,8 +110,8 @@ function(hhs_add_app target product bundle licensed)
         HARDENED_RUNTIME_ENABLED FALSE
         DOCUMENT_EXTENSIONS hhs hhpack hhpreset hhchain
         # iPhone / iPad (ignored on desktop)
-        IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         REQUIRES_FULL_SCREEN TRUE
         STATUS_BAR_HIDDEN TRUE
         BACKGROUND_AUDIO_ENABLED TRUE

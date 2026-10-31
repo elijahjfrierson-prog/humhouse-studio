@@ -36,18 +36,19 @@ public:
         stampBtn.onClick = [this] { stampBtn.setToggleState (stampChord >= 0, juce::dontSendNotification); stampMenu(); };
         setupButton (ghostBtn, "GHOST", "Show other channels' notes faintly (Alt+V)", true);
         {
-            const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM" };
+            const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM", "GRAB" };
             const char* tips[] { "Draw (P) - click to add, drag to move / resize", "Paint (B) - drag to paint a run of notes",
                                  "Delete (D) - click or drag over notes to erase", "Mute (T) - click a note to mute / unmute it",
                                  "Slice (C) - click a note to cut it at the snap line", "Select (E) - drag a box to select notes",
-                                 "Zoom (Z) - click to zoom in, Shift-click to zoom out" };
-            for (int i = 0; i < 7; ++i)
+                                 "Zoom (Z) - click to zoom in, Shift-click to zoom out",
+                                 "Grab (G) - drag a note to move it, drag its right half to stretch it, drag empty space to scroll" };
+            for (int i = 0; i < 8; ++i)
             {
                 auto* b = new IconTextButton();
                 toolBtns.add (b);
                 setupButton (*b, {}, tips[i], true);
                 (void) labels;
-                b->icon = (int) std::array<CursorIcon, 7> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom }[(size_t) i];
+                b->icon = (int) std::array<CursorIcon, 8> { CursorIcon::Pencil, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors, CursorIcon::Select, CursorIcon::Zoom, CursorIcon::Hand }[(size_t) i];
                 b->setRadioGroupId (4201);
                 b->onClick = [this, i] { editTool = (EditTool) i; };
                 addAndMakeVisible (b);
@@ -66,6 +67,8 @@ public:
         velH = s.settings != nullptr ? juce::jlimit (40, 600, s.settings->getIntValue ("prVelH", 70)) : 70;
         hbar.onMove = [this] (double v) { scrollX = juce::jmax (0.0, v); repaint(); };
         addAndMakeVisible (hbar);
+        vbar.onMove = [this] (double v) { scrollY = (float) juce::jlimit (0.0, juce::jmax (0.0, 128.0 * rowH - gridArea().getHeight()), v); repaint(); };
+        addAndMakeVisible (vbar);
         setNoteSize (s.settings != nullptr ? juce::jlimit (0, 3, s.settings->getIntValue ("prNoteSize", 1)) : 1, false);
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
@@ -276,6 +279,7 @@ public:
                         : editTool == EditTool::Mute   ? toolCursor (CursorIcon::Mute)
                         : editTool == EditTool::Slice  ? toolCursor (CursorIcon::Scissors)
                         : editTool == EditTool::Zoom   ? toolCursor (CursorIcon::Zoom)
+                        : editTool == EditTool::Grab   ? toolCursor (CursorIcon::Hand)
                         : juce::MouseCursor (juce::MouseCursor::NormalCursor));
     }
 
@@ -285,6 +289,10 @@ public:
         auto ga = gridArea();
         dragStart = e.position; changed = false;
         if (s.channel (channelId) == nullptr) return;
+        if (phoneUI && (e.source.getIndex() > 0 || (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom())))
+        {   // touch: drag the keyboard strip (or use a second finger) to scroll freely up/down and side to side
+            drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
         if (e.y > barH && e.y < ga.getY())   // bar numbers: drag = select bars (FL), click or the handle = playhead
         {
@@ -300,6 +308,10 @@ public:
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
+        if (phoneUI && ! tapReplay && hit < 0 && ! e.mods.isPopupMenu() && (editTool == EditTool::Draw || editTool == EditTool::Paint))
+        {   // phone: drag empty space to scroll (BandLab), a quick tap still adds a note
+            drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Delete) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Mute)
@@ -329,6 +341,12 @@ public:
             scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
             repaint();
             return;
+        }
+        if (editTool == EditTool::Grab)
+        {
+            if (hit < 0) { drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return; }
+            const auto nr = noteRect (notes[(size_t) hit]);
+            edge = e.position.x > nr.getCentreX();   // finger-sized stretch zone: the right half of the note
         }
         if (e.mods.isCommandDown() || editTool == EditTool::Select)
         {
@@ -372,6 +390,13 @@ public:
         lastMouse = e.getPosition();
         auto& p = s.p();
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
+        if (drag == Drag::Pan)
+        {
+            if (e.source.getIndex() != panSrc) return;
+            scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
+            scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) gridArea().getHeight()), panY0 - (e.position.y - panFrom.y));
+            syncHBar(); repaint(); return;
+        }
         if (drag == Drag::Scrub) { scrubTo (e); return; }
         if (drag == Drag::TimeSel)
         {
@@ -444,6 +469,13 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (drag == Drag::Pan)
+        {
+            const bool tap = panTap && e.position.getDistanceFrom (panFrom) < 10.0f;
+            drag = Drag::None; panTap = false;
+            if (tap) { tapReplay = true; mouseDown (e); mouseUp (e); tapReplay = false; }
+            return;
+        }
         if (drag == Drag::TimeSel && ! timeMoved) { timeSelA = timeSelB = -1; scrubTo (e); }
         if (previewKey >= 0) { s.engine.previewNote (channelId, previewKey, 0, false); previewKey = -1; }
         if (changed || drag == Drag::Velocity || drag == Drag::Delete)
@@ -494,7 +526,7 @@ public:
         if (is ('t', alt)) { stampMenu(); return true; }
         {
             const std::pair<int, EditTool> keys[] { { 'p', EditTool::Draw }, { 'b', EditTool::Paint }, { 'd', EditTool::Delete }, { 't', EditTool::Mute },
-                                                    { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom } };
+                                                    { 'c', EditTool::Slice }, { 'e', EditTool::Select }, { 'z', EditTool::Zoom }, { 'g', EditTool::Grab } };
             for (auto& [key, tool] : keys) if (is (key, 0)) { setTool (tool); return true; }
         }
         const double snap = s.p().snap > 0 ? s.p().snap : 0.25;
@@ -533,6 +565,7 @@ public:
         if (is (juce::KeyPress::deleteKey, 0) || is (juce::KeyPress::backspaceKey, 0)) return op ("Delete notes", [] (NoteList& n) { tools::deleteSelected (n); });
         if (is ('c', cmd))
         {
+            if (std::none_of (s.notes (channelId).begin(), s.notes (channelId).end(), [] (const auto& n) { return n.selected; })) return false;
             clipboard().clear();
             for (auto& n : s.notes (channelId)) if (n.selected) clipboard().push_back (n);
             clipFrom() = timeSelB > timeSelA ? timeSelA : -1.0;   // bars copied by number keep their spot in the bar
@@ -559,8 +592,9 @@ public:
     }
 
 private:
-    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize };
-    enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom };
+    enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false;
+    enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
     double paintLast = 0;
@@ -569,11 +603,14 @@ private:
     int channelId = -1;
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
-    static constexpr int keyW = 64, rulerH = 18, hbarH = 12;
+    static constexpr int keyW = 64, rulerH = 18, hbarH = phoneUI ? 26 : 12;
     int velH = 70;   // drag the line above the velocity lane to resize it (saved)
-    HScroll hbar;
+    HScroll hbar, vbar { true };
     void syncHBar()
     {
+        const auto vga = gridArea();
+        vbar.setBounds (getWidth() - hbarH, vga.getY(), hbarH, vga.getHeight());
+        vbar.sync (128.0 * rowH, scrollY, vga.getHeight());
         hbar.setBounds (keyW, getHeight() - hbarH, getWidth() - keyW, hbarH);
         hbar.sync (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX, gridArea().getWidth() / (double) pxPerBeat);
     }
@@ -613,7 +650,7 @@ private:
         s.live ([this] (Project&) { for (auto& n : s.notes (channelId)) n.selected = n.start >= timeSelA - 1e-9 && n.start < timeSelB - 1e-9; });
     }
 
-    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedBottom (velH + hbarH); }
+    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedRight (hbarH).withTrimmedBottom (velH + hbarH); }
     float beatToX (double b) const { return (float) gridArea().getX() + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) gridArea().getX()) / pxPerBeat; }
     float keyToY (int key) const { return (float) gridArea().getY() + (127 - key) * rowH - scrollY; }
