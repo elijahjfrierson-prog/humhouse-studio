@@ -1555,6 +1555,7 @@ public:
             if (e.source.getIndex() != panSrc) return;
             scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
             scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), panY0 - (int) (e.position.y - panFrom.y));
+            layoutHeaders();
             lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
         }
         if (drag == Drag::Scrub)
@@ -1928,7 +1929,7 @@ public:
     bool isInterestedInFileDrag (const juce::StringArray& files) override { return ! allHumHouseShareFiles (files); }
     void filesDropped (const juce::StringArray& files, int x, int y) override
     {
-        const double at = juce::jmax (0.0, snap (xToBeat ((float) x)));
+        const double at = juce::jmax (0.0, snap (x < 0 ? s.engine.positionBeats() : xToBeat ((float) x)));
         int lane = laneAt ((float) y);
         s.edit ("Add audio", [&] (Project& p) {
             for (auto& path : files)
