@@ -554,6 +554,7 @@ public:
         if (is (juce::KeyPress::deleteKey, 0) || is (juce::KeyPress::backspaceKey, 0)) return op ("Delete notes", [] (NoteList& n) { tools::deleteSelected (n); });
         if (is ('c', cmd))
         {
+            if (std::none_of (s.notes (channelId).begin(), s.notes (channelId).end(), [] (const auto& n) { return n.selected; })) return false;
             clipboard().clear();
             for (auto& n : s.notes (channelId)) if (n.selected) clipboard().push_back (n);
             clipFrom() = timeSelB > timeSelA ? timeSelA : -1.0;   // bars copied by number keep their spot in the bar
