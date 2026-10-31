@@ -1178,9 +1178,8 @@ private:
     }
     void importFiles()
     {
-        importChooser = std::make_unique<juce::FileChooser> ("Import audio, MIDI or a HumHouse file",
-            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
-            "*.wav;*.mp3;*.aif;*.aiff;*.flac;*.ogg;*.m4a;*.mid;*.midi;*.hhpack;*.hhpreset;*.hhchain;*.hhs");
+        importChooser = std::make_unique<juce::FileChooser> ("Import any file (Downloads, iCloud, On My iPhone, connected drives)",
+            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory), "*");
         juce::Component::SafePointer<MainComponent> safe (this);
         importChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
             [safe] (const juce::FileChooser& fc)
