@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - name: macOS (universal .pkg)
-            os: macos-14
+            os: macos-15
             artifact: HumHouse-Studio-macOS
           - name: Windows (Setup.exe)
             os: windows-2022
@@ -138,7 +138,7 @@ jobs:
 
   ios:
     name: iPhone / iPad (.ipa, unsigned - sideload)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Configure (iOS, Xcode)
