@@ -1880,7 +1880,7 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
-            if (timeSelB > timeSelA && timeSelA <= clipLo + 1.0e-6 && timeSelB > clipLo) clipLo = timeSelA;   // time selection round the clips: paste keeps the empty space before the first one
+            if (timeSelB > timeSelA && timeSelA <= clipLo + 1.0e-6 && timeSelB > clipLo && clipLo - timeSelA < s.p().beatsPerBar) clipLo = timeSelA;   // a time selection starting in the same bar keeps the gap before the first clip; never more than a bar, so a stale selection can't push the paste bars past the playhead
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;

@@ -568,7 +568,9 @@ public:
             if (std::none_of (s.notes (channelId).begin(), s.notes (channelId).end(), [] (const auto& n) { return n.selected; })) return false;
             clipboard().clear();
             for (auto& n : s.notes (channelId)) if (n.selected) clipboard().push_back (n);
-            clipFrom() = timeSelB > timeSelA ? timeSelA : -1.0;   // bars copied by number keep their spot in the bar
+            double firstSel = 1e9;
+            for (auto& n : clipboard()) firstSel = std::min (firstSel, n.start);
+            clipFrom() = timeSelB > timeSelA && timeSelA <= firstSel + 1.0e-6 && firstSel - timeSelA < s.p().beatsPerBar ? timeSelA : -1.0;   // bars copied by number keep their spot in the bar
             clipLen() = timeSelB > timeSelA ? timeSelB - timeSelA : 0.0;
             return true;
         }
