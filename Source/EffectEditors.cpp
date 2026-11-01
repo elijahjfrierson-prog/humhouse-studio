@@ -47,7 +47,13 @@ private:
 
 bool focusExisting (const juce::String& key)
 {
-    for (auto* w : EditorWindow::windows()) if (w->key == key) { w->toFront (true); return true; }
+    for (auto* w : EditorWindow::windows())
+        if (w->key == key)
+        {
+            if (phoneUI) EditorWindow::close (w);   // phone: tapping the same thing again closes its window
+            else w->toFront (true);
+            return true;
+        }
     return false;
 }
 

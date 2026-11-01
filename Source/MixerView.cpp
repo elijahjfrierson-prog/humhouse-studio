@@ -417,7 +417,7 @@ public:
         for (int i = 0; i < maxSlots; ++i)
         {
             auto row = r.removeFromTop (30);
-            bypass[i]->setBounds (row.removeFromLeft (14).reduced (0, 8));
+            bypass[i]->setBounds (phoneUI ? row.removeFromLeft (30).reduced (0, 2) : row.removeFromLeft (14).reduced (0, 8));
             row.removeFromLeft (4);
             mixes[i]->setBounds (row.removeFromRight (28));
             slots[i]->setBounds (row.reduced (0, 2));

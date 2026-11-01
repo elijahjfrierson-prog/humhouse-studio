@@ -574,12 +574,12 @@ public:
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
-        mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
+        mixPopBtn.onClick = [this] { if (phoneUI) { phoneMixToggle(); return; } if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
         setupButton (rackPopBtn, "RACK", "Channel Rack: pop it out into its own window so you can edit samples and one-shots on Rec and in full screen (click again to dock it)", true);
-        rackPopBtn.onClick = [this] { if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
+        rackPopBtn.onClick = [this] { if (phoneUI) { phoneRackToggle(); return; } if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (rackPopBtn);
-        rackPopOut = [this] { toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
+        rackPopOut = [this] { if (phoneUI) { phoneRackToggle(); return; } toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
@@ -648,8 +648,10 @@ public:
             undoBtn.onClick = [this] { studio.undoStep (-1); };
             redoBtn.onClick = [this] { studio.undoStep (1); };
             altABtn.onClick = [this] { phoneAlt ('a'); };
+            dupBtn.setTooltip ("Cmd+B: duplicate the selected notes (BEAT) or clips (REC) right after themselves");
+            dupBtn.onClick = [this] { phoneDuplicate(); };
             altSBtn.onClick = [this] { phoneAlt ('s'); };
-            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn }) addAndMakeVisible (b);
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn }) addAndMakeVisible (b);
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -703,7 +705,7 @@ if (phoneUI)
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             const std::pair<juce::Component*, int> items[] {
                 { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
-                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 },
+                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 }, { &dupBtn, 66 },
                 { &bpm, 110 }, { &posLabel, 110 },
                 { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
                 { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
@@ -720,8 +722,8 @@ if (phoneUI)
                 if (it.first != nullptr) it.first->setBounds (cell); else logoArea = cell;
                 x += it.second + 4;
             }
-            mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
-            rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+            mixPopBtn.setToggleState (view == 2, juce::dontSendNotification);
+            rackPopBtn.setToggleState (view == 0 && ! rackHidden, juce::dontSendNotification);
         }
         else
         {
@@ -760,14 +762,15 @@ if (phoneUI)
         }
         if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
         const bool rackHere = here (rack), pianoHere = here (piano);
-        if (rackHere) rack->setVisible (view == 0);
+        if (rackHere) rack->setVisible (view == 0 && ! (phoneUI && rackHidden && pianoHere));
         if (pianoHere) piano->setVisible (view == 0);
         if (here (playlist)) playlist->setVisible (view == 1);
         if (here (mixer)) mixer->setVisible (view == 2);
         pianoSplit.setVisible (false);
         if (view == 0)
         {
-            if (rackHere && pianoHere)
+            if (rackHere && pianoHere && phoneUI && rackHidden) piano->setBounds (r);
+            else if (rackHere && pianoHere)
             {
                 splitTop = r.getY(); splitTotal = r.getHeight();
                 const int splitH = phoneUI ? 34 : 22;
@@ -1186,7 +1189,7 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
     bool clipArmed = false; int clipView = -1;
     void phoneAlt (int key)
     {
@@ -1196,12 +1199,30 @@ private:
             hintBar.setText (key == 's' && view == 1 ? "Strum is for notes: open the pattern in BEAT, select notes, then ALT+S"
                                                      : "Select notes or audio clips first", juce::dontSendNotification);
     }
+    void clearClipboardMode()
+    {
+        clipArmed = false; phoneClipTarget = nullptr; dropBtn.setVisible (false);
+        copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY");
+    }
+    void phoneDuplicate()
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (target == nullptr || ! target->keyPressed (juce::KeyPress ('b', juce::ModifierKeys::commandModifier, 0)))
+            hintBar.setText ("Select notes or clips first, then CMD+B", juce::dontSendNotification);
+    }
+    void phoneRackToggle()   // phone: the Rack stays docked on BEAT; RACK shows / hides it (no floating window)
+    {
+        if (view != 0) { rackHidden = false; setView (0); }
+        else { rackHidden = ! rackHidden; resized(); }
+    }
+    void phoneMixToggle() { setView (view == 2 ? lastView : 2); }
     void phoneCopyPaste (int key)
     {
         juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
         if (target == nullptr) return;
         int n = 0;
         if (view == 1) for (auto& c : studio.p().clips) n += c.selected ? 1 : 0;
+        if (key == 'c' && clipArmed) { clearClipboardMode(); hintBar.setText ("Copy off", juce::dontSendNotification); return; }   // tap COPY again to turn it off
         if (key == 'c' && view == 1 && n == 0) { hintBar.setText ("Nothing selected: tap clips or patterns first, then COPY", juce::dontSendNotification); return; }
         const bool handled = target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
         if (key == 'c' && ! handled) { hintBar.setText ("Nothing selected: select notes first, then COPY", juce::dontSendNotification); return; }
@@ -1247,7 +1268,7 @@ private:
     void closeEverything()
     {
         juce::PopupMenu::dismissAllActiveMenus();
-        if (phoneUI) { clipArmed = false; phoneClipTarget = nullptr; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
+        if (phoneUI) clearClipboardMode();
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
         closeAllEditorWindows();
         std::vector<juce::Component*> pops;
@@ -1265,7 +1286,7 @@ private:
         showBrowser = false;
         resized();
     }
-    int view = 0, ticks = 0;
+    int view = 0, ticks = 0, lastView = 0; bool rackHidden = false;
     bool showBrowser = ! phoneUI;
     juce::TextButton browserTab { ">" };
     juce::String flashText;
@@ -1360,10 +1381,18 @@ private:
 
     void setView (int v)
     {
+        if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab };
-        tabs[v]->setToggleState (true, juce::dontSendNotification);
+        for (int i = 0; i < 3; ++i) tabs[i]->setToggleState (i == v, juce::dontSendNotification);
+        if (phoneUI)   // phone: never leave a floating Rack / Mixer window over the page after switching
+        {
+            std::vector<juce::Component*> pops;
+            for (auto& p : popouts) pops.push_back (p.first);
+            for (auto* c : pops) reattach (c);
+        }
         resized();
+        repaint();
         if (! popouts.empty()) juce::MessageManager::callAsync ([] { raiseFloatingWindows(); });
     }
 

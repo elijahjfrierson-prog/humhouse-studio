@@ -342,6 +342,8 @@ void resetTheme()
 
 void showThemeDialog (Studio& s)
 {
+    static juce::Component::SafePointer<juce::DialogWindow> open;
+    if (open != nullptr) { delete open.getComponent(); return; }   // tap COLOR again to close it
     juce::DialogWindow::LaunchOptions o;
     o.content.setOwned (new ThemePanel (s));
     o.dialogTitle = "Theme color";
@@ -349,7 +351,7 @@ void showThemeDialog (Studio& s)
     o.escapeKeyTriggersCloseButton = true;
     o.useNativeTitleBar = true;
     o.resizable = false;
-    o.launchAsync();
+    open = o.launchAsync();
 }
 
 void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)
