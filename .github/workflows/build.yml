@@ -20,7 +20,7 @@ jobs:
       matrix:
         include:
           - name: macOS (universal .pkg)
-            os: macos-14
+            os: macos-15
             artifact: HumHouse-Studio-macOS
           - name: Windows (Setup.exe)
             os: windows-2022
@@ -84,7 +84,7 @@ jobs:
             echo "app not in /Applications"; pkgutil --pkg-info com.humhouse.studio.installer.app || true
             pkgutil --files com.humhouse.studio.installer.app | head || true; exit 1; }
           v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/HumHouse Studio.app/Contents/Info.plist")
-          echo "installed version: $v"; test "$v" = "1.3.3" || { echo "old version still installed"; exit 1; }
+          echo "installed version: $v"; test "$v" = "1.3.6" || { echo "old version still installed"; exit 1; }
           n=$(find /Applications -maxdepth 2 -name "HumHouse Studio*.app" | wc -l | tr -d ' ')
           test "$n" = "1" || { echo "expected exactly one HumHouse Studio.app, found $n"; exit 1; }
 
@@ -113,7 +113,7 @@ jobs:
           }
           $keys = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'HumHouse Studio*' }
           if (@($keys).Count -ne 1) { throw "expected one HumHouse Studio install, found $(@($keys).Count)" }
-          if ($keys.DisplayName -notlike '*1.3.3*') { throw "old version still registered: $($keys.DisplayName)" }
+          if ($keys.DisplayName -notlike '*1.3.6*') { throw "old version still registered: $($keys.DisplayName)" }
 
       - name: Stage artifacts (Linux)
         if: runner.os == 'Linux'
@@ -138,7 +138,7 @@ jobs:
 
   ios:
     name: iPhone / iPad (.ipa, unsigned - sideload)
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Configure (iOS, Xcode)
@@ -161,3 +161,27 @@ jobs:
           name: HumHouse-Studio-iPhone
           path: artifacts/
           if-no-files-found: error
+      - name: Publish to SideStore source (main only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          R=https://github.com/${{ github.repository }}/releases/download/ios-latest
+          SIZE=$(stat -f%z artifacts/HumHouse-Studio-iPhone.ipa)
+          VER=$(grep -m1 -oE 'HumHouseStudio VERSION [0-9.]+' CMakeLists.txt | awk '{print $3}')
+          python3 - "$R" "$SIZE" "$VER" "${{ github.run_number }}" <<'PY'
+          import json, sys, datetime
+          r, size, ver, build = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+          icon = "https://raw.githubusercontent.com/${{ github.repository }}/main/assets/humhouse-icon.png"
+          app = {"name": "HumHouse Studio", "bundleIdentifier": "com.humhouse.studio.master", "developerName": "HumHouse",
+                 "subtitle": "Beat + vocal DAW", "iconURL": icon, "tintColor": "#E0A030",
+                 "localizedDescription": "HumHouse Studio: Playlist, Channel Rack, Piano Roll, Mixer, AutoPitch, HumLab and all built-in sounds.",
+                 "versions": [{"version": ver, "buildVersion": build, "date": datetime.date.today().isoformat(),
+                               "localizedDescription": "Build " + build, "downloadURL": r + "/HumHouse-Studio-iPhone.ipa",
+                               "size": size, "minOSVersion": "15.0"}],
+                 "appPermissions": {"entitlements": [], "privacy": {"NSMicrophoneUsageDescription": "Record vocals and instruments."}}}
+          src = {"name": "HumHouse Studio", "identifier": "com.humhouse.source", "subtitle": "HumHouse Studio for iPhone & iPad",
+                 "sourceURL": r + "/apps.json", "iconURL": icon, "tintColor": "#E0A030", "apps": [app], "news": []}
+          json.dump(src, open("artifacts/apps.json", "w"), indent=1)
+          PY
+          gh release upload ios-latest artifacts/HumHouse-Studio-iPhone.ipa artifacts/apps.json --clobber -R ${{ github.repository }}

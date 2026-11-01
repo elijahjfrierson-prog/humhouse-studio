@@ -514,6 +514,7 @@ static juce::File siblingSample (const juce::File& f, int dir)
 
 struct Row : public juce::Component
 {
+    int tapTok = 0;
     Row (Studio& st, int id) : s (st), channelId (id)
     {
         setupButton (mute, {}, "Channel on/off (green = on)", true);
@@ -528,7 +529,17 @@ struct Row : public juce::Component
         insert.setSliderStyle (juce::Slider::LinearBar);
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");
         insert.onValueChange = [this] { s.edit ("Route channel", [&] (Project&) { if (auto* c = s.channel (channelId)) c->mixerTrack = (int) insert.getValue(); }); };
-        name.onMouse = [this] (const juce::MouseEvent& e) { e.mods.isPopupMenu() ? menu() : select (true); };
+        name.onMouse = [this] (const juce::MouseEvent& e)
+        {
+            if (e.mods.isPopupMenu()) { menu(); return; }
+            select (true);
+            if (phoneUI && e.getNumberOfClicks() < 2)   // phone: one tap = MAIN / FUNC / SCOPE, double tap = the right-click menu (HumWave etc.)
+            {
+                const int tok = ++tapTok;
+                juce::Component::SafePointer<Row> sp (this);
+                juce::Timer::callAfterDelay (300, [sp, tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
+            }
+        };
         setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
@@ -539,7 +550,7 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &shift, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
+        name.onDouble = [this] { if (phoneUI) { ++tapTok; menu(); } else openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
         name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Drop a sample here: replace this channel's sound. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
@@ -932,18 +943,39 @@ public:
         if (! hitStep (e.getPosition(), row, step)) return;
         const int id = rows[(size_t) row]->channelId;
         if (e.mods.isPopupMenu()) { rollMenu (id, step); return; }
+        if (phoneUI) { touchStep = { row, step }; touchPanned = false; touchScroll0 = scrollY; return; }
         paintOn = ! stepOn (id, step);
         setStep (id, step, paintOn);
         lastStep = { row, step };
     }
+    juce::Point<int> touchStep { -1, -1 }; bool touchPanned = false; int touchScroll0 = 0;
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (phoneUI && touchStep.x >= 0)
+        {
+            if (! touchPanned && e.getDistanceFromDragStart() < 10) return;
+            touchPanned = true;
+            scrollY = juce::jlimit (0, juce::jmax (0, (int) rows.size() * rowH - (getHeight() - headerH)), touchScroll0 - e.getDistanceFromDragStartY());
+            layoutRows(); repaint(); return;
+        }
         int row, step;
         if (e.mods.isPopupMenu() || ! hitStep (e.getPosition(), row, step) || juce::Point<int> (row, step) == lastStep) return;
         lastStep = { row, step };
         setStep (rows[(size_t) row]->channelId, step, paintOn);
     }
-    void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && e.getMouseDownX() >= ctlW) s.commit ("Steps"); lastStep = { -1, -1 }; }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (phoneUI && touchStep.x >= 0)
+        {
+            const auto t = touchStep; touchStep = { -1, -1 };
+            if (touchPanned || t.x >= (int) rows.size()) return;
+            const int id = rows[(size_t) t.x]->channelId;
+            setStep (id, t.y, ! stepOn (id, t.y));
+            s.commit ("Steps"); return;
+        }
+        if (! e.mods.isPopupMenu() && e.getMouseDownX() >= ctlW) s.commit ("Steps");
+        lastStep = { -1, -1 };
+    }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
     {
         scrollY = juce::jlimit (0, juce::jmax (0, (int) rows.size() * rowH - (getHeight() - headerH)), scrollY - (int) (w.deltaY * 120));

@@ -15,10 +15,13 @@ public:
                   juce::AudioProcessor* p = nullptr)
         : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), proc (p), valid (std::move (stillValid))
     {
-        setUsingNativeTitleBar (true);
+        setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
+        if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         setContentOwned (content, true);
         setResizable (false, false);
-        centreWithSize (getWidth(), getHeight());
+        auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+        if (phoneUI) centreWithSize (juce::jmin (getWidth(), area.getWidth()), juce::jmin (getHeight(), area.getHeight()));
+        else centreWithSize (getWidth(), getHeight());
         setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.3.3 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.3.6 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -110,8 +110,8 @@ function(hhs_add_app target product bundle licensed)
         HARDENED_RUNTIME_ENABLED FALSE
         DOCUMENT_EXTENSIONS hhs hhpack hhpreset hhchain
         # iPhone / iPad (ignored on desktop)
-        IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
-        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        IPHONE_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        IPAD_SCREEN_ORIENTATIONS UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         REQUIRES_FULL_SCREEN TRUE
         STATUS_BAR_HIDDEN TRUE
         BACKGROUND_AUDIO_ENABLED TRUE
