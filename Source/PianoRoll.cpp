@@ -308,7 +308,7 @@ public:
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        if (phoneUI && ! tapReplay && hit < 0 && ! e.mods.isPopupMenu() && (editTool == EditTool::Draw || editTool == EditTool::Paint))
+        if (phoneUI && ! tapReplay && hit < 0 && ! e.mods.isPopupMenu() && editTool != EditTool::Select && editTool != EditTool::Grab)
         {   // phone: drag empty space to scroll (BandLab), a quick tap still adds a note
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }

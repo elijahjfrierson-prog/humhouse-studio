@@ -1206,6 +1206,11 @@ public:
     {
         hbar.onMove = [this] (double v) { lastUserView = juce::Time::getMillisecondCounter(); scrollX = juce::jmax (0.0, v); repaint(); };
         addAndMakeVisible (hbar);
+        if (phoneUI)
+        {
+            vbarP.onMove = [this] (double v) { scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), (int) v); layoutHeaders(); repaint(); };
+            addAndMakeVisible (vbarP);
+        }
         s.addChangeListener (this);
         setupButton (addDrummer, "HumHouse Drums", "HumHouse Drums: adds a rock drum track (Logic-style drummer region + pad window). Or right-click any track name > HumHouse Drummer");
         addDrummer.onClick = [this] {
@@ -1484,7 +1489,7 @@ public:
             }
         }
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
-        if (phoneUI && ! tapReplay && i < 0)
+        if (phoneUI && ! tapReplay && (i < 0 || ! p.clips[(size_t) i].selected))
         {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
@@ -2040,11 +2045,17 @@ private:
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
     static constexpr int hbarH = phoneUI ? 26 : 12;
-    HScroll hbar;
+    HScroll hbar, vbarP { true };
     void syncHBar()
     {
         hbar.setBounds (headerW, getHeight() - hbarH, juce::jmax (10, getWidth() - headerW - 18), hbarH);
         hbar.sync (s.p().songLengthBeats() + 32.0 * s.p().beatsPerBar, scrollX, clipArea().getWidth() / (double) pxPerBeat);
+        if (phoneUI)
+        {
+            const auto ca = clipArea();
+            vbarP.setBounds (getWidth() - 56 - hbarH - 2, ca.getY(), hbarH, ca.getHeight());
+            vbarP.sync (totalLaneH() + 40.0, scrollY, ca.getHeight());
+        }
     }
     float beatToX (double b) const { return (float) headerW + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) headerW) / pxPerBeat; }

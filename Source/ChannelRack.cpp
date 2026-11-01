@@ -932,18 +932,39 @@ public:
         if (! hitStep (e.getPosition(), row, step)) return;
         const int id = rows[(size_t) row]->channelId;
         if (e.mods.isPopupMenu()) { rollMenu (id, step); return; }
+        if (phoneUI) { touchStep = { row, step }; touchPanned = false; touchScroll0 = scrollY; return; }
         paintOn = ! stepOn (id, step);
         setStep (id, step, paintOn);
         lastStep = { row, step };
     }
+    juce::Point<int> touchStep { -1, -1 }; bool touchPanned = false; int touchScroll0 = 0;
     void mouseDrag (const juce::MouseEvent& e) override
     {
+        if (phoneUI && touchStep.x >= 0)
+        {
+            if (! touchPanned && e.getDistanceFromDragStart() < 10) return;
+            touchPanned = true;
+            scrollY = juce::jlimit (0, juce::jmax (0, (int) rows.size() * rowH - (getHeight() - headerH)), touchScroll0 - e.getDistanceFromDragStartY());
+            layoutRows(); repaint(); return;
+        }
         int row, step;
         if (e.mods.isPopupMenu() || ! hitStep (e.getPosition(), row, step) || juce::Point<int> (row, step) == lastStep) return;
         lastStep = { row, step };
         setStep (rows[(size_t) row]->channelId, step, paintOn);
     }
-    void mouseUp (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu() && e.getMouseDownX() >= ctlW) s.commit ("Steps"); lastStep = { -1, -1 }; }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (phoneUI && touchStep.x >= 0)
+        {
+            const auto t = touchStep; touchStep = { -1, -1 };
+            if (touchPanned || t.x >= (int) rows.size()) return;
+            const int id = rows[(size_t) t.x]->channelId;
+            setStep (id, t.y, ! stepOn (id, t.y));
+            s.commit ("Steps"); return;
+        }
+        if (! e.mods.isPopupMenu() && e.getMouseDownX() >= ctlW) s.commit ("Steps");
+        lastStep = { -1, -1 };
+    }
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w) override
     {
         scrollY = juce::jlimit (0, juce::jmax (0, (int) rows.size() * rowH - (getHeight() - headerH)), scrollY - (int) (w.deltaY * 120));
