@@ -171,9 +171,11 @@ private:
     }
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
-        if (phoneUI) listBoxItemDoubleClicked (row, e);   // phone: one tap adds the effect and opens its window
+        juce::ignoreUnused (e);
+        if (phoneUI) add (row);   // phone: one tap adds the effect and opens its window
     }
-    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (! phoneUI) add (row); }
+    void add (int row)
     {
         if (row < 0 || row >= (int) entries.size()) return;
         auto e = entries[(size_t) row];

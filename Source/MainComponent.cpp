@@ -1222,6 +1222,9 @@ private:
     void phoneDelete()
     {
         juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        const auto& clips = engine.project().clips;
+        if (view == 1 && std::none_of (clips.begin(), clips.end(), [] (const Clip& c) { return c.selected; }))
+            target = nullptr;   // DELETE only removes clips, never a whole selected track
         if (target == nullptr || ! target->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)))
             hintBar.setText ("Select notes or clips first, then DELETE", juce::dontSendNotification);
     }
