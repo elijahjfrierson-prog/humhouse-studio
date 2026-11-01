@@ -15,7 +15,13 @@ inline constexpr bool phoneUI = false;
 #endif
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
-inline bool phoneClipArmed = false;   // after COPY: any tap (even on a note / clip) picks the drop spot
+inline juce::Component* phoneClipTarget = nullptr;   // after COPY: any tap on this editor (even on a note / clip) picks the drop spot
+// phone: a double tap acts like a right-click (track / clip / channel menus)
+inline juce::MouseEvent asRightClick (const juce::MouseEvent& e)
+{
+    return juce::MouseEvent (e.source, e.position, juce::ModifierKeys (juce::ModifierKeys::rightButtonModifier), e.pressure, e.orientation, e.rotation, e.tiltX, e.tiltY,
+                             e.eventComponent, e.originalComponent, e.eventTime, e.mouseDownPosition, e.mouseDownTime, 1, false);
+}   // after COPY: any tap (even on a note / clip) picks the drop spot
 
 namespace col
 {

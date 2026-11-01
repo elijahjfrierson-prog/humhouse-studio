@@ -1095,7 +1095,7 @@ struct LaneHeader : public juce::Component
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
     juce::Slider soft, vol; float softPrev = 0.0f;
-    void mouseDoubleClick (const juce::MouseEvent& e) override { if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (phoneUI && ! grip().expanded (3).contains (e.getPosition())) { const auto r = asRightClick (e); mouseDown (r); mouseUp (r); return; } if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
         setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
@@ -1496,7 +1496,7 @@ public:
             }
         }
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
-        if (phoneUI && ! tapReplay && (phoneClipArmed || i < 0 || ! p.clips[(size_t) i].selected))
+        if (phoneUI && ! tapReplay && (phoneClipTarget == this || i < 0 || ! p.clips[(size_t) i].selected))
         {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
@@ -1753,6 +1753,7 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH) { timeSelA = timeSelB = -1; s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
+        if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; clipMenu (i); return; }   // phone: double tap = the right-click menu (stem split, settings...)
         if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
         {
             const int uid = p.clips[(size_t) i].uid;

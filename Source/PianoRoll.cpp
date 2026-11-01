@@ -319,7 +319,7 @@ public:
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipArmed || (editTool != EditTool::Select && editTool != EditTool::Grab)))
+        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipTarget == this || (editTool != EditTool::Select && editTool != EditTool::Grab)))
         {   // phone: one finger drags the roll side to side / up and down even over notes (BandLab); a quick tap still adds / picks a note, GRAB moves + stretches
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
@@ -603,7 +603,7 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double ph = dropAt >= 0.0 && ! s.engine.isPlaying() ? dropAt : playheadLocal();   // the marker you set (no wrap at the pattern end), else the playhead
+            const double ph = dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropAt) < 1.0e-6 ? dropAt : playheadLocal();   // the marker you set (no wrap at the pattern end), else the playhead
             double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);

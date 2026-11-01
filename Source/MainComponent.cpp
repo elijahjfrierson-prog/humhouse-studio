@@ -1209,7 +1209,7 @@ private:
         {
             copyBtn.setToggleState (true, juce::dontSendNotification);
             copyBtn.setButtonText (view == 1 ? "COPIED " + juce::String (n) : "COPIED");
-            clipArmed = phoneClipArmed = true; clipView = view; dropBtn.setVisible (false);
+            clipArmed = true; phoneClipTarget = view == 1 ? (juce::Component*) playlist.get() : (juce::Component*) piano.get(); clipView = view; dropBtn.setVisible (false);
             hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - scroll, tap where they go, then tap CLIPBOARD"
                                        : "Copied the notes - scroll, tap where they go, then tap CLIPBOARD", juce::dontSendNotification);
         }
@@ -1247,7 +1247,7 @@ private:
     void closeEverything()
     {
         juce::PopupMenu::dismissAllActiveMenus();
-        if (phoneUI) { clipArmed = phoneClipArmed = false; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
+        if (phoneUI) { clipArmed = false; phoneClipTarget = nullptr; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
         closeAllEditorWindows();
         std::vector<juce::Component*> pops;

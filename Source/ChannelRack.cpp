@@ -514,6 +514,7 @@ static juce::File siblingSample (const juce::File& f, int dir)
 
 struct Row : public juce::Component
 {
+    int tapTok = 0;
     Row (Studio& st, int id) : s (st), channelId (id)
     {
         setupButton (mute, {}, "Channel on/off (green = on)", true);
@@ -528,7 +529,16 @@ struct Row : public juce::Component
         insert.setSliderStyle (juce::Slider::LinearBar);
         insert.setTooltip ("Mixer insert this channel plays through (drag to change, 0 = master)");
         insert.onValueChange = [this] { s.edit ("Route channel", [&] (Project&) { if (auto* c = s.channel (channelId)) c->mixerTrack = (int) insert.getValue(); }); };
-        name.onMouse = [this] (const juce::MouseEvent& e) { e.mods.isPopupMenu() ? menu() : select (true); };
+        name.onMouse = [this] (const juce::MouseEvent& e)
+        {
+            if (e.mods.isPopupMenu()) { menu(); return; }
+            select (true);
+            if (phoneUI)   // phone: one tap = MAIN / FUNC / SCOPE, double tap = the right-click menu (HumWave etc.)
+            {
+                const int tok = ++tapTok;
+                juce::Timer::callAfterDelay (300, [sp = juce::Component::SafePointer<Row> (this), tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
+            }
+        };
         setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
@@ -539,7 +549,7 @@ struct Row : public juce::Component
         for (juce::Component* c : { (juce::Component*) &mute, (juce::Component*) &vol, (juce::Component*) &pan, (juce::Component*) &pitch,
                                     (juce::Component*) &glide, (juce::Component*) &shift, (juce::Component*) &name, (juce::Component*) &insert })
             addAndMakeVisible (c);
-        name.onDouble = [this] { openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
+        name.onDouble = [this] { if (phoneUI) { ++tapTok; menu(); } else openChannelEditor (s, channelId); };   // FL: wave, amp / INS, sample settings in one window
         name.setTooltip ("Click: open in Piano Roll. Double-click: channel settings (wave, amp, sample). Drop a sample here: replace this channel's sound. Mouse wheel / Up-Down: shuffle samples in this folder. Right-click: rename, delete, editor, routing");
         name.setWantsKeyboardFocus (true);
         name.onShuffle = [this] (int dir) {
