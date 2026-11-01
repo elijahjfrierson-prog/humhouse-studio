@@ -536,7 +536,8 @@ struct Row : public juce::Component
             if (phoneUI && e.getNumberOfClicks() < 2)   // phone: one tap = MAIN / FUNC / SCOPE, double tap = the right-click menu (HumWave etc.)
             {
                 const int tok = ++tapTok;
-                juce::Timer::callAfterDelay (300, [sp = juce::Component::SafePointer<Row> (this), tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
+                juce::Component::SafePointer<Row> sp (this);
+                juce::Timer::callAfterDelay (300, [sp, tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
             }
         };
         setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
