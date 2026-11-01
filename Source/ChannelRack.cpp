@@ -533,7 +533,7 @@ struct Row : public juce::Component
         {
             if (e.mods.isPopupMenu()) { menu(); return; }
             select (true);
-            if (phoneUI)   // phone: one tap = MAIN / FUNC / SCOPE, double tap = the right-click menu (HumWave etc.)
+            if (phoneUI && e.getNumberOfClicks() < 2)   // phone: one tap = MAIN / FUNC / SCOPE, double tap = the right-click menu (HumWave etc.)
             {
                 const int tok = ++tapTok;
                 juce::Timer::callAfterDelay (300, [sp = juce::Component::SafePointer<Row> (this), tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
