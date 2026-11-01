@@ -1664,8 +1664,10 @@ private:
             if (safe == nullptr || r != 1) return;
             auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
             if (name.isEmpty()) name = "Untitled";
-            safe->engine.project().projectFile = docsDir().getChildFile (name + ".hhs");
-            safe->engine.project().title = name;
+            auto f = docsDir().getChildFile (name + ".hhs");
+            if (f.existsAsFile() && f != safe->engine.project().projectFile) f = f.getNonexistentSibling (true);   // never overwrite another song
+            safe->engine.project().projectFile = f;
+            safe->engine.project().title = f.getFileNameWithoutExtension();
             safe->writeProject();
             if (after && ! safe->studio.dirty) after();
         }), true);
