@@ -319,10 +319,13 @@ public:
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipTarget == this || (editTool != EditTool::Select && editTool != EditTool::Grab)))
+        const bool onSelected = hit >= 0 && notes[(size_t) hit].selected;
+        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipTarget == this || (! onSelected && editTool != EditTool::Select && editTool != EditTool::Grab)))
         {   // phone: one finger drags the roll side to side / up and down even over notes (BandLab); a quick tap still adds / picks a note, GRAB moves + stretches
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
+        if (phoneUI && onSelected && editTool == EditTool::Draw)   // phone: drag a selected note = move it, its right half = stretch it
+            edge = e.position.x > noteRect (notes[(size_t) hit]).getCentreX();
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Delete) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Mute)
