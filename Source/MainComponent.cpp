@@ -643,7 +643,13 @@ public:
                 m->hintBar.setText ("Tap CLIPBOARD to drop it here (or tap another spot). X stops copying.", juce::dontSendNotification);
                 return true;
             };
-            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn }) addAndMakeVisible (b);
+            altABtn.setTooltip ("Alt+A: rolls / arpeggiator on the selected notes (BEAT) or audio clips (REC)");
+            altSBtn.setTooltip ("Alt+S: strum the selected notes");
+            undoBtn.onClick = [this] { studio.undoStep (-1); };
+            redoBtn.onClick = [this] { studio.undoStep (1); };
+            altABtn.onClick = [this] { phoneAlt ('a'); };
+            altSBtn.onClick = [this] { phoneAlt ('s'); };
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn }) addAndMakeVisible (b);
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -697,7 +703,7 @@ if (phoneUI)
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             const std::pair<juce::Component*, int> items[] {
                 { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
-                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 },
+                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 },
                 { &bpm, 110 }, { &posLabel, 110 },
                 { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
                 { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
@@ -1180,8 +1186,16 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
     bool clipArmed = false; int clipView = -1;
+    void phoneAlt (int key)
+    {
+        juce::Component* t = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (t == nullptr) { hintBar.setText ("ALT+A / ALT+S work on the BEAT and REC pages", juce::dontSendNotification); return; }
+        if (! t->keyPressed (juce::KeyPress (key, juce::ModifierKeys::altModifier, 0)))
+            hintBar.setText (key == 's' && view == 1 ? "Strum is for notes: open the pattern in BEAT, select notes, then ALT+S"
+                                                     : "Select notes or audio clips first", juce::dontSendNotification);
+    }
     void phoneCopyPaste (int key)
     {
         juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
@@ -1195,7 +1209,7 @@ private:
         {
             copyBtn.setToggleState (true, juce::dontSendNotification);
             copyBtn.setButtonText (view == 1 ? "COPIED " + juce::String (n) : "COPIED");
-            clipArmed = true; clipView = view; dropBtn.setVisible (false);
+            clipArmed = phoneClipArmed = true; clipView = view; dropBtn.setVisible (false);
             hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - scroll, tap where they go, then tap CLIPBOARD"
                                        : "Copied the notes - scroll, tap where they go, then tap CLIPBOARD", juce::dontSendNotification);
         }
@@ -1233,7 +1247,7 @@ private:
     void closeEverything()
     {
         juce::PopupMenu::dismissAllActiveMenus();
-        if (phoneUI) { clipArmed = false; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
+        if (phoneUI) { clipArmed = phoneClipArmed = false; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
         closeAllEditorWindows();
         std::vector<juce::Component*> pops;

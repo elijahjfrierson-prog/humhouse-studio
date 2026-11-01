@@ -1496,7 +1496,7 @@ public:
             }
         }
         if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
-        if (phoneUI && ! tapReplay && (i < 0 || ! p.clips[(size_t) i].selected))
+        if (phoneUI && ! tapReplay && (phoneClipArmed || i < 0 || ! p.clips[(size_t) i].selected))
         {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
@@ -1696,9 +1696,9 @@ public:
         auto& p = s.p();
         if (drag == Drag::Pan && pinching)
         {
-            pinching = false;
-            if (e.source.getIndex() == 0) drag = Drag::None;
-            else { panFrom = touchPos[0]; panX0 = scrollX; panY0 = scrollY; }
+            pinching = false;   // the finger still down keeps panning, whichever one lifted first
+            const int left = e.source.getIndex() == 0 ? 1 : 0;
+            panSrc = left; panFrom = touchPos[left]; panX0 = scrollX; panY0 = scrollY; panTap = false;
             return;
         }
         if (drag == Drag::Pan)
@@ -2080,7 +2080,8 @@ private:
     void syncHBar()
     {
         hbar.setBounds (headerW, getHeight() - hbarH, juce::jmax (10, getWidth() - headerW - 18), hbarH);
-        hbar.sync (s.p().songLengthBeats() + 32.0 * s.p().beatsPerBar, scrollX, clipArea().getWidth() / (double) pxPerBeat);
+        const double vis = clipArea().getWidth() / (double) pxPerBeat;
+        hbar.sync (juce::jmax (s.p().songLengthBeats(), scrollX + vis) + 32.0 * s.p().beatsPerBar, scrollX, vis);
         if (phoneUI)
         {
             const auto ca = clipArea();

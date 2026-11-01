@@ -15,6 +15,7 @@ inline constexpr bool phoneUI = false;
 #endif
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
+inline bool phoneClipArmed = false;   // after COPY: any tap (even on a note / clip) picks the drop spot
 
 namespace col
 {

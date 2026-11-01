@@ -35,6 +35,9 @@ public:
         setupButton (stampBtn, "STAMP", "Chord stamp (Alt/Opt+T): every note you draw lays down the chosen chord", true);
         stampBtn.onClick = [this] { stampBtn.setToggleState (stampChord >= 0, juce::dontSendNotification); stampMenu(); };
         setupButton (ghostBtn, "GHOST", "Show other channels' notes faintly (Alt+V)", true);
+        setupButton (velBtn, "VEL", "Tap to show / tuck away the velocity lane", true);
+        velBtn.setToggleState (true, juce::dontSendNotification);
+        velBtn.onClick = [this] { velShown = velBtn.getToggleState(); syncHBar(); repaint(); };
         {
             const char* labels[] { "DRAW", "PAINT", "DEL", "MUTE", "SLICE", "SEL", "ZOOM", "GRAB" };
             const char* tips[] { "Draw (P) - click to add, drag to move / resize", "Paint (B) - drag to paint a run of notes",
@@ -78,7 +81,7 @@ public:
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         for (juce::Component* c : { (juce::Component*) &rootBox, (juce::Component*) &scaleBox, (juce::Component*) &highlightBtn, (juce::Component*) &snapBox,
-                                    (juce::Component*) &toolsBtn, (juce::Component*) &quantBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &sizeBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
+                                    (juce::Component*) &toolsBtn, (juce::Component*) &quantBtn, (juce::Component*) &slideBtn, (juce::Component*) &stampBtn, (juce::Component*) &ghostBtn, (juce::Component*) &velBtn, (juce::Component*) &muteBtn, (juce::Component*) &lockBtn, (juce::Component*) &sizeBtn, (juce::Component*) &glide, (juce::Component*) &chLabel })
             addAndMakeVisible (c);
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
@@ -104,7 +107,7 @@ public:
         struct Item { juce::Component* c; int w, gap; };
         std::vector<Item> items { { &chLabel, 150, 6 }, { &rootBox, 60, 4 }, { &scaleBox, 150, 4 }, { &highlightBtn, 60, 10 },
                                   { &snapBox, 100, 10 }, { &toolsBtn, 70, 4 }, { &quantBtn, 62, 4 }, { &slideBtn, 60, 4 }, { &stampBtn, stampChord >= 0 ? 110 : 64, 4 },
-                                  { &ghostBtn, 60, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 4 }, { &sizeBtn, 64, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
+                                  { &ghostBtn, 60, 4 }, { &velBtn, 48, 4 }, { &muteBtn, 56, 4 }, { &lockBtn, 52, 4 }, { &sizeBtn, 64, 10 }, { &glide, 28, 48 } };   // 48: room for the GLIDE label
         for (auto* b : toolBtns) items.push_back ({ b, 30, 2 });
         const int avail = juce::jmax (100, getWidth() - 12);
         auto layout = [&] (bool apply)
@@ -249,6 +252,7 @@ public:
             g.setColour (col::accent2); g.fillPath (tri);
             g.fillRect (px - 0.75f, (float) barH + 10, 1.5f, (float) rulerH - 10);
         }
+        if (! velShown) return;   // VEL tab tucked it away
         // velocity lane
         juce::Rectangle<int> vel (keyW, ga.getBottom(), getWidth() - keyW, velH);
         g.setColour (col::panel); g.fillRect (vel);
@@ -307,16 +311,16 @@ public:
             if (ph >= 0.0 && std::abs (beatToX (ph) - e.position.x) <= 8.0f) { drag = Drag::Scrub; scrubTo (e); return; }
             drag = Drag::TimeSel; timeMoved = false; return;
         }
-        if (e.x >= keyW && std::abs (e.y - ga.getBottom()) <= 3) { drag = Drag::VelSize; return; }
-        if (e.y >= ga.getBottom()) { drag = Drag::Velocity; velPrev = e.position; setVelocityAt (e.position); return; }
+        if (velShown && e.x >= keyW && std::abs (e.y - ga.getBottom()) <= (phoneUI ? 10 : 3)) { drag = Drag::VelSize; return; }
+        if (velShown && e.y >= ga.getBottom() && e.y < ga.getBottom() + velH) { drag = Drag::Velocity; velPrev = e.position; setVelocityAt (e.position); return; }
         if (! ga.contains (e.getPosition())) return;
         if (timeSelB > timeSelA) { timeSelA = timeSelB = -1; repaint(); }
 
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        if (phoneUI && ! tapReplay && hit < 0 && ! e.mods.isPopupMenu() && editTool != EditTool::Select && editTool != EditTool::Grab)
-        {   // phone: drag empty space to scroll (BandLab), a quick tap still adds a note
+        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipArmed || (editTool != EditTool::Select && editTool != EditTool::Grab)))
+        {   // phone: one finger drags the roll side to side / up and down even over notes (BandLab); a quick tap still adds / picks a note, GRAB moves + stretches
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
@@ -486,9 +490,9 @@ public:
     {
         if (drag == Drag::Pan && pinching)
         {
-            pinching = false;
-            if (e.source.getIndex() == 0) drag = Drag::None;
-            else { panFrom = touchPos[0]; panX0 = scrollX; panY0 = scrollY; }
+            pinching = false;   // the finger still down keeps panning, whichever one lifted first
+            const int left = e.source.getIndex() == 0 ? 1 : 0;
+            panSrc = left; panFrom = touchPos[left]; panX0 = scrollX; panY0 = scrollY; panTap = false;
             return;
         }
         if (drag == Drag::Pan)
@@ -599,7 +603,7 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double ph = playheadLocal();   // always at the playhead marker
+            const double ph = dropAt >= 0.0 && ! s.engine.isPlaying() ? dropAt : playheadLocal();   // the marker you set (no wrap at the pattern end), else the playhead
             double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
@@ -629,6 +633,7 @@ private:
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
     static constexpr int keyW = 64, rulerH = 18, hbarH = phoneUI ? 26 : 12;
+    bool velShown = true; double dropAt = -1.0;   // dropAt: the spot you tapped / scrubbed to, so paste can land past the pattern's end (bar 2000 if you like)
     int velH = 70;   // drag the line above the velocity lane to resize it (saved)
     HScroll hbar, vbar { true };
     void syncHBar()
@@ -637,7 +642,8 @@ private:
         vbar.setBounds (getWidth() - hbarH, vga.getY(), hbarH, vga.getHeight());
         vbar.sync (128.0 * rowH, scrollY, vga.getHeight());
         hbar.setBounds (keyW, getHeight() - hbarH, getWidth() - keyW, hbarH);
-        hbar.sync (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX, gridArea().getWidth() / (double) pxPerBeat);
+        const double vis = gridArea().getWidth() / (double) pxPerBeat;   // the bar always reaches further than you are, so you can keep going right forever
+        hbar.sync (juce::jmax (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX + vis + 32.0 * s.p().beatsPerBar), scrollX, vis);
     }
     int barH = 34;   // 64 when the toolbar wraps to two rows
     double lastLength = 0.25; float lastVelocity = 0.78f; juce::Point<float> velPrev;
@@ -647,7 +653,7 @@ private:
     juce::Rectangle<float> selRect;
     int previewKey = -1;
     juce::ComboBox rootBox, scaleBox, snapBox;
-    juce::TextButton highlightBtn, toolsBtn, quantBtn, slideBtn, stampBtn, ghostBtn, muteBtn, lockBtn, sizeBtn;
+    juce::TextButton highlightBtn, toolsBtn, quantBtn, slideBtn, stampBtn, ghostBtn, velBtn, muteBtn, lockBtn, sizeBtn;
     int noteSize = 1;
     void setNoteSize (int level, bool keepView = true)
     {
@@ -675,7 +681,7 @@ private:
         s.live ([this] (Project&) { for (auto& n : s.notes (channelId)) n.selected = n.start >= timeSelA - 1e-9 && n.start < timeSelB - 1e-9; });
     }
 
-    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedRight (hbarH).withTrimmedBottom (velH + hbarH); }
+    juce::Rectangle<int> gridArea() const { return getLocalBounds().withTrimmedTop (barH + rulerH).withTrimmedLeft (keyW).withTrimmedRight (hbarH).withTrimmedBottom ((velShown ? velH : 0) + hbarH); }
     float beatToX (double b) const { return (float) gridArea().getX() + (float) ((b - scrollX) * pxPerBeat); }
     double xToBeat (float x) const { return scrollX + (x - (float) gridArea().getX()) / pxPerBeat; }
     float keyToY (int key) const { return (float) gridArea().getY() + (127 - key) * rowH - scrollY; }
@@ -755,7 +761,9 @@ private:
     {
         const double b = juce::jmax (0.0, xToBeat (juce::jmax ((float) keyW, e.position.x)));
         const double sn = s.p().snap > 0 ? s.p().snap : 0.25;
-        s.engine.setPositionBeats (e.mods.isAltDown() ? b : std::round (b / sn) * sn);
+        const double at = e.mods.isAltDown() ? b : std::round (b / sn) * sn;
+        s.engine.setPositionBeats (at);
+        dropAt = s.p().songMode ? -1.0 : at;
         repaint();
     }
     double playheadLocal() const
