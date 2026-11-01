@@ -101,7 +101,7 @@ public:
         search.onTextChange = [this] { rebuild(); };
         addAndMakeVisible (search);
         list.setModel (this);
-        list.setRowHeight (22);
+        list.setRowHeight (phoneUI ? 40 : 22);
         list.setTooltip ("Double-click an effect: adds it to the selected mixer insert. Double-click an instrument: new channel");
         addAndMakeVisible (list);
         setupButton (scan, "Scan plugins", "Find every VST3 / AU plugin on this computer");
@@ -164,10 +164,14 @@ private:
             return;
         }
         if (selected) { g.setColour (col::accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
-        g.setColour (col::text); g.setFont (juce::FontOptions (13.0f));
+        g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 16.0f : 13.0f));
         g.drawText (e.label, 14, 0, w - 100, h, juce::Justification::centredLeft, true);
         g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
         g.drawText (e.sub, w - 110, 0, 104, h, juce::Justification::centredRight, true);
+    }
+    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    {
+        if (phoneUI) listBoxItemDoubleClicked (row, e);   // phone: one tap adds the effect and opens its window
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
     {
@@ -393,6 +397,7 @@ public:
         list.setModel (this); list.setRowHeight (24);
         list.setColour (juce::ListBox::backgroundColourId, col::panel);
         addAndMakeVisible (list);
+        if (phoneUI) list.addMouseListener (this, true);   // phone: slide a row sideways to drag it into REC (up/down still scrolls)
         hint.setText ("Drag onto the Playlist or Record page. Everything stays here until you clear it (undo with Cmd/Ctrl+Z).", juce::dontSendNotification);
         hint.setFont (juce::Font (juce::FontOptions (11.0f))); hint.setColour (juce::Label::textColourId, col::dim);
         addAndMakeVisible (hint);
@@ -541,6 +546,29 @@ private:
         const int row = sel.isEmpty() ? -1 : sel[0];
         if (row < 0 || row >= (int) rows.size() || rows[(size_t) row].header) return {};
         return audio ? "audio:" + rows[(size_t) row].file.getFullPathName() : "pattern:" + juce::String (rows[(size_t) row].index);
+    }
+    bool fingerDrag = false;
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! phoneUI || fingerDrag || ! list.isParentOf (e.eventComponent)) return;
+        const auto d = e.getOffsetFromDragStart();
+        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        const auto at = e.getEventRelativeTo (&list).getMouseDownPosition();
+        const int row = list.getRowContainingPosition (at.x, at.y);
+        juce::SparseSet<int> sel; sel.addRange ({ row, row + 1 });
+        const auto desc = getDragSourceDescription (sel);
+        auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this);
+        if (desc.isVoid() || dc == nullptr) return;
+        fingerDrag = true;
+        juce::Image img (juce::Image::ARGB, 180, 32, true);
+        {
+            juce::Graphics g (img);
+            g.setColour (rows[(size_t) row].colour.withAlpha (0.9f)); g.fillRoundedRectangle (0.0f, 0.0f, 180.0f, 32.0f, 6.0f);
+            g.setColour (juce::Colours::white); g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+            g.drawText (rows[(size_t) row].name, 8, 0, 164, 32, juce::Justification::centredLeft, true);
+        }
+        dc->startDragging (desc, &list, juce::ScaledImage (img), false);
     }
 };
 #endif

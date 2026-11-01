@@ -650,6 +650,8 @@ public:
             altABtn.onClick = [this] { phoneAlt ('a'); };
             dupBtn.setTooltip ("Cmd+B: duplicate the selected notes (BEAT) or clips (REC) right after themselves");
             dupBtn.onClick = [this] { phoneDuplicate(); };
+            delBtn.setTooltip ("Delete the selected clips (REC) or notes (BEAT)");
+            delBtn.onClick = [this] { phoneDelete(); };
             octUpBtn.setTooltip ("Octave up: the selected notes (all notes if none are selected)");
             octDnBtn.setTooltip ("Octave down: the selected notes (all notes if none are selected)");
             noteUpBtn.setTooltip ("Up one note: the selected notes (all notes if none are selected)");
@@ -659,7 +661,7 @@ public:
             noteUpBtn.onClick = [this] { phoneTranspose (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier); };
             noteDnBtn.onClick = [this] { phoneTranspose (juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier); };
             altSBtn.onClick = [this] { phoneAlt ('s'); };
-            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn, &octUpBtn, &octDnBtn, &noteUpBtn, &noteDnBtn }) addAndMakeVisible (b);
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn, &delBtn, &octUpBtn, &octDnBtn, &noteUpBtn, &noteDnBtn }) addAndMakeVisible (b);
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -713,7 +715,7 @@ if (phoneUI)
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             const std::pair<juce::Component*, int> items[] {
                 { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
-                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 }, { &dupBtn, 66 }, { &octDnBtn, 56 }, { &octUpBtn, 56 }, { &noteDnBtn, 44 }, { &noteUpBtn, 44 },
+                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 }, { &dupBtn, 66 }, { &delBtn, 60 }, { &octDnBtn, 56 }, { &octUpBtn, 56 }, { &noteDnBtn, 44 }, { &noteUpBtn, 44 },
                 { &bpm, 110 }, { &posLabel, 110 },
                 { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
                 { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
@@ -1197,7 +1199,7 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
     bool clipArmed = false; int clipView = -1;
     void phoneAlt (int key)
     {
@@ -1216,6 +1218,12 @@ private:
     {
         if (view != 0) setView (0);   // notes live in the BEAT page's Piano Roll
         piano->keyPressed (juce::KeyPress (key, mods, 0));
+    }
+    void phoneDelete()
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (target == nullptr || ! target->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)))
+            hintBar.setText ("Select notes or clips first, then DELETE", juce::dontSendNotification);
     }
     void phoneDuplicate()
     {
