@@ -629,6 +629,20 @@ public:
             copyBtn.setColour (juce::TextButton::buttonOnColourId, col::accent);
             copyBtn.onClick = [this] { phoneCopyPaste ('c'); };
             pasteBtn.onClick = [this] { phoneCopyPaste ('v'); };
+            dropBtn.setColour (juce::TextButton::buttonColourId, col::accent);
+            dropBtn.onClick = [this] { dropBtn.setVisible (false); phoneCopyPaste ('v'); };
+            addChildComponent (dropBtn);
+            juce::Component::SafePointer<MainComponent> safeTap (this);
+            phoneTapHook = [safeTap] (juce::Component* c, juce::Point<int> p)
+            {
+                auto* m = safeTap.getComponent();
+                if (m == nullptr || ! m->clipArmed || c != (m->clipView == 1 ? m->playlist.get() : m->piano.get()) || m->view != m->clipView) return false;
+                const auto q = m->getLocalPoint (c, p);
+                m->dropBtn.setBounds (juce::Rectangle<int> (190, 48).withCentre (q.translated (0, -44)).constrainedWithin (m->getLocalBounds()));
+                m->dropBtn.setVisible (true); m->dropBtn.toFront (false);
+                m->hintBar.setText ("Tap CLIPBOARD to drop it here (or tap another spot). X stops copying.", juce::dontSendNotification);
+                return true;
+            };
             for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn }) addAndMakeVisible (b);
         }
         setWantsKeyboardFocus (true);
@@ -750,9 +764,10 @@ if (phoneUI)
             if (rackHere && pianoHere)
             {
                 splitTop = r.getY(); splitTotal = r.getHeight();
-                const int rh = pianoMin ? splitTotal - 22 : juce::jlimit (80, juce::jmax (80, splitTotal - 140), (int) (splitTotal * rackFrac));
+                const int splitH = phoneUI ? 34 : 22;
+                const int rh = pianoMin ? splitTotal - splitH : juce::jlimit (80, juce::jmax (80, splitTotal - 140), (int) (splitTotal * rackFrac));
                 rack->setBounds (r.removeFromTop (rh));
-                pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (22)); pianoSplit.repaint();
+                pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (splitH)); pianoSplit.repaint();
                 piano->setVisible (! pianoMin); piano->setBounds (r);
             }
             else if (rackHere) rack->setBounds (r);
@@ -1165,7 +1180,8 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    bool clipArmed = false; int clipView = -1;
     void phoneCopyPaste (int key)
     {
         juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
@@ -1179,8 +1195,9 @@ private:
         {
             copyBtn.setToggleState (true, juce::dontSendNotification);
             copyBtn.setButtonText (view == 1 ? "COPIED " + juce::String (n) : "COPIED");
-            hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - PASTE puts them at the playhead"
-                                       : "Copied the selected notes - PASTE puts them at the playhead", juce::dontSendNotification);
+            clipArmed = true; clipView = view; dropBtn.setVisible (false);
+            hintBar.setText (view == 1 ? "Copied " + juce::String (n) + (n == 1 ? " clip" : " clips") + " - scroll, tap where they go, then tap CLIPBOARD"
+                                       : "Copied the notes - scroll, tap where they go, then tap CLIPBOARD", juce::dontSendNotification);
         }
         else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
     }
@@ -1216,6 +1233,7 @@ private:
     void closeEverything()
     {
         juce::PopupMenu::dismissAllActiveMenus();
+        if (phoneUI) { clipArmed = false; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
         closeAllEditorWindows();
         std::vector<juce::Component*> pops;

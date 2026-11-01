@@ -13,6 +13,8 @@ inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one 
 #else
 inline constexpr bool phoneUI = false;
 #endif
+// phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
+inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
 
 namespace col
 {

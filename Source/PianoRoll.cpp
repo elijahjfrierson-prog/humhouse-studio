@@ -289,6 +289,13 @@ public:
         auto ga = gridArea();
         dragStart = e.position; changed = false;
         if (s.channel (channelId) == nullptr) return;
+        if (phoneUI && e.source.getIndex() == 0) touchPos[0] = e.position;
+        if (phoneUI && e.source.getIndex() == 1 && drag == Drag::Pan && panSrc == 0)
+        {
+            touchPos[1] = e.position; pinching = true; panTap = false;
+            pinchD0 = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])); pinchPpb0 = pxPerBeat;
+            pinchBeat = xToBeat ((touchPos[0].x + touchPos[1].x) * 0.5f); return;
+        }
         if (phoneUI && (e.source.getIndex() > 0 || (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom())))
         {   // touch: drag the keyboard strip (or use a second finger) to scroll freely up/down and side to side
             drag = Drag::Pan; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
@@ -301,7 +308,7 @@ public:
             drag = Drag::TimeSel; timeMoved = false; return;
         }
         if (e.x >= keyW && std::abs (e.y - ga.getBottom()) <= 3) { drag = Drag::VelSize; return; }
-        if (e.y >= ga.getBottom()) { drag = Drag::Velocity; setVelocityAt (e.position); return; }
+        if (e.y >= ga.getBottom()) { drag = Drag::Velocity; velPrev = e.position; setVelocityAt (e.position); return; }
         if (! ga.contains (e.getPosition())) return;
         if (timeSelB > timeSelA) { timeSelA = timeSelB = -1; repaint(); }
 
@@ -392,6 +399,14 @@ public:
         if (drag == Drag::Keys) { const int k = yToKey (e.position.y); if (k != previewKey) preview (k); return; }
         if (drag == Drag::Pan)
         {
+            if (e.source.getIndex() < 2) touchPos[e.source.getIndex()] = e.position;
+            if (pinching)   // two-finger pinch: zoom from very close to very far, anchored between the fingers
+            {
+                const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
+                pxPerBeat = juce::jlimit (4.0f, 2000.0f, pinchPpb0 * d / pinchD0);
+                scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) gridArea().getX()) / pxPerBeat);
+                syncHBar(); repaint(); return;
+            }
             if (e.source.getIndex() != panSrc) return;
             scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
             scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) gridArea().getHeight()), panY0 - (e.position.y - panFrom.y));
@@ -469,10 +484,18 @@ public:
 
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (drag == Drag::Pan && pinching)
+        {
+            pinching = false;
+            if (e.source.getIndex() == 0) drag = Drag::None;
+            else { panFrom = touchPos[0]; panX0 = scrollX; panY0 = scrollY; }
+            return;
+        }
         if (drag == Drag::Pan)
         {
             const bool tap = panTap && e.position.getDistanceFrom (panFrom) < 10.0f;
             drag = Drag::None; panTap = false;
+            if (tap && e.x > keyW && phoneTapHook && phoneTapHook (this, e.getPosition())) { scrubTo (e); return; }
             if (tap) { tapReplay = true; mouseDown (e); mouseUp (e); tapReplay = false; }
             return;
         }
@@ -595,7 +618,7 @@ public:
 
 private:
     enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
-    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false;
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -617,7 +640,7 @@ private:
         hbar.sync (s.p().patterns[(size_t) s.p().currentPattern].lengthBeats() + 16.0 * s.p().beatsPerBar, scrollX, gridArea().getWidth() / (double) pxPerBeat);
     }
     int barH = 34;   // 64 when the toolbar wraps to two rows
-    double lastLength = 0.25; float lastVelocity = 0.78f;
+    double lastLength = 0.25; float lastVelocity = 0.78f; juce::Point<float> velPrev;
     Drag drag = Drag::None;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     NoteList dragOrig; int dragNote = -1; bool changed = false;
@@ -693,14 +716,20 @@ private:
     void setVelocityAt (juce::Point<float> pt)
     {
         const auto ga = gridArea();
-        const float v = juce::jlimit (0.0f, 1.0f, ((float) (ga.getBottom() + velH - 4) - pt.y) / (float) (velH - 8));
+        // FL: drag across the lane and every note you sweep over takes the height of the line you drew, so one
+        // stroke across 40 hats edits all 40 even when the finger / mouse moves fast
+        auto velOf = [&] (float y) { return juce::jlimit (0.0f, 1.0f, ((float) (ga.getBottom() + velH - 4) - y) / (float) (velH - 8)); };
+        const auto a = velPrev; velPrev = pt;
+        const float tol = phoneUI ? 12.0f : 5.0f, x0 = juce::jmin (a.x, pt.x) - tol, x1 = juce::jmax (a.x, pt.x) + tol;
         s.live ([&] (Project&) {
             auto& notes = s.notes (channelId);
             const bool anySel = tools::anySelected (notes);
             for (auto& n : notes)
             {
                 const float x = beatToX (n.start);
-                if (std::abs (x - pt.x) < 5.0f && (! anySel || n.selected)) { n.velocity = v; lastVelocity = v; }
+                if (x < x0 || x > x1 || (anySel && ! n.selected)) continue;
+                const float t = std::abs (pt.x - a.x) < 1.0f ? 1.0f : juce::jlimit (0.0f, 1.0f, (x - a.x) / (pt.x - a.x));
+                n.velocity = lastVelocity = velOf (a.y + (pt.y - a.y) * t);
             }
         });
         repaint();
