@@ -1918,7 +1918,8 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = cellStart (s.engine.positionBeats() + 1.0e-6);   // always at the playhead marker: set it to bar 49, it pastes on bar 49
+            const double g = plSnap > 0 ? juce::jmin (plSnap, gridSnap()) : 0.0, ph = s.engine.positionBeats();
+            const double at = juce::jmax (0.0, g > 0 ? std::floor (ph / g + 1.0e-6) * g : ph);   // exactly on the playhead marker (same grid the click put it on), never pulled back to the bar start
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
