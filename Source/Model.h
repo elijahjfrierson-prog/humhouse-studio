@@ -140,7 +140,7 @@ struct Channel
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
     bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
     float sampleBpm = 0.0f;                // the sample's own tempo; 0 = read it from the file name
-    juce::Colour colour { 0xffff8a3d };
+    juce::Colour colour { 0xff9b5cff };
 };
 
 struct Pattern

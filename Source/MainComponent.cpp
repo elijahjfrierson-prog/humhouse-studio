@@ -495,6 +495,13 @@ public:
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
+        if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
+        {
+            const auto old = juce::Colour::fromString (studio.settings->getValue ("themeColour", "ff000000"));
+            if (studio.settings->containsKey ("themeColour") && old.getSaturation() > 0.4f && old.getHue() > 0.02f && old.getHue() < 0.13f)
+                studio.settings->removeValue ("themeColour");
+            studio.settings->setValue ("purpleDefault", true);
+        }
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
         if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
@@ -1208,7 +1215,7 @@ private:
         void paint (juce::Graphics& g) override
         {
             g.fillAll (col::lightMode ? col::panel2 : juce::Colour (0xff15181d));
-            g.setColour (juce::Colour (0xffff8a4c).withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
+            g.setColour (col::accent.withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
             g.setColour (col::text.withAlpha (0.6f)); g.setFont (12.0f);
             g.drawText (minimized ? "PIANO ROLL  [+] click to show" : "PIANO ROLL  [-] click to minimize  |  drag to resize",
                         getLocalBounds(), juce::Justification::centred);

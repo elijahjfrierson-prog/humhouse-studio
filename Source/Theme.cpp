@@ -93,7 +93,7 @@ public:
         tint.setRange (0.0, 1.0); tint.setValue (s.settings ? s.settings->getDoubleValue ("themeTint", 0.5) : 0.5, juce::dontSendNotification);
         tint.setTooltip ("How much the color tints the whole DAW background (0 = neutral black)");
         for (auto* l : { &brightLabel, &tintLabel }) { l->setFont (juce::FontOptions (12.0f)); addAndMakeVisible (l); }
-        const juce::uint32 presets[] { 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffe6e8eb, 0xff8c929b, 0xff000000 };
+        const juce::uint32 presets[] { 0xff9b5cff, 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffe6e8eb, 0xff8c929b, 0xff000000 };
         for (auto p : presets)
         {
             auto* b = swatches.add (new juce::TextButton());
@@ -144,7 +144,7 @@ public:
             addAndMakeVisible (b);
         }
         syncFontMode();
-        setupButton (reset, "Reset", "Back to the original HumHouse orange");
+        setupButton (reset, "Reset", "Back to the default HumHouse purple");
         reset.onClick = [this] {
             resetTheme();
             applyGradient ({}); applyFontGradient ({}); syncFontMode(); black = false;

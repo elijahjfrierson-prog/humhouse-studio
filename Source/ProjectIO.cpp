@@ -335,7 +335,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.pluginId = t["plugin"].toString(); c.pluginState.fromBase64Encoding (t["state"].toString());
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.shift = (float) t.getProperty ("shift", 0.0); c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
-        c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xffff8a3d));
+        c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff9b5cff));
         c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
