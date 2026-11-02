@@ -497,7 +497,7 @@ public:
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
-        if (phoneUI && ! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // phone default: HumHouse purple
+        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         auto audioXml = studio.settings->getXmlValue ("audio");

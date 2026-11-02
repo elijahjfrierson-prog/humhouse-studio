@@ -6,7 +6,7 @@ namespace
 {
 struct Palette { juce::Colour bg, panel, panel2, grid, gridBeat, gridBar, accent, scale, root; };
 const Palette defaults { juce::Colour (0xff0e1013), juce::Colour (0xff16191e), juce::Colour (0xff1d2127), juce::Colour (0xff22262d),
-                         juce::Colour (0xff2c3139), juce::Colour (0xff3c434e), juce::Colour (0xffff8a3d), juce::Colour (0xff1a2721),
+                         juce::Colour (0xff2c3139), juce::Colour (0xff3c434e), juce::Colour (0xff9b5cff), juce::Colour (0xff1a2721),
                          juce::Colour (0xff21392d) };
 
 void refreshAll()
