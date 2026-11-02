@@ -1799,7 +1799,11 @@ private:
             {
                 juce::FileOutputStream out (tmp);
                 if (out.openedOk()) { out.setPosition (0); out.truncate(); }
-                if (! out.openedOk() || out.writeFromInputStream (*in, -1) < 0) { tmp.deleteFile(); return local.existsAsFile() ? local : juce::File(); }
+                const auto total = in->getTotalLength();
+                const auto copied = out.openedOk() ? out.writeFromInputStream (*in, -1) : (juce::int64) -1;
+                out.flush();
+                if (copied < 0 || ! out.getStatus().wasOk() || (total >= 0 && copied != total))   // phone full mid-copy: never keep half a file
+                { tmp.deleteFile(); return local.existsAsFile() ? local : juce::File(); }
             }
             // same file again (under its name or an earlier "name (2)"): reuse it; a different file with that name: keep both
             for (int i = 1; i <= 100; ++i)
