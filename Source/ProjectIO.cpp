@@ -40,6 +40,13 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
     if (f.existsAsFile()) return f;
     auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
     if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
+    {   // built-in kit saved from another HumHouse app (Studio vs Master, another drive/PC): use this app's copy
+        const auto norm = s.replaceCharacter ('\\', '/');
+        const int at = norm.lastIndexOfIgnoreCase ("/Sounds/");
+        if (at >= 0)
+            for (auto root : { bundledSoundsRoot(), hhsHome().getChildFile ("Sounds") })
+                if (auto c = alt0 (root.getChildFile (norm.substring (at + 8))); c != juce::File()) return c;
+    }
     if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
     auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
     const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
