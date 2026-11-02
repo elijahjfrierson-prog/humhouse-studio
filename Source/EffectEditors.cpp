@@ -246,7 +246,7 @@ private:
     }
     juce::File presetDir() const
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio")
+        return hhsHome()
             .getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (kind));
     }
     juce::String lastPreset;   // saving again with this name overwrites the old preset
@@ -1928,7 +1928,7 @@ void closeEditorsForPlugin (juce::AudioProcessor* p)
 
 namespace hhs
 {
-static juce::File presetsRoot() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Presets"); }
+static juce::File presetsRoot() { return hhsHome().getChildFile ("Presets"); }
 
 static std::unique_ptr<juce::XmlElement> chainXml (Studio& s, int track)
 {

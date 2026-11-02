@@ -8,6 +8,15 @@
 
 namespace hhs
 {
+// the app's own folder: Music on desktop; on iPhone it's Documents, the only folder the Files app shows and the app can always write
+inline juce::File hhsHome()
+{
+   #if JUCE_IOS
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("HumHouse Studio");
+   #else
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio");
+   #endif
+}
 // drum one-shots keep their pitch on every key; everything else follows the Piano Roll (root key = the WAV as-is)
 inline bool isDrumSampleName (juce::String n)
 {

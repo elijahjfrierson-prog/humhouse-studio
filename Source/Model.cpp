@@ -365,7 +365,7 @@ juce::File Project::recordingsFolder() const
 {
     if (projectFile.existsAsFile()) return projectFile.getParentDirectory().getChildFile ("Recordings");
     // not saved yet: the song still gets its own session folder (never a shared one); the first save copies it into the song folder
-    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sessions")
+    return hhsHome().getChildFile ("Sessions")
                .getChildFile (juce::File::createLegalFileName (title.isEmpty() ? juce::String ("Untitled") : title)).getChildFile ("Recordings");
 }
 

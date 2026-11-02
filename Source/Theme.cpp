@@ -349,9 +349,10 @@ void showThemeDialog (Studio& s)
     o.dialogTitle = "Theme color";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = true;
+    o.useNativeTitleBar = ! phoneUI;   // phone: our title bar with an X to leave
     o.resizable = false;
     open = o.launchAsync();
+    if (phoneUI && open != nullptr) { open->setTitleBarHeight (44); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
 }
 
 void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)

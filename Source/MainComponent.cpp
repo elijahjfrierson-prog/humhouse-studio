@@ -195,6 +195,17 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.drawRoundedRectangle (r, 4.0f, 1.0f);
 }
 
+juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
+{
+    if (! phoneUI) return LookAndFeel_V4::getTextButtonFont (b, h);
+    return juce::Font (juce::FontOptions (juce::jmin (18.0f, (float) h * 0.5f), juce::Font::bold));
+}
+
+juce::Font HHLookAndFeel::getPopupMenuFont()
+{
+    return phoneUI ? juce::Font (juce::FontOptions (19.0f)) : LookAndFeel_V4::getPopupMenuFont();
+}
+
 void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
 {
     const auto font = getTextButtonFont (b, b.getHeight());
@@ -486,6 +497,7 @@ public:
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
+        if (phoneUI && ! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // phone default: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         auto audioXml = studio.settings->getXmlValue ("audio");
@@ -662,6 +674,24 @@ public:
             noteDnBtn.onClick = [this] { phoneTranspose (juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier); };
             altSBtn.onClick = [this] { phoneAlt ('s'); };
             for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn, &delBtn, &octUpBtn, &octDnBtn, &noteUpBtn, &noteDnBtn }) addAndMakeVisible (b);
+            // folders: one tap opens a row of their buttons under the top bar, another tap tucks it away
+            browserBtn.setButtonText ("SOUNDS");
+            toolsOpen = studio.settings->getBoolValue ("phoneTools", true);
+            keysOpen = studio.settings->getBoolValue ("phoneKeys", false);
+            moreOpen = studio.settings->getBoolValue ("phoneMore", false);
+            const juce::String down (juce::CharPointer_UTF8 (" \xe2\x96\xbe"));
+            toolsBtn.setButtonText ("TOOLS" + down); keysBtn.setButtonText ("PIANO ROLL" + down); moreBtn.setButtonText ("MORE" + down);
+            toolsBtn.setTooltip ("Copy, paste, undo, redo, delete, duplicate, Alt+A, Alt+S");
+            keysBtn.setTooltip ("Octave and one-note up / down for the selected notes");
+            moreBtn.setTooltip ("Metronome, count-in, mixer, scope, color, CPU");
+            auto folder = [this] (juce::TextButton& b, bool& open, const char* key)
+            {
+                b.setColour (juce::TextButton::buttonOnColourId, col::accent);
+                b.setToggleState (open, juce::dontSendNotification);
+                b.onClick = [this, &b, &open, key] { open = ! open; b.setToggleState (open, juce::dontSendNotification); studio.settings->setValue (key, open); resized(); };
+                addAndMakeVisible (b);
+            };
+            folder (toolsBtn, toolsOpen, "phoneTools"); folder (keysBtn, keysOpen, "phoneKeys"); folder (moreBtn, moreOpen, "phoneMore");
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -713,20 +743,27 @@ if (phoneUI)
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
                 r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
-            const std::pair<juce::Component*, int> items[] {
-                { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
-                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 }, { &dupBtn, 66 }, { &delBtn, 60 }, { &octDnBtn, 56 }, { &octUpBtn, 56 }, { &noteDnBtn, 44 }, { &noteUpBtn, 44 },
-                { &bpm, 110 }, { &posLabel, 110 },
-                { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
-                { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
-            const int rowH = 40, avail = juce::jmax (200, r.getWidth() - 16);
+            // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
+            constexpr int brk = -1;
+            std::vector<std::pair<juce::Component*, int>> items {
+                { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
+                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
+            if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
+            if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
+            if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
+            for (auto* c : std::initializer_list<juce::Component*> { &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
+                                                                    &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
+                c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
+            const int rowH = 46, avail = juce::jmax (200, r.getWidth() - 16);
             int x = 0, rows = 1;
-            for (auto& it : items) { if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
+            for (auto& it : items) { if (it.second == brk) { if (x > 0) { ++rows; x = 0; } continue; } if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
             topBar = r.removeFromTop (rows * rowH + 8);
             logoArea = {};
             int y = topBar.getY() + 4; x = 0;
             for (auto& it : items)
             {
+                if (it.second == brk) { if (x > 0) { y += rowH; x = 0; } continue; }
                 if (x > 0 && x + it.second > avail) { y += rowH; x = 0; }
                 const juce::Rectangle<int> cell (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
                 if (it.first != nullptr) it.first->setBounds (cell); else logoArea = cell;
@@ -1199,7 +1236,8 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" }, toolsBtn, keysBtn, moreBtn;
+    bool toolsOpen = true, keysOpen = false, moreOpen = false;
     bool clipArmed = false; int clipView = -1;
     void phoneAlt (int key)
     {
@@ -1264,7 +1302,13 @@ private:
     {
         juce::PopupMenu m;
         const auto names = getMenuBarNames();
-        for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], getMenuForIndex (i, names[i]));
+        for (int i = 0; i < names.size(); ++i)
+        {
+            if (! phoneUI) { m.addSubMenu (names[i], getMenuForIndex (i, names[i])); continue; }
+            m.addSectionHeader (names[i]);   // phone: every item is one tap away (no sub-folders to open first)
+            const auto sub = getMenuForIndex (i, names[i]);
+            for (juce::PopupMenu::MenuItemIterator it (sub); it.next();) m.addItem (it.getItem());
+        }
         juce::Component::SafePointer<MainComponent> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
                          [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
@@ -1279,7 +1323,14 @@ private:
             {
                 if (safe == nullptr) return;
                 juce::StringArray share, media;
-                for (auto& f : fc.getResults())
+                juce::Array<juce::File> picked;
+               #if JUCE_IOS
+                for (auto& u : fc.getURLResults()) if (auto f = copyIntoApp (u); f.existsAsFile()) picked.add (f);
+               #else
+                picked = fc.getResults();
+               #endif
+                if (picked.isEmpty()) { safe->hintBar.setText ("Couldn't read that file. If it's in iCloud, open it once in Files to download it, then import again.", juce::dontSendNotification); return; }
+                for (auto& f : picked)
                     if (f.existsAsFile()) (allHumHouseShareFiles ({ f.getFullPathName() }) ? share : media).add (f.getFullPathName());
                 if (! share.isEmpty()) safe->filesDropped (share, 0, 0);
                 if (auto* t = dynamic_cast<juce::FileDragAndDropTarget*> (safe->playlist.get()); t != nullptr && ! media.isEmpty())
@@ -1316,11 +1367,7 @@ private:
     juce::String flashText;
     juce::uint32 flashUntil = 0;
 
-   #if JUCE_IOS   // Documents shows up in the Files app (On My iPhone > HumHouse Studio)
-    static juce::File docsDir() { return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("HumHouse Studio"); }
-   #else
-    static juce::File docsDir() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"); }
-   #endif
+    static juce::File docsDir() { return hhsHome(); }   // iPhone: Files > On My iPhone > HumHouse Studio
     juce::File backupDir() const
     {
         auto& p = const_cast<Engine&> (engine).project();
@@ -1381,7 +1428,7 @@ private:
     {
         if (popouts.count (c) > 0) { reattach (c); return; }
         auto w = std::make_unique<PopOut> (title);
-        w->setUsingNativeTitleBar (true);
+        w->setUsingNativeTitleBar (! phoneUI);
         w->setContentNonOwned (c, false);
         c->setVisible (true);
         w->setResizable (true, true);
@@ -1625,7 +1672,17 @@ private:
         engine.storePluginStates();
         collectAudio();
         auto& p = engine.project();
-        if (saveProject (p, p.projectFile))
+        bool ok = saveProject (p, p.projectFile);
+       #if JUCE_IOS
+        if (! ok)   // never lose a song: fall back to a fresh file in Files > On My iPhone > HumHouse Studio
+        {
+            docsDir().createDirectory();
+            p.projectFile = docsDir().getChildFile (juce::File::createLegalFileName (p.title.isEmpty() ? juce::String ("Untitled") : p.title) + ".hhs").getNonexistentSibling (true);
+            collectAudio();
+            ok = saveProject (p, p.projectFile);
+        }
+       #endif
+        if (ok)
         {
             writeBackup (p);
             studio.dirty = false;
@@ -1634,7 +1691,9 @@ private:
             saveBtn.setButtonText ("SAVED"); saveBtn.setToggleState (true, juce::dontSendNotification);   // opposite color = confirmed
             savedFlash = 45;
         }
-        else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save", "Could not save the project.");
+        else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save",
+                                                     "Could not save the project to\n" + p.projectFile.getFullPathName()
+                                                         + "\n\nA backup was kept. Try Save As with another name, or free up space.");
     }
 
     // FL-style: Save / Don't Save / Cancel before the current project is closed
@@ -1661,7 +1720,11 @@ private:
     void save (bool as, std::function<void()> after = {})
     {
         auto& p = engine.project();
-        if (! as && p.projectFile.existsAsFile()) { writeProject(); if (after && ! studio.dirty) after(); return; }
+        bool inPlace = ! as && p.projectFile.existsAsFile();
+       #if JUCE_IOS
+        inPlace = inPlace && p.projectFile.isAChildOf (docsDir());   // opened from elsewhere: save a copy into the app's folder
+       #endif
+        if (inPlace) { writeProject(); if (after && ! studio.dirty) after(); return; }
         docsDir().createDirectory();
        #if JUCE_IOS
         // iPhone: the Files save sheet hands back a location the app can't write to (false "Could not save"),
@@ -1719,6 +1782,58 @@ private:
     }
 
     void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }
+   #if JUCE_IOS
+    // Files hands back a temporary security-scoped link: copy the file into the app's folder while it's readable
+    static juce::File copyIntoApp (const juce::URL& u)
+    {
+        const auto local = u.getLocalFile();
+        if (local.isAChildOf (docsDir())) return local;
+        auto name = juce::URL::removeEscapeChars (u.getFileName());
+        if (name.isEmpty()) name = local.getFileName();
+        auto dir = docsDir().getChildFile ("Imported");
+        dir.createDirectory();
+        auto dest = dir.getChildFile (juce::File::createLegalFileName (name));
+        if (auto in = u.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)))
+        {
+            if (dest.existsAsFile() && dest.getSize() == in->getTotalLength()) return dest;
+            dest = dest.getNonexistentSibling (true);
+            juce::FileOutputStream out (dest);
+            if (out.openedOk() && out.writeFromInputStream (*in, -1) >= 0) { out.flush(); return dest; }
+            dest.deleteFile();
+        }
+        return local.existsAsFile() ? local : juce::File();
+    }
+    void openChooser (bool backups)
+    {
+        juce::Array<juce::File> found;
+        auto scan = [&found] (const juce::File& d, bool deep) { if (d.isDirectory()) for (auto& f : d.findChildFiles (juce::File::findFiles, deep, "*.hhs")) if (! found.contains (f)) found.add (f); };
+        const auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+        scan (docsDir(), true); scan (docs, false); scan (docs.getChildFile ("Inbox"), true);
+        scan (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"), true);   // songs from older builds
+        juce::Array<juce::File> songs;
+        for (auto& f : found)
+            if (! f.isAChildOf (templatesDir()) && ! f.hasFileExtension ("tmp") && (f.getParentDirectory().getFileName() == "Backup") == backups) songs.add (f);
+        std::sort (songs.begin(), songs.end(), [] (const juce::File& a, const juce::File& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
+        juce::PopupMenu m;
+        m.addSectionHeader (backups ? "Backups - newest first" : "Your songs - newest first");
+        for (int i = 0; i < juce::jmin (300, songs.size()); ++i)
+            m.addItem (i + 1, songs[i].getFileNameWithoutExtension() + "    " + songs[i].getLastModificationTime().toString (true, true, false));
+        if (songs.isEmpty()) m.addItem (-1, backups ? "No backups yet" : "No songs saved yet", false);
+        m.addSeparator();
+        m.addItem (100000, "Browse Files (iCloud, Downloads, other apps)...");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe, songs] (int r) {
+            if (safe == nullptr || r == 0) return;
+            if (r >= 1 && r <= songs.size()) { safe->load (songs[r - 1]); return; }
+            if (r != 100000) return;
+            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+                if (safe == nullptr || fc.getURLResults().isEmpty()) return;
+                if (auto f = copyIntoApp (fc.getURLResults()[0]); f.existsAsFile()) safe->load (f);
+            });
+        });
+    }
+   #else
     void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
@@ -1726,6 +1841,7 @@ private:
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
+   #endif
 
     static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
@@ -1775,8 +1891,8 @@ private:
         templatesDir().createDirectory();
         auto f = templatesDir().getChildFile (name + ".hhs");
         auto tmp = f.getSiblingFile (name + ".hhs.tmp");
-        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) lastTemplate = name;   // same name = replace, never half-written
-        else tmp.deleteFile();
+        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) { lastTemplate = name; flash ("Saved template " + name); }   // same name = replace, never half-written
+        else { tmp.deleteFile(); juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Template", "Could not save the template to\n" + f.getFullPathName()); }
     }
 
     void shareTemplatePack (const Project& p, const juce::String& name)
@@ -1944,6 +2060,7 @@ private:
 
     void showAudioSettings()
     {
+        if (phoneUI) { showPhoneLatency(); return; }
         auto* sel = new juce::AudioDeviceSelectorComponent (engine.deviceManager, 0, 32, 0, 2, true, false, true, false);
         sel->setSize (560, 480);
         juce::DialogWindow::LaunchOptions o;
@@ -1951,8 +2068,37 @@ private:
         o.dialogTitle = "Audio settings - device, inputs, buffer size, sample rate";
         o.dialogBackgroundColour = col::panel;
         o.escapeKeyTriggersCloseButton = true;
-        o.useNativeTitleBar = true;
+        o.useNativeTitleBar = ! phoneUI;
         o.launchAsync();
+    }
+
+    // phone: pick the buffer from a list (the desktop device panel crashed on iPhone); lower = less delay
+    void showPhoneLatency()
+    {
+        auto* dev = engine.deviceManager.getCurrentAudioDevice();
+        const int cur = dev != nullptr ? dev->getCurrentBufferSizeSamples() : 0;
+        const double sr = dev != nullptr && dev->getCurrentSampleRate() > 0 ? dev->getCurrentSampleRate() : 48000.0;
+        juce::Array<int> sizes;
+        if (dev != nullptr) for (int b : dev->getAvailableBufferSizes()) if (b >= 32 && b <= 2048) sizes.addIfNotAlreadyThere (b);
+        if (sizes.isEmpty()) sizes = { 64, 128, 256, 512, 1024 };
+        juce::PopupMenu m;
+        m.addSectionHeader ("Latency: lower = faster, higher = no crackles");
+        for (int b : sizes)
+            m.addItem (b, juce::String (b) + " samples  (" + juce::String (1000.0 * b / sr, 1) + " ms)" + (b <= 128 ? "  fastest" : b == 256 ? "  recommended" : ""), true, b == cur);
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe] (int b) {
+            if (safe == nullptr || b <= 0) return;
+            juce::MessageManager::callAsync ([safe, b] {   // after the menu is gone: the device restarts cleanly
+                if (safe == nullptr) return;
+                auto& dm = safe->engine.deviceManager;
+                auto setup = dm.getAudioDeviceSetup();
+                if (setup.bufferSize == b) return;
+                setup.bufferSize = b;
+                const auto err = dm.setAudioDeviceSetup (setup, true);
+                if (auto x = dm.createStateXml()) safe->studio.settings->setValue ("audio", x.get());
+                safe->hintBar.setText (err.isEmpty() ? "Buffer " + juce::String (b) + " samples" : "Couldn't change the buffer: " + err, juce::dontSendNotification);
+            });
+        });
     }
 
     struct ShortcutsWindow : juce::DocumentWindow
@@ -1966,7 +2112,7 @@ private:
             ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
             ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
             setContentOwned (ed, false);
-            setUsingNativeTitleBar (true); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
+            setUsingNativeTitleBar (! phoneUI); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
         }
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override

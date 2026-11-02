@@ -298,6 +298,8 @@ public:
         {
             touchPos[1] = e.position; pinching = true; panTap = false;
             pinchD0 = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])); pinchPpb0 = pxPerBeat;
+            pinchDx0 = std::abs (touchPos[0].x - touchPos[1].x); pinchDy0 = std::abs (touchPos[0].y - touchPos[1].y); pinchRowH0 = rowH;
+            pinchRow = (scrollY + (touchPos[0].y + touchPos[1].y) * 0.5f - (float) ga.getY()) / rowH;
             pinchBeat = xToBeat ((touchPos[0].x + touchPos[1].x) * 0.5f); return;
         }
         if (phoneUI && (e.source.getIndex() > 0 || (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom())))
@@ -410,8 +412,16 @@ public:
             if (pinching)   // two-finger pinch: zoom from very close to very far, anchored between the fingers
             {
                 const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
-                pxPerBeat = juce::jlimit (4.0f, 2000.0f, pinchPpb0 * d / pinchD0);
+                const float dx = std::abs (touchPos[0].x - touchPos[1].x), dy = std::abs (touchPos[0].y - touchPos[1].y);
+                const bool xAxis = pinchDx0 >= 40.0f, yAxis = pinchDy0 >= 40.0f;   // fingers side by side zoom time, stacked zoom the keys
+                if (xAxis || ! yAxis) pxPerBeat = juce::jlimit (4.0f, 2000.0f, pinchPpb0 * (xAxis ? juce::jmax (20.0f, dx) / pinchDx0 : d / pinchD0));
                 scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) gridArea().getX()) / pxPerBeat);
+                if (yAxis)
+                {
+                    const auto ga = gridArea();
+                    rowH = juce::jlimit (6.0f, 60.0f, pinchRowH0 * juce::jmax (20.0f, dy) / pinchDy0);
+                    scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) ga.getHeight()), pinchRow * rowH - ((touchPos[0].y + touchPos[1].y) * 0.5f - (float) ga.getY()));
+                }
                 syncHBar(); repaint(); return;
             }
             if (e.source.getIndex() != panSrc) return;
@@ -625,7 +635,7 @@ public:
 
 private:
     enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
-    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchRowH0 = 20.0f, pinchRow = 0; double pinchBeat = 0;
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;

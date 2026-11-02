@@ -388,7 +388,11 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
     if (saved == nullptr)   // first run: a 512-sample buffer keeps big sessions (and OBS capture) glitch-free; change it in Audio settings
     {
         auto setup = deviceManager.getAudioDeviceSetup();
+       #if JUCE_IOS
+        if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
+       #else
         if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+       #endif
     }
     deviceManager.addAudioCallback (this);
 }

@@ -50,7 +50,7 @@ void showPluginScanner (Studio& s)
     o.dialogTitle = "Plugin House - scan for VST3 / AU plugins (Options > Scan)";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = true;
+    o.useNativeTitleBar = ! phoneUI;
     o.resizable = true;
     o.launchAsync();
 }
@@ -172,7 +172,7 @@ private:
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
         juce::ignoreUnused (e);
-        if (phoneUI) add (row);   // phone: one tap adds the effect and opens its window
+        if (phoneUI && row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind != 0) { add (row); list.deselectAllRows(); }   // phone: one tap adds the effect and opens its window
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (! phoneUI) add (row); }
     void add (int row)
@@ -262,6 +262,45 @@ public:
         loadFolders();
         folders.setSelectedItemIndex (firstKit, juce::dontSendNotification);
         setRoot (juce::File (roots[firstKit]));   // opens on the built-in kits
+        if (phoneUI)
+        {
+            tree.setItemHeight (36); results.setRowHeight (36);
+            tree.addMouseListener (this, true); results.addMouseListener (this, true);
+        }
+    }
+    // phone: slide a sample sideways onto the Channel Rack or REC (up/down still scrolls the list)
+    bool fingerDrag = false;
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! phoneUI || fingerDrag) return;
+        const bool inTree = tree.isParentOf (e.eventComponent), inRes = results.isParentOf (e.eventComponent);
+        if (! inTree && ! inRes) return;
+        const auto d = e.getOffsetFromDragStart();
+        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this);
+        if (dc == nullptr || dc->isDragAndDropActive()) return;
+        juce::File f;
+        if (inTree)
+        {
+            if (auto* it = tree.getItemAt (e.getEventRelativeTo (&tree).getMouseDownPosition().y)) { it->setSelected (true, true); f = tree.getSelectedFile(); }
+        }
+        else
+        {
+            const auto at = e.getEventRelativeTo (&results).getMouseDownPosition();
+            const int row = results.getRowContainingPosition (at.x, at.y);
+            if (row >= 0 && row < hits.size()) f = hits[row];
+        }
+        if (! f.existsAsFile() || ! (isAudioFile (f) || f.hasFileExtension ("mid;midi"))) return;
+        fingerDrag = true;
+        juce::Image img (juce::Image::ARGB, 200, 32, true);
+        {
+            juce::Graphics g (img);
+            g.setColour (col::accent.withAlpha (0.9f)); g.fillRoundedRectangle (0.0f, 0.0f, 200.0f, 32.0f, 6.0f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+            g.drawText (f.getFileNameWithoutExtension(), 8, 0, 184, 32, juce::Justification::centredLeft, true);
+        }
+        dc->startDragging ("sample:" + f.getFullPathName(), inTree ? (juce::Component*) &tree : (juce::Component*) &results, juce::ScaledImage (img), false);
     }
     ~SampleBrowser() override { tree.removeListener (this); }
     void paint (juce::Graphics& g) override
@@ -320,7 +359,7 @@ private:
         roots.removeEmptyStrings();
         roots.removeString (downloadsFolder().getFullPathName());
         roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
-        const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
+        const auto lib = hhsHome().getChildFile ("Sounds");
         roots.removeString (lib.getFullPathName());
         if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());
         // kits that ship with the app (Classic Trap, Etherea Instruments, Triple S Hitters): each one in the folder list, right after Downloads
@@ -372,7 +411,11 @@ private:
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override { return "sample"; }
     void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile() && isAudioFile (f)) s.engine.previewFile (f); }
-    void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
+    void fileClicked (const juce::File& f, const juce::MouseEvent& e) override
+    {
+        if (phoneUI && f.isDirectory())   // phone: one tap opens / closes a folder
+            if (auto* it = tree.getItemAt (e.getEventRelativeTo (&tree).y)) it->setOpen (! it->isOpen());
+    }
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
     void browserRootChanged (const juce::File&) override {}
 };

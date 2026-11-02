@@ -982,9 +982,14 @@ public:
         layoutRows(); repaint();
     }
 
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString() == "sample"; }
+    bool isInterestedInDragSource (const SourceDetails& d) override { const auto t = d.description.toString(); return t == "sample" || t.startsWith ("sample:"); }
     void itemDropped (const SourceDetails& d) override   // drag from the Samples browser
     {
+        if (const auto t = d.description.toString(); t.startsWith ("sample:"))   // phone finger drag
+        {
+            filesDropped ({ t.fromFirstOccurrenceOf ("sample:", false, false) }, d.localPosition.x, d.localPosition.y);
+            return;
+        }
         if (auto* t = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get()))
         {
             juce::StringArray files;

@@ -54,7 +54,7 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
         tries.add (ioBase.getChildFile ("Audio").getChildFile (name));
         tries.add (ioBase.getParentDirectory().getChildFile ("Recordings").getChildFile (name));
     }
-    for (auto root : { juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"),
+    for (auto root : { hhsHome(),
                        juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile ("HumHouse Studio") })
     {
         tries.add (root.getChildFile ("Recordings").getChildFile (name));
@@ -472,7 +472,7 @@ bool loadProject (Project& p, const juce::File& f)
 juce::File writeBackup (const Project& p, int keep)
 {
     auto dir = (p.projectFile.existsAsFile() ? p.projectFile.getParentDirectory()
-                                             : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"))
+                                             : hhsHome())
                    .getChildFile ("Backup");
     dir.createDirectory();
     const auto base = p.projectFile.existsAsFile() ? p.projectFile.getFileNameWithoutExtension() : p.title;

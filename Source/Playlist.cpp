@@ -342,7 +342,7 @@ class ToolWindow : public juce::DocumentWindow, private juce::Timer
 public:
     ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
-        setUsingNativeTitleBar (true); setContentOwned (c, true); setResizable (true, false);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (c, true); setResizable (true, false);
         centreWithSize (getWidth(), getHeight()); setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
@@ -1117,6 +1117,7 @@ struct LaneHeader : public juce::Component
         }
         else if (e.mods.isCommandDown()) { if (sel.contains (index)) sel.removeValue (index); else sel.add (index); s.laneAnchor = index; }
         else { sel.clear(); sel.add (index); s.laneAnchor = index; }
+        if (index >= 0 && index < (int) s.p().lanes.size()) s.selectedTrack = s.p().lanes[(size_t) index].mixerTrack;   // Plugin House adds FX to this track's insert
         if (getParentComponent() != nullptr) getParentComponent()->repaint();
         for (auto* c : getParentComponent()->getChildren()) c->repaint();
     }
@@ -1948,12 +1949,13 @@ public:
     bool isInterestedInDragSource (const SourceDetails& d) override
     {
         const auto t = d.description.toString();
-        return t == "sample" || t.startsWith ("pattern:") || t.startsWith ("audio:");
+        return t == "sample" || t.startsWith ("sample:") || t.startsWith ("pattern:") || t.startsWith ("audio:");
     }
     void itemDropped (const SourceDetails& d) override   // drag from the Samples browser / PATTERNS tab
     {
         const auto desc = d.description.toString();
         if (desc.startsWith ("audio:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("audio:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
+        if (desc.startsWith ("sample:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("sample:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
         if (desc.startsWith ("pattern:"))
         {
             const int pat = desc.fromFirstOccurrenceOf ("pattern:", false, false).getIntValue();

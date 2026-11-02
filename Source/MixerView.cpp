@@ -771,7 +771,7 @@ struct PatchWindow : juce::DocumentWindow, private juce::Timer
 {
     PatchWindow (const juce::String& t, PatchMethodView* v, int id) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton), view (v), chId (id)
     {
-        setUsingNativeTitleBar (true);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
         setContentOwned (v, true);
         setResizable (true, false);
         centreWithSize (getWidth(), getHeight());
