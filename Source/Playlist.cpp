@@ -980,7 +980,11 @@ struct LaneHeader : public juce::Component
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
         arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
-        arm.onClick = [this] { const bool on = arm.getToggleState(); const auto t = targets(); s.edit ("Arm", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].armed = on; }); };
+        arm.onClick = [this] {
+            const bool on = arm.getToggleState(); const auto t = targets();
+            s.edit ("Arm", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].armed = on; });
+            if (on && index >= 0 && index < (int) s.p().lanes.size()) s.selectedTrack = s.p().lanes[(size_t) index].mixerTrack;   // FX you add next go on the track you're singing into
+        };
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
