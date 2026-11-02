@@ -245,7 +245,7 @@ public:
             const float x0 = juce::jmax ((float) keyW, (float) beatToX (timeSelA)), x1 = (float) beatToX (timeSelB);
             if (x1 > x0) { g.setColour (col::accent.withAlpha (0.45f)); g.fillRect (x0, (float) barH, x1 - x0, (float) rulerH); }
         }
-        if (const double ph = playheadLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
+        if (const double ph = markerLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
         {
             const float px = (float) beatToX (ph);
             juce::Path tri; tri.addTriangle (px - 7, (float) barH + 1, px + 7, (float) barH + 1, px, (float) (barH + 13));
@@ -314,7 +314,7 @@ public:
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
         if (e.y > barH && e.y < ga.getY())   // bar numbers: drag = select bars (FL), click or the handle = playhead
         {
-            const double ph = playheadLocal();
+            const double ph = markerLocal();
             if (ph >= 0.0 && std::abs (beatToX (ph) - e.position.x) <= 8.0f) { drag = Drag::Scrub; scrubTo (e); return; }
             drag = Drag::TimeSel; timeMoved = false; return;
         }
@@ -630,7 +630,7 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double ph = dropValid() ? dropAt : playheadLocal();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
+            const double ph = markerLocal();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
             double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
@@ -811,7 +811,13 @@ private:
             const Clip* hit = nullptr; const double pos = s.engine.positionBeats();
             for (auto& c : p.clips)
                 if (c.patternIndex == p.currentPattern && (hit == nullptr || (pos >= c.start && pos < c.start + c.length))) hit = &c;
-            if (hit != nullptr) s.engine.setPositionBeats (hit->start + at);
+            if (hit != nullptr)
+            {
+                const double len = p.patterns[(size_t) p.currentPattern].lengthBeats();
+                double off = at - std::fmod (juce::jmax (0.0, hit->patOffset), len);   // trimmed / sliced clips start mid-pattern
+                if (off < 0.0) off += len;
+                s.engine.setPositionBeats (hit->start + off);
+            }
         }
         dropAt = at; dropPos = s.engine.positionBeats();
         repaint();
@@ -824,9 +830,10 @@ private:
         double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
-                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
+                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start + juce::jmax (0.0, c.patOffset), len);
         return local;
     }
+    double markerLocal() const { return dropValid() ? dropAt : playheadLocal(); }
     bool dropValid() const { return dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropPos) < 1.0e-6; }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {
@@ -836,7 +843,7 @@ private:
         double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
-                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
+                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start + juce::jmax (0.0, c.patOffset), len);
         if (dropValid()) local = dropAt;   // the marker you clicked stays where you put it
         if (local < 0) return;
         const float x = (float) beatToX (local);
