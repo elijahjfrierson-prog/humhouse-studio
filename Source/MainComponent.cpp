@@ -1795,15 +1795,21 @@ private:
         auto dest = dir.getChildFile (juce::File::createLegalFileName (name));
         if (auto in = u.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)))
         {
-            juce::MemoryBlock data;
-            in->readIntoMemoryBlock (data);
-            if (dest.existsAsFile())   // same file again: reuse it; a different file with that name: keep both
+            const auto tmp = dir.getChildFile (dest.getFileName() + ".part");   // streamed, so big recordings never sit in memory
             {
-                juce::MemoryBlock old;
-                if (dest.getSize() == (juce::int64) data.getSize() && dest.loadFileAsData (old) && old == data) return dest;
-                dest = dest.getNonexistentSibling (true);
+                juce::FileOutputStream out (tmp);
+                if (out.openedOk()) { out.setPosition (0); out.truncate(); }
+                if (! out.openedOk() || out.writeFromInputStream (*in, -1) < 0) { tmp.deleteFile(); return local.existsAsFile() ? local : juce::File(); }
             }
-            if (dest.replaceWithData (data.getData(), data.getSize())) return dest;
+            // same file again (under its name or an earlier "name (2)"): reuse it; a different file with that name: keep both
+            for (int i = 1; i <= 100; ++i)
+            {
+                const auto c = i == 1 ? dest : dir.getChildFile (dest.getFileNameWithoutExtension() + " (" + juce::String (i) + ")" + dest.getFileExtension());
+                if (c.existsAsFile() && c.hasIdenticalContentTo (tmp)) { tmp.deleteFile(); return c; }
+            }
+            if (dest.existsAsFile()) dest = dest.getNonexistentSibling (true);
+            if (tmp.moveFileTo (dest)) return dest;
+            tmp.deleteFile();
         }
         return local.existsAsFile() ? local : juce::File();
     }
