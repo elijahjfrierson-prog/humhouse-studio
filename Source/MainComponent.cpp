@@ -1795,14 +1795,15 @@ private:
         auto dest = dir.getChildFile (juce::File::createLegalFileName (name));
         if (auto in = u.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)))
         {
-            const auto tmp = dest.getSiblingFile (dest.getFileName() + ".part");   // always the fresh contents; same name = replaced
+            juce::MemoryBlock data;
+            in->readIntoMemoryBlock (data);
+            if (dest.existsAsFile())   // same file again: reuse it; a different file with that name: keep both
             {
-                juce::FileOutputStream out (tmp);
-                out.setPosition (0); out.truncate();
-                if (! out.openedOk() || out.writeFromInputStream (*in, -1) < 0) { tmp.deleteFile(); return local.existsAsFile() ? local : juce::File(); }
+                juce::MemoryBlock old;
+                if (dest.getSize() == (juce::int64) data.getSize() && dest.loadFileAsData (old) && old == data) return dest;
+                dest = dest.getNonexistentSibling (true);
             }
-            if (tmp.replaceFileIn (dest)) return dest;
-            tmp.deleteFile();
+            if (dest.replaceWithData (data.getData(), data.getSize())) return dest;
         }
         return local.existsAsFile() ? local : juce::File();
     }
