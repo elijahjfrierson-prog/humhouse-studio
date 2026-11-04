@@ -631,7 +631,7 @@ public:
         if (is ('v', cmd) && ! clipboard().empty())
         {
             const double ph = markerLocal();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
-            double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
+            double at = juce::jmax (0.0, ph);   // exactly on the marker, never re-snapped back
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
             if (clipFrom() >= 0.0)

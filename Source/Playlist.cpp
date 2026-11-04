@@ -1918,8 +1918,7 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double g = plSnap > 0 ? juce::jmin (plSnap, gridSnap()) : 0.0, ph = s.engine.positionBeats();
-            const double at = juce::jmax (0.0, g > 0 ? std::floor (ph / g + 1.0e-6) * g : ph);   // exactly on the playhead marker (same grid the click put it on), never pulled back to the bar start
+            const double at = juce::jmax (0.0, s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
