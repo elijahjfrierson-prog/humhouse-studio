@@ -724,6 +724,7 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
+    if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; }
     prepareRuntimes();
 }
 
@@ -959,6 +960,64 @@ void Engine::startRecordingWriters (bool surprise)
     }
     const juce::SpinLock::ScopedLockType sl (takeLock);
     takes = std::move (newTakes);
+}
+
+bool Engine::retroRecord()
+{
+    if (proj.lanes.empty()) return false;
+    const int cap = retroBuf.getNumSamples();
+    const int w = retroWrite.load();
+    const double endBeat = retroEndBeat.load();
+    const int lane = juce::jlimit (0, (int) proj.lanes.size() - 1, retroLane.load());
+    // the oldest half second may be overwritten while copying: leave it out
+    const int len = (int) std::min<juce::int64> (retroTotal.load(), (juce::int64) cap - (juce::int64) (sampleRate * 0.5));
+    if (len <= 0) return false;
+    juce::AudioBuffer<float> grab (2, len);
+    const int start = ((w - len) % cap + cap) % cap;
+    const int first = std::min (len, cap - start);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        grab.copyFrom (ch, 0, retroBuf, ch, start, first);
+        if (first < len) grab.copyFrom (ch, first, retroBuf, ch, 0, len - first);
+    }
+    // keep only what was heard: trim the silence at both ends (-60 dB), with 50 ms of air
+    int a = 0, b = len - 1;
+    auto loud = [&grab] (int i) { return std::abs (grab.getSample (0, i)) > 0.001f || std::abs (grab.getSample (1, i)) > 0.001f; };
+    while (a < len && ! loud (a)) ++a;
+    if (a >= len) return false;
+    while (b > a && ! loud (b)) --b;
+    const int pad = (int) (sampleRate * 0.05);
+    a = std::max (0, a - pad); b = std::min (len - 1, b + pad);
+    const int keepLen = b - a + 1;
+
+    auto folder = proj.recordingsFolder(); folder.createDirectory();
+    const auto song = juce::File::createLegalFileName (proj.projectFile.existsAsFile() ? proj.projectFile.getFileNameWithoutExtension() : proj.title).replaceCharacter (' ', '_');
+    const auto file = folder.getNonexistentChildFile (proj.lanes[(size_t) lane].name.replaceCharacters (" /\\", "___") + "_" + song + "_"
+                                                      + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + "_retro", ".wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> wr;
+        if (auto* os = file.createOutputStream().release())
+        {
+            wr.reset (wav.createWriterFor (os, sampleRate, 2, 24, {}, 0));
+            if (wr == nullptr) delete os;
+        }
+        if (wr == nullptr || ! wr->writeFromAudioSampleBuffer (grab, a, keepLen)) { wr.reset(); file.deleteFile(); return false; }
+    }
+    const double spb = sampleRate * 60.0 / proj.bpm;
+    Clip c; c.uid = proj.newUid(); c.lane = lane; c.audioFile = file; c.mixerTrack = proj.lanes[(size_t) lane].mixerTrack;
+    c.length = keepLen / spb; c.fadeIn = c.fadeOut = 0.02;
+    // played along: line it up where it was heard (minus the device latency); stopped: put it at the playhead
+    c.start = endBeat >= 0.0 ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
+    if (c.start < 0.0) { c.sourceOffset = -c.start * 60.0 / proj.bpm; c.length += c.start; c.start = 0.0; }
+    if (c.length < 0.05) { file.deleteFile(); return false; }
+    {
+        const juce::ScopedLock sl (lock);
+        proj.clips.push_back (c);
+    }
+    freshTakes.insert (file.getFullPathName());
+    juce::MessageManager::callAsync ([this, al = alive] { if (! al->load()) return; sync(); primeClipReaders (position.load()); if (onRecordingAdded) onRecordingAdded(); });
+    return true;
 }
 
 void Engine::finishRecordingWriters()
@@ -1696,6 +1755,26 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     // live input: armed lanes monitor through their insert and record
     const bool rolling = playing.load() && ! countingIn.load();
+    if (numIn > 0 && in != nullptr && ! proj.lanes.empty() && retroBuf.getNumSamples() > n)
+    {
+        // Retro Record: always keep the last 60 s of the first armed track's input (track 1 if none is armed)
+        int rl = 0;
+        for (size_t l = 0; l < proj.lanes.size(); ++l) if (proj.lanes[l].armed) { rl = (int) l; break; }
+        const auto& lane = proj.lanes[(size_t) rl];
+        const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
+        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : in[0];
+        const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
+        if (il != nullptr)
+        {
+            if (ir == nullptr) ir = il;
+            auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
+            const int cap = retroBuf.getNumSamples();
+            int w = retroWrite.load();
+            for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
+            retroWrite = w; retroTotal += n; retroLane = rl;
+            retroEndBeat = rolling ? position.load() : -1.0;
+        }
+    }
     {
         const juce::SpinLock::ScopedTryLockType tl (takeLock);
         for (size_t l = 0; l < proj.lanes.size(); ++l)

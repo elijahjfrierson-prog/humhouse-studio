@@ -70,6 +70,8 @@ public:
     bool isPlaying() const { return playing.load(); }
     void setRecording (bool shouldRecord);
     bool isRecording() const { return recording.load(); }
+    // Retro Record: the last 60 s of mic input is always kept (armed or not); this drops it on REC as a clip
+    bool retroRecord();
     double positionBeats() const { return position.load(); }
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
@@ -208,6 +210,10 @@ private:
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;
+    juce::AudioBuffer<float> retroBuf;
+    std::atomic<int> retroWrite { 0 }, retroLane { 0 };
+    std::atomic<juce::int64> retroTotal { 0 };
+    std::atomic<double> retroEndBeat { -1.0 };   // beat where the newest retro sample was heard (-1: stopped)
     struct NormState { float rms = 0.0f, gain = 1.0f; };
     std::array<NormState, 256> normState {};
     juce::AudioBuffer<float> normScratch { 2, 8192 };

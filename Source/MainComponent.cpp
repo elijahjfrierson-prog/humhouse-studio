@@ -577,6 +577,8 @@ public:
         setupButton (countBtn, "COUNT-IN", "1 bar count-in / pre-roll before recording", true);
         countBtn.setToggleState (engine.countInOn.load(), juce::dontSendNotification);
         countBtn.onClick = [this] { engine.countInOn = countBtn.getToggleState(); };
+        setupButton (retroBtn, "RETRO", "Retro Record: drops the last 60 s you sang or played onto REC, even if nothing was armed or recording", false);
+        retroBtn.onClick = [this] { flash (engine.retroRecord() ? "Retro Record: last take added to REC" : "Retro Record: nothing heard on the input yet"); };
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
@@ -602,7 +604,7 @@ public:
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
-        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
+        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &retroBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -756,10 +758,10 @@ if (phoneUI)
                 { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
                 { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
-            if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
+            if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
             if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
-            for (auto* c : std::initializer_list<juce::Component*> { &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
+            for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
                                                                     &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
                 c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
             const int rowH = 46, avail = juce::jmax (200, r.getWidth() - 16);
@@ -795,7 +797,8 @@ if (phoneUI)
         bpm.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
-        countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
+        countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (4);
+        retroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (8);
         saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
@@ -1229,6 +1232,7 @@ private:
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
     juce::TextButton rackPopBtn;
+    juce::TextButton retroBtn;
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it

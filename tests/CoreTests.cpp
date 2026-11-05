@@ -679,6 +679,22 @@ int main()
         int surprise = 0;
         for (size_t i = before; i < p.clips.size(); ++i) surprise += p.clips[i].hidden && p.clips[i].audioFile.getFileName().contains ("_surprise");
         CHECK (surprise == 1);
+        // Retro Record: nothing armed, nothing recording, stopped: the last input still lands on REC as a clip
+        for (auto& l : p.lanes) l.armed = false;
+        e.setPositionBeats (8.0);
+        for (int b = 0; b < 100; ++b) { const float* ins[1] { mic.getReadPointer (0) }; float* o[2] { out.getWritePointer (0), out.getWritePointer (1) }; e.processBlock (ins, 1, o, 2, 512); }
+        const auto beforeRetro = p.clips.size();
+        CHECK (e.retroRecord());
+        CHECK (p.clips.size() == beforeRetro + 1);
+        if (p.clips.size() == beforeRetro + 1)
+        {
+            const auto& rc = p.clips.back();
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatReader> rd (wav.createReaderFor (rc.audioFile.createInputStream().release(), true));
+            std::printf ("retro record: %.2f beats at beat %.2f, %lld samples\n", rc.length, rc.start, rd ? (long long) rd->lengthInSamples : -1LL);
+            CHECK (rd != nullptr && rd->lengthInSamples >= 100 * 512);
+            CHECK (std::abs (rc.start - 8.0) < 1.0e-6 && rc.audioFile.getFileName().contains ("_retro"));
+        }
     }
     // recording latency: a take moves earlier by the device's in+out latency, so its first sound lands on the beat
     {
