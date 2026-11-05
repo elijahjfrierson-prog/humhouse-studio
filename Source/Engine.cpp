@@ -725,7 +725,7 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
-    if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; }
+    if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
 }
 
@@ -1776,7 +1776,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             int w = retroWrite.load();
             for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
             const double prevEnd = retroEndBeat.load(), newEnd = rolling ? position.load() : -1.0;
-            if (newEnd < 0.0 || prevEnd < 0.0 || newEnd < prevEnd) retroRunFrom = retroTotal.load();   // stopped, started or looped
+            if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
+                retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
             retroWrite = w; retroTotal += n; retroLane = rl;
             retroEndBeat = newEnd;
         }
