@@ -1482,7 +1482,8 @@ public:
         }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
-        if (i >= 0 && ! e.mods.isPopupMenu() && ! p.clips[(size_t) i].isAuto() && tool != PTool::Delete && hasGainDot (clipRect (p.clips[(size_t) i]))
+        if (i >= 0 && ! e.mods.isPopupMenu() && ! p.clips[(size_t) i].isAuto() && ! p.clips[(size_t) i].isDrummer()
+            && (tool == PTool::Select || tool == PTool::Paint) && ! (phoneUI && phoneClipTarget == this) && hasGainDot (clipRect (p.clips[(size_t) i]))
             && e.position.getDistanceFrom (gainDot (clipRect (p.clips[(size_t) i]))) < (phoneUI ? 18.0f : 7.0f))
         {   // the dB dot: drag up / down for the clip level, double-click (double tap) = 0 dB
             if (e.getNumberOfClicks() >= 2) { const int uid = p.clips[(size_t) i].uid; s.edit ("Clip volume 0 dB", [uid] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.gain = 1.0f; }); repaint(); return; }
@@ -1592,7 +1593,7 @@ public:
         if (drag == Drag::Gain)
         {
             if (dragClip < 0 || dragClip >= (int) p.clips.size()) return;
-            float db = juce::jlimit (-60.0f, 12.0f, gainDb0 - (e.position.y - dragStart.y) * (e.mods.isShiftDown() ? 0.05f : 0.25f));
+            float db = juce::jlimit (-60.0f, p.clips[(size_t) dragClip].isAudio() ? 12.0f : 0.0f, gainDb0 - (e.position.y - dragStart.y) * (e.mods.isShiftDown() ? 0.05f : 0.25f));
             if (std::abs (db) < 0.3f) db = 0.0f;
             const int uid = p.clips[(size_t) dragClip].uid; const float gn = db <= -59.9f ? 0.0f : juce::Decibels::decibelsToGain (db);
             s.live ([uid, gn] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.gain = gn; });
@@ -2254,7 +2255,7 @@ private:
     static juce::Point<float> gainDot (juce::Rectangle<float> r) { return { r.getX() + (phoneUI ? 14.0f : 9.0f), r.getBottom() - (phoneUI ? 10.0f : 7.0f) }; }
     void drawGainDot (juce::Graphics& g, const Clip& c)
     {
-        if (c.isAuto()) return;
+        if (c.isAuto() || c.isDrummer()) return;   // drummer regions keep their own per-piece dB
         const auto r = clipRect (c);
         if (! hasGainDot (r) || r.getRight() < headerW) return;
         const auto pt = gainDot (r); const float rad = phoneUI ? 6.0f : 4.0f;
