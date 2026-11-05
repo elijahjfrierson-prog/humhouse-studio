@@ -2378,6 +2378,8 @@ int main()
         const auto kits = drumKits();
         std::printf ("drummer kits: %d\n", kits.size());
         CHECK (kits.size() >= 3);
+        CHECK (kits.size() > 3 && kits[3].getFileName() == "Nu Rock Kit");
+        { hhx::KitEngine nk; nk.prepare (48000.0, 512); const int n = nk.loadKitFolder (kits[3]); std::printf ("Nu Rock Kit samples: %d\n", n); CHECK (n == 27); }
         Engine e; e.prepare (44100, 512);
         auto& p = e.project(); p.bpm = 120;
         const int id = addDrummerTrack (p, 0.0, 2);

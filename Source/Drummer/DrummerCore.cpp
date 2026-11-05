@@ -133,8 +133,12 @@ juce::Array<juce::File> drumKits()
 {
     juce::Array<juce::File> kits;
     for (auto& f : bundledSoundsDir().getChildFile ("Rock Drums").findChildFiles (juce::File::findDirectories, false))
-        if (f.getChildFile ("kit.json").existsAsFile()) kits.add (f);
+        if (f.getChildFile ("kit.json").existsAsFile()
+            || ! f.findChildFiles (juce::File::findFiles, false, "*.wav;*.flac").isEmpty())
+            kits.add (f);
     kits.sort();
+    for (int i = 0; i < kits.size(); ++i)   // the Nu Rock kit from the original Session Drummer sits 4th
+        if (kits[i].getFileName() == "Nu Rock Kit" && kits.size() > 3) { kits.move (i, 3); break; }
     return kits;
 }
 
