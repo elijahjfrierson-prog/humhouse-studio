@@ -412,6 +412,7 @@ void Engine::newProject (Project p)
     {
         const juce::ScopedLock sl (lock);
         proj = std::move (p);
+        retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0;   // a new song never gets the last song's retro audio
         std::swap (oldC, channelRt); std::swap (oldT, trackRt); std::swap (oldClips, clipRt);
         channelOrder.clear(); levels.clear(); sources.clear();
         position = 0.0;
@@ -968,9 +969,10 @@ bool Engine::retroRecord()
     const int cap = retroBuf.getNumSamples();
     const int w = retroWrite.load();
     const double endBeat = retroEndBeat.load();
+    const juce::int64 total = retroTotal.load(), runFrom = retroRunFrom.load();
     const int lane = juce::jlimit (0, (int) proj.lanes.size() - 1, retroLane.load());
     // the oldest half second may be overwritten while copying: leave it out
-    const int len = (int) std::min<juce::int64> (retroTotal.load(), (juce::int64) cap - (juce::int64) (sampleRate * 0.5));
+    const int len = (int) std::min<juce::int64> (total, (juce::int64) cap - (juce::int64) (sampleRate * 0.5));
     if (len <= 0) return false;
     juce::AudioBuffer<float> grab (2, len);
     const int start = ((w - len) % cap + cap) % cap;
@@ -1008,7 +1010,9 @@ bool Engine::retroRecord()
     Clip c; c.uid = proj.newUid(); c.lane = lane; c.audioFile = file; c.mixerTrack = proj.lanes[(size_t) lane].mixerTrack;
     c.length = keepLen / spb; c.fadeIn = c.fadeOut = 0.02;
     // played along: line it up where it was heard (minus the device latency); stopped: put it at the playhead
-    c.start = endBeat >= 0.0 ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
+    // (only when it was heard in one straight run: a take that crosses a loop jump or a stop goes at the playhead)
+    const bool oneRun = endBeat >= 0.0 && total - len + a >= runFrom;
+    c.start = oneRun ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
     if (c.start < 0.0) { c.sourceOffset = -c.start * 60.0 / proj.bpm; c.length += c.start; c.start = 0.0; }
     if (c.length < 0.05) { file.deleteFile(); return false; }
     {
@@ -1762,7 +1766,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         for (size_t l = 0; l < proj.lanes.size(); ++l) if (proj.lanes[l].armed) { rl = (int) l; break; }
         const auto& lane = proj.lanes[(size_t) rl];
         const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : in[0];
+        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
         const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
         if (il != nullptr)
         {
@@ -1771,8 +1775,10 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             const int cap = retroBuf.getNumSamples();
             int w = retroWrite.load();
             for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
+            const double prevEnd = retroEndBeat.load(), newEnd = rolling ? position.load() : -1.0;
+            if (newEnd < 0.0 || prevEnd < 0.0 || newEnd < prevEnd) retroRunFrom = retroTotal.load();   // stopped, started or looped
             retroWrite = w; retroTotal += n; retroLane = rl;
-            retroEndBeat = rolling ? position.load() : -1.0;
+            retroEndBeat = newEnd;
         }
     }
     {

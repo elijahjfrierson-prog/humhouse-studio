@@ -212,7 +212,7 @@ private:
     juce::AudioBuffer<float> scratch, inputScratch;
     juce::AudioBuffer<float> retroBuf;
     std::atomic<int> retroWrite { 0 }, retroLane { 0 };
-    std::atomic<juce::int64> retroTotal { 0 };
+    std::atomic<juce::int64> retroTotal { 0 }, retroRunFrom { 0 };   // runFrom: retroTotal when the current straight playback run began
     std::atomic<double> retroEndBeat { -1.0 };   // beat where the newest retro sample was heard (-1: stopped)
     struct NormState { float rms = 0.0f, gain = 1.0f; };
     std::array<NormState, 256> normState {};
