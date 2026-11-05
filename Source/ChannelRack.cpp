@@ -567,7 +567,7 @@ struct Row : public juce::Component
     {
         k.onValueChange = [this, &k, set] {
             s.live ([&] (Project&) { if (auto* c = s.channel (channelId)) set (*c, (float) k.getValue()); });
-            if (! k.isMouseButtonDown()) s.commit (k.getName());
+            if (! touchHeld()) s.commit (k.getName());
         };
         k.onDragEnd = [this, &k] { s.commit (k.getName()); };
     }
@@ -849,7 +849,7 @@ public:
             else if (i >= 0 && i != s.p().currentPattern)
                 s.edit ("Select pattern", [i] (Project& p) { p.currentPattern = i; });
         };
-        swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! swing.isMouseButtonDown()) s.commit ("Swing"); };
+        swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! touchHeld()) s.commit ("Swing"); };
         swing.onDragEnd = [this] { s.commit ("Swing"); };
         for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing, (juce::Component*) &popBtn })
             addAndMakeVisible (c);

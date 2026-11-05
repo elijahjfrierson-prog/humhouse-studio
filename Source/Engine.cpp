@@ -1154,6 +1154,9 @@ void Engine::click (float* l, float* r, int n, double b0, double b1)
     }
 }
 
+// pattern clip level (the dB dot): scales the note velocities of that clip only
+static Note clipVel (const Note& n, float g) { if (g == 1.0f) return n; Note c = n; c.velocity = juce::jlimit (0.0f, 1.0f, c.velocity * g); return c; }
+
 void Engine::renderSegment (double b0, double b1, int off, int n)
 {
     const double spb = sampleRate * 60.0 / proj.bpm;
@@ -1287,8 +1290,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     {
                         if (note.muted) continue;
                         const double s = base + rep * plen + swingBeat (note.start) + shiftBeats;
-                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, note, s);
-                        else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
+                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, clipVel (note, clip.gain), s);
+                        else if (chase && s < b0 && s >= clip.start) chaseNote (ci, clipVel (note, clip.gain), s, clip.start + clip.length);
                     }
             }
         }

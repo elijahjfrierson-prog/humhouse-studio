@@ -163,7 +163,7 @@ public:
                 auto* k = new Knob (p.name, "drag up / down, double-click resets", p.mn, p.mx, p.def);
                 k->setValue (p.value, juce::dontSendNotification);
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
-                k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
+                k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! touchHeld()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
                 auto* rc = rightClicks.add (new RightClick());
                 rc->fn = [this, id] { if (onParamMenu) onParamMenu (id); };

@@ -76,7 +76,7 @@ public:
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
-            if (! glide.isMouseButtonDown()) s.commit ("Glide");
+            if (! touchHeld()) s.commit ("Glide");
         };
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));

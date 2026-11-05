@@ -172,7 +172,12 @@ private:
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
         juce::ignoreUnused (e);
-        if (phoneUI && row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind != 0) { add (row); list.deselectAllRows(); }   // phone: one tap adds the effect and opens its window
+        if (phoneUI && row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind != 0)
+        {   // add after the tap finishes: adding + opening the window inside the list's own click rebuilt the list under the finger
+            list.deselectAllRows();
+            juce::Component::SafePointer<PluginList> sp (this);
+            juce::MessageManager::callAsync ([sp, row] { if (sp != nullptr) sp->add (row); });
+        }   // phone: one tap adds the effect and opens its window
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (! phoneUI) add (row); }
     void add (int row)
@@ -413,8 +418,11 @@ private:
     void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile() && isAudioFile (f)) s.engine.previewFile (f); }
     void fileClicked (const juce::File& f, const juce::MouseEvent& e) override
     {
-        if (phoneUI && f.isDirectory())   // phone: one tap opens / closes a folder
-            if (auto* it = tree.getItemAt (e.getEventRelativeTo (&tree).y)) it->setOpen (! it->isOpen());
+        juce::ignoreUnused (e);
+        if (phoneUI && f.isDirectory())   // phone: one tap opens / closes the folder you tapped (matched by path: the y lookup always hit the top folder)
+            for (int r = 0; r < tree.getNumRowsInTree(); ++r)
+                if (auto* it = tree.getItemOnRow (r))
+                    if (it->getUniqueName() == f.getFullPathName()) { it->setOpen (! it->isOpen()); break; }
     }
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
     void browserRootChanged (const juce::File&) override {}

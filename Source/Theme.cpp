@@ -379,11 +379,17 @@ void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)
     if (! withText) return;
     area.removeFromLeft (8.0f);
     const float h = area.getHeight();
+    float fit = 1.0f;   // shrink the words to the space they get, never cut them off
+    {
+        juce::GlyphArrangement ga; ga.addLineOfText (juce::Font (juce::FontOptions (h * 0.52f, juce::Font::bold)), "HUMHOUSE", 0.0f, 0.0f);
+        const float tw = ga.getBoundingBox (0, -1, true).getWidth() + 2.0f;
+        if (tw > area.getWidth() && area.getWidth() > 1.0f) fit = area.getWidth() / tw;
+    }
     g.setColour (col::accent);
-    g.setFont (juce::FontOptions (h * 0.52f, juce::Font::bold));
+    g.setFont (juce::FontOptions (h * 0.52f * fit, juce::Font::bold));
     g.drawText ("HUMHOUSE", area.removeFromTop (h * 0.62f), juce::Justification::bottomLeft, false);
     g.setColour (col::dim);
-    g.setFont (juce::FontOptions (h * 0.3f, juce::Font::bold));
+    g.setFont (juce::FontOptions (h * 0.3f * fit, juce::Font::bold));
     g.drawText ("S T U D I O", area, juce::Justification::topLeft, false);
 }
 }
