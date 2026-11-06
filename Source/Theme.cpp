@@ -477,7 +477,7 @@ struct LayoutPanel : juce::Component
         {
             col::laneMinH = 60;
             if (s.settings) { s.settings->removeValue ("layout"); s.settings->setValue ("layoutName", label); }
-            col::lightMode = false; applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);
+            col::lightMode = false; applyTheme (juce::Colour (0xff9b5cff), 0.15f, false);
         }
         else
         {

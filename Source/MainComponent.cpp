@@ -187,12 +187,15 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
 {
     auto r = b.getLocalBounds().toFloat().reduced (0.5f);
     auto base = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : b.findColour (juce::TextButton::buttonColourId);
-    if (down) base = base.brighter (0.2f);
-    else if (over) base = base.brighter (0.08f);
-    g.setColour (base);
-    g.fillRoundedRectangle (r, 4.0f);
-    g.setColour (col::gridBar.withAlpha (0.7f));
-    g.drawRoundedRectangle (r, 4.0f, 1.0f);
+    if (down) base = base.brighter (0.15f);
+    else if (over) base = base.brighter (0.06f);
+    g.setGradientFill (juce::ColourGradient (base.brighter (0.07f), 0.0f, r.getY(), base.darker (0.07f), 0.0f, r.getBottom(), false));   // studio console look: soft top light
+    g.fillRoundedRectangle (r, 3.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.drawRoundedRectangle (r, 3.0f, 1.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.05f));
+    g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + 3.0f, r.getRight() - 3.0f);
+    if (b.getToggleState() && r.getHeight() > 12.0f) { g.setColour (col::accent); g.fillRoundedRectangle (r.getX() + 4.0f, r.getBottom() - 3.0f, r.getWidth() - 8.0f, 2.0f, 1.0f); }
 }
 
 juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
@@ -586,7 +589,7 @@ public:
         }
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
-        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
+        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.15f, false);   // default look: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         applySavedLayout (studio);
