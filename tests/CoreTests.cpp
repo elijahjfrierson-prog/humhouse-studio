@@ -1,5 +1,6 @@
 #include <cstdlib>
 #include <set>
+#include <thread>
 #include "../Source/Engine.h"
 #include "../Source/Drummer/DrummerCore.h"
 #include "../Source/Drummer/KitEngine.h"
@@ -308,6 +309,85 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 int main()
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
+    // phone crash repro: 5-minute beat + vocal + 2 adlibs, 60 FX added one at a time while audio runs, undo/redo, save, reopen
+    if (std::getenv ("HHS_STRESS") != nullptr)
+    {
+        const double sr = 44100; const int secs = 300;
+        auto wav = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-stress-vocal.wav");
+        {
+            juce::AudioBuffer<float> b (1, (int) sr * secs);
+            double ph = 0;
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                const double t = i / sr, f = 220.0 * std::pow (2.0, (std::fmod (std::floor (t * 2.0), 7.0)) / 12.0) * (1.0 + 0.004 * std::sin (t * 33.0));
+                ph += 2.0 * juce::MathConstants<double>::pi * f / sr;
+                const float env = std::fmod (t, 0.5) < 0.42 ? 1.0f : 0.0f;
+                b.setSample (0, i, env * (0.3f * (float) std::sin (ph) + 0.1f * (float) std::sin (2 * ph) + 0.05f * (float) std::sin (3 * ph)));
+            }
+            wav.deleteFile();
+            std::unique_ptr<juce::OutputStream> os (wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), sr, 1, 16, {}, 0));
+            if (w) { os.release(); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+        }
+        auto rss = [] { long pages = 0, res = 0; if (auto* f = std::fopen ("/proc/self/statm", "r")) { if (std::fscanf (f, "%ld %ld", &pages, &res) != 2) res = 0; std::fclose (f); } return res * 4096.0 / 1048576.0; };
+        Engine e; e.prepare (48000, 256);
+        e.newProject (Project::createDemo());
+        auto& p = e.project();
+        p.songMode = true; p.bpm = 140;
+        const double songBeats = secs * p.bpm / 60.0;
+        std::vector<int> vocalTracks;
+        for (int v = 0; v < 3; ++v)
+        {
+            const juce::ScopedLock sl (e.getLock());
+            const int mt = p.addMixerTrack (v == 0 ? "Lead" : "Adlib " + juce::String (v));
+            vocalTracks.push_back (mt);
+            Lane ln; ln.name = p.mixer[(size_t) mt].name; ln.mixerTrack = mt; p.lanes.push_back (ln);
+            Clip c; c.uid = p.newUid(); c.audioFile = wav; c.start = 0; c.length = songBeats; c.lane = (int) p.lanes.size() - 1; p.clips.push_back (c);
+        }
+        e.sync(); e.play();
+        std::atomic<bool> run { true }; std::atomic<int> blocks { 0 }; std::atomic<double> worst { 0 }, total { 0 };
+        std::thread audio ([&] {
+            juce::AudioBuffer<float> out (2, 256);
+            while (run.load())
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                e.processBlock (nullptr, 0, o, 2, 256);
+                const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) / (256.0 / 48000.0);
+                if (! std::isfinite (out.getSample (0, 0))) std::printf ("NaN at block %d\n", blocks.load());
+                worst = std::max (worst.load(), dt); total = total + dt; ++blocks;
+            }
+        });
+        UndoHistory undo; undo.push (p, "start");
+        const auto& all = builtinEffects();
+        const char* chain[] = { "autopitch", "stgate", "deess", "steq7", "fet76", "stdyn", "satur", "stvocal", "vroom", "verb", "delay", "pitchshift", "comp", "eq", "chorus", "wide", "limiter", "stlimit", "purify", "glitch" };
+        for (int k = 0; k < 60; ++k)
+        {
+            const juce::String type = k < 57 ? juce::String (chain[k % 20]) : juce::String (all[(size_t) (k % (int) all.size())].id);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            { const juce::ScopedLock sl (e.getLock()); p.addFx (vocalTracks[(size_t) (k % 3)], type); }
+            e.sync(); undo.push (p, "add " + type);
+            std::printf ("fx %2d %-10s sync %.1f ms  rss %.0f MB  avg load %.0f%%  worst %.0f%%\n", k + 1, type.toRawUTF8(), juce::Time::getMillisecondCounterHiRes() - t0, rss(), 100.0 * total.load() / std::max (1, blocks.load()), 100.0 * worst.load());
+            total = 0; blocks = 0; worst = 0;
+            juce::Thread::sleep (30);
+        }
+        for (int k = 0; k < 60; ++k) { { const juce::ScopedLock sl (e.getLock()); undo.undo (p); } e.sync(); }
+        for (int k = 0; k < 60; ++k) { { const juce::ScopedLock sl (e.getLock()); undo.redo (p); } e.sync(); }
+        std::printf ("undo/redo 60 x2 done, fx on vocal %d, rss %.0f MB\n", (int) p.mixer[(size_t) vocalTracks[0]].fx.size(), rss());
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-stress.hhs");
+        CHECK (saveProject (p, f));
+        for (int r = 0; r < 3; ++r)
+        {
+            Project q; CHECK (loadProject (q, f));
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            e.newProject (std::move (q)); e.sync(); e.play();
+            std::printf ("reopen %d: %.0f ms, rss %.0f MB\n", r, juce::Time::getMillisecondCounterHiRes() - t0, rss());
+            juce::Thread::sleep (200);
+        }
+        run = false; audio.join(); e.stop();
+        std::printf (failures ? "%d FAILURES\n" : "STRESS PASSED\n", failures);
+        return failures ? 1 : 0;
+    }
     // offline AutoPitch render for listening / analysis: HHS_AP_RENDER="in.wav;out.wav;style;key;scale;A4;speed"
     if (const char* spec = std::getenv ("HHS_AP_RENDER"))
     {
@@ -2394,8 +2474,7 @@ int main()
         const auto kits = drumKits();
         std::printf ("drummer kits: %d\n", kits.size());
         CHECK (kits.size() >= 3);
-        CHECK (kits.size() > 3 && kits[3].getFileName() == "Nu Rock Kit");
-        { hhx::KitEngine nk; nk.prepare (48000.0, 512); const int n = nk.loadKitFolder (kits[3]); std::printf ("Nu Rock Kit samples: %d\n", n); CHECK (n == 27); }
+        for (auto& k : kits) CHECK (! k.getFileName().contains ("Nu Rock"));
         Engine e; e.prepare (44100, 512);
         auto& p = e.project(); p.bpm = 120;
         const int id = addDrummerTrack (p, 0.0, 2);
