@@ -31,6 +31,22 @@ int drumGroupOf (int lane)
     return GroupCymbals;   // ride, crashes, china, splash, perc
 }
 
+int drumLaneForKey (int key)
+{
+    using namespace hhx;
+    switch (key)
+    {
+        case 35: case 36: return LaneKick;   case 37: return LaneSideStick; case 38: return LaneSnare;   case 39: return LaneSnareFlam;
+        case 40: return LaneSnareRim;        case 41: return LaneTom4;      case 42: return LaneHatClosed; case 43: return LaneTom3;
+        case 44: return LaneHatPedal;        case 45: return LaneTom2;      case 46: return LaneHatOpen2; case 47: return LaneTom2;
+        case 48: return LaneTom1;            case 49: return LaneCrashL;    case 50: return LaneTom1;     case 51: return LaneRideBow;
+        case 52: return LaneChina;           case 53: return LaneRideBell;  case 55: return LaneSplash;   case 57: return LaneCrashR;
+        case 59: return LaneRideEdge;        default: break;
+    }
+    static const int byName[12] { LaneKick, LaneSideStick, LaneSnare, LaneSnareFlam, LaneSnareRim, LaneTom4, LaneHatClosed, LaneTom3, LaneHatPedal, LaneTom2, LaneHatOpen2, LaneTom1 };
+    return byName[((key % 12) + 12) % 12];   // C = kick, D = snare, F# = hat ... the same pattern in every octave
+}
+
 int kitPieceOf (int lane)
 {
     using namespace hhx;
@@ -137,8 +153,6 @@ juce::Array<juce::File> drumKits()
             || ! f.findChildFiles (juce::File::findFiles, false, "*.wav;*.flac").isEmpty())
             kits.add (f);
     kits.sort();
-    for (int i = 0; i < kits.size(); ++i)   // the Nu Rock kit from the original Session Drummer sits 4th
-        if (kits[i].getFileName() == "Nu Rock Kit" && kits.size() > 3) { kits.move (i, 3); break; }
     return kits;
 }
 
@@ -195,7 +209,12 @@ public:
             juce::Thread::launch ([k, f] { k->loadKitFolder (f); });   // big multi-mic kits load in the background; strokes are skipped until ready
         }
     }
-    void noteOn (int key, float v, bool) override { kit->noteOn (key & 31, v, key >> 5); ring = (juce::int64) (sr * 8.0); }
+    void noteOn (int key, float v, bool) override
+    {
+        if (key >= kDrummerLaneKey) { const int k = key - kDrummerLaneKey; kit->noteOn (k & 31, v, k >> 5); }
+        else kit->noteOn (drumLaneForKey (key), v, 0);   // used to be key & 31: C5 (60) = Tom 4, so the Rack only played toms
+        ring = (juce::int64) (sr * 8.0);
+    }
     void noteOff (int) override {}
     void allNotesOff() override { kit->allNotesOff(); }
     void choke() override {}

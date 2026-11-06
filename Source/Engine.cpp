@@ -1310,7 +1310,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     if (s < b0 || s >= b1) continue;
                     const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
                     if ((mask >> g & 1) == 0 || silent (sec, g) || src->steps.count (sec) > 0) continue;   // off here, or a manual STEPS section
-                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
+                    Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
                 if (src->steps.empty()) continue;
@@ -1326,7 +1326,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     for (int g = 0; g < NumDrumGroups; ++g)
                         if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
                         {
-                            Note nt; nt.key = drumGroupLane (g); nt.start = rel; nt.length = 0.125;
+                            Note nt; nt.key = kDrummerLaneKey + drumGroupLane (g); nt.start = rel; nt.length = 0.125;
                             nt.velocity = juce::jlimit (0.02f, 1.0f, (step % 4 == 0 ? 0.9f : 0.72f) * drummerDynamics (*src, at));
                             emit (ci, nt, s);
                         }

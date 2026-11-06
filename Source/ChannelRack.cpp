@@ -540,7 +540,7 @@ struct Row : public juce::Component
                 juce::Timer::callAfterDelay (300, [sp, tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
             }
         };
-        setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
+        setupButton (wrench, "SET", "Channel settings: normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
         setupButton (link, "MIDI", "Link MIDI: your keyboard / piano plays this channel (link as many as you like; none linked = the selected channel plays)", true);

@@ -240,7 +240,17 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     void set (const juce::String& id, float v)
     {
-        for (auto& p : params) if (p.id == id) p.value = v;
+        for (auto& p : params)
+            if (p.id == id)
+            {
+                p.value = v;
+                if (p.choices.empty() && Studio::readout())
+                {
+                    const float span = p.mn < 0 && p.mx > 0 ? juce::jmax (-p.mn, p.mx) : p.mx - p.mn;
+                    const float pc = span > 0 ? 100.0f * (p.mn < 0 && p.mx > 0 ? v : v - p.mn) / span : 0.0f;
+                    Studio::readout() (p.name + ":  " + juce::String (juce::roundToInt (pc)) + "%   (" + juce::String (v, std::abs (v) >= 100 ? 0 : 2) + ")");
+                }
+            }
         onSet (id, v);
         if (onAnyChange) onAnyChange();
     }
@@ -961,6 +971,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     if (slot == nullptr) return;
     const auto key = "fx:" + juce::String (track) + ":" + juce::String (slotUid);
     if (focusExisting (key)) return;
+    if (phoneUI)   // phone: one effect window at a time (every open window kept its own live graph running)
+        for (auto* w : EditorWindow::windows()) if (w->key.startsWith ("fx:")) EditorWindow::close (w);
     const auto trackName = track == 0 ? juce::String ("Master") : s.p().mixer[(size_t) track].name;
 
     if (slot->type == "plugin")
@@ -1776,7 +1788,7 @@ void openChannelEditor (Studio& s, int channelId)
     if (sampler)   // FL-style: wave, amp / INS and sample settings together on one page
     {
         auto* wave = new SampleWaveView (s, channelId); wave->setSize (560, 180);
-        tabs->add ("MAIN", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
+        tabs->add ("SOUND", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
                                             new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP") }));
     }
     else if (ch->synth.wave == 10)   // Serum-style: the wavetable on top, draw on it, knobs below
@@ -1785,8 +1797,8 @@ void openChannelEditor (Studio& s, int channelId)
         tabs->add ("OSC", new StackPage ({ wv, new ParamGrid (ch->name + "  |  HumWave", ins, setter, commit, kind) }));
     }
     else tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
-    tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
-    tabs->add ("SCOPE", createScopeView ([&s, channelId]() -> ScopeTap* {
+    tabs->add ("SHAPE", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
+    tabs->add ("WAVE VIEW", createScopeView ([&s, channelId]() -> ScopeTap* {
         auto* c = s.channel (channelId);
         const int t = c != nullptr ? c->mixerTrack : 0;
         return t > 0 ? s.engine.trackScope (t) : &masterScope(); }, ch->name));
@@ -1871,7 +1883,7 @@ void openClipEditor (Studio& s, int clipUid)
     };
     auto commit = [&s] { s.commit ("Clip settings"); };
     std::vector<ParamGrid::P> mainP, func;
-    mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (FL link)" } });
+    mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (linked)" } });
     mainP.push_back ({ "gain", "Volume (dB)", -24, 12, 0, juce::Decibels::gainToDecibels (c0->gain, -60.0f), {} });
     mainP.push_back ({ "trim", "Trim (cut silence in front)", 0, 1, 0, 0.0f, {} });
     mainP.push_back ({ "fadeIn", "Fade in (beats)", 0, 8, 0, (float) c0->fadeIn, {} });
@@ -1884,9 +1896,9 @@ void openClipEditor (Studio& s, int clipUid)
     func.push_back ({ "humtime", "HumTime (chop / timing)", 0, 1, 0, 0.0f, { "-", "Open" } });
     func.push_back ({ "humtone", "HumTone (pitch)", 0, 1, 0, 0.0f, { "-", "Open" } });
     auto* tabs = new ChannelTabs();
-    tabs->add ("MAIN", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
-    tabs->add ("FUNC", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
-    tabs->add ("SCOPE", createScopeView ([&s, clipUid]() -> ScopeTap* {
+    tabs->add ("CLIP", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
+    tabs->add ("SHAPE", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
+    tabs->add ("WAVE VIEW", createScopeView ([&s, clipUid]() -> ScopeTap* {
         int t = 0;
         for (auto& c : s.p().clips)
             if (c.uid == clipUid) t = c.mixerTrack >= 0 ? c.mixerTrack : (c.lane >= 0 && c.lane < (int) s.p().lanes.size() ? s.p().lanes[(size_t) c.lane].mixerTrack : 0);

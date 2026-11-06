@@ -14,14 +14,14 @@ struct WelcomePanel : public juce::Component
     {
         title.setText ("Welcome to HumHouse Studio", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
-        sub.setText ("Beats and vocals in one place - FL-style workflow, BandLab-fast.", juce::dontSendNotification);
+        sub.setText ("Beats and vocals in one place - full studio workflow, phone-fast.", juce::dontSendNotification);
         sub.setColour (juce::Label::textColourId, hhs::col::dim);
         list.setMultiLine (true); list.setReadOnly (true); list.setCaretVisible (false);
         list.setText (
             "BEATS\n"
             "  - Channel Rack with step sequencer, built-in kits, sampler and synth\n"
             "  - Piano Roll: scale highlight + LOCK, chord stamp, hi-hat rolls, glide / 808 slides\n"
-            "  - Playlist: patterns + audio clips, FL keys (select, paint, slice, mute), snap, zoom\n"
+            "  - Playlist: patterns + audio clips, HumHouse keys (select, paint, slice, mute), snap, zoom\n"
             "\nVOCALS\n"
             "  - Record takes with punch-in, loop recording and instant playback of earlier takes\n"
             "  - AutoPitch (key / scale, speed, Hard Tune), Studio Vocal smoother, de-ess, Noise Gate\n"

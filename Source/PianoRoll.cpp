@@ -65,7 +65,7 @@ public:
         setupButton (lockBtn, "LOCK", "Scale lock: notes you draw, drag or stamp snap to the chosen key and scale", true);
         lockBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prScaleLock", false), juce::dontSendNotification);
         lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
-        setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the FL-like default). Alt + scroll fine-tunes", false);
+        setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the default). Alt + scroll fine-tunes", false);
         sizeBtn.onClick = [this] { setNoteSize ((noteSize + 1) % 4); };
         velH = s.settings != nullptr ? juce::jlimit (40, 600, s.settings->getIntValue ("prVelH", 70)) : 70;
         hbar.onMove = [this] (double v) { scrollX = juce::jmax (0.0, v); repaint(); };

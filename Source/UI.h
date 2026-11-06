@@ -365,6 +365,7 @@ struct Studio : public juce::ChangeBroadcaster
     template <typename F> void live (F&& f) { const juce::ScopedLock sl (engine.getLock()); f (p()); }
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
+    static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves
     void undoStep (int delta);
     void jumpHistory (int index);
     NoteList& notes (int channelId);

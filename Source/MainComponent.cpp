@@ -81,20 +81,20 @@ void showWhatsNewIfUpdated()
         "- Drag the playhead on the bar numbers in Piano Roll, Playlist and Record\n"
         "- Playlist: E + drag the bar ruler = time selection (copy / paste / Ctrl+B whole bars incl. empty space); Shift+drag ruler = punch\n"
         "- Piano Roll toolbar wraps to two rows when narrow; Glide always visible\n"
-        "- Note names match FL: middle C = C5 (C0 to G10)\n"
+        "- Note names: middle C = C5 (C0 to G10)\n"
         "- One-shots: smoother pitched playback (Hermite), SET (wrench) button on every channel, on/off buttons for Normalize, Reverse, Declick...\n"
         "- One-shots / 808 cut mode: no click at the start or when the next hit cuts the last one\n"
         "- Piano Roll LOCK: notes you draw, drag or stamp snap to your key and scale\n"
         "- Sample previews stop when you click anywhere, press Stop or Space\n"
         "- Recording: earlier takes and the beat play instantly when you hit record (no dropout while take files are created, punch pre-roll preloaded)\n"
         "- Studio Vocal (Studio FX): 0-latency vocal smoother - Smooth, De-Ess, Silk air, Warmth + 7 presets\n"
-        "- No more phasing on buses: automatic plugin delay compensation like FL, the Mix knob lines dry up with latent FX, mono plugins get the mono sum instead of just the left side\n"
+        "- No more phasing on buses: automatic plugin delay compensation, the Mix knob lines dry up with latent FX, mono plugins get the mono sum instead of just the left side\n"
         "- AutoPitch rebuilt: Auto-Tune style single read head spliced on whole pitch cycles - full voice, no clicks or phasing, ~0.1-6 ms\n"
-        "- Knobs work like FL: drag up/down or scroll, Shift = fine, double-click to type a value, Alt-click resets\n"
+        "- Knobs: drag up/down or scroll, Shift = fine, double-click to type a value, Alt-click resets\n"
         "- Studio EQ: Pro-Q style band bar (type / freq / gain / Q, type values in), selected band shape, listen (Alt+drag a dot), Shift = fine, display range 6 / 12 / 18 / 30 dB\n"
         "- Trackpad pinch zoom + Ctrl/Cmd+scroll zoom at the mouse in Playlist and Piano Roll\n"
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
-        "- FL Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
+        "- Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
         "- Ctrl/Cmd+C / X / V copy, cut, paste at the playhead; Ctrl/Cmd+B duplicate; Shift+drag clones; Ctrl/Cmd+D deselect\n"
         "- Audio beats no longer cut off at the start: clip audio is loaded before playback begins\n"
         "- Start mid-note (e.g. bar 1.4) and 808s / samples play from the matching point in the sample\n"
@@ -107,7 +107,7 @@ void showWhatsNewIfUpdated()
         "- Fade bends: drag the round handle on any fade up / down for curved fades\n"
         "- Smoother UI: Playlist / Piano Roll only redraw what moves while playing; Options > capture-friendly drawing toggle (Windows)\n"
         "- See the take being recorded: live red clip + waveform; quiet takes drawn scaled up\n"
-        "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
+        "- New takes over an earlier take drop to the next lane instead of covering it\n"
         "- NORM button on every track: zero-latency auto-normalize for your voice\n"
         "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
         "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
@@ -351,20 +351,26 @@ void Studio::commit (const juce::String& what)
 
 void Studio::undoStep (int delta)
 {
-    bool ok = false;
-    {
-        const juce::ScopedLock sl (engine.getLock());
-        ok = delta < 0 ? undo.undo (p()) : undo.redo (p());
-    }
-    if (ok) { engine.sync(); dirty = true; sendChangeMessage(); }
+    jumpHistory (undo.current() + (delta < 0 ? -1 : 1));
 }
 
+// the snapshot is parsed before the audio lock is taken and the old song is freed after it: parsing a big song
+// (60 FX, long vocals) under the lock stalled playback = static / lag on undo, redo and history jumps
 void Studio::jumpHistory (int index)
 {
-    bool ok = false;
-    { const juce::ScopedLock sl (engine.getLock()); ok = undo.jumpTo (index, p()); }
-    if (ok) { engine.sync(); dirty = true; sendChangeMessage(); }
+    if (index < 0 || index >= undo.size() || index == undo.current()) return;
+    Project next;
+    if (! undo.stateAt (index, next)) return;
+    {
+        const juce::ScopedLock sl (engine.getLock());
+        next.projectFile = p().projectFile;
+        std::swap (p(), next);
+        undo.setCurrent (index);
+    }
+    engine.sync(); dirty = true; sendChangeMessage();
 }
+
+std::function<void (const juce::String&)>& Studio::readout() { static std::function<void (const juce::String&)> f; return f; }
 
 NoteList& Studio::notes (int channelId)
 {
@@ -628,6 +634,7 @@ public:
         hintBar.setColour (juce::Label::backgroundColourId, col::panel);
         hintBar.setFont (juce::FontOptions (13.0f));
         addAndMakeVisible (hintBar);
+        Studio::readout() = [hb = juce::Component::SafePointer<juce::Label> (&hintBar)] (const juce::String& t) { if (hb != nullptr) hb->setText (t, juce::dontSendNotification); };
 
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
         if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);

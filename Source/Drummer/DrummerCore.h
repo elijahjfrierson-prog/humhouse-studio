@@ -10,6 +10,8 @@ struct DrumHit { double beat; int lane; float vel; int variant; };
 enum DrumGroup { GroupKick = 0, GroupSnare, GroupHats, GroupToms, GroupCymbals, NumDrumGroups };
 const char* drumGroupName (int g);
 int drumGroupOf (int lane);
+constexpr int kDrummerLaneKey = 1000;   // the Drummer's own strokes: 1000 + lane + 32 * variant. Lower keys are notes from the Channel Rack / Piano Roll
+int drumLaneForKey (int key);           // Channel Rack / Piano Roll note -> kit piece (GM drum map, then by note name in any octave)
 constexpr int NumKitPieces = 17;
 int kitPieceOf (int lane);              // the per-piece level knob a lane follows
 const char* kitPieceName (int piece);

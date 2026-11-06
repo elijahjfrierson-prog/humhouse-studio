@@ -1278,7 +1278,7 @@ public:
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
-        setupButton (rts, "RETURN", "On stop, jump back to where playback started (FL style)", true);
+        setupButton (rts, "RETURN", "On stop, jump back to where playback started", true);
         rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
         setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
         preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };
@@ -2794,7 +2794,7 @@ private:
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
         m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
-        m.addItem (19, "Clip settings (FL wrench): Main / Func / Scope...", clip.isAudio());
+        m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
         {
             juce::PopupMenu tm;
             tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");

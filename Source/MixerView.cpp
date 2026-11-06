@@ -24,7 +24,8 @@ struct Strip : public juce::Component
         pan.onDragEnd = [this] { s.commit ("Pan"); };
         duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! touchHeld()) s.commit ("Duck"); };
         duck.onDragEnd = [this] { s.commit ("Duck"); };
-        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); }); if (! touchHeld()) s.commit ("Stereo separation"); };
+        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); });
+            if (auto& ro = Studio::readout()) { const float v = (float) sep.getValue(); ro ("Stereo:  " + juce::String (juce::roundToInt (std::abs (v) * 100.0f)) + "% " + (v > 0.001f ? "separation (wider)" : v < -0.001f ? "merged (toward mono)" : "(as recorded)")); } if (! touchHeld()) s.commit ("Stereo separation"); };
         sep.onDragEnd = [this] { s.commit ("Stereo separation"); };
         addAndMakeVisible (sep);
         setupButton (scBtn, "SC", "Sidechain: pick the source (default = armed vocal) + ratio / threshold / attack / release");
@@ -217,7 +218,7 @@ struct Strip : public juce::Component
     Studio& s; int index; float level = 0;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
-    Knob sep { "M/S", "stereo separation (FL): left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
+    Knob sep { "M/S", "stereo separation: left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
     juce::TextButton scBtn;
     juce::TextButton mute, solo, route;

@@ -578,20 +578,34 @@ void UndoHistory::push (const Project& p, const juce::String& desc)
 {
     auto xml = projectToTree (p).toXmlString();
     if (index >= 0 && states[(size_t) index].first == xml) return;
-    states.resize ((size_t) (index + 1));
+    while ((int) states.size() > index + 1) { bytes -= (size_t) states.back().first.getNumBytesAsUTF8(); states.pop_back(); }
+    bytes += (size_t) xml.getNumBytesAsUTF8();
     states.push_back ({ xml, desc });
-    if ((int) states.size() > maxLevels + 1) states.erase (states.begin());
+   #if JUCE_IOS
+    const size_t budget = (size_t) 48 << 20;    // big songs x 999 levels ran the phone out of memory (iOS kills the app)
+   #else
+    const size_t budget = (size_t) 512 << 20;
+   #endif
+    while (states.size() > 2 && ((int) states.size() > maxLevels + 1 || bytes > budget))
+    { bytes -= (size_t) states.front().first.getNumBytesAsUTF8(); states.erase (states.begin()); }
     index = (int) states.size() - 1;
 }
 
-bool UndoHistory::jumpTo (int i, Project& p)
+bool UndoHistory::stateAt (int i, Project& out) const
 {
     if (i < 0 || i >= (int) states.size()) return false;
     auto xml = juce::XmlDocument::parse (states[(size_t) i].first);
     if (! xml) return false;
-    const auto file = p.projectFile;
-    p = projectFromTree (juce::ValueTree::fromXml (*xml));
-    p.projectFile = file;
+    out = projectFromTree (juce::ValueTree::fromXml (*xml));
+    return true;
+}
+
+bool UndoHistory::jumpTo (int i, Project& p)
+{
+    Project q;
+    if (! stateAt (i, q)) return false;
+    q.projectFile = p.projectFile;
+    p = std::move (q);
     index = i;
     return true;
 }
