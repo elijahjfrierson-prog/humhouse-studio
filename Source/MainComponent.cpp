@@ -515,8 +515,9 @@ struct KeyCmdEditor : juce::Component
         }
         resetAll.setButtonText ("Reset all to default"); resetAll.setWantsKeyboardFocus (false); addAndMakeVisible (resetAll);
         resetAll.onClick = [this] { keys.clear(); waiting = -1; refresh(); save(); };
+        addAndMakeVisible (status);
         refresh();
-        setSize (460, 34 + 28 * (int) keyActions().size());
+        setSize (460, 62 + 28 * (int) keyActions().size());
     }
     void refresh()
     {
@@ -536,6 +537,7 @@ struct KeyCmdEditor : juce::Component
             names[i]->setBounds (row.removeFromLeft (170)); resetBtns[i]->setBounds (row.removeFromRight (72).reduced (2)); setBtns[i]->setBounds (row.reduced (2));
         }
         resetAll.setBounds (r.removeFromTop (28).reduced (2));
+        status.setBounds (r.removeFromTop (28));
     }
     bool keyPressed (const juce::KeyPress& k) override
     {
@@ -543,14 +545,16 @@ struct KeyCmdEditor : juce::Component
         if (k != juce::KeyPress (juce::KeyPress::escapeKey))
         {
             auto& a = keyActions()[(size_t) waiting];
-            for (auto it = keys.begin(); it != keys.end();) it = it->second == k ? keys.erase (it) : std::next (it);   // one key, one command
-            if (k == a.def) keys.erase (a.id); else keys[a.id] = k;
-            save();
+            const KeyAction* taken = nullptr;   // one key, one command: a key another command already uses is refused
+            for (auto& b : keyActions())
+                if (juce::String (b.id) != a.id) { const auto it = keys.find (b.id); if ((it != keys.end() ? it->second : b.def) == k) taken = &b; }
+            if (taken != nullptr) status.setText (k.getTextDescriptionWithIcons() + " is already " + taken->name + ". Change that one first.", juce::dontSendNotification);
+            else { status.setText ({}, juce::dontSendNotification); if (k == a.def) keys.erase (a.id); else keys[a.id] = k; save(); }
         }
         waiting = -1; refresh(); return true;
     }
     std::map<juce::String, juce::KeyPress>& keys; std::function<void()> save;
-    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns; juce::TextButton resetAll; int waiting = -1;
+    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns; juce::TextButton resetAll; juce::Label status; int waiting = -1;
 };
 
 class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
