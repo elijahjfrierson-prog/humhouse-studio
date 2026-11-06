@@ -27,7 +27,7 @@ static juce::File unglue (const juce::String& s)
     const auto it = gluedIn->find (s);
     if (it == gluedIn->end()) return {};
     const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
-    auto dst = hhsHome().getChildFile ("Glued Audio").getChildFile (juce::String::toHexString (s.hashCode64()) + "-" + juce::String (it->second.length())).getChildFile (name);
+    auto dst = hhsHome().getChildFile ("Glued Audio").getChildFile (juce::String::toHexString (s.hashCode64()) + "-" + juce::String::toHexString (it->second.hashCode64())).getChildFile (name);
     if (dst.existsAsFile()) return dst;
     juce::MemoryOutputStream mo;
     if (! juce::Base64::convertFromBase64 (mo, it->second)) return {};
@@ -507,7 +507,7 @@ bool saveProject (const Project& p, const juce::File& f)
             g.setProperty ("data", juce::Base64::toBase64 (mb.getData(), mb.getSize()), nullptr);
             glued.appendChild (g, nullptr);
         };
-        for (auto& c : p.channels) glue (c.sampleFile);
+        for (auto& c : p.channels) { glue (c.sampleFile); glue (c.smpLayerFile); }
         for (auto& c : p.clips) glue (c.audioFile);
         for (auto& a : p.audioPool) glue (a);
         if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
