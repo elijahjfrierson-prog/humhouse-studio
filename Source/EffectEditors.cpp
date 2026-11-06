@@ -1434,18 +1434,24 @@ struct DrumSections : juce::Component
             src->drum.groupMask = 1 << GroupKick;
             src->name = base.name + " " + drumGroupName (GroupKick);
             src->mixerTrack = p.addMixerTrack (src->name);
+            std::vector<int> parts { src->mixerTrack };
             for (int g = GroupSnare; g < NumDrumGroups; ++g)
             {
                 Channel c = base;
                 c.id = p.nextChannelId++; c.drumLink = id; c.drum.groupMask = 1 << g;
                 c.name = base.name + " " + drumGroupName (g);
                 c.mixerTrack = p.addMixerTrack (c.name);
+                parts.push_back (c.mixerTrack);
                 p.channels.push_back (c);
             }
+            // the drum master: every part still runs through one Drums insert (the drummer's old one if it had its own)
+            const int bus = base.mixerTrack > 0 && base.mixerTrack < (int) p.mixer.size() ? base.mixerTrack : p.addMixerTrack (base.name + " Drums");
+            p.mixer[(size_t) bus].name = base.name + " Drums";
+            for (int t : parts) { auto& mt = p.mixer[(size_t) t]; mt.sends = { { bus, 1.0f } }; mt.routesToMaster = false; }
         });
         s.engine.sync();
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Split by drum",
-            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert. Edit the groove (style, sections, steps) on the Kick channel.");
+            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert, all routed into one Drums master insert. Edit the groove (style, sections, steps) on the Kick channel.");
     }
     juce::TextButton splitBtn;
     int sections() const
@@ -1598,6 +1604,9 @@ void openChannelEditor (Studio& s, int channelId)
         mix.push_back ({ "squeeze", "Squeeze", 0, 1, 0, d.squeeze, {} });
         mix.push_back ({ "glow", "Squeeze glow", 0, 4, 0, (float) d.glow, { "Off", "Clean", "Tube", "Tape", "Transformer" } });
         mix.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+        static const char* eqIds[12] { "deq0", "deq1", "deq2", "deq3", "deq4", "deq5", "deq6", "deq7", "deq8", "deq9", "deq10", "deq11" };
+        static const char* eqNames[12] { "EQ 31 Hz", "EQ 63 Hz", "EQ 125 Hz", "EQ 250 Hz", "EQ 400 Hz", "EQ 630 Hz", "EQ 1 kHz", "EQ 1.6 kHz", "EQ 2.5 kHz", "EQ 4 kHz", "EQ 8 kHz", "EQ 16 kHz" };
+        for (int b = 0; b < 12; ++b) mix.push_back ({ eqIds[b], eqNames[b], -15, 15, 0, d.eqDb[(size_t) b], {} });
         std::vector<ParamGrid::P> kitp;
         static std::vector<std::string> kitIds, kitLabels; kitIds.clear(); kitLabels.clear();
         for (int gi = 0; gi < NumDrumGroups; ++gi)
@@ -1622,7 +1631,7 @@ void openChannelEditor (Studio& s, int channelId)
                 auto& d = c->drum;
                 if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
                 else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
-                else if (id == "fills") d.fills = v; else if (id == "fillvar") d.fillVar = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "fills") d.fills = v; else if (id == "fillvar") d.fillVar = v; else if (id.startsWith ("deq")) d.eqDb[(size_t) juce::jlimit (0, 11, id.substring (3).getIntValue())] = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
                 else if (id == "kickPat") d.kickPattern = (int) std::lround (v); else if (id == "snarePat") d.snarePattern = (int) std::lround (v);
                 else if (id == "hatPat") d.hatPattern = (int) std::lround (v); else if (id == "tomPat") d.tomPattern = (int) std::lround (v);
                 else if (id == "crashPat") d.crashPattern = (int) std::lround (v);

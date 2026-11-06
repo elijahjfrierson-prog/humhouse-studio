@@ -227,6 +227,7 @@ public:
             const int n = juce::jmin (num - done, tmp.getNumSamples());
             tmp.clear (0, n);
             kit->renderNextBlock (tmp, 0, n);
+            applyEq (n);
             for (int ch = 0; ch < out.getNumChannels(); ++ch) out.addFrom (ch, start + done, tmp, juce::jmin (ch, 1), 0, n);
             done += n;
         }
@@ -246,8 +247,42 @@ public:
             kit->setLaneTune (l, d.pieceTune[(size_t) g]); kit->setLaneDamp (l, d.pieceDamp[(size_t) g]);
             kit->setLaneCompression (l, d.pieceComp[(size_t) g]);
         }
+        for (size_t b = 0; b < 12; ++b) eqTarget[b].store (d.eqDb[b]);
     }
 private:
+    // KIT MIX 12-band EQ on the whole kit; coefficients are rebuilt on the audio thread only when a band moves
+    struct Band { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z[2][2] {}; };
+    std::array<std::atomic<float>, 12> eqTarget {};
+    std::array<float, 12> eqNow {};
+    std::array<Band, 12> bands;
+    double eqRate = 0;
+    void applyEq (int n)
+    {
+        static constexpr float freqs[12] { 31, 63, 125, 250, 400, 630, 1000, 1600, 2500, 4000, 8000, 16000 };
+        for (size_t b = 0; b < 12; ++b)
+        {
+            const float gdb = eqTarget[b].load();
+            if (gdb == eqNow[b] && eqRate == sr) continue;
+            eqNow[b] = gdb;
+            const double f = juce::jmin ((double) freqs[b], sr * 0.45), A = std::pow (10.0, gdb / 40.0), w = juce::MathConstants<double>::twoPi * f / sr;
+            const double al = std::sin (w) / (2.0 * 1.4), cw = std::cos (w), a0 = 1.0 + al / A;
+            auto& q = bands[b];
+            q.b0 = (float) ((1.0 + al * A) / a0); q.b1 = (float) (-2.0 * cw / a0); q.b2 = (float) ((1.0 - al * A) / a0);
+            q.a1 = q.b1; q.a2 = (float) ((1.0 - al / A) / a0);
+        }
+        eqRate = sr;
+        for (size_t b = 0; b < 12; ++b)
+        {
+            if (std::abs (eqNow[b]) < 0.05f) continue;
+            auto& q = bands[b];
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* x = tmp.getWritePointer (ch); float z0 = q.z[ch][0], z1 = q.z[ch][1];
+                for (int i = 0; i < n; ++i) { const float in = x[i], y = q.b0 * in + z0; z0 = q.b1 * in - q.a1 * y + z1; z1 = q.b2 * in - q.a2 * y; x[i] = y; }
+                q.z[ch][0] = z0; q.z[ch][1] = z1;
+            }
+        }
+    }
     std::shared_ptr<hhx::KitEngine> kit = std::make_shared<hhx::KitEngine>();
     juce::File kitFolder; juce::AudioBuffer<float> tmp;
     double sr = 44100; juce::int64 ring = 0; bool started = false;

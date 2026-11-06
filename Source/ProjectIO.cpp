@@ -145,6 +145,7 @@ juce::ValueTree projectToTree (const Project& p)
                 for (int m : d.sectionMute) sm.add (juce::String (m));
                 juce::StringArray pd; for (float v : d.partDb) pd.add (juce::String (v, 3));
                 { juce::StringArray cc; for (float v : d.pieceComp) cc.add (juce::String (v, 3)); t.setProperty ("drPcc", cc.joinIntoString (","), nullptr); }
+                { juce::StringArray eq; for (float v : d.eqDb) eq.add (juce::String (v, 2)); t.setProperty ("drEq", eq.joinIntoString (","), nullptr); }
                 t.setProperty ("drPd", pd.joinIntoString (","), nullptr);
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
@@ -314,6 +315,8 @@ Project projectFromTree (const juce::ValueTree& root)
                     for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
                 if (const auto cc = juce::StringArray::fromTokens (t["drPcc"].toString(), ",", ""); cc.size() == 5)
                     for (int g = 0; g < 5; ++g) d.pieceComp[(size_t) g] = cc[g].getFloatValue();
+                if (const auto eq = juce::StringArray::fromTokens (t["drEq"].toString(), ",", ""); eq.size() == 12)
+                    for (int b = 0; b < 12; ++b) d.eqDb[(size_t) b] = eq[b].getFloatValue();
                 const auto pd = juce::StringArray::fromTokens (t["drPd"].toString(), ",", "");
                 if (pd.size() == (int) d.partDb.size())
                     for (int k = 0; k < pd.size(); ++k) d.partDb[(size_t) k] = pd[k].getFloatValue();

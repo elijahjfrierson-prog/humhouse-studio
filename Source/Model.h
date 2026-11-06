@@ -97,7 +97,8 @@ struct DrummerParams
     // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
     std::array<float, 17> partDb {};   // per kit piece (kitPieceOf), on top of the group level
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
-    std::array<float, 5> pieceComp { 0, 0, 0, 0, 0 };   // per drum group: its own compressor 0..1
+    std::array<float, 5> pieceComp { 0, 0, 0, 0, 0 };
+    std::array<float, 12> eqDb {};          // KIT MIX: the drums' own 12-band EQ (31 Hz .. 16 kHz), dB   // per drum group: its own compressor 0..1
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
     int groupMask = 31;                       // bit g = this channel plays drum group g (Split by drum)
