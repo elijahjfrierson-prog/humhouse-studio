@@ -588,6 +588,7 @@ public:
         if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
+        applySavedLayout (studio);
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);
@@ -714,6 +715,29 @@ public:
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
         for (auto& kv : juce::StringArray::fromTokens (studio.settings->getValue ("keymap"), ";", ""))
             if (kv.contains ("=")) userKeys[kv.upToFirstOccurrenceOf ("=", false, false)] = juce::KeyPress::createFromDescription (kv.fromFirstOccurrenceOf ("=", false, false));
+        applyKeySet = [this] (const juce::String& set)   // Layout: the matching DAW's key commands (none of them clash with another command)
+        {
+            const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
+            userKeys.clear();
+            auto put = [this] (const char* id, juce::KeyPress k) { userKeys[id] = k; };
+            if (set == "Logic")
+            {
+                put ("metro", juce::KeyPress ('k')); put ("mixer", juce::KeyPress ('x')); put ("piano", juce::KeyPress ('p'));
+                put ("browser", juce::KeyPress ('f')); put ("home", juce::KeyPress (juce::KeyPress::returnKey)); put ("export", juce::KeyPress ('b', cmd, 0));
+            }
+            else if (set == "Pro Tools")
+            {
+                put ("rec", juce::KeyPress (juce::KeyPress::F12Key)); put ("home", juce::KeyPress (juce::KeyPress::returnKey));
+                put ("mixer", juce::KeyPress ('=', cmd, 0)); put ("export", juce::KeyPress ('b', cmd | alt, 0));
+            }
+            else if (set == "Reaper")
+            {
+                put ("rec", juce::KeyPress ('r', cmd, 0)); put ("export", juce::KeyPress ('r', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd, 0));
+                put ("metro", juce::KeyPress ('m', cmd | shift, 0)); put ("browser", juce::KeyPress ('x', cmd | alt, 0)); put ("home", juce::KeyPress ('w'));
+            }
+            studio.settings->setValue ("layoutKeySet", set);
+            saveKeys();
+        };
         if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
@@ -1151,6 +1175,7 @@ if (phoneUI)
             }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
+            m.addItem (4712, "Layout... (Logic, Pro Tools, Reaper looks + make your own)");
             {
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -1296,6 +1321,7 @@ if (phoneUI)
             case mPlugins: showPluginScanner (studio); break;
             case mTheme: showThemeDialog (studio); break;
             case 4711: showKeyCommands(); break;
+            case 4712: showLayoutDialog (studio); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;

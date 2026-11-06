@@ -31,6 +31,7 @@ namespace col
     inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
         gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xff9b5cff), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+    inline int laneMinH = 60;                               // Layout: smallest Playlist track height
     inline bool lightMode = false;                          // White theme: light backgrounds, dark text
     inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
     // meters + scopes gradient (quiet -> loud), set in Theme
@@ -442,6 +443,9 @@ void resetTheme();
 void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
 void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex, empty = solid font
 void showThemeDialog (Studio&);
+void showLayoutDialog (Studio&);   // Options > Layout: DAW-style looks + your own
+void applySavedLayout (Studio&);
+inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 
 enum class Tool { Arp, Strum, Chop, Flam, Quantize, Randomize, Limit, Articulate, ScaleLevels, Flip, Claw, Lfo };

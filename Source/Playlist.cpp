@@ -1304,7 +1304,7 @@ public:
     void resized() override
     {
         placeSplitBars();
-        laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
+        laneH = juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
@@ -2090,6 +2090,7 @@ private:
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
+    void lookAndFeelChanged() override { resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
