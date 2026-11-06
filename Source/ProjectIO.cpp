@@ -131,7 +131,7 @@ juce::ValueTree projectToTree (const Project& p)
         if (c.type == ChannelType::Drummer)
         {
             auto& d = c.drum;
-            const std::pair<const char*, float> fs[] { { "drC", d.complexity }, { "drL", d.loudness }, { "drI", d.intensity }, { "drF", d.fills }, { "drSw", d.swing },
+            const std::pair<const char*, float> fs[] { { "drC", d.complexity }, { "drL", d.loudness }, { "drI", d.intensity }, { "drF", d.fills }, { "drFv", d.fillVar }, { "drSw", d.swing },
                 { "drHu", d.humanize }, { "drGh", d.ghost }, { "drHo", d.hatOpen }, { "drPu", d.punch }, { "drGu", d.glue }, { "drDr", d.drive },
                 { "drMb", d.micBlend }, { "drRm", d.roomMix }, { "drSq", d.squeeze } };
             for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
@@ -144,6 +144,7 @@ juce::ValueTree projectToTree (const Project& p)
                 for (int g = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) pc.add (juce::String ((*a)[(size_t) g], 3));
                 for (int m : d.sectionMute) sm.add (juce::String (m));
                 juce::StringArray pd; for (float v : d.partDb) pd.add (juce::String (v, 3));
+                { juce::StringArray cc; for (float v : d.pieceComp) cc.add (juce::String (v, 3)); t.setProperty ("drPcc", cc.joinIntoString (","), nullptr); }
                 t.setProperty ("drPd", pd.joinIntoString (","), nullptr);
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
@@ -299,7 +300,7 @@ Project projectFromTree (const juce::ValueTree& root)
         if (c.type == ChannelType::Drummer)
         {
             auto& d = c.drum;
-            const std::pair<const char*, float*> fs[] { { "drC", &d.complexity }, { "drL", &d.loudness }, { "drI", &d.intensity }, { "drF", &d.fills }, { "drSw", &d.swing },
+            const std::pair<const char*, float*> fs[] { { "drC", &d.complexity }, { "drL", &d.loudness }, { "drI", &d.intensity }, { "drF", &d.fills }, { "drFv", &d.fillVar }, { "drSw", &d.swing },
                 { "drHu", &d.humanize }, { "drGh", &d.ghost }, { "drHo", &d.hatOpen }, { "drPu", &d.punch }, { "drGu", &d.glue }, { "drDr", &d.drive },
                 { "drMb", &d.micBlend }, { "drRm", &d.roomMix }, { "drSq", &d.squeeze } };
             for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
@@ -311,6 +312,8 @@ Project projectFromTree (const juce::ValueTree& root)
                 const auto pc = juce::StringArray::fromTokens (t["drPc"].toString(), ",", "");
                 if (pc.size() == 20)
                     for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
+                if (const auto cc = juce::StringArray::fromTokens (t["drPcc"].toString(), ",", ""); cc.size() == 5)
+                    for (int g = 0; g < 5; ++g) d.pieceComp[(size_t) g] = cc[g].getFloatValue();
                 const auto pd = juce::StringArray::fromTokens (t["drPd"].toString(), ",", "");
                 if (pd.size() == (int) d.partDb.size())
                     for (int k = 0; k < pd.size(); ++k) d.partDb[(size_t) k] = pd[k].getFloatValue();

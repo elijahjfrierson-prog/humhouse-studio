@@ -11,7 +11,7 @@ namespace hhs
 juce::String DrummerParams::performanceKey() const
 {
     juce::String k;
-    for (float v : { complexity, loudness, intensity, fills, swing, humanize, ghost, hatOpen }) k << juce::String (v, 3) << ",";
+    for (float v : { complexity, loudness, intensity, fills, fillVar, swing, humanize, ghost, hatOpen }) k << juce::String (v, 3) << ",";
     return k + juce::String ((int) halfTime) + juce::String ((int) ride) + "," + juce::String (character) + "," + juce::String (seed)
          + "," + juce::String (kickPattern) + juce::String (snarePattern) + juce::String (hatPattern) + juce::String (tomPattern) + juce::String (crashPattern);
 }
@@ -97,7 +97,7 @@ static std::vector<DrumHit> render (const DrummerParams& p, double bpm, int bars
     if (! corpus().isLoaded() || bars <= 0) return out;
     hhx::PerformanceSettings s;
     s.complexity = p.complexity; s.intensity = p.loudness; s.sectionVelocity = p.intensity;
-    s.fillAmount = p.fills; s.swing = p.swing; s.humanize = p.humanize; s.ghostAmount = p.ghost; s.hatOpenness = p.hatOpen;
+    s.fillAmount = p.fills; s.fillComplexity = 0.5f + 0.8f * (p.fillVar - 0.5f); s.fillVelVar = 0.3f + 0.4f * (p.fillVar - 0.5f); s.swing = p.swing; s.humanize = p.humanize; s.ghostAmount = p.ghost; s.hatOpenness = p.hatOpen;   // fillVar 0.5 = the classic fills
     s.halfTime = p.halfTime; s.rideInsteadOfHat = p.ride; s.character = p.character; s.tempoBpm = (float) bpm;
     s.seed = (std::uint64_t) juce::jmax (1, p.seed);
     s.kickPattern = p.kickPattern; s.snarePattern = p.snarePattern; s.hatPattern = p.hatPattern;
@@ -244,6 +244,7 @@ public:
             const int g = drumGroupOf (l);
             kit->setLaneGainDb (l, d.pieceDb[(size_t) g] + d.partDb[(size_t) kitPieceOf (l)]); kit->setLanePan (l, d.piecePan[(size_t) g]);
             kit->setLaneTune (l, d.pieceTune[(size_t) g]); kit->setLaneDamp (l, d.pieceDamp[(size_t) g]);
+            kit->setLaneCompression (l, d.pieceComp[(size_t) g]);
         }
     }
 private:

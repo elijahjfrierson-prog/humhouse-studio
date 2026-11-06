@@ -1316,8 +1316,8 @@ struct DrumSteps : juce::Component
         autoBtn.setButtonText ("Back to auto");
         autoBtn.onClick = [this]
         {
-            const int i = channelId, k = section;
-            s.edit ("Drummer steps", [i, k] (Project& p) { for (auto& c : p.channels) if (c.id == i) c.drum.steps.erase (k); });
+            const int i = channelId, k0 = all > 0 ? 0 : section, k1 = all > 0 ? all - 1 : section;
+            s.edit ("Drummer steps", [i, k0, k1] (Project& p) { for (auto& c : p.channels) if (c.id == i) for (int k = k0; k <= k1; ++k) c.drum.steps.erase (k); });
             repaint();
         };
         setSize (600, 210);
@@ -1331,7 +1331,8 @@ struct DrumSteps : juce::Component
         const auto it = c->drum.steps.find (section);
         const bool man = it != c->drum.steps.end();
         g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
-        g.drawText ("Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8) + (man ? "  |  STEPS: this bar repeats for 8 bars" : "  |  AUTO: click a step to edit"),
+        g.drawText ((all > 0 ? "ALL sections (bars 1-" + juce::String (all * 8) + ")" : "Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8))
+                    + (man ? "  |  your steps repeat, the drummer plays around them and fills bar 8" : "  |  AUTO: click a step - one kick and the drummer builds around it"),
                     10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
         const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
         for (int gi = 0; gi < NumDrumGroups; ++gi)
@@ -1353,20 +1354,60 @@ struct DrumSteps : juce::Component
         const auto* c = s.channel (channelId); if (c == nullptr) return;
         const int gi = juce::jlimit (0, (int) NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
         const int st = juce::jlimit (0, 15, (int) ((e.position.x - r.getX()) / (r.getWidth() / 16.0f)));
-        const int i = channelId, k = section;
-        const auto seed = c->drum.steps.count (k) > 0 ? std::array<int, 5> {} : drummerSeedSteps (c->drum, s.p().bpm, k);
-        s.edit ("Drummer steps", [i, k, gi, st, seed] (Project& p) {
+        const int i = channelId, k0 = all > 0 ? 0 : section, k1 = all > 0 ? all - 1 : section;
+        const auto cur = c->drum.steps.find (section);
+        const bool on = cur != c->drum.steps.end() && (cur->second[(size_t) gi] >> st & 1) != 0;
+        s.edit ("Drummer steps", [i, k0, k1, gi, st, on] (Project& p) {
             for (auto& ch : p.channels)
                 if (ch.id == i)
-                {
-                    auto f = ch.drum.steps.find (k);
-                    if (f == ch.drum.steps.end()) f = ch.drum.steps.emplace (k, seed).first;
-                    f->second[(size_t) gi] ^= 1 << st;
-                }
+                    for (int k = k0; k <= k1; ++k)
+                    {
+                        auto& b = ch.drum.steps[k][(size_t) gi];
+                        b = on ? (b & ~(1 << st)) : (b | 1 << st);
+                    }
         });
         repaint();
     }
-    Studio& s; int channelId, section; juce::TextButton autoBtn;
+    Studio& s; int channelId, section, all = 0; juce::TextButton autoBtn;   // all > 0: edits go to sections 0 .. all-1
+};
+
+// SEQUENCER: the manual drummer, one 8-bar section at a time (1-8, 9-16 ...) or ALL of them at once
+struct DrumSequencer : juce::Component
+{
+    DrumSequencer (Studio& st, int id) : s (st), channelId (id), steps (st, id, 0)
+    {
+        addAndMakeVisible (steps);
+        for (int k = -1; k < count(); ++k)
+        {
+            auto* b = btns.add (new juce::TextButton (k < 0 ? juce::String ("ALL") : juce::String (k * 8 + 1) + "-" + juce::String (k * 8 + 8)));
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc93d).withAlpha (0.8f));
+            b->onClick = [this, k] { pick (k); };
+            addAndMakeVisible (b);
+        }
+        pick (0);
+        setSize (640, 260);
+    }
+    int count() const
+    {
+        double end = 0;
+        for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
+        return juce::jlimit (1, 32, (int) std::ceil (end / 32.0 - 1e-6));
+    }
+    void pick (int k)
+    {
+        steps.section = juce::jmax (0, k); steps.all = k < 0 ? count() : 0;
+        for (int i = 0; i < btns.size(); ++i) btns[i]->setToggleState (i == k + 1, juce::dontSendNotification);
+        steps.repaint();
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        auto top = r.removeFromTop (26);
+        const int w = juce::jmin (70, top.getWidth() / juce::jmax (1, btns.size()));
+        for (auto* b : btns) b->setBounds (top.removeFromLeft (w).reduced (2, 0));
+        steps.setBounds (r);
+    }
+    Studio& s; int channelId; DrumSteps steps; juce::OwnedArray<juce::TextButton> btns;
 };
 
 // SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song; double-click = STEPS editor
@@ -1539,6 +1580,7 @@ void openChannelEditor (Studio& s, int channelId)
             perf.push_back ({ "mixer", "Mixer insert (FX)", 0, (float) mixChoices.size() - 1, 0, (float) juce::jlimit (0, (int) mixChoices.size() - 1, ch->mixerTrack), mixChoices });
         perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
         perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
+        perf.push_back ({ "fillvar", "Fill variation", 0, 1, 0.5f, d.fillVar, {} });
         perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
         perf.push_back ({ "humanize", "Feel (human timing)", 0, 1, 0.5f, d.humanize, {} });
         perf.push_back ({ "ghost", "Ghost notes", 0, 1, 0.5f, d.ghost, {} });
@@ -1559,7 +1601,7 @@ void openChannelEditor (Studio& s, int channelId)
         std::vector<ParamGrid::P> kitp;
         static std::vector<std::string> kitIds, kitLabels; kitIds.clear(); kitLabels.clear();
         for (int gi = 0; gi < NumDrumGroups; ++gi)
-            for (auto* what : { "Level", "Pan", "Tune", "Decay" })
+            for (auto* what : { "Level", "Pan", "Tune", "Decay", "Comp" })
             {
                 kitIds.push_back (std::string ("pc") + what[0] + std::to_string (gi));
                 kitLabels.push_back (std::string (drumGroupName (gi)) + " " + what);
@@ -1571,6 +1613,7 @@ void openChannelEditor (Studio& s, int channelId)
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -1, 1, 0, d.piecePan[g], {} }); ++k;
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -12, 12, 0, d.pieceTune[g], {} }); ++k;
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceDamp[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceComp[g], {} }); ++k;
         }
         auto setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
@@ -1579,7 +1622,7 @@ void openChannelEditor (Studio& s, int channelId)
                 auto& d = c->drum;
                 if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
                 else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
-                else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "fills") d.fills = v; else if (id == "fillvar") d.fillVar = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
                 else if (id == "kickPat") d.kickPattern = (int) std::lround (v); else if (id == "snarePat") d.snarePattern = (int) std::lround (v);
                 else if (id == "hatPat") d.hatPattern = (int) std::lround (v); else if (id == "tomPat") d.tomPattern = (int) std::lround (v);
                 else if (id == "crashPat") d.crashPattern = (int) std::lround (v);
@@ -1600,7 +1643,7 @@ void openChannelEditor (Studio& s, int channelId)
                 {
                     const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
                     const auto w = id[2];
-                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v;
+                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v; else if (w == 'C') d.pieceComp[g] = v;
                 }
             });
         };
@@ -1632,6 +1675,7 @@ void openChannelEditor (Studio& s, int channelId)
         tabs->add ("LEVELS", levels());
         tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
         tabs->add ("SECTIONS", new DrumSections (s, channelId));
+        tabs->add ("SEQUENCER", new DrumSequencer (s, channelId));
         tabs->finish();
         EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
         return;
