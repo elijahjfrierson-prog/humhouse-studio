@@ -2592,7 +2592,7 @@ int main()
         songB.getChildFile ("Audio Files").createDirectory();
         writeWav (songB.getChildFile ("Audio Files").getChildFile ("Vocals_take.wav"), 22050);
         Project r; CHECK (loadProject (r, songB.getChildFile ("The Low.hhs")));
-        CHECK (! r.clips.empty() && ! r.clips.back().audioFile.existsAsFile());
+        CHECK (! r.clips.empty() && r.clips.back().audioFile != songB.getChildFile ("Audio Files").getChildFile ("Vocals_take.wav"));   // its own glued take, never the other one
         std::printf ("glue: backup after move finds the vocal, wrong same-named take ignored\n");
         root.deleteRecursively();
     }
@@ -2900,6 +2900,28 @@ int main()
         CHECK (std::abs (back.mixer[0].stereoSep + 1.0f) < 1.0e-4f);
         CHECK (back.mixer[0].fx.size() == 10 && back.mixer[0].fx[9].type == "limiter" && back.mixer[0].fx[3].type.isEmpty());
         CHECK (std::abs (back.channels[0].smpStart - 0.125f) < 1.0e-4f);
+    }
+
+    {   // glued audio: the song carries its one-shot, so it opens on another computer / phone where the file doesn't exist
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-glue-test");
+        dir.deleteRecursively(); dir.createDirectory();
+        auto wav = dir.getChildFile ("myshot.wav");
+        {
+            juce::AudioBuffer<float> b (1, 4410);
+            for (int i = 0; i < 4410; ++i) b.setSample (0, i, 0.5f * std::sin ((float) i * 0.05f));
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (wav), 44100, 1, 16, {}, 0));
+            CHECK (w != nullptr); if (w) w->writeFromAudioSampleBuffer (b, 0, 4410);
+        }
+        Project p; Channel c; c.id = 77; c.name = "Shot"; c.sampleFile = wav; p.channels.push_back (c);
+        auto song = dir.getChildFile ("Songs").getChildFile ("glue.hhs"); song.getParentDirectory().createDirectory();
+        CHECK (saveProject (p, song));
+        const auto size = wav.getSize(); wav.deleteFile();
+        Project q; CHECK (loadProject (q, song));
+        CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.getSize() == size
+               && q.channels.back().sampleFile.getFileName() == "myshot.wav");
+        std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
+        dir.deleteRecursively();
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);

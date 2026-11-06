@@ -1,5 +1,6 @@
 #include "ProjectIO.h"
 #include <map>
+#include <set>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -17,6 +18,22 @@ struct IOBaseScope
     }
     ~IOBaseScope() { ioBase = juce::File(); }
 };
+
+// audio glued inside the .hhs (one-shots, samples, takes): path when saved -> base64 data. Used only if the file isn't found
+static thread_local const std::map<juce::String, juce::String>* gluedIn = nullptr;
+static juce::File unglue (const juce::String& s)
+{
+    if (gluedIn == nullptr) return {};
+    const auto it = gluedIn->find (s);
+    if (it == gluedIn->end()) return {};
+    const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
+    auto dst = hhsHome().getChildFile ("Glued Audio").getChildFile (juce::String::toHexString (s.hashCode64()) + "-" + juce::String (it->second.length())).getChildFile (name);
+    if (dst.existsAsFile()) return dst;
+    juce::MemoryOutputStream mo;
+    if (! juce::Base64::convertFromBase64 (mo, it->second)) return {};
+    dst.getParentDirectory().createDirectory();
+    return dst.replaceWithData (mo.getData(), mo.getDataSize()) ? dst : juce::File();
+}
 
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
 static juce::String relStr (const juce::File& f)
@@ -41,6 +58,7 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
     auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
     if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
     if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
+    if (auto g = unglue (s); g != juce::File()) return g;
     auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
     {   // built-in kit saved from another HumHouse app (Studio vs Master, another drive/PC): use this app's copy
         const auto norm = s.replaceCharacter ('\\', '/');
@@ -468,8 +486,36 @@ Project projectFromTree (const juce::ValueTree& root)
 bool saveProject (const Project& p, const juce::File& f)
 {
     IOBaseScope base (f);
-    auto xml = projectToTree (p).createXml();
-    return xml && xml->writeTo (f);
+    auto tree = projectToTree (p);
+    // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
+    if (f.getParentDirectory().getFileName() != "Backup")
+    {
+        juce::ValueTree glued ("GLUED");
+        std::set<juce::String> seen; juce::int64 total = 0;
+        const auto bundled = bundledSoundsRoot();
+        auto glue = [&] (const juce::File& a)
+        {
+            if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
+            if (bundled != juce::File() && a.isAChildOf (bundled)) return;   // built-in sounds ship with every HumHouse app
+            const auto size = a.getSize();
+            if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
+            juce::MemoryBlock mb;
+            if (! a.loadFileAsData (mb)) return;
+            total += size;
+            juce::ValueTree g ("F");
+            g.setProperty ("path", a.getFullPathName(), nullptr);
+            g.setProperty ("data", juce::Base64::toBase64 (mb.getData(), mb.getSize()), nullptr);
+            glued.appendChild (g, nullptr);
+        };
+        for (auto& c : p.channels) glue (c.sampleFile);
+        for (auto& c : p.clips) glue (c.audioFile);
+        for (auto& a : p.audioPool) glue (a);
+        if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
+    }
+    auto xml = tree.createXml();
+    if (! xml) return false;
+    auto tmp = f.getSiblingFile (f.getFileName() + ".saving");   // never leave a half-written song behind
+    return xml->writeTo (tmp) && tmp.moveFileTo (f);
 }
 
 bool loadProject (Project& p, const juce::File& f)
@@ -477,7 +523,16 @@ bool loadProject (Project& p, const juce::File& f)
     auto xml = juce::XmlDocument::parse (f);
     if (! xml || ! xml->hasTagName ("HUMHOUSE_PROJECT")) return false;
     IOBaseScope base (f);
-    p = projectFromTree (juce::ValueTree::fromXml (*xml));
+    auto tree = juce::ValueTree::fromXml (*xml);
+    std::map<juce::String, juce::String> glued;
+    if (auto g = tree.getChildWithName ("GLUED"); g.isValid())
+    {
+        for (auto c : g) glued[c["path"].toString()] = c["data"].toString();
+        tree.removeChild (g, nullptr);
+    }
+    gluedIn = &glued;
+    p = projectFromTree (tree);
+    gluedIn = nullptr;
     p.projectFile = f;
     return true;
 }
