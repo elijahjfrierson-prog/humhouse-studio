@@ -482,6 +482,77 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 };
 }
 
+// Options > Key commands: every action with its default key; any of them can be given your own key, or reset
+struct KeyAction { const char* id; const char* name; juce::KeyPress def; };
+static const std::vector<KeyAction>& keyActions()
+{
+    const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier;
+    static const std::vector<KeyAction> a {
+        { "play", "Play / Stop", juce::KeyPress (juce::KeyPress::spaceKey) },  { "home", "Go to start", juce::KeyPress (juce::KeyPress::homeKey) },
+        { "rec", "Record on / off", juce::KeyPress ('r') },                    { "song", "Pattern / Song mode", juce::KeyPress ('l') },
+        { "playlist", "Show REC (Playlist)", juce::KeyPress (juce::KeyPress::F5Key) }, { "piano", "Show Piano Roll", juce::KeyPress (juce::KeyPress::F7Key) },
+        { "browser", "Browser on / off", juce::KeyPress (juce::KeyPress::F8Key) }, { "mixer", "Show Mixer", juce::KeyPress (juce::KeyPress::F9Key) },
+        { "save", "Save", juce::KeyPress ('s', cmd, 0) },                      { "saveas", "Save as", juce::KeyPress ('s', cmd | shift, 0) },
+        { "open", "Open", juce::KeyPress ('o', cmd, 0) },                      { "new", "New project", juce::KeyPress ('n', cmd, 0) },
+        { "undo", "Undo", juce::KeyPress ('z', cmd, 0) },                      { "redo", "Redo", juce::KeyPress ('z', cmd | shift, 0) },
+        { "metro", "Metronome", juce::KeyPress ('m', cmd, 0) },                { "export", "Export WAV", juce::KeyPress ('r', cmd, 0) },
+        { "shortcuts", "Shortcuts window", juce::KeyPress ('u', cmd, 0) } };
+    return a;
+}
+
+struct KeyCmdEditor : juce::Component
+{
+    KeyCmdEditor (std::map<juce::String, juce::KeyPress>& m, std::function<void()> onSave) : keys (m), save (std::move (onSave))
+    {
+        setWantsKeyboardFocus (true);
+        for (size_t i = 0; i < keyActions().size(); ++i)
+        {
+            auto* l = names.add (new juce::Label ({}, keyActions()[i].name)); addAndMakeVisible (l);
+            auto* b = setBtns.add (new juce::TextButton()); b->setWantsKeyboardFocus (false); addAndMakeVisible (b);
+            b->onClick = [this, i] { waiting = (int) i; refresh(); grabKeyboardFocus(); };
+            auto* r = resetBtns.add (new juce::TextButton ("Default")); r->setWantsKeyboardFocus (false); addAndMakeVisible (r);
+            r->onClick = [this, i] { keys.erase (keyActions()[i].id); waiting = -1; refresh(); save(); };
+        }
+        resetAll.setButtonText ("Reset all to default"); resetAll.setWantsKeyboardFocus (false); addAndMakeVisible (resetAll);
+        resetAll.onClick = [this] { keys.clear(); waiting = -1; refresh(); save(); };
+        refresh();
+        setSize (460, 34 + 28 * (int) keyActions().size());
+    }
+    void refresh()
+    {
+        for (size_t i = 0; i < keyActions().size(); ++i)
+        {
+            auto& a = keyActions()[i]; const auto it = keys.find (a.id);
+            const auto k = it != keys.end() ? it->second : a.def;
+            setBtns[(int) i]->setButtonText (waiting == (int) i ? "Press a key... (Esc = cancel)" : k.getTextDescriptionWithIcons() + (it != keys.end() ? "  (yours)" : ""));
+        }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        for (int i = 0; i < names.size(); ++i)
+        {
+            auto row = r.removeFromTop (28);
+            names[i]->setBounds (row.removeFromLeft (170)); resetBtns[i]->setBounds (row.removeFromRight (72).reduced (2)); setBtns[i]->setBounds (row.reduced (2));
+        }
+        resetAll.setBounds (r.removeFromTop (28).reduced (2));
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (waiting < 0) return false;
+        if (k != juce::KeyPress (juce::KeyPress::escapeKey))
+        {
+            auto& a = keyActions()[(size_t) waiting];
+            for (auto it = keys.begin(); it != keys.end();) it = it->second == k ? keys.erase (it) : std::next (it);   // one key, one command
+            if (k == a.def) keys.erase (a.id); else keys[a.id] = k;
+            save();
+        }
+        waiting = -1; refresh(); return true;
+    }
+    std::map<juce::String, juce::KeyPress>& keys; std::function<void()> save;
+    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns; juce::TextButton resetAll; int waiting = -1;
+};
+
 class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
@@ -637,6 +708,8 @@ public:
         Studio::readout() = [hb = juce::Component::SafePointer<juce::Label> (&hintBar)] (const juce::String& t) { if (hb != nullptr) hb->setText (t, juce::dontSendNotification); };
 
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+        for (auto& kv : juce::StringArray::fromTokens (studio.settings->getValue ("keymap"), ";", ""))
+            if (kv.contains ("=")) userKeys[kv.upToFirstOccurrenceOf ("=", false, false)] = juce::KeyPress::createFromDescription (kv.fromFirstOccurrenceOf ("=", false, false));
         if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
@@ -850,8 +923,33 @@ if (phoneUI)
         else if (here (mixer)) mixer->setBounds (r);
     }
 
+    std::map<juce::String, juce::KeyPress> userKeys;   // Options > Key commands: action id -> your key
+    bool remapping = false;
+    void saveKeys()
+    {
+        juce::StringArray s; for (auto& [id, k] : userKeys) s.add (id + "=" + k.getTextDescription());
+        studio.settings->setValue ("keymap", s.joinIntoString (";")); studio.settings->saveIfNeeded();
+    }
+    void showKeyCommands()
+    {
+        juce::DialogWindow::LaunchOptions o;
+        o.content.setOwned (new KeyCmdEditor (userKeys, [this] { saveKeys(); }));
+        o.dialogTitle = "Key commands"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
+        o.launchAsync();
+    }
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (! remapping && ! userKeys.empty())
+        {
+            for (auto& a : keyActions())
+                if (auto it = userKeys.find (a.id); it != userKeys.end() && k == it->second)
+                {
+                    const juce::ScopedValueSetter<bool> sv (remapping, true);
+                    return keyPressed (a.def);
+                }
+            for (auto& a : keyActions())
+                if (userKeys.count (a.id) > 0 && k == a.def) return true;   // moved to your own key
+        }
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
@@ -1076,6 +1174,7 @@ if (phoneUI)
                #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
+            m.addItem (4711, "Key commands... (make your own, reset to default)");
             m.addSeparator();
             add (mShortcuts, "Shortcuts", "Cmd/Ctrl+U", true, shortcutsWin != nullptr && shortcutsWin->isVisible());
         }
@@ -1192,6 +1291,7 @@ if (phoneUI)
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
             case mTheme: showThemeDialog (studio); break;
+            case 4711: showKeyCommands(); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
