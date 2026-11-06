@@ -570,6 +570,7 @@ public:
         o.osxLibrarySubFolder = "Application Support";
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
+        kbState.addListener (&kbListen);
 
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
@@ -660,6 +661,23 @@ public:
         countBtn.setToggleState (engine.countInOn.load(), juce::dontSendNotification);
         countBtn.onClick = [this] { engine.countInOn = countBtn.getToggleState(); };
         setupButton (retroBtn, "RETRO", "Retro Record: drops the last 60 s you sang or played onto REC, even if nothing was armed or recording", false);
+        setupButton (pianoBtn, "PIANO", "Keyboard inset: play the selected channel or sample on keys to hear it before placing", true);
+        pianoBtn.onClick = [this]
+        {
+            if (kbInset == nullptr)
+            {
+                kbInset = std::make_unique<juce::MidiKeyboardComponent> (kbState, juce::MidiKeyboardComponent::horizontalKeyboard);
+                kbInset->setAvailableRange (24, 108);
+                kbInset->setKeyWidth (phoneUI ? 34.0f : 22.0f);
+                kbInset->setLowestVisibleKey (48);
+                kbInset->setWantsKeyboardFocus (false);
+                kbInset->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
+                kbInset->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
+                addChildComponent (*kbInset);
+            }
+            if (! pianoBtn.getToggleState()) kbState.allNotesOff (1);
+            resized();
+        };
         retroBtn.onClick = [this] { flash (engine.retroRecord() ? "Retro Record: last take added to REC" : "Retro Record: nothing heard on the input yet"); };
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
@@ -686,7 +704,7 @@ public:
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
-        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &retroBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
+        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &retroBtn, (juce::Button*) &pianoBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -826,6 +844,7 @@ public:
 
     ~MainComponent() override
     {
+        kbState.removeListener (&kbListen);
         rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         stopTimer();
@@ -867,9 +886,9 @@ if (phoneUI)
                 { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
-            if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
+            if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
             if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
-            for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
+            for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &pianoBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
                                                                     &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
                 c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
             const int rowH = 46, avail = juce::jmax (200, r.getWidth() - 16);
@@ -906,7 +925,8 @@ if (phoneUI)
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
         countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (4);
-        retroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (8);
+        retroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
+        pianoBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (8);
         saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
@@ -918,6 +938,11 @@ if (phoneUI)
         cpuLabel.setBounds (t.removeFromRight (86));
         }
         hintBar.setBounds (r.removeFromBottom (22));
+        if (kbInset != nullptr)
+        {
+            kbInset->setVisible (pianoBtn.getToggleState());
+            if (pianoBtn.getToggleState()) kbInset->setBounds (r.removeFromBottom (phoneUI ? 110 : 76));
+        }
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
         if (phoneUI)
         {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
@@ -1369,7 +1394,16 @@ private:
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
     juce::TextButton rackPopBtn;
-    juce::TextButton retroBtn;
+    juce::TextButton retroBtn, pianoBtn;
+    juce::MidiKeyboardState kbState;
+    std::unique_ptr<juce::MidiKeyboardComponent> kbInset;
+    struct KbListen : juce::MidiKeyboardState::Listener
+    {
+        explicit KbListen (MainComponent& o) : m (o) {}
+        void handleNoteOn (juce::MidiKeyboardState*, int, int note, float vel) override { m.liveNote (note, juce::jmax (0.05f, vel), true); }
+        void handleNoteOff (juce::MidiKeyboardState*, int, int note, float) override { m.liveNote (note, 0.0f, false); }
+        MainComponent& m;
+    } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
