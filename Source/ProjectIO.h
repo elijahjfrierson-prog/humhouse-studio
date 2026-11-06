@@ -24,12 +24,15 @@ public:
     bool undo (Project&);
     bool redo (Project&);
     bool jumpTo (int i, Project&);
+    bool stateAt (int i, Project& out) const;   // parse a snapshot without touching the live project (do it off the audio lock)
+    void setCurrent (int i) { index = juce::jlimit (-1, (int) states.size() - 1, i); }
     int  size() const { return (int) states.size(); }
     int  current() const { return index; }
     juce::String description (int i) const { return states[(size_t) i].second; }
-    void clear() { states.clear(); index = -1; }
+    void clear() { states.clear(); index = -1; bytes = 0; }
 private:
     std::vector<std::pair<juce::String, juce::String>> states; // xml, description
     int index = -1;
+    size_t bytes = 0;
 };
 }

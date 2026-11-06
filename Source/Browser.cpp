@@ -50,7 +50,7 @@ void showPluginScanner (Studio& s)
     o.dialogTitle = "Plugin House - scan for VST3 / AU plugins (Options > Scan)";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = true;
+    o.useNativeTitleBar = ! phoneUI;
     o.resizable = true;
     o.launchAsync();
 }
@@ -101,7 +101,7 @@ public:
         search.onTextChange = [this] { rebuild(); };
         addAndMakeVisible (search);
         list.setModel (this);
-        list.setRowHeight (22);
+        list.setRowHeight (phoneUI ? 40 : 22);
         list.setTooltip ("Double-click an effect: adds it to the selected mixer insert. Double-click an instrument: new channel");
         addAndMakeVisible (list);
         setupButton (scan, "Scan plugins", "Find every VST3 / AU plugin on this computer");
@@ -164,12 +164,23 @@ private:
             return;
         }
         if (selected) { g.setColour (col::accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
-        g.setColour (col::text); g.setFont (juce::FontOptions (13.0f));
+        g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 16.0f : 13.0f));
         g.drawText (e.label, 14, 0, w - 100, h, juce::Justification::centredLeft, true);
         g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
         g.drawText (e.sub, w - 110, 0, 104, h, juce::Justification::centredRight, true);
     }
-    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    void listBoxItemClicked (int row, const juce::MouseEvent& e) override
+    {
+        juce::ignoreUnused (e);
+        if (phoneUI && row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind != 0)
+        {   // add after the tap finishes: adding + opening the window inside the list's own click rebuilt the list under the finger
+            list.deselectAllRows();
+            juce::Component::SafePointer<PluginList> sp (this);
+            juce::MessageManager::callAsync ([sp, row] { if (sp != nullptr) sp->add (row); });
+        }   // phone: one tap adds the effect and opens its window
+    }
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (! phoneUI) add (row); }
+    void add (int row)
     {
         if (row < 0 || row >= (int) entries.size()) return;
         auto e = entries[(size_t) row];
@@ -256,6 +267,45 @@ public:
         loadFolders();
         folders.setSelectedItemIndex (firstKit, juce::dontSendNotification);
         setRoot (juce::File (roots[firstKit]));   // opens on the built-in kits
+        if (phoneUI)
+        {
+            tree.setItemHeight (36); results.setRowHeight (36);
+            tree.addMouseListener (this, true); results.addMouseListener (this, true);
+        }
+    }
+    // phone: slide a sample sideways onto the Channel Rack or REC (up/down still scrolls the list)
+    bool fingerDrag = false;
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! phoneUI || fingerDrag) return;
+        const bool inTree = tree.isParentOf (e.eventComponent), inRes = results.isParentOf (e.eventComponent);
+        if (! inTree && ! inRes) return;
+        const auto d = e.getOffsetFromDragStart();
+        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this);
+        if (dc == nullptr || dc->isDragAndDropActive()) return;
+        juce::File f;
+        if (inTree)
+        {
+            if (auto* it = tree.getItemAt (e.getEventRelativeTo (&tree).getMouseDownPosition().y)) { it->setSelected (true, true); f = tree.getSelectedFile(); }
+        }
+        else
+        {
+            const auto at = e.getEventRelativeTo (&results).getMouseDownPosition();
+            const int row = results.getRowContainingPosition (at.x, at.y);
+            if (row >= 0 && row < hits.size()) f = hits[row];
+        }
+        if (! f.existsAsFile() || ! (isAudioFile (f) || f.hasFileExtension ("mid;midi"))) return;
+        fingerDrag = true;
+        juce::Image img (juce::Image::ARGB, 200, 32, true);
+        {
+            juce::Graphics g (img);
+            g.setColour (col::accent.withAlpha (0.9f)); g.fillRoundedRectangle (0.0f, 0.0f, 200.0f, 32.0f, 6.0f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+            g.drawText (f.getFileNameWithoutExtension(), 8, 0, 184, 32, juce::Justification::centredLeft, true);
+        }
+        dc->startDragging ("sample:" + f.getFullPathName(), inTree ? (juce::Component*) &tree : (juce::Component*) &results, juce::ScaledImage (img), false);
     }
     ~SampleBrowser() override { tree.removeListener (this); }
     void paint (juce::Graphics& g) override
@@ -314,7 +364,7 @@ private:
         roots.removeEmptyStrings();
         roots.removeString (downloadsFolder().getFullPathName());
         roots.insert (0, downloadsFolder().getFullPathName());   // beats come from Downloads: always first
-        const auto lib = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Sounds");
+        const auto lib = hhsHome().getChildFile ("Sounds");
         roots.removeString (lib.getFullPathName());
         if (lib.isDirectory()) roots.insert (1, lib.getFullPathName());
         // kits that ship with the app (Classic Trap, Etherea Instruments, Triple S Hitters): each one in the folder list, right after Downloads
@@ -366,7 +416,14 @@ private:
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override { return "sample"; }
     void selectionChanged() override { auto f = tree.getSelectedFile(); if (f.existsAsFile() && isAudioFile (f)) s.engine.previewFile (f); }
-    void fileClicked (const juce::File&, const juce::MouseEvent&) override {}
+    void fileClicked (const juce::File& f, const juce::MouseEvent& e) override
+    {
+        juce::ignoreUnused (e);
+        if (phoneUI && f.isDirectory())   // phone: one tap opens / closes the folder you tapped (matched by path: the y lookup always hit the top folder)
+            for (int r = 0; r < tree.getNumRowsInTree(); ++r)
+                if (auto* it = tree.getItemOnRow (r))
+                    if (it->getUniqueName() == f.getFullPathName()) { it->setOpen (! it->isOpen()); break; }
+    }
     void fileDoubleClicked (const juce::File& f) override { if (f.existsAsFile()) addSampleChannels (s, { f }, {}); }
     void browserRootChanged (const juce::File&) override {}
 };
@@ -393,6 +450,7 @@ public:
         list.setModel (this); list.setRowHeight (24);
         list.setColour (juce::ListBox::backgroundColourId, col::panel);
         addAndMakeVisible (list);
+        if (phoneUI) list.addMouseListener (this, true);   // phone: slide a row sideways to drag it into REC (up/down still scrolls)
         hint.setText ("Drag onto the Playlist or Record page. Everything stays here until you clear it (undo with Cmd/Ctrl+Z).", juce::dontSendNotification);
         hint.setFont (juce::Font (juce::FontOptions (11.0f))); hint.setColour (juce::Label::textColourId, col::dim);
         addAndMakeVisible (hint);
@@ -541,6 +599,29 @@ private:
         const int row = sel.isEmpty() ? -1 : sel[0];
         if (row < 0 || row >= (int) rows.size() || rows[(size_t) row].header) return {};
         return audio ? "audio:" + rows[(size_t) row].file.getFullPathName() : "pattern:" + juce::String (rows[(size_t) row].index);
+    }
+    bool fingerDrag = false;
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! phoneUI || fingerDrag || ! list.isParentOf (e.eventComponent)) return;
+        const auto d = e.getOffsetFromDragStart();
+        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        const auto at = e.getEventRelativeTo (&list).getMouseDownPosition();
+        const int row = list.getRowContainingPosition (at.x, at.y);
+        juce::SparseSet<int> sel; sel.addRange ({ row, row + 1 });
+        const auto desc = getDragSourceDescription (sel);
+        auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this);
+        if (desc.isVoid() || dc == nullptr) return;
+        fingerDrag = true;
+        juce::Image img (juce::Image::ARGB, 180, 32, true);
+        {
+            juce::Graphics g (img);
+            g.setColour (rows[(size_t) row].colour.withAlpha (0.9f)); g.fillRoundedRectangle (0.0f, 0.0f, 180.0f, 32.0f, 6.0f);
+            g.setColour (juce::Colours::white); g.setFont (juce::Font (juce::FontOptions (14.0f, juce::Font::bold)));
+            g.drawText (rows[(size_t) row].name, 8, 0, 164, 32, juce::Justification::centredLeft, true);
+        }
+        dc->startDragging (desc, &list, juce::ScaledImage (img), false);
     }
 };
 #endif

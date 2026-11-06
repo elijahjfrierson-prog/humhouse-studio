@@ -81,20 +81,20 @@ void showWhatsNewIfUpdated()
         "- Drag the playhead on the bar numbers in Piano Roll, Playlist and Record\n"
         "- Playlist: E + drag the bar ruler = time selection (copy / paste / Ctrl+B whole bars incl. empty space); Shift+drag ruler = punch\n"
         "- Piano Roll toolbar wraps to two rows when narrow; Glide always visible\n"
-        "- Note names match FL: middle C = C5 (C0 to G10)\n"
+        "- Note names: middle C = C5 (C0 to G10)\n"
         "- One-shots: smoother pitched playback (Hermite), SET (wrench) button on every channel, on/off buttons for Normalize, Reverse, Declick...\n"
         "- One-shots / 808 cut mode: no click at the start or when the next hit cuts the last one\n"
         "- Piano Roll LOCK: notes you draw, drag or stamp snap to your key and scale\n"
         "- Sample previews stop when you click anywhere, press Stop or Space\n"
         "- Recording: earlier takes and the beat play instantly when you hit record (no dropout while take files are created, punch pre-roll preloaded)\n"
         "- Studio Vocal (Studio FX): 0-latency vocal smoother - Smooth, De-Ess, Silk air, Warmth + 7 presets\n"
-        "- No more phasing on buses: automatic plugin delay compensation like FL, the Mix knob lines dry up with latent FX, mono plugins get the mono sum instead of just the left side\n"
+        "- No more phasing on buses: automatic plugin delay compensation, the Mix knob lines dry up with latent FX, mono plugins get the mono sum instead of just the left side\n"
         "- AutoPitch rebuilt: Auto-Tune style single read head spliced on whole pitch cycles - full voice, no clicks or phasing, ~0.1-6 ms\n"
-        "- Knobs work like FL: drag up/down or scroll, Shift = fine, double-click to type a value, Alt-click resets\n"
+        "- Knobs: drag up/down or scroll, Shift = fine, double-click to type a value, Alt-click resets\n"
         "- Studio EQ: Pro-Q style band bar (type / freq / gain / Q, type values in), selected band shape, listen (Alt+drag a dot), Shift = fine, display range 6 / 12 / 18 / 30 dB\n"
         "- Trackpad pinch zoom + Ctrl/Cmd+scroll zoom at the mouse in Playlist and Piano Roll\n"
         "- Snap menu in the Playlist and finer snaps everywhere: (none), 1/6, 1/4, 1/3, 1/2 step, 1/6, 1/3, 1/2 beat, beat, bar\n"
-        "- FL Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
+        "- Playlist keys: E select (drag a box over a chorus), P/B paint, D delete, T mute, C slice\n"
         "- Ctrl/Cmd+C / X / V copy, cut, paste at the playhead; Ctrl/Cmd+B duplicate; Shift+drag clones; Ctrl/Cmd+D deselect\n"
         "- Audio beats no longer cut off at the start: clip audio is loaded before playback begins\n"
         "- Start mid-note (e.g. bar 1.4) and 808s / samples play from the matching point in the sample\n"
@@ -107,7 +107,7 @@ void showWhatsNewIfUpdated()
         "- Fade bends: drag the round handle on any fade up / down for curved fades\n"
         "- Smoother UI: Playlist / Piano Roll only redraw what moves while playing; Options > capture-friendly drawing toggle (Windows)\n"
         "- See the take being recorded: live red clip + waveform; quiet takes drawn scaled up\n"
-        "- New takes over an earlier take drop to the next lane (FL style) instead of covering it\n"
+        "- New takes over an earlier take drop to the next lane instead of covering it\n"
         "- NORM button on every track: zero-latency auto-normalize for your voice\n"
         "- Louder, fuller gain staging: default faders = 0 dB (no hidden loss), synths +5 dB\n"
         "- Knobs move in clean steps (0.01 / 0.1 / 1), Shift = fine\n"
@@ -193,6 +193,17 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.fillRoundedRectangle (r, 4.0f);
     g.setColour (col::gridBar.withAlpha (0.7f));
     g.drawRoundedRectangle (r, 4.0f, 1.0f);
+}
+
+juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
+{
+    if (! phoneUI) return LookAndFeel_V4::getTextButtonFont (b, h);
+    return juce::Font (juce::FontOptions (juce::jmin (18.0f, (float) h * 0.5f), juce::Font::bold));
+}
+
+juce::Font HHLookAndFeel::getPopupMenuFont()
+{
+    return phoneUI ? juce::Font (juce::FontOptions (19.0f)) : LookAndFeel_V4::getPopupMenuFont();
 }
 
 void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
@@ -340,20 +351,26 @@ void Studio::commit (const juce::String& what)
 
 void Studio::undoStep (int delta)
 {
-    bool ok = false;
-    {
-        const juce::ScopedLock sl (engine.getLock());
-        ok = delta < 0 ? undo.undo (p()) : undo.redo (p());
-    }
-    if (ok) { engine.sync(); dirty = true; sendChangeMessage(); }
+    jumpHistory (undo.current() + (delta < 0 ? -1 : 1));
 }
 
+// the snapshot is parsed before the audio lock is taken and the old song is freed after it: parsing a big song
+// (60 FX, long vocals) under the lock stalled playback = static / lag on undo, redo and history jumps
 void Studio::jumpHistory (int index)
 {
-    bool ok = false;
-    { const juce::ScopedLock sl (engine.getLock()); ok = undo.jumpTo (index, p()); }
-    if (ok) { engine.sync(); dirty = true; sendChangeMessage(); }
+    if (index < 0 || index >= undo.size() || index == undo.current()) return;
+    Project next;
+    if (! undo.stateAt (index, next)) return;
+    {
+        const juce::ScopedLock sl (engine.getLock());
+        next.projectFile = p().projectFile;
+        std::swap (p(), next);
+        undo.setCurrent (index);
+    }
+    engine.sync(); dirty = true; sendChangeMessage();
 }
+
+std::function<void (const juce::String&)>& Studio::readout() { static std::function<void (const juce::String&)> f; return f; }
 
 NoteList& Studio::notes (int channelId)
 {
@@ -465,6 +482,81 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 };
 }
 
+// Options > Key commands: every action with its default key; any of them can be given your own key, or reset
+struct KeyAction { const char* id; const char* name; juce::KeyPress def; };
+static const std::vector<KeyAction>& keyActions()
+{
+    const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier;
+    static const std::vector<KeyAction> a {
+        { "play", "Play / Stop", juce::KeyPress (juce::KeyPress::spaceKey) },  { "home", "Go to start", juce::KeyPress (juce::KeyPress::homeKey) },
+        { "rec", "Record on / off", juce::KeyPress ('r') },                    { "song", "Pattern / Song mode", juce::KeyPress ('l') },
+        { "playlist", "Show REC (Playlist)", juce::KeyPress (juce::KeyPress::F5Key) }, { "piano", "Show Piano Roll", juce::KeyPress (juce::KeyPress::F7Key) },
+        { "browser", "Browser on / off", juce::KeyPress (juce::KeyPress::F8Key) }, { "mixer", "Show Mixer", juce::KeyPress (juce::KeyPress::F9Key) },
+        { "save", "Save", juce::KeyPress ('s', cmd, 0) },                      { "saveas", "Save as", juce::KeyPress ('s', cmd | shift, 0) },
+        { "open", "Open", juce::KeyPress ('o', cmd, 0) },                      { "new", "New project", juce::KeyPress ('n', cmd, 0) },
+        { "undo", "Undo", juce::KeyPress ('z', cmd, 0) },                      { "redo", "Redo", juce::KeyPress ('z', cmd | shift, 0) },
+        { "metro", "Metronome", juce::KeyPress ('m', cmd, 0) },                { "export", "Export WAV", juce::KeyPress ('r', cmd, 0) },
+        { "shortcuts", "Shortcuts window", juce::KeyPress ('u', cmd, 0) } };
+    return a;
+}
+
+struct KeyCmdEditor : juce::Component
+{
+    KeyCmdEditor (std::map<juce::String, juce::KeyPress>& m, std::function<void()> onSave) : keys (m), save (std::move (onSave))
+    {
+        setWantsKeyboardFocus (true);
+        for (size_t i = 0; i < keyActions().size(); ++i)
+        {
+            auto* l = names.add (new juce::Label ({}, keyActions()[i].name)); addAndMakeVisible (l);
+            auto* b = setBtns.add (new juce::TextButton()); b->setWantsKeyboardFocus (false); addAndMakeVisible (b);
+            b->onClick = [this, i] { waiting = (int) i; refresh(); grabKeyboardFocus(); };
+            auto* r = resetBtns.add (new juce::TextButton ("Default")); r->setWantsKeyboardFocus (false); addAndMakeVisible (r);
+            r->onClick = [this, i] { keys.erase (keyActions()[i].id); waiting = -1; refresh(); save(); };
+        }
+        resetAll.setButtonText ("Reset all to default"); resetAll.setWantsKeyboardFocus (false); addAndMakeVisible (resetAll);
+        resetAll.onClick = [this] { keys.clear(); waiting = -1; refresh(); save(); };
+        addAndMakeVisible (status);
+        refresh();
+        setSize (460, 62 + 28 * (int) keyActions().size());
+    }
+    void refresh()
+    {
+        for (size_t i = 0; i < keyActions().size(); ++i)
+        {
+            auto& a = keyActions()[i]; const auto it = keys.find (a.id);
+            const auto k = it != keys.end() ? it->second : a.def;
+            setBtns[(int) i]->setButtonText (waiting == (int) i ? "Press a key... (Esc = cancel)" : k.getTextDescriptionWithIcons() + (it != keys.end() ? "  (yours)" : ""));
+        }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        for (int i = 0; i < names.size(); ++i)
+        {
+            auto row = r.removeFromTop (28);
+            names[i]->setBounds (row.removeFromLeft (170)); resetBtns[i]->setBounds (row.removeFromRight (72).reduced (2)); setBtns[i]->setBounds (row.reduced (2));
+        }
+        resetAll.setBounds (r.removeFromTop (28).reduced (2));
+        status.setBounds (r.removeFromTop (28));
+    }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (waiting < 0) return false;
+        if (k != juce::KeyPress (juce::KeyPress::escapeKey))
+        {
+            auto& a = keyActions()[(size_t) waiting];
+            const KeyAction* taken = nullptr;   // one key, one command: a key another command already uses is refused
+            for (auto& b : keyActions())
+                if (juce::String (b.id) != a.id) { const auto it = keys.find (b.id); if ((it != keys.end() ? it->second : b.def) == k) taken = &b; }
+            if (taken != nullptr) status.setText (k.getTextDescriptionWithIcons() + " is already " + taken->name + ". Change that one first.", juce::dontSendNotification);
+            else { status.setText ({}, juce::dontSendNotification); if (k == a.def) keys.erase (a.id); else keys[a.id] = k; save(); }
+        }
+        waiting = -1; refresh(); return true;
+    }
+    std::map<juce::String, juce::KeyPress>& keys; std::function<void()> save;
+    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns; juce::TextButton resetAll; juce::Label status; int waiting = -1;
+};
+
 class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
@@ -478,16 +570,26 @@ public:
         o.osxLibrarySubFolder = "Application Support";
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
+        kbState.addListener (&kbListen);
 
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
+        if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
+        {
+            const auto old = juce::Colour::fromString (studio.settings->getValue ("themeColour", "ff000000"));
+            if (studio.settings->containsKey ("themeColour") && old.getSaturation() > 0.4f && old.getHue() > 0.02f && old.getHue() < 0.13f)
+                studio.settings->removeValue ("themeColour");
+            studio.settings->setValue ("purpleDefault", true);
+        }
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
+        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
+        applySavedLayout (studio);
         auto audioXml = studio.settings->getXmlValue ("audio");
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);
@@ -558,6 +660,25 @@ public:
         setupButton (countBtn, "COUNT-IN", "1 bar count-in / pre-roll before recording", true);
         countBtn.setToggleState (engine.countInOn.load(), juce::dontSendNotification);
         countBtn.onClick = [this] { engine.countInOn = countBtn.getToggleState(); };
+        setupButton (retroBtn, "RETRO", "Retro Record: drops the last 60 s you sang or played onto REC, even if nothing was armed or recording", false);
+        setupButton (pianoBtn, "PIANO", "Keyboard inset: play the selected channel or sample on keys to hear it before placing", true);
+        pianoBtn.onClick = [this]
+        {
+            if (kbInset == nullptr)
+            {
+                kbInset = std::make_unique<juce::MidiKeyboardComponent> (kbState, juce::MidiKeyboardComponent::horizontalKeyboard);
+                kbInset->setAvailableRange (24, 108);
+                kbInset->setKeyWidth (phoneUI ? 34.0f : 22.0f);
+                kbInset->setLowestVisibleKey (48);
+                kbInset->setWantsKeyboardFocus (false);
+                kbInset->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
+                kbInset->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
+                addChildComponent (*kbInset);
+            }
+            if (! pianoBtn.getToggleState()) kbState.allNotesOff (1);
+            resized();
+        };
+        retroBtn.onClick = [this] { flash (engine.retroRecord() ? "Retro Record: last take added to REC" : "Retro Record: nothing heard on the input yet"); };
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
@@ -574,16 +695,16 @@ public:
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
         addAndMakeVisible (scopeBtn);
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
-        mixPopBtn.onClick = [this] { if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
+        mixPopBtn.onClick = [this] { if (phoneUI) { phoneMixToggle(); return; } if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (mixPopBtn);
         setupButton (rackPopBtn, "RACK", "Channel Rack: pop it out into its own window so you can edit samples and one-shots on Rec and in full screen (click again to dock it)", true);
-        rackPopBtn.onClick = [this] { if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
+        rackPopBtn.onClick = [this] { if (phoneUI) { phoneRackToggle(); return; } if ((popouts.count (rack.get()) > 0) != rackPopBtn.getToggleState()) toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); };
         addAndMakeVisible (rackPopBtn);
-        rackPopOut = [this] { toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
+        rackPopOut = [this] { if (phoneUI) { phoneRackToggle(); return; } toggleDetach (rack.get(), "Channel Rack"); rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification); rack->resized(); };
         setupButton (saveBtn, "SAVE", "Save the project (Cmd/Ctrl+S). Flashes SAVED when it's written", false);
         saveBtn.onClick = [this] { save (false); };
         addAndMakeVisible (saveBtn);
-        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
+        for (juce::Button* b : { (juce::Button*) &songBtn, (juce::Button*) &startBtn, (juce::Button*) &playBtn, (juce::Button*) &stopBtn, (juce::Button*) &recBtn, (juce::Button*) &metroBtn, (juce::Button*) &countBtn, (juce::Button*) &retroBtn, (juce::Button*) &pianoBtn, (juce::Button*) &browserBtn, (juce::Button*) &themeBtn }) addAndMakeVisible (b);
 
         bpm.setSliderStyle (juce::Slider::LinearBar);
         bpm.setRange (40.0, 300.0, 0.01);
@@ -607,8 +728,34 @@ public:
         hintBar.setColour (juce::Label::backgroundColourId, col::panel);
         hintBar.setFont (juce::FontOptions (13.0f));
         addAndMakeVisible (hintBar);
+        Studio::readout() = [hb = juce::Component::SafePointer<juce::Label> (&hintBar)] (const juce::String& t) { if (hb != nullptr) hb->setText (t, juce::dontSendNotification); };
 
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
+        for (auto& kv : juce::StringArray::fromTokens (studio.settings->getValue ("keymap"), ";", ""))
+            if (kv.contains ("=")) userKeys[kv.upToFirstOccurrenceOf ("=", false, false)] = juce::KeyPress::createFromDescription (kv.fromFirstOccurrenceOf ("=", false, false));
+        applyKeySet = [this] (const juce::String& set)   // Layout: the matching DAW's key commands (none of them clash with another command)
+        {
+            const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
+            userKeys.clear();
+            auto put = [this] (const char* id, juce::KeyPress k) { userKeys[id] = k; };
+            if (set == "Logic")
+            {
+                put ("metro", juce::KeyPress ('k')); put ("mixer", juce::KeyPress ('x')); put ("piano", juce::KeyPress ('p'));
+                put ("browser", juce::KeyPress ('f')); put ("home", juce::KeyPress (juce::KeyPress::returnKey)); put ("export", juce::KeyPress ('b', cmd, 0));
+            }
+            else if (set == "Pro Tools")
+            {
+                put ("rec", juce::KeyPress (juce::KeyPress::F12Key)); put ("home", juce::KeyPress (juce::KeyPress::returnKey));
+                put ("mixer", juce::KeyPress ('=', cmd, 0)); put ("export", juce::KeyPress ('b', cmd | alt, 0));
+            }
+            else if (set == "Reaper")
+            {
+                put ("rec", juce::KeyPress ('r', cmd, 0)); put ("export", juce::KeyPress ('r', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd, 0));
+                put ("metro", juce::KeyPress ('m', cmd | shift, 0)); put ("browser", juce::KeyPress ('x', cmd | alt, 0)); put ("home", juce::KeyPress ('w'));
+            }
+            studio.settings->setValue ("layoutKeySet", set);
+            saveKeys();
+        };
         if (! floatWithTopmost) juce::Desktop::getInstance().addGlobalMouseListener (&floatRaiser);
 #if JUCE_MAC
         juce::MenuBarModel::setMacMainMenu (this);
@@ -648,8 +795,38 @@ public:
             undoBtn.onClick = [this] { studio.undoStep (-1); };
             redoBtn.onClick = [this] { studio.undoStep (1); };
             altABtn.onClick = [this] { phoneAlt ('a'); };
+            dupBtn.setTooltip ("Cmd+B: duplicate the selected notes (BEAT) or clips (REC) right after themselves");
+            dupBtn.onClick = [this] { phoneDuplicate(); };
+            delBtn.setTooltip ("Delete the selected clips (REC) or notes (BEAT)");
+            delBtn.onClick = [this] { phoneDelete(); };
+            octUpBtn.setTooltip ("Octave up: the selected notes (all notes if none are selected)");
+            octDnBtn.setTooltip ("Octave down: the selected notes (all notes if none are selected)");
+            noteUpBtn.setTooltip ("Up one note: the selected notes (all notes if none are selected)");
+            noteDnBtn.setTooltip ("Down one note: the selected notes (all notes if none are selected)");
+            octUpBtn.onClick  = [this] { phoneTranspose (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier); };
+            octDnBtn.onClick  = [this] { phoneTranspose (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier); };
+            noteUpBtn.onClick = [this] { phoneTranspose (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier); };
+            noteDnBtn.onClick = [this] { phoneTranspose (juce::KeyPress::downKey, juce::ModifierKeys::shiftModifier); };
             altSBtn.onClick = [this] { phoneAlt ('s'); };
-            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn }) addAndMakeVisible (b);
+            for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn, &delBtn, &octUpBtn, &octDnBtn, &noteUpBtn, &noteDnBtn }) addAndMakeVisible (b);
+            // folders: one tap opens a row of their buttons under the top bar, another tap tucks it away
+            browserBtn.setButtonText ("SOUNDS");
+            toolsOpen = studio.settings->getBoolValue ("phoneTools", true);
+            keysOpen = studio.settings->getBoolValue ("phoneKeys", false);
+            moreOpen = studio.settings->getBoolValue ("phoneMore", false);
+            const juce::String down (juce::CharPointer_UTF8 (" \xe2\x96\xbe"));
+            toolsBtn.setButtonText ("TOOLS" + down); keysBtn.setButtonText ("PIANO ROLL" + down); moreBtn.setButtonText ("MORE" + down);
+            toolsBtn.setTooltip ("Copy, paste, undo, redo, delete, duplicate, Alt+A, Alt+S");
+            keysBtn.setTooltip ("Octave and one-note up / down for the selected notes");
+            moreBtn.setTooltip ("Metronome, count-in, mixer, scope, color, CPU");
+            auto folder = [this] (juce::TextButton& b, bool& open, const char* key)
+            {
+                b.setColour (juce::TextButton::buttonOnColourId, col::accent);
+                b.setToggleState (open, juce::dontSendNotification);
+                b.onClick = [this, &b, &open, key] { open = ! open; b.setToggleState (open, juce::dontSendNotification); studio.settings->setValue (key, open); resized(); };
+                addAndMakeVisible (b);
+            };
+            folder (toolsBtn, toolsOpen, "phoneTools"); folder (keysBtn, keysOpen, "phoneKeys"); folder (moreBtn, moreOpen, "phoneMore");
         }
         setWantsKeyboardFocus (true);
         setSize (1440, 900);
@@ -667,6 +844,7 @@ public:
 
     ~MainComponent() override
     {
+        kbState.removeListener (&kbListen);
         rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         stopTimer();
@@ -701,27 +879,34 @@ if (phoneUI)
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
                 r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
-            const std::pair<juce::Component*, int> items[] {
-                { &menuBtn, 64 }, { nullptr, 130 }, { &closeAllBtn, 44 }, { &startBtn, 40 }, { &playBtn, 40 }, { &stopBtn, 40 }, { &recBtn, 40 }, { &songBtn, 48 },
-                { &beatTab, 72 }, { &recordTab, 72 }, { &mixTab, 72 }, { &importBtn, 72 }, { &copyBtn, 76 }, { &pasteBtn, 60 }, { &undoBtn, 60 }, { &redoBtn, 60 }, { &altABtn, 60 }, { &altSBtn, 60 },
-                { &bpm, 110 }, { &posLabel, 110 },
-                { &metroBtn, 62 }, { &countBtn, 80 }, { &rackPopBtn, 52 }, { &mixPopBtn, 40 }, { &scopeBtn, 64 }, { &themeBtn, 64 },
-                { &browserBtn, 120 }, { &saveBtn, 70 }, { &cpuLabel, 86 } };
-            const int rowH = 40, avail = juce::jmax (200, r.getWidth() - 16);
+            // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
+            constexpr int brk = -1;
+            std::vector<std::pair<juce::Component*, int>> items {
+                { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
+                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
+            if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
+            if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
+            if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
+            for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &pianoBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
+                                                                    &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
+                c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
+            const int rowH = 46, avail = juce::jmax (200, r.getWidth() - 16);
             int x = 0, rows = 1;
-            for (auto& it : items) { if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
+            for (auto& it : items) { if (it.second == brk) { if (x > 0) { ++rows; x = 0; } continue; } if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
             topBar = r.removeFromTop (rows * rowH + 8);
             logoArea = {};
             int y = topBar.getY() + 4; x = 0;
             for (auto& it : items)
             {
+                if (it.second == brk) { if (x > 0) { y += rowH; x = 0; } continue; }
                 if (x > 0 && x + it.second > avail) { y += rowH; x = 0; }
                 const juce::Rectangle<int> cell (topBar.getX() + 8 + x, y + 2, it.second, rowH - 4);
                 if (it.first != nullptr) it.first->setBounds (cell); else logoArea = cell;
                 x += it.second + 4;
             }
-            mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
-            rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
+            mixPopBtn.setToggleState (view == 2, juce::dontSendNotification);
+            rackPopBtn.setToggleState (view == 0 && ! rackHidden, juce::dontSendNotification);
         }
         else
         {
@@ -739,7 +924,9 @@ if (phoneUI)
         bpm.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
         metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
-        countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (8);
+        countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (4);
+        retroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
+        pianoBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (8);
         saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
         browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
         themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
@@ -751,6 +938,11 @@ if (phoneUI)
         cpuLabel.setBounds (t.removeFromRight (86));
         }
         hintBar.setBounds (r.removeFromBottom (22));
+        if (kbInset != nullptr)
+        {
+            kbInset->setVisible (pianoBtn.getToggleState());
+            if (pianoBtn.getToggleState()) kbInset->setBounds (r.removeFromBottom (phoneUI ? 110 : 76));
+        }
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
         if (phoneUI)
         {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
@@ -760,14 +952,15 @@ if (phoneUI)
         }
         if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
         const bool rackHere = here (rack), pianoHere = here (piano);
-        if (rackHere) rack->setVisible (view == 0);
+        if (rackHere) rack->setVisible (view == 0 && ! (phoneUI && rackHidden && pianoHere));
         if (pianoHere) piano->setVisible (view == 0);
         if (here (playlist)) playlist->setVisible (view == 1);
         if (here (mixer)) mixer->setVisible (view == 2);
         pianoSplit.setVisible (false);
         if (view == 0)
         {
-            if (rackHere && pianoHere)
+            if (rackHere && pianoHere && phoneUI && rackHidden) piano->setBounds (r);
+            else if (rackHere && pianoHere)
             {
                 splitTop = r.getY(); splitTotal = r.getHeight();
                 const int splitH = phoneUI ? 34 : 22;
@@ -783,8 +976,33 @@ if (phoneUI)
         else if (here (mixer)) mixer->setBounds (r);
     }
 
+    std::map<juce::String, juce::KeyPress> userKeys;   // Options > Key commands: action id -> your key
+    bool remapping = false;
+    void saveKeys()
+    {
+        juce::StringArray s; for (auto& [id, k] : userKeys) s.add (id + "=" + k.getTextDescription());
+        studio.settings->setValue ("keymap", s.joinIntoString (";")); studio.settings->saveIfNeeded();
+    }
+    void showKeyCommands()
+    {
+        juce::DialogWindow::LaunchOptions o;
+        o.content.setOwned (new KeyCmdEditor (userKeys, [this] { saveKeys(); }));
+        o.dialogTitle = "Key commands"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
+        o.launchAsync();
+    }
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (! remapping && ! userKeys.empty())
+        {
+            for (auto& a : keyActions())
+                if (auto it = userKeys.find (a.id); it != userKeys.end() && k == it->second)
+                {
+                    const juce::ScopedValueSetter<bool> sv (remapping, true);
+                    return keyPressed (a.def);
+                }
+            for (auto& a : keyActions())
+                if (userKeys.count (a.id) > 0 && k == a.def) return true;   // moved to your own key
+        }
         const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
         auto is = [&k] (int key, int mods) { return k == juce::KeyPress (key, mods, 0); };
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
@@ -982,6 +1200,7 @@ if (phoneUI)
             }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
+            m.addItem (4712, "Layout... (Logic, Pro Tools, Reaper looks + make your own)");
             {
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -1009,6 +1228,7 @@ if (phoneUI)
                #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
+            m.addItem (4711, "Key commands... (make your own, reset to default)");
             m.addSeparator();
             add (mShortcuts, "Shortcuts", "Cmd/Ctrl+U", true, shortcutsWin != nullptr && shortcutsWin->isVisible());
         }
@@ -1125,6 +1345,8 @@ if (phoneUI)
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
             case mTheme: showThemeDialog (studio); break;
+            case 4711: showKeyCommands(); break;
+            case 4712: showLayoutDialog (studio); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
@@ -1158,7 +1380,7 @@ private:
         void paint (juce::Graphics& g) override
         {
             g.fillAll (col::lightMode ? col::panel2 : juce::Colour (0xff15181d));
-            g.setColour (juce::Colour (0xffff8a4c).withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
+            g.setColour (col::accent.withAlpha (0.8f)); g.fillRoundedRectangle (getLocalBounds().toFloat().withSizeKeepingCentre (40, 4).withX (8), 2);
             g.setColour (col::text.withAlpha (0.6f)); g.setFont (12.0f);
             g.drawText (minimized ? "PIANO ROLL  [+] click to show" : "PIANO ROLL  [-] click to minimize  |  drag to resize",
                         getLocalBounds(), juce::Justification::centred);
@@ -1172,6 +1394,16 @@ private:
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
     juce::TextButton rackPopBtn;
+    juce::TextButton retroBtn, pianoBtn;
+    juce::MidiKeyboardState kbState;
+    std::unique_ptr<juce::MidiKeyboardComponent> kbInset;
+    struct KbListen : juce::MidiKeyboardState::Listener
+    {
+        explicit KbListen (MainComponent& o) : m (o) {}
+        void handleNoteOn (juce::MidiKeyboardState*, int, int note, float vel) override { m.liveNote (note, juce::jmax (0.05f, vel), true); }
+        void handleNoteOff (juce::MidiKeyboardState*, int, int note, float) override { m.liveNote (note, 0.0f, false); }
+        MainComponent& m;
+    } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
@@ -1186,7 +1418,8 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
-    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" };
+    juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" }, toolsBtn, keysBtn, moreBtn;
+    bool toolsOpen = true, keysOpen = false, moreOpen = false;
     bool clipArmed = false; int clipView = -1;
     void phoneAlt (int key)
     {
@@ -1196,12 +1429,44 @@ private:
             hintBar.setText (key == 's' && view == 1 ? "Strum is for notes: open the pattern in BEAT, select notes, then ALT+S"
                                                      : "Select notes or audio clips first", juce::dontSendNotification);
     }
+    void clearClipboardMode()
+    {
+        clipArmed = false; phoneClipTarget = nullptr; dropBtn.setVisible (false);
+        copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY");
+    }
+    void phoneTranspose (int key, int mods)
+    {
+        if (view != 0) setView (0);   // notes live in the BEAT page's Piano Roll
+        piano->keyPressed (juce::KeyPress (key, mods, 0));
+    }
+    void phoneDelete()
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        const auto& clips = engine.project().clips;
+        if (view == 1 && std::none_of (clips.begin(), clips.end(), [] (const Clip& c) { return c.selected; }))
+            target = nullptr;   // DELETE only removes clips, never a whole selected track
+        if (target == nullptr || ! target->keyPressed (juce::KeyPress (juce::KeyPress::deleteKey)))
+            hintBar.setText ("Select notes or clips first, then DELETE", juce::dontSendNotification);
+    }
+    void phoneDuplicate()
+    {
+        juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
+        if (target == nullptr || ! target->keyPressed (juce::KeyPress ('b', juce::ModifierKeys::commandModifier, 0)))
+            hintBar.setText ("Select notes or clips first, then CMD+B", juce::dontSendNotification);
+    }
+    void phoneRackToggle()   // phone: the Rack stays docked on BEAT; RACK shows / hides it (no floating window)
+    {
+        if (view != 0) { rackHidden = false; setView (0); }
+        else { rackHidden = ! rackHidden; resized(); }
+    }
+    void phoneMixToggle() { setView (view == 2 ? lastView : 2); }
     void phoneCopyPaste (int key)
     {
         juce::Component* target = view == 1 ? playlist.get() : view == 0 ? piano.get() : nullptr;
         if (target == nullptr) return;
         int n = 0;
         if (view == 1) for (auto& c : studio.p().clips) n += c.selected ? 1 : 0;
+        if (key == 'c' && clipArmed) { clearClipboardMode(); hintBar.setText ("Copy off", juce::dontSendNotification); return; }   // tap COPY again to turn it off
         if (key == 'c' && view == 1 && n == 0) { hintBar.setText ("Nothing selected: tap clips or patterns first, then COPY", juce::dontSendNotification); return; }
         const bool handled = target->keyPressed (juce::KeyPress (key, juce::ModifierKeys::commandModifier, 0));
         if (key == 'c' && ! handled) { hintBar.setText ("Nothing selected: select notes first, then COPY", juce::dontSendNotification); return; }
@@ -1219,7 +1484,13 @@ private:
     {
         juce::PopupMenu m;
         const auto names = getMenuBarNames();
-        for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], getMenuForIndex (i, names[i]));
+        for (int i = 0; i < names.size(); ++i)
+        {
+            if (! phoneUI) { m.addSubMenu (names[i], getMenuForIndex (i, names[i])); continue; }
+            m.addSectionHeader (names[i]);   // phone: every item is one tap away (no sub-folders to open first)
+            const auto sub = getMenuForIndex (i, names[i]);
+            for (juce::PopupMenu::MenuItemIterator it (sub); it.next();) m.addItem (it.getItem());
+        }
         juce::Component::SafePointer<MainComponent> safe (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
                          [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
@@ -1234,7 +1505,14 @@ private:
             {
                 if (safe == nullptr) return;
                 juce::StringArray share, media;
-                for (auto& f : fc.getResults())
+                juce::Array<juce::File> picked;
+               #if JUCE_IOS
+                for (auto& u : fc.getURLResults()) if (auto f = copyIntoApp (u); f.existsAsFile()) picked.add (f);
+               #else
+                picked = fc.getResults();
+               #endif
+                if (picked.isEmpty()) { safe->hintBar.setText ("Couldn't read that file. If it's in iCloud, open it once in Files to download it, then import again.", juce::dontSendNotification); return; }
+                for (auto& f : picked)
                     if (f.existsAsFile()) (allHumHouseShareFiles ({ f.getFullPathName() }) ? share : media).add (f.getFullPathName());
                 if (! share.isEmpty()) safe->filesDropped (share, 0, 0);
                 if (auto* t = dynamic_cast<juce::FileDragAndDropTarget*> (safe->playlist.get()); t != nullptr && ! media.isEmpty())
@@ -1247,7 +1525,7 @@ private:
     void closeEverything()
     {
         juce::PopupMenu::dismissAllActiveMenus();
-        if (phoneUI) { clipArmed = false; phoneClipTarget = nullptr; dropBtn.setVisible (false); copyBtn.setToggleState (false, juce::dontSendNotification); copyBtn.setButtonText ("COPY"); }
+        if (phoneUI) clearClipboardMode();
         juce::ModalComponentManager::getInstance()->cancelAllModalComponents();
         closeAllEditorWindows();
         std::vector<juce::Component*> pops;
@@ -1265,13 +1543,13 @@ private:
         showBrowser = false;
         resized();
     }
-    int view = 0, ticks = 0;
+    int view = 0, ticks = 0, lastView = 0; bool rackHidden = false;
     bool showBrowser = ! phoneUI;
     juce::TextButton browserTab { ">" };
     juce::String flashText;
     juce::uint32 flashUntil = 0;
 
-    static juce::File docsDir() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"); }
+    static juce::File docsDir() { return hhsHome(); }   // iPhone: Files > On My iPhone > HumHouse Studio
     juce::File backupDir() const
     {
         auto& p = const_cast<Engine&> (engine).project();
@@ -1332,7 +1610,7 @@ private:
     {
         if (popouts.count (c) > 0) { reattach (c); return; }
         auto w = std::make_unique<PopOut> (title);
-        w->setUsingNativeTitleBar (true);
+        w->setUsingNativeTitleBar (! phoneUI);
         w->setContentNonOwned (c, false);
         c->setVisible (true);
         w->setResizable (true, true);
@@ -1360,10 +1638,18 @@ private:
 
     void setView (int v)
     {
+        if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab };
-        tabs[v]->setToggleState (true, juce::dontSendNotification);
+        for (int i = 0; i < 3; ++i) tabs[i]->setToggleState (i == v, juce::dontSendNotification);
+        if (phoneUI)   // phone: never leave a floating Rack / Mixer window over the page after switching
+        {
+            std::vector<juce::Component*> pops;
+            for (auto& p : popouts) pops.push_back (p.first);
+            for (auto* c : pops) reattach (c);
+        }
         resized();
+        repaint();
         if (! popouts.empty()) juce::MessageManager::callAsync ([] { raiseFloatingWindows(); });
     }
 
@@ -1568,7 +1854,17 @@ private:
         engine.storePluginStates();
         collectAudio();
         auto& p = engine.project();
-        if (saveProject (p, p.projectFile))
+        bool ok = saveProject (p, p.projectFile);
+       #if JUCE_IOS
+        if (! ok)   // never lose a song: fall back to a fresh file in Files > On My iPhone > HumHouse Studio
+        {
+            docsDir().createDirectory();
+            p.projectFile = docsDir().getChildFile (juce::File::createLegalFileName (p.title.isEmpty() ? juce::String ("Untitled") : p.title) + ".hhs").getNonexistentSibling (true);
+            collectAudio();
+            ok = saveProject (p, p.projectFile);
+        }
+       #endif
+        if (ok)
         {
             writeBackup (p);
             studio.dirty = false;
@@ -1577,7 +1873,9 @@ private:
             saveBtn.setButtonText ("SAVED"); saveBtn.setToggleState (true, juce::dontSendNotification);   // opposite color = confirmed
             savedFlash = 45;
         }
-        else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save", "Could not save the project.");
+        else juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Save",
+                                                     "Could not save the project to\n" + p.projectFile.getFullPathName()
+                                                         + "\n\nA backup was kept. Try Save As with another name, or free up space.");
     }
 
     // FL-style: Save / Don't Save / Cancel before the current project is closed
@@ -1604,8 +1902,33 @@ private:
     void save (bool as, std::function<void()> after = {})
     {
         auto& p = engine.project();
-        if (! as && p.projectFile.existsAsFile()) { writeProject(); if (after && ! studio.dirty) after(); return; }
+        bool inPlace = ! as && p.projectFile.existsAsFile();
+       #if JUCE_IOS
+        inPlace = inPlace && p.projectFile.isAChildOf (docsDir());   // opened from elsewhere: save a copy into the app's folder
+       #endif
+        if (inPlace) { writeProject(); if (after && ! studio.dirty) after(); return; }
         docsDir().createDirectory();
+       #if JUCE_IOS
+        // iPhone: the Files save sheet hands back a location the app can't write to (false "Could not save"),
+        // so projects save straight into the app's folder, which the Files app shows
+        auto* w = new juce::AlertWindow ("Save project", "Name your song (it saves to Files > On My iPhone > HumHouse Studio)", juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("name", p.title);
+        w->addButton ("SAVE", 1, juce::KeyPress (juce::KeyPress::returnKey));
+        w->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+        juce::Component::SafePointer<MainComponent> safe (this);
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([safe, w, after] (int r) {
+            if (safe == nullptr || r != 1) return;
+            auto name = juce::File::createLegalFileName (w->getTextEditorContents ("name").trim());
+            if (name.isEmpty()) name = "Untitled";
+            auto f = docsDir().getChildFile (name + ".hhs");
+            if (f.existsAsFile() && f != safe->engine.project().projectFile) f = f.getNonexistentSibling (true);   // never overwrite another song
+            safe->engine.project().projectFile = f;
+            safe->engine.project().title = f.getFileNameWithoutExtension();
+            safe->writeProject();
+            if (after && ! safe->studio.dirty) after();
+        }), true);
+        return;
+       #endif
         chooser = std::make_unique<juce::FileChooser> ("Save project", docsDir().getChildFile (p.title + ".hhs"), "*.hhs");
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                   | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -1641,6 +1964,72 @@ private:
     }
 
     void open (bool backups) { askToSave ([this, backups] { openChooser (backups); }); }
+   #if JUCE_IOS
+    // Files hands back a temporary security-scoped link: copy the file into the app's folder while it's readable
+    static juce::File copyIntoApp (const juce::URL& u)
+    {
+        const auto local = u.getLocalFile();
+        if (local.isAChildOf (docsDir())) return local;
+        auto name = juce::URL::removeEscapeChars (u.getFileName());
+        if (name.isEmpty()) name = local.getFileName();
+        auto dir = docsDir().getChildFile ("Imported");
+        dir.createDirectory();
+        auto dest = dir.getChildFile (juce::File::createLegalFileName (name));
+        if (auto in = u.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)))
+        {
+            const auto tmp = dir.getChildFile (dest.getFileName() + ".part");   // streamed, so big recordings never sit in memory
+            {
+                juce::FileOutputStream out (tmp);
+                if (out.openedOk()) { out.setPosition (0); out.truncate(); }
+                const auto total = in->getTotalLength();
+                const auto copied = out.openedOk() ? out.writeFromInputStream (*in, -1) : (juce::int64) -1;
+                out.flush();
+                if (copied < 0 || ! out.getStatus().wasOk() || (total >= 0 && copied != total))   // phone full mid-copy: never keep half a file
+                { tmp.deleteFile(); return local.existsAsFile() ? local : juce::File(); }
+            }
+            // same file again (under its name or an earlier "name (2)"): reuse it; a different file with that name: keep both
+            for (int i = 1; i <= 100; ++i)
+            {
+                const auto c = i == 1 ? dest : dir.getChildFile (dest.getFileNameWithoutExtension() + " (" + juce::String (i) + ")" + dest.getFileExtension());
+                if (c.existsAsFile() && c.hasIdenticalContentTo (tmp)) { tmp.deleteFile(); return c; }
+            }
+            if (dest.existsAsFile()) dest = dest.getNonexistentSibling (true);
+            if (tmp.moveFileTo (dest)) return dest;
+            tmp.deleteFile();
+        }
+        return local.existsAsFile() ? local : juce::File();
+    }
+    void openChooser (bool backups)
+    {
+        juce::Array<juce::File> found;
+        auto scan = [&found] (const juce::File& d, bool deep) { if (d.isDirectory()) for (auto& f : d.findChildFiles (juce::File::findFiles, deep, "*.hhs")) if (! found.contains (f)) found.add (f); };
+        const auto docs = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+        scan (docsDir(), true); scan (docs, false); scan (docs.getChildFile ("Inbox"), true);
+        scan (juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"), true);   // songs from older builds
+        juce::Array<juce::File> songs;
+        for (auto& f : found)
+            if (! f.isAChildOf (templatesDir()) && ! f.hasFileExtension ("tmp") && (f.getParentDirectory().getFileName() == "Backup") == backups) songs.add (f);
+        std::sort (songs.begin(), songs.end(), [] (const juce::File& a, const juce::File& b) { return a.getLastModificationTime() > b.getLastModificationTime(); });
+        juce::PopupMenu m;
+        m.addSectionHeader (backups ? "Backups - newest first" : "Your songs - newest first");
+        for (int i = 0; i < juce::jmin (300, songs.size()); ++i)
+            m.addItem (i + 1, songs[i].getFileNameWithoutExtension() + "    " + songs[i].getLastModificationTime().toString (true, true, false));
+        if (songs.isEmpty()) m.addItem (-1, backups ? "No backups yet" : "No songs saved yet", false);
+        m.addSeparator();
+        m.addItem (100000, "Browse Files (iCloud, Downloads, other apps)...");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe, songs] (int r) {
+            if (safe == nullptr || r == 0) return;
+            if (r >= 1 && r <= songs.size()) { safe->load (songs[r - 1]); return; }
+            if (r != 100000) return;
+            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs");
+            safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
+                if (safe == nullptr || fc.getURLResults().isEmpty()) return;
+                if (auto f = copyIntoApp (fc.getURLResults()[0]); f.existsAsFile()) safe->load (f);
+            });
+        });
+    }
+   #else
     void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
@@ -1648,6 +2037,7 @@ private:
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
+   #endif
 
     static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
@@ -1697,8 +2087,8 @@ private:
         templatesDir().createDirectory();
         auto f = templatesDir().getChildFile (name + ".hhs");
         auto tmp = f.getSiblingFile (name + ".hhs.tmp");
-        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) lastTemplate = name;   // same name = replace, never half-written
-        else tmp.deleteFile();
+        if (saveProject (engine.project(), tmp) && tmp.moveFileTo (f)) { lastTemplate = name; flash ("Saved template " + name); }   // same name = replace, never half-written
+        else { tmp.deleteFile(); juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Template", "Could not save the template to\n" + f.getFullPathName()); }
     }
 
     void shareTemplatePack (const Project& p, const juce::String& name)
@@ -1866,6 +2256,7 @@ private:
 
     void showAudioSettings()
     {
+        if (phoneUI) { showPhoneLatency(); return; }
         auto* sel = new juce::AudioDeviceSelectorComponent (engine.deviceManager, 0, 32, 0, 2, true, false, true, false);
         sel->setSize (560, 480);
         juce::DialogWindow::LaunchOptions o;
@@ -1873,8 +2264,37 @@ private:
         o.dialogTitle = "Audio settings - device, inputs, buffer size, sample rate";
         o.dialogBackgroundColour = col::panel;
         o.escapeKeyTriggersCloseButton = true;
-        o.useNativeTitleBar = true;
+        o.useNativeTitleBar = ! phoneUI;
         o.launchAsync();
+    }
+
+    // phone: pick the buffer from a list (the desktop device panel crashed on iPhone); lower = less delay
+    void showPhoneLatency()
+    {
+        auto* dev = engine.deviceManager.getCurrentAudioDevice();
+        const int cur = dev != nullptr ? dev->getCurrentBufferSizeSamples() : 0;
+        const double sr = dev != nullptr && dev->getCurrentSampleRate() > 0 ? dev->getCurrentSampleRate() : 48000.0;
+        juce::Array<int> sizes;
+        if (dev != nullptr) for (int b : dev->getAvailableBufferSizes()) if (b >= 32 && b <= 2048) sizes.addIfNotAlreadyThere (b);
+        if (sizes.isEmpty()) sizes = { 64, 128, 256, 512, 1024 };
+        juce::PopupMenu m;
+        m.addSectionHeader ("Latency: lower = faster, higher = no crackles");
+        for (int b : sizes)
+            m.addItem (b, juce::String (b) + " samples  (" + juce::String (1000.0 * b / sr, 1) + " ms)" + (b <= 128 ? "  fastest" : b == 256 ? "  recommended" : ""), true, b == cur);
+        juce::Component::SafePointer<MainComponent> safe (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe] (int b) {
+            if (safe == nullptr || b <= 0) return;
+            juce::MessageManager::callAsync ([safe, b] {   // after the menu is gone: the device restarts cleanly
+                if (safe == nullptr) return;
+                auto& dm = safe->engine.deviceManager;
+                auto setup = dm.getAudioDeviceSetup();
+                if (setup.bufferSize == b) return;
+                setup.bufferSize = b;
+                const auto err = dm.setAudioDeviceSetup (setup, true);
+                if (auto x = dm.createStateXml()) safe->studio.settings->setValue ("audio", x.get());
+                safe->hintBar.setText (err.isEmpty() ? "Buffer " + juce::String (b) + " samples" : "Couldn't change the buffer: " + err, juce::dontSendNotification);
+            });
+        });
     }
 
     struct ShortcutsWindow : juce::DocumentWindow
@@ -1888,7 +2308,7 @@ private:
             ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
             ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
             setContentOwned (ed, false);
-            setUsingNativeTitleBar (true); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
+            setUsingNativeTitleBar (! phoneUI); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
         }
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override

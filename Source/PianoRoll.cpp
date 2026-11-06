@@ -65,7 +65,7 @@ public:
         setupButton (lockBtn, "LOCK", "Scale lock: notes you draw, drag or stamp snap to the chosen key and scale", true);
         lockBtn.setToggleState (s.settings != nullptr && s.settings->getBoolValue ("prScaleLock", false), juce::dontSendNotification);
         lockBtn.onClick = [this] { if (s.settings) s.settings->setValue ("prScaleLock", lockBtn.getToggleState()); };
-        setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the FL-like default). Alt + scroll fine-tunes", false);
+        setupButton (sizeBtn, "", "Note size: S / M / L / XL (M is the default). Alt + scroll fine-tunes", false);
         sizeBtn.onClick = [this] { setNoteSize ((noteSize + 1) % 4); };
         velH = s.settings != nullptr ? juce::jlimit (40, 600, s.settings->getIntValue ("prVelH", 70)) : 70;
         hbar.onMove = [this] (double v) { scrollX = juce::jmax (0.0, v); repaint(); };
@@ -76,7 +76,7 @@ public:
         glide.setSkewFactorFromMidPoint (0.15);   // short 808 slides (20-150 ms) get most of the knob's travel
         glide.onValueChange = [this] {
             s.live ([this] (Project&) { if (auto* c = s.channel (channelId)) c->glide = (float) glide.getValue(); });
-            if (! glide.isMouseButtonDown()) s.commit ("Glide");
+            if (! touchHeld()) s.commit ("Glide");
         };
         glide.onDragEnd = [this] { s.commit ("Glide"); };
         chLabel.setFont (juce::FontOptions (14.0f, juce::Font::bold));
@@ -245,7 +245,7 @@ public:
             const float x0 = juce::jmax ((float) keyW, (float) beatToX (timeSelA)), x1 = (float) beatToX (timeSelB);
             if (x1 > x0) { g.setColour (col::accent.withAlpha (0.45f)); g.fillRect (x0, (float) barH, x1 - x0, (float) rulerH); }
         }
-        if (const double ph = playheadLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
+        if (const double ph = markerLocal(); ph >= 0.0 && beatToX (ph) >= keyW)   // FL handle: grab it on the bar numbers
         {
             const float px = (float) beatToX (ph);
             juce::Path tri; tri.addTriangle (px - 7, (float) barH + 1, px + 7, (float) barH + 1, px, (float) (barH + 13));
@@ -264,8 +264,13 @@ public:
             if (x < keyW || x > getWidth()) continue;
             const float h = (velH - 8) * n.velocity;
             g.setColour (n.selected ? juce::Colours::white : ch->colour);
-            g.fillRect (x, (float) vel.getBottom() - 4 - h, 3.0f, h);
-            g.fillEllipse (x - 2.5f, (float) vel.getBottom() - 6 - h, 8.0f, 5.0f);
+            g.fillRect (x, (float) vel.getBottom() - 4 - h, 4.0f, h);
+            g.fillEllipse (x - 3.0f, (float) vel.getBottom() - 7 - h, 10.0f, 6.0f);
+        }
+        if (drag == Drag::Velocity && velReadout >= 0.0f)
+        {
+            g.setColour (col::text); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+            g.drawText ("VEL " + juce::String (juce::roundToInt (velReadout * 100.0f)) + "%", vel.reduced (8, 4), juce::Justification::topRight, false);
         }
     }
 
@@ -298,6 +303,8 @@ public:
         {
             touchPos[1] = e.position; pinching = true; panTap = false;
             pinchD0 = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])); pinchPpb0 = pxPerBeat;
+            pinchDx0 = std::abs (touchPos[0].x - touchPos[1].x); pinchDy0 = std::abs (touchPos[0].y - touchPos[1].y); pinchRowH0 = rowH;
+            pinchRow = (scrollY + (touchPos[0].y + touchPos[1].y) * 0.5f - (float) ga.getY()) / rowH;
             pinchBeat = xToBeat ((touchPos[0].x + touchPos[1].x) * 0.5f); return;
         }
         if (phoneUI && (e.source.getIndex() > 0 || (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom())))
@@ -307,22 +314,34 @@ public:
         if (e.x < keyW && e.y > ga.getY() && e.y < ga.getBottom()) { drag = Drag::Keys; preview (yToKey (e.position.y)); return; }
         if (e.y > barH && e.y < ga.getY())   // bar numbers: drag = select bars (FL), click or the handle = playhead
         {
-            const double ph = playheadLocal();
+            const double ph = markerLocal();
             if (ph >= 0.0 && std::abs (beatToX (ph) - e.position.x) <= 8.0f) { drag = Drag::Scrub; scrubTo (e); return; }
             drag = Drag::TimeSel; timeMoved = false; return;
         }
         if (velShown && e.x >= keyW && std::abs (e.y - ga.getBottom()) <= (phoneUI ? 10 : 3)) { drag = Drag::VelSize; return; }
-        if (velShown && e.y >= ga.getBottom() && e.y < ga.getBottom() + velH) { drag = Drag::Velocity; velPrev = e.position; setVelocityAt (e.position); return; }
+        if (velShown && e.y >= ga.getBottom() && e.y < ga.getBottom() + velH) {
+            drag = Drag::Velocity; velPrev = velDown = e.position; velLock.clear();
+            auto& ns = s.notes (channelId);
+            const bool anySel = tools::anySelected (ns);
+            float best = phoneUI ? 16.0f : 7.0f;
+            for (auto& n : ns) if (! anySel || n.selected) best = juce::jmin (best, std::abs (beatToX (n.start) - e.position.x));
+            for (int i = 0; i < (int) ns.size(); ++i)
+                if ((! anySel || ns[(size_t) i].selected) && std::abs (beatToX (ns[(size_t) i].start) - e.position.x) <= best + 0.5f) velLock.push_back (i);
+            setVelocityAt (e.position); return;
+        }
         if (! ga.contains (e.getPosition())) return;
         if (timeSelB > timeSelA) { timeSelA = timeSelB = -1; repaint(); }
 
         auto& notes = s.notes (channelId);
         int hit; bool edge;
         hitNote (e.position, hit, edge);
-        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipTarget == this || (editTool != EditTool::Select && editTool != EditTool::Grab)))
+        const bool onSelected = hit >= 0 && notes[(size_t) hit].selected && editTool == EditTool::Draw;
+        if (phoneUI && ! tapReplay && ! e.mods.isPopupMenu() && (phoneClipTarget == this || (! onSelected && editTool != EditTool::Select && editTool != EditTool::Grab)))
         {   // phone: one finger drags the roll side to side / up and down even over notes (BandLab); a quick tap still adds / picks a note, GRAB moves + stretches
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
         }
+        if (phoneUI && onSelected)   // phone: drag a selected note = move it, its right half = stretch it
+            edge = e.position.x > noteRect (notes[(size_t) hit]).getCentreX();
         if (e.mods.isPopupMenu()) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Delete) { drag = Drag::Delete; deleteAt (e.position); return; }
         if (editTool == EditTool::Mute)
@@ -407,8 +426,16 @@ public:
             if (pinching)   // two-finger pinch: zoom from very close to very far, anchored between the fingers
             {
                 const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
-                pxPerBeat = juce::jlimit (4.0f, 2000.0f, pinchPpb0 * d / pinchD0);
+                const float dx = std::abs (touchPos[0].x - touchPos[1].x), dy = std::abs (touchPos[0].y - touchPos[1].y);
+                const bool xAxis = pinchDx0 >= 40.0f, yAxis = pinchDy0 >= 40.0f;   // fingers side by side zoom time, stacked zoom the keys
+                if (xAxis || ! yAxis) pxPerBeat = juce::jlimit (4.0f, 2000.0f, pinchPpb0 * (xAxis ? juce::jmax (20.0f, dx) / pinchDx0 : d / pinchD0));
                 scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) gridArea().getX()) / pxPerBeat);
+                if (yAxis)
+                {
+                    const auto ga = gridArea();
+                    rowH = juce::jlimit (6.0f, 60.0f, pinchRowH0 * juce::jmax (20.0f, dy) / pinchDy0);
+                    scrollY = juce::jlimit (0.0f, juce::jmax (0.0f, 128 * rowH - (float) ga.getHeight()), pinchRow * rowH - ((touchPos[0].y + touchPos[1].y) * 0.5f - (float) ga.getY()));
+                }
                 syncHBar(); repaint(); return;
             }
             if (e.source.getIndex() != panSrc) return;
@@ -603,8 +630,8 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double ph = dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropAt) < 1.0e-6 ? dropAt : playheadLocal();   // the marker you set (no wrap at the pattern end), else the playhead
-            double at = juce::jmax (0.0, floorSnap ((ph >= 0.0 ? ph : 0.0) + 1.0e-6));
+            const double ph = markerLocal();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
+            double at = juce::jmax (0.0, ph);   // exactly on the marker, never re-snapped back
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
             if (clipFrom() >= 0.0)
@@ -622,7 +649,7 @@ public:
 
 private:
     enum class Drag { None, Move, Resize, Select, Velocity, Delete, Keys, Paint, Scrub, TimeSel, VelSize, Pan };
-    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
+    juce::Point<float> panFrom; double panX0 = 0; float panY0 = 0; int panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchRowH0 = 20.0f, pinchRow = 0; double pinchBeat = 0;
     enum class EditTool { Draw, Paint, Delete, Mute, Slice, Select, Zoom, Grab };
     EditTool editTool = EditTool::Draw;
     juce::OwnedArray<juce::TextButton> toolBtns;
@@ -633,7 +660,8 @@ private:
     double scrollX = 0;
     float scrollY = 0, pxPerBeat = 96.0f, rowH = 20.0f;
     static constexpr int keyW = 64, rulerH = 18, hbarH = phoneUI ? 26 : 12;
-    bool velShown = true; double dropAt = -1.0;   // dropAt: the spot you tapped / scrubbed to, so paste can land past the pattern's end (bar 2000 if you like)
+    bool velShown = true; double dropAt = -1.0, dropPos = -1.0;   // dropAt: the spot you tapped / scrubbed to, so paste can land past the pattern's end (bar 2000 if you like)
+    std::vector<int> velLock; juce::Point<float> velDown; float velReadout = -1.0f;
     int velH = 70;   // drag the line above the velocity lane to resize it (saved)
     HScroll hbar, vbar { true };
     void syncHBar()
@@ -726,6 +754,18 @@ private:
         // stroke across 40 hats edits all 40 even when the finger / mouse moves fast
         auto velOf = [&] (float y) { return juce::jlimit (0.0f, 1.0f, ((float) (ga.getBottom() + velH - 4) - y) / (float) (velH - 8)); };
         const auto a = velPrev; velPrev = pt;
+        const auto laneArea = juce::Rectangle<int> (0, ga.getBottom() - 2, getWidth(), velH + 4);
+        if (! velLock.empty() && std::abs (pt.x - velDown.x) < (phoneUI ? 24.0f : 12.0f))   // grabbed a bar: up/down sets it smoothly
+        {
+            const float v = velOf (pt.y);
+            s.live ([&] (Project&) {
+                auto& notes = s.notes (channelId);
+                for (int i : velLock) if (i < (int) notes.size()) notes[(size_t) i].velocity = lastVelocity = v;
+            });
+            velReadout = v; repaint (laneArea); return;
+        }
+        velLock.clear();   // moved sideways: sweep like FL
+        velReadout = velOf (pt.y);
         const float tol = phoneUI ? 12.0f : 5.0f, x0 = juce::jmin (a.x, pt.x) - tol, x1 = juce::jmax (a.x, pt.x) + tol;
         s.live ([&] (Project&) {
             auto& notes = s.notes (channelId);
@@ -738,7 +778,7 @@ private:
                 n.velocity = lastVelocity = velOf (a.y + (pt.y - a.y) * t);
             }
         });
-        repaint();
+        repaint (laneArea);
     }
     void quantMenu()
     {
@@ -762,8 +802,24 @@ private:
         const double b = juce::jmax (0.0, xToBeat (juce::jmax ((float) keyW, e.position.x)));
         const double sn = s.p().snap > 0 ? s.p().snap : 0.25;
         const double at = e.mods.isAltDown() ? b : std::round (b / sn) * sn;
-        s.engine.setPositionBeats (at);
-        dropAt = s.p().songMode ? -1.0 : at;
+        auto& p = s.p();
+        if (! p.songMode) s.engine.setPositionBeats (at);
+        else
+        {
+            // song mode: move the song playhead into this pattern's clip (the one under the playhead, else the first),
+            // never to the pattern-local beat, which put the marker somewhere else and pasted at the start
+            const Clip* hit = nullptr; const double pos = s.engine.positionBeats();
+            for (auto& c : p.clips)
+                if (c.patternIndex == p.currentPattern && (hit == nullptr || (pos >= c.start && pos < c.start + c.length))) hit = &c;
+            if (hit != nullptr)
+            {
+                const double len = p.patterns[(size_t) p.currentPattern].lengthBeats();
+                double off = at - std::fmod (juce::jmax (0.0, hit->patOffset), len);   // trimmed / sliced clips start mid-pattern
+                if (off < 0.0) off += len;
+                s.engine.setPositionBeats (hit->start + off);
+            }
+        }
+        dropAt = at; dropPos = s.engine.positionBeats();
         repaint();
     }
     double playheadLocal() const
@@ -774,9 +830,11 @@ private:
         double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
-                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
+                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start + juce::jmax (0.0, c.patOffset), len);
         return local;
     }
+    double markerLocal() const { return dropValid() ? dropAt : playheadLocal(); }
+    bool dropValid() const { return dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropPos) < 1.0e-6; }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {
         auto& p = s.p();
@@ -785,7 +843,8 @@ private:
         double local = p.songMode ? -1.0 : pos;
         if (p.songMode)
             for (auto& c : p.clips)
-                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start, len);
+                if (c.patternIndex == p.currentPattern && pos >= c.start && pos < c.start + c.length) local = std::fmod (pos - c.start + juce::jmax (0.0, c.patOffset), len);
+        if (dropValid()) local = dropAt;   // the marker you clicked stays where you put it
         if (local < 0) return;
         const float x = (float) beatToX (local);
         g.setColour (col::accent2.withAlpha (0.22f)); g.fillRect (x - 2.5f, (float) ga.getY(), 5.0f, (float) ga.getHeight());

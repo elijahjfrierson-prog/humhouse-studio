@@ -47,7 +47,13 @@ private:
 
 bool focusExisting (const juce::String& key)
 {
-    for (auto* w : EditorWindow::windows()) if (w->key == key) { w->toFront (true); return true; }
+    for (auto* w : EditorWindow::windows())
+        if (w->key == key)
+        {
+            if (phoneUI) EditorWindow::close (w);   // phone: tapping the same thing again closes its window
+            else w->toFront (true);
+            return true;
+        }
     return false;
 }
 
@@ -157,7 +163,7 @@ public:
                 auto* k = new Knob (p.name, "drag up / down, double-click resets", p.mn, p.mx, p.def);
                 k->setValue (p.value, juce::dontSendNotification);
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
-                k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! k->isMouseButtonDown()) onCommit(); };
+                k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! touchHeld()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
                 auto* rc = rightClicks.add (new RightClick());
                 rc->fn = [this, id] { if (onParamMenu) onParamMenu (id); };
@@ -234,13 +240,23 @@ private:
     std::unique_ptr<juce::FileChooser> chooser;
     void set (const juce::String& id, float v)
     {
-        for (auto& p : params) if (p.id == id) p.value = v;
+        for (auto& p : params)
+            if (p.id == id)
+            {
+                p.value = v;
+                if (p.choices.empty() && Studio::readout())
+                {
+                    const float span = p.mn < 0 && p.mx > 0 ? juce::jmax (-p.mn, p.mx) : p.mx - p.mn;
+                    const float pc = span > 0 ? 100.0f * (p.mn < 0 && p.mx > 0 ? v : v - p.mn) / span : 0.0f;
+                    Studio::readout() (p.name + ":  " + juce::String (juce::roundToInt (pc)) + "%   (" + juce::String (v, std::abs (v) >= 100 ? 0 : 2) + ")");
+                }
+            }
         onSet (id, v);
         if (onAnyChange) onAnyChange();
     }
     juce::File presetDir() const
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio")
+        return hhsHome()
             .getChildFile ("Presets").getChildFile (juce::File::createLegalFileName (kind));
     }
     juce::String lastPreset;   // saving again with this name overwrites the old preset
@@ -955,6 +971,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     if (slot == nullptr) return;
     const auto key = "fx:" + juce::String (track) + ":" + juce::String (slotUid);
     if (focusExisting (key)) return;
+    if (phoneUI)   // phone: one effect window at a time (every open window kept its own live graph running)
+        for (auto* w : EditorWindow::windows()) if (w->key.startsWith ("fx:")) EditorWindow::close (w);
     const auto trackName = track == 0 ? juce::String ("Master") : s.p().mixer[(size_t) track].name;
 
     if (slot->type == "plugin")
@@ -1298,8 +1316,8 @@ struct DrumSteps : juce::Component
         autoBtn.setButtonText ("Back to auto");
         autoBtn.onClick = [this]
         {
-            const int i = channelId, k = section;
-            s.edit ("Drummer steps", [i, k] (Project& p) { for (auto& c : p.channels) if (c.id == i) c.drum.steps.erase (k); });
+            const int i = channelId, k0 = all > 0 ? 0 : section, k1 = all > 0 ? all - 1 : section;
+            s.edit ("Drummer steps", [i, k0, k1] (Project& p) { for (auto& c : p.channels) if (c.id == i) for (int k = k0; k <= k1; ++k) c.drum.steps.erase (k); });
             repaint();
         };
         setSize (600, 210);
@@ -1313,7 +1331,8 @@ struct DrumSteps : juce::Component
         const auto it = c->drum.steps.find (section);
         const bool man = it != c->drum.steps.end();
         g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
-        g.drawText ("Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8) + (man ? "  |  STEPS: this bar repeats for 8 bars" : "  |  AUTO: click a step to edit"),
+        g.drawText ((all > 0 ? "ALL sections (bars 1-" + juce::String (all * 8) + ")" : "Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8))
+                    + (man ? "  |  your steps repeat, the drummer plays around them and fills bar 8" : "  |  AUTO: click a step - one kick and the drummer builds around it"),
                     10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
         const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
         for (int gi = 0; gi < NumDrumGroups; ++gi)
@@ -1335,20 +1354,60 @@ struct DrumSteps : juce::Component
         const auto* c = s.channel (channelId); if (c == nullptr) return;
         const int gi = juce::jlimit (0, (int) NumDrumGroups - 1, (int) ((e.position.y - r.getY()) / (r.getHeight() / (float) NumDrumGroups)));
         const int st = juce::jlimit (0, 15, (int) ((e.position.x - r.getX()) / (r.getWidth() / 16.0f)));
-        const int i = channelId, k = section;
-        const auto seed = c->drum.steps.count (k) > 0 ? std::array<int, 5> {} : drummerSeedSteps (c->drum, s.p().bpm, k);
-        s.edit ("Drummer steps", [i, k, gi, st, seed] (Project& p) {
+        const int i = channelId, k0 = all > 0 ? 0 : section, k1 = all > 0 ? all - 1 : section;
+        const auto cur = c->drum.steps.find (section);
+        const bool on = cur != c->drum.steps.end() && (cur->second[(size_t) gi] >> st & 1) != 0;
+        s.edit ("Drummer steps", [i, k0, k1, gi, st, on] (Project& p) {
             for (auto& ch : p.channels)
                 if (ch.id == i)
-                {
-                    auto f = ch.drum.steps.find (k);
-                    if (f == ch.drum.steps.end()) f = ch.drum.steps.emplace (k, seed).first;
-                    f->second[(size_t) gi] ^= 1 << st;
-                }
+                    for (int k = k0; k <= k1; ++k)
+                    {
+                        auto& b = ch.drum.steps[k][(size_t) gi];
+                        b = on ? (b & ~(1 << st)) : (b | 1 << st);
+                    }
         });
         repaint();
     }
-    Studio& s; int channelId, section; juce::TextButton autoBtn;
+    Studio& s; int channelId, section, all = 0; juce::TextButton autoBtn;   // all > 0: edits go to sections 0 .. all-1
+};
+
+// SEQUENCER: the manual drummer, one 8-bar section at a time (1-8, 9-16 ...) or ALL of them at once
+struct DrumSequencer : juce::Component
+{
+    DrumSequencer (Studio& st, int id) : s (st), channelId (id), steps (st, id, 0)
+    {
+        addAndMakeVisible (steps);
+        for (int k = -1; k < count(); ++k)
+        {
+            auto* b = btns.add (new juce::TextButton (k < 0 ? juce::String ("ALL") : juce::String (k * 8 + 1) + "-" + juce::String (k * 8 + 8)));
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc93d).withAlpha (0.8f));
+            b->onClick = [this, k] { pick (k); };
+            addAndMakeVisible (b);
+        }
+        pick (0);
+        setSize (640, 260);
+    }
+    int count() const
+    {
+        double end = 0;
+        for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
+        return juce::jlimit (1, 32, (int) std::ceil (end / 32.0 - 1e-6));
+    }
+    void pick (int k)
+    {
+        steps.section = juce::jmax (0, k); steps.all = k < 0 ? count() : 0;
+        for (int i = 0; i < btns.size(); ++i) btns[i]->setToggleState (i == k + 1, juce::dontSendNotification);
+        steps.repaint();
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6);
+        auto top = r.removeFromTop (26);
+        const int w = juce::jmin (70, top.getWidth() / juce::jmax (1, btns.size()));
+        for (auto* b : btns) b->setBounds (top.removeFromLeft (w).reduced (2, 0));
+        steps.setBounds (r);
+    }
+    Studio& s; int channelId; DrumSteps steps; juce::OwnedArray<juce::TextButton> btns;
 };
 
 // SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song; double-click = STEPS editor
@@ -1375,18 +1434,24 @@ struct DrumSections : juce::Component
             src->drum.groupMask = 1 << GroupKick;
             src->name = base.name + " " + drumGroupName (GroupKick);
             src->mixerTrack = p.addMixerTrack (src->name);
+            std::vector<int> parts { src->mixerTrack };
             for (int g = GroupSnare; g < NumDrumGroups; ++g)
             {
                 Channel c = base;
                 c.id = p.nextChannelId++; c.drumLink = id; c.drum.groupMask = 1 << g;
                 c.name = base.name + " " + drumGroupName (g);
                 c.mixerTrack = p.addMixerTrack (c.name);
+                parts.push_back (c.mixerTrack);
                 p.channels.push_back (c);
             }
+            // the drum master: every part still runs through one Drums insert (the drummer's old one if it had its own)
+            const int bus = base.mixerTrack > 0 && base.mixerTrack < (int) p.mixer.size() ? base.mixerTrack : p.addMixerTrack (base.name + " Drums");
+            p.mixer[(size_t) bus].name = base.name + " Drums";
+            for (int t : parts) { auto& mt = p.mixer[(size_t) t]; mt.sends = { { bus, 1.0f } }; mt.routesToMaster = false; }
         });
         s.engine.sync();
         juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Split by drum",
-            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert. Edit the groove (style, sections, steps) on the Kick channel.");
+            "Kick, Snare, Hats, Toms and Cymbals now each have their own Channel Rack channel and mixer insert, all routed into one Drums master insert. Edit the groove (style, sections, steps) on the Kick channel.");
     }
     juce::TextButton splitBtn;
     int sections() const
@@ -1521,6 +1586,7 @@ void openChannelEditor (Studio& s, int channelId)
             perf.push_back ({ "mixer", "Mixer insert (FX)", 0, (float) mixChoices.size() - 1, 0, (float) juce::jlimit (0, (int) mixChoices.size() - 1, ch->mixerTrack), mixChoices });
         perf.push_back ({ "intensity", "Hit strength", 0, 1, 0.6f, d.intensity, {} });
         perf.push_back ({ "fills", "Fills", 0, 1, 0.4f, d.fills, {} });
+        perf.push_back ({ "fillvar", "Fill variation", 0, 1, 0.5f, d.fillVar, {} });
         perf.push_back ({ "swing", "Swing", 0, 1, 0, d.swing, {} });
         perf.push_back ({ "humanize", "Feel (human timing)", 0, 1, 0.5f, d.humanize, {} });
         perf.push_back ({ "ghost", "Ghost notes", 0, 1, 0.5f, d.ghost, {} });
@@ -1538,10 +1604,13 @@ void openChannelEditor (Studio& s, int channelId)
         mix.push_back ({ "squeeze", "Squeeze", 0, 1, 0, d.squeeze, {} });
         mix.push_back ({ "glow", "Squeeze glow", 0, 4, 0, (float) d.glow, { "Off", "Clean", "Tube", "Tape", "Transformer" } });
         mix.push_back ({ "volume", "Volume", 0, 1.25f, 0.8f, ch->volume, {} });
+        static const char* eqIds[12] { "deq0", "deq1", "deq2", "deq3", "deq4", "deq5", "deq6", "deq7", "deq8", "deq9", "deq10", "deq11" };
+        static const char* eqNames[12] { "EQ 31 Hz", "EQ 63 Hz", "EQ 125 Hz", "EQ 250 Hz", "EQ 400 Hz", "EQ 630 Hz", "EQ 1 kHz", "EQ 1.6 kHz", "EQ 2.5 kHz", "EQ 4 kHz", "EQ 8 kHz", "EQ 16 kHz" };
+        for (int b = 0; b < 12; ++b) mix.push_back ({ eqIds[b], eqNames[b], -15, 15, 0, d.eqDb[(size_t) b], {} });
         std::vector<ParamGrid::P> kitp;
         static std::vector<std::string> kitIds, kitLabels; kitIds.clear(); kitLabels.clear();
         for (int gi = 0; gi < NumDrumGroups; ++gi)
-            for (auto* what : { "Level", "Pan", "Tune", "Decay" })
+            for (auto* what : { "Level", "Pan", "Tune", "Decay", "Comp" })
             {
                 kitIds.push_back (std::string ("pc") + what[0] + std::to_string (gi));
                 kitLabels.push_back (std::string (drumGroupName (gi)) + " " + what);
@@ -1553,6 +1622,7 @@ void openChannelEditor (Studio& s, int channelId)
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -1, 1, 0, d.piecePan[g], {} }); ++k;
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), -12, 12, 0, d.pieceTune[g], {} }); ++k;
             kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceDamp[g], {} }); ++k;
+            kitp.push_back ({ kitIds[(size_t) k].c_str(), kitLabels[(size_t) k].c_str(), 0, 1, 0, d.pieceComp[g], {} }); ++k;
         }
         auto setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
@@ -1561,7 +1631,7 @@ void openChannelEditor (Studio& s, int channelId)
                 auto& d = c->drum;
                 if (id == "kit") { if ((int) v >= 0 && (int) v < kits.size()) c->sampleFile = kits[(int) v]; }
                 else if (id == "complexity") d.complexity = v; else if (id == "loudness") d.loudness = v; else if (id == "intensity") d.intensity = v;
-                else if (id == "fills") d.fills = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
+                else if (id == "fills") d.fills = v; else if (id == "fillvar") d.fillVar = v; else if (id.startsWith ("deq")) d.eqDb[(size_t) juce::jlimit (0, 11, id.substring (3).getIntValue())] = v; else if (id == "swing") d.swing = v; else if (id == "humanize") d.humanize = v;
                 else if (id == "kickPat") d.kickPattern = (int) std::lround (v); else if (id == "snarePat") d.snarePattern = (int) std::lround (v);
                 else if (id == "hatPat") d.hatPattern = (int) std::lround (v); else if (id == "tomPat") d.tomPattern = (int) std::lround (v);
                 else if (id == "crashPat") d.crashPattern = (int) std::lround (v);
@@ -1582,7 +1652,7 @@ void openChannelEditor (Studio& s, int channelId)
                 {
                     const auto g = (size_t) juce::jlimit (0, 4, id.getLastCharacters (1).getIntValue());
                     const auto w = id[2];
-                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v;
+                    if (w == 'L') d.pieceDb[g] = v; else if (w == 'P') d.piecePan[g] = v; else if (w == 'T') d.pieceTune[g] = v; else if (w == 'D') d.pieceDamp[g] = v; else if (w == 'C') d.pieceComp[g] = v;
                 }
             });
         };
@@ -1614,6 +1684,7 @@ void openChannelEditor (Studio& s, int channelId)
         tabs->add ("LEVELS", levels());
         tabs->add ("KIT", new ParamGrid (ch->name + "  |  Each drum (Kick, Snare, Hats, Toms, Cymbals)", kitp, setter, commit, "Drummer Kit"));
         tabs->add ("SECTIONS", new DrumSections (s, channelId));
+        tabs->add ("SEQUENCER", new DrumSequencer (s, channelId));
         tabs->finish();
         EditorWindow::windows().add (new EditorWindow (ch->name, tabs, key, [&s, channelId] { return s.channel (channelId) != nullptr; }));
         return;
@@ -1770,7 +1841,7 @@ void openChannelEditor (Studio& s, int channelId)
     if (sampler)   // FL-style: wave, amp / INS and sample settings together on one page
     {
         auto* wave = new SampleWaveView (s, channelId); wave->setSize (560, 180);
-        tabs->add ("MAIN", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
+        tabs->add ("SOUND", new StackPage ({ wave, new ParamGrid (ch->name + "  |  Amp / INS", ins, setter, commit, kind),
                                             new ParamGrid (ch->name + "  |  Sample", smp, setter, commit, "Sampler SMP") }));
     }
     else if (ch->synth.wave == 10)   // Serum-style: the wavetable on top, draw on it, knobs below
@@ -1779,8 +1850,8 @@ void openChannelEditor (Studio& s, int channelId)
         tabs->add ("OSC", new StackPage ({ wv, new ParamGrid (ch->name + "  |  HumWave", ins, setter, commit, kind) }));
     }
     else tabs->add ("INS", new ParamGrid (ch->name + "  |  " + kind, ins, setter, commit, kind));
-    tabs->add ("FUNC", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
-    tabs->add ("SCOPE", createScopeView ([&s, channelId]() -> ScopeTap* {
+    tabs->add ("SHAPE", new ParamGrid (ch->name + "  |  Functions", func, setter, commit, kind + " FUNC"));
+    tabs->add ("WAVE VIEW", createScopeView ([&s, channelId]() -> ScopeTap* {
         auto* c = s.channel (channelId);
         const int t = c != nullptr ? c->mixerTrack : 0;
         return t > 0 ? s.engine.trackScope (t) : &masterScope(); }, ch->name));
@@ -1865,7 +1936,7 @@ void openClipEditor (Studio& s, int clipUid)
     };
     auto commit = [&s] { s.commit ("Clip settings"); };
     std::vector<ParamGrid::P> mainP, func;
-    mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (FL link)" } });
+    mainP.push_back ({ "link", "Linked copies", 0, 1, 1, 1.0f, { "This clip only", "All copies (linked)" } });
     mainP.push_back ({ "gain", "Volume (dB)", -24, 12, 0, juce::Decibels::gainToDecibels (c0->gain, -60.0f), {} });
     mainP.push_back ({ "trim", "Trim (cut silence in front)", 0, 1, 0, 0.0f, {} });
     mainP.push_back ({ "fadeIn", "Fade in (beats)", 0, 8, 0, (float) c0->fadeIn, {} });
@@ -1878,9 +1949,9 @@ void openClipEditor (Studio& s, int clipUid)
     func.push_back ({ "humtime", "HumTime (chop / timing)", 0, 1, 0, 0.0f, { "-", "Open" } });
     func.push_back ({ "humtone", "HumTone (pitch)", 0, 1, 0, 0.0f, { "-", "Open" } });
     auto* tabs = new ChannelTabs();
-    tabs->add ("MAIN", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
-    tabs->add ("FUNC", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
-    tabs->add ("SCOPE", createScopeView ([&s, clipUid]() -> ScopeTap* {
+    tabs->add ("CLIP", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
+    tabs->add ("SHAPE", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
+    tabs->add ("WAVE VIEW", createScopeView ([&s, clipUid]() -> ScopeTap* {
         int t = 0;
         for (auto& c : s.p().clips)
             if (c.uid == clipUid) t = c.mixerTrack >= 0 ? c.mixerTrack : (c.lane >= 0 && c.lane < (int) s.p().lanes.size() ? s.p().lanes[(size_t) c.lane].mixerTrack : 0);
@@ -1922,7 +1993,7 @@ void closeEditorsForPlugin (juce::AudioProcessor* p)
 
 namespace hhs
 {
-static juce::File presetsRoot() { return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio").getChildFile ("Presets"); }
+static juce::File presetsRoot() { return hhsHome().getChildFile ("Presets"); }
 
 static std::unique_ptr<juce::XmlElement> chainXml (Studio& s, int track)
 {

@@ -388,7 +388,11 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
     if (saved == nullptr)   // first run: a 512-sample buffer keeps big sessions (and OBS capture) glitch-free; change it in Audio settings
     {
         auto setup = deviceManager.getAudioDeviceSetup();
+       #if JUCE_IOS
+        if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
+       #else
         if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+       #endif
     }
     deviceManager.addAudioCallback (this);
 }
@@ -408,6 +412,7 @@ void Engine::newProject (Project p)
     {
         const juce::ScopedLock sl (lock);
         proj = std::move (p);
+        retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0;   // a new song never gets the last song's retro audio
         std::swap (oldC, channelRt); std::swap (oldT, trackRt); std::swap (oldClips, clipRt);
         channelOrder.clear(); levels.clear(); sources.clear();
         position = 0.0;
@@ -720,6 +725,7 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
+    if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
 }
 
@@ -957,6 +963,67 @@ void Engine::startRecordingWriters (bool surprise)
     takes = std::move (newTakes);
 }
 
+bool Engine::retroRecord()
+{
+    if (proj.lanes.empty()) return false;
+    const int cap = retroBuf.getNumSamples();
+    const int w = retroWrite.load();
+    const double endBeat = retroEndBeat.load();
+    const juce::int64 total = retroTotal.load(), runFrom = retroRunFrom.load();
+    const int lane = juce::jlimit (0, (int) proj.lanes.size() - 1, retroLane.load());
+    // the oldest half second may be overwritten while copying: leave it out
+    const int len = (int) std::min<juce::int64> (total, (juce::int64) cap - (juce::int64) (sampleRate * 0.5));
+    if (len <= 0) return false;
+    juce::AudioBuffer<float> grab (2, len);
+    const int start = ((w - len) % cap + cap) % cap;
+    const int first = std::min (len, cap - start);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        grab.copyFrom (ch, 0, retroBuf, ch, start, first);
+        if (first < len) grab.copyFrom (ch, first, retroBuf, ch, 0, len - first);
+    }
+    // keep only what was heard: trim the silence at both ends (-60 dB), with 50 ms of air
+    int a = 0, b = len - 1;
+    auto loud = [&grab] (int i) { return std::abs (grab.getSample (0, i)) > 0.001f || std::abs (grab.getSample (1, i)) > 0.001f; };
+    while (a < len && ! loud (a)) ++a;
+    if (a >= len) return false;
+    while (b > a && ! loud (b)) --b;
+    const int pad = (int) (sampleRate * 0.05);
+    a = std::max (0, a - pad); b = std::min (len - 1, b + pad);
+    const int keepLen = b - a + 1;
+
+    auto folder = proj.recordingsFolder(); folder.createDirectory();
+    const auto song = juce::File::createLegalFileName (proj.projectFile.existsAsFile() ? proj.projectFile.getFileNameWithoutExtension() : proj.title).replaceCharacter (' ', '_');
+    const auto file = folder.getNonexistentChildFile (proj.lanes[(size_t) lane].name.replaceCharacters (" /\\", "___") + "_" + song + "_"
+                                                      + juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S") + "_retro", ".wav");
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> wr;
+        if (auto* os = file.createOutputStream().release())
+        {
+            wr.reset (wav.createWriterFor (os, sampleRate, 2, 24, {}, 0));
+            if (wr == nullptr) delete os;
+        }
+        if (wr == nullptr || ! wr->writeFromAudioSampleBuffer (grab, a, keepLen)) { wr.reset(); file.deleteFile(); return false; }
+    }
+    const double spb = sampleRate * 60.0 / proj.bpm;
+    Clip c; c.uid = proj.newUid(); c.lane = lane; c.audioFile = file; c.mixerTrack = proj.lanes[(size_t) lane].mixerTrack;
+    c.length = keepLen / spb; c.fadeIn = c.fadeOut = 0.02;
+    // played along: line it up where it was heard (minus the device latency); stopped: put it at the playhead
+    // (only when it was heard in one straight run: a take that crosses a loop jump or a stop goes at the playhead)
+    const bool oneRun = endBeat >= 0.0 && total - len + a >= runFrom;
+    c.start = oneRun ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
+    if (c.start < 0.0) { c.sourceOffset = -c.start * 60.0 / proj.bpm; c.length += c.start; c.start = 0.0; }
+    if (c.length < 0.05) { file.deleteFile(); return false; }
+    {
+        const juce::ScopedLock sl (lock);
+        proj.clips.push_back (c);
+    }
+    freshTakes.insert (file.getFullPathName());
+    juce::MessageManager::callAsync ([this, al = alive] { if (! al->load()) return; sync(); primeClipReaders (position.load()); if (onRecordingAdded) onRecordingAdded(); });
+    return true;
+}
+
 void Engine::finishRecordingWriters()
 {
     std::vector<std::unique_ptr<Take>> done;
@@ -1150,6 +1217,9 @@ void Engine::click (float* l, float* r, int n, double b0, double b1)
     }
 }
 
+// pattern clip level (the dB dot): scales the note velocities of that clip only
+static Note clipVel (const Note& n, float g) { if (g == 1.0f) return n; Note c = n; c.velocity = juce::jlimit (0.0f, 1.0f, c.velocity * g); return c; }
+
 void Engine::renderSegment (double b0, double b1, int off, int n)
 {
     const double spb = sampleRate * 60.0 / proj.bpm;
@@ -1239,8 +1309,10 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     const double s = clip.start + h.beat + shiftBeats;
                     if (s < b0 || s >= b1) continue;
                     const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
-                    if ((mask >> g & 1) == 0 || silent (sec, g) || src->steps.count (sec) > 0) continue;   // off here, or a manual STEPS section
-                    Note nt; nt.key = h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
+                    if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
+                    if (auto ms = src->steps.find (sec); ms != src->steps.end() && ms->second[(size_t) g] != 0
+                        && ! (src->fills > 0.02f && std::fmod (clip.start + h.beat, 32.0) >= 28.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
+                    Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
                 if (src->steps.empty()) continue;
@@ -1253,11 +1325,14 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     const int sec = (int) (at / 32.0), step = (int) (std::llround (at * 4.0) % 16);
                     const auto st = src->steps.find (sec);
                     if (st == src->steps.end()) continue;
+                    if (src->fills > 0.02f && std::fmod (at, 32.0) >= 28.0) continue;   // bar 8 of the section: the automatic fill
                     for (int g = 0; g < NumDrumGroups; ++g)
                         if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
                         {
-                            Note nt; nt.key = drumGroupLane (g); nt.start = rel; nt.length = 0.125;
-                            nt.velocity = juce::jlimit (0.02f, 1.0f, (step % 4 == 0 ? 0.9f : 0.72f) * drummerDynamics (*src, at));
+                            Note nt; nt.key = kDrummerLaneKey + drumGroupLane (g); nt.start = rel; nt.length = 0.125;
+                            const auto hsh = ((juce::uint32) std::llround (at * 4.0) * 2654435761u + (juce::uint32) g * 40503u) % 1000u;
+                            const float acc = step % 8 == 0 ? 0.95f : step % 4 == 0 ? 0.86f : step % 2 == 0 ? 0.74f : 0.6f;   // played, not stamped
+                            nt.velocity = juce::jlimit (0.02f, 1.0f, acc * (0.93f + 0.14f * (float) hsh / 1000.0f) * drummerDynamics (*src, at));
                             emit (ci, nt, s);
                         }
                 }
@@ -1283,8 +1358,8 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     {
                         if (note.muted) continue;
                         const double s = base + rep * plen + swingBeat (note.start) + shiftBeats;
-                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, note, s);
-                        else if (chase && s < b0 && s >= clip.start) chaseNote (ci, note, s, clip.start + clip.length);
+                        if (s >= b0 && s < b1 && s < clip.start + clip.length + juce::jmax (0.0, shiftBeats) && s >= clip.start + juce::jmin (0.0, shiftBeats)) emit (ci, clipVel (note, clip.gain), s);
+                        else if (chase && s < b0 && s >= clip.start) chaseNote (ci, clipVel (note, clip.gain), s, clip.start + clip.length);
                     }
             }
         }
@@ -1689,6 +1764,29 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     // live input: armed lanes monitor through their insert and record
     const bool rolling = playing.load() && ! countingIn.load();
+    if (numIn > 0 && in != nullptr && ! proj.lanes.empty() && retroBuf.getNumSamples() > n)
+    {
+        // Retro Record: always keep the last 60 s of the first armed track's input (track 1 if none is armed)
+        int rl = 0;
+        for (size_t l = 0; l < proj.lanes.size(); ++l) if (proj.lanes[l].armed) { rl = (int) l; break; }
+        const auto& lane = proj.lanes[(size_t) rl];
+        const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
+        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+        const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
+        if (il != nullptr)
+        {
+            if (ir == nullptr) ir = il;
+            auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
+            const int cap = retroBuf.getNumSamples();
+            int w = retroWrite.load();
+            for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
+            const double prevEnd = retroEndBeat.load(), newEnd = rolling ? position.load() : -1.0;
+            if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
+                retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
+            retroWrite = w; retroTotal += n; retroLane = rl;
+            retroEndBeat = newEnd;
+        }
+    }
     {
         const juce::SpinLock::ScopedTryLockType tl (takeLock);
         for (size_t l = 0; l < proj.lanes.size(); ++l)

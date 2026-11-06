@@ -8,6 +8,15 @@
 
 namespace hhs
 {
+// the app's own folder: Music on desktop; on iPhone it's Documents, the only folder the Files app shows and the app can always write
+inline juce::File hhsHome()
+{
+   #if JUCE_IOS
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("HumHouse Studio");
+   #else
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio");
+   #endif
+}
 // drum one-shots keep their pitch on every key; everything else follows the Piano Roll (root key = the WAV as-is)
 inline bool isDrumSampleName (juce::String n)
 {
@@ -78,6 +87,7 @@ int importMidiPattern (Project& p, const juce::File& midiFile);
 struct DrummerParams
 {
     float complexity = 0.45f, loudness = 0.55f, intensity = 0.6f, fills = 0.4f;
+    float fillVar = 0.5f;   // FILL VARIATION: 0 = the same simple fill, 1 = a different fill each time across toms, cymbals, kick and snare
     float swing = 0.0f, humanize = 0.5f, ghost = 0.5f, hatOpen = 0.0f;
     bool  halfTime = false, ride = false;
     int   character = 1, seed = 1;
@@ -87,6 +97,8 @@ struct DrummerParams
     // per drum group (Kick, Snare, Hats, Toms, Cymbals): level dB, pan, tune semitones, decay 0..1 (1 = shortest)
     std::array<float, 17> partDb {};   // per kit piece (kitPieceOf), on top of the group level
     std::array<float, 5> pieceDb { 0, 0, 0, 0, 0 }, piecePan { 0, 0, 0, 0, 0 }, pieceTune { 0, 0, 0, 0, 0 }, pieceDamp { 0, 0, 0, 0, 0 };
+    std::array<float, 5> pieceComp { 0, 0, 0, 0, 0 };
+    std::array<float, 12> eqDb {};          // KIT MIX: the drums' own 12-band EQ (31 Hz .. 16 kHz), dB   // per drum group: its own compressor 0..1
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
     int groupMask = 31;                       // bit g = this channel plays drum group g (Split by drum)
@@ -131,7 +143,7 @@ struct Channel
     float stretchTime = 1.0f;              // time multiplier for Stretch / Stretch X
     bool  tempoSync = true;                // loops / rhythmic tails follow the song tempo (keeps pitch)
     float sampleBpm = 0.0f;                // the sample's own tempo; 0 = read it from the file name
-    juce::Colour colour { 0xffff8a3d };
+    juce::Colour colour { 0xff9b5cff };
 };
 
 struct Pattern

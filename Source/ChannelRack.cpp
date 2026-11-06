@@ -540,7 +540,7 @@ struct Row : public juce::Component
                 juce::Timer::callAfterDelay (300, [sp, tok] { if (sp != nullptr && sp->tapTok == tok) openChannelEditor (sp->s, sp->channelId); });
             }
         };
-        setupButton (wrench, "SET", "Channel settings (FL wrench): normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
+        setupButton (wrench, "SET", "Channel settings: normalize, reverse, trim, fades, declick, ADSR, cut itself, stretch", false);
         wrench.onClick = [this] { openChannelEditor (s, channelId); };
         addAndMakeVisible (wrench);
         setupButton (link, "MIDI", "Link MIDI: your keyboard / piano plays this channel (link as many as you like; none linked = the selected channel plays)", true);
@@ -567,7 +567,7 @@ struct Row : public juce::Component
     {
         k.onValueChange = [this, &k, set] {
             s.live ([&] (Project&) { if (auto* c = s.channel (channelId)) set (*c, (float) k.getValue()); });
-            if (! k.isMouseButtonDown()) s.commit (k.getName());
+            if (! touchHeld()) s.commit (k.getName());
         };
         k.onDragEnd = [this, &k] { s.commit (k.getName()); };
     }
@@ -849,7 +849,7 @@ public:
             else if (i >= 0 && i != s.p().currentPattern)
                 s.edit ("Select pattern", [i] (Project& p) { p.currentPattern = i; });
         };
-        swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! swing.isMouseButtonDown()) s.commit ("Swing"); };
+        swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! touchHeld()) s.commit ("Swing"); };
         swing.onDragEnd = [this] { s.commit ("Swing"); };
         for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing, (juce::Component*) &popBtn })
             addAndMakeVisible (c);
@@ -982,9 +982,14 @@ public:
         layoutRows(); repaint();
     }
 
-    bool isInterestedInDragSource (const SourceDetails& d) override { return d.description.toString() == "sample"; }
+    bool isInterestedInDragSource (const SourceDetails& d) override { const auto t = d.description.toString(); return t == "sample" || t.startsWith ("sample:"); }
     void itemDropped (const SourceDetails& d) override   // drag from the Samples browser
     {
+        if (const auto t = d.description.toString(); t.startsWith ("sample:"))   // phone finger drag
+        {
+            filesDropped ({ t.fromFirstOccurrenceOf ("sample:", false, false) }, d.localPosition.x, d.localPosition.y);
+            return;
+        }
         if (auto* t = dynamic_cast<juce::FileTreeComponent*> (d.sourceComponent.get()))
         {
             juce::StringArray files;

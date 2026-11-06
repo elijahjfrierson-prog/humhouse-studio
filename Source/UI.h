@@ -13,6 +13,8 @@ inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one 
 #else
 inline constexpr bool phoneUI = false;
 #endif
+// a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
+inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
 inline juce::Component* phoneClipTarget = nullptr;   // after COPY: any tap on this editor (even on a note / clip) picks the drop spot
@@ -27,8 +29,9 @@ namespace col
 {
     // mutable so the theme color wheel can recolor the whole DAW
     inline juce::Colour bg (0xff0e1013), panel (0xff16191e), panel2 (0xff1d2127), grid (0xff22262d), gridBeat (0xff2c3139),
-        gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xffff8a3d), accent2 (0xff38d1ff),
+        gridBar (0xff3c434e), text (0xffdfe4ec), dim (0xff7f8896), accent (0xff9b5cff), accent2 (0xff38d1ff),
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
+    inline int laneMinH = 60;                               // Layout: smallest Playlist track height
     inline bool lightMode = false;                          // White theme: light backgrounds, dark text
     inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
     // meters + scopes gradient (quiet -> loud), set in Theme
@@ -321,6 +324,8 @@ public:
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;   // Font = Gradient
+    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;   // phone: a bit bigger
+    juce::Font getPopupMenuFont() override;
     void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
@@ -361,6 +366,7 @@ struct Studio : public juce::ChangeBroadcaster
     template <typename F> void live (F&& f) { const juce::ScopedLock sl (engine.getLock()); f (p()); }
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
+    static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves
     void undoStep (int delta);
     void jumpHistory (int index);
     NoteList& notes (int channelId);
@@ -437,6 +443,9 @@ void resetTheme();
 void applyGradient (const juce::String& colours);   // "lo mid hi" ARGB hex
 void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex, empty = solid font
 void showThemeDialog (Studio&);
+void showLayoutDialog (Studio&);   // Options > Layout: DAW-style looks + your own
+void applySavedLayout (Studio&);
+inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 
 enum class Tool { Arp, Strum, Chop, Flam, Quantize, Randomize, Limit, Articulate, ScaleLevels, Flip, Claw, Lfo };

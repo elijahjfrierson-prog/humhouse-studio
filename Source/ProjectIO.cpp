@@ -1,5 +1,6 @@
 #include "ProjectIO.h"
 #include <map>
+#include <set>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -17,6 +18,22 @@ struct IOBaseScope
     }
     ~IOBaseScope() { ioBase = juce::File(); }
 };
+
+// audio glued inside the .hhs (one-shots, samples, takes): path when saved -> base64 data. Used only if the file isn't found
+static thread_local const std::map<juce::String, juce::String>* gluedIn = nullptr;
+static juce::File unglue (const juce::String& s)
+{
+    if (gluedIn == nullptr) return {};
+    const auto it = gluedIn->find (s);
+    if (it == gluedIn->end()) return {};
+    const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
+    auto dst = hhsHome().getChildFile ("Glued Audio").getChildFile (juce::String::toHexString (s.hashCode64()) + "-" + juce::String::toHexString (it->second.hashCode64())).getChildFile (name);
+    if (dst.existsAsFile()) return dst;
+    juce::MemoryOutputStream mo;
+    if (! juce::Base64::convertFromBase64 (mo, it->second)) return {};
+    dst.getParentDirectory().createDirectory();
+    return dst.replaceWithData (mo.getData(), mo.getDataSize()) ? dst : juce::File();
+}
 
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
 static juce::String relStr (const juce::File& f)
@@ -41,7 +58,15 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
     auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
     if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
     if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
+    if (auto g = unglue (s); g != juce::File()) return g;
     auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
+    {   // built-in kit saved from another HumHouse app (Studio vs Master, another drive/PC): use this app's copy
+        const auto norm = s.replaceCharacter ('\\', '/');
+        const int at = norm.lastIndexOfIgnoreCase ("/Sounds/");
+        if (at >= 0)
+            for (auto root : { bundledSoundsRoot(), hhsHome().getChildFile ("Sounds") })
+                if (auto c = alt (root.getChildFile (norm.substring (at + 8))); c != juce::File()) return c;
+    }
     const auto name = s.fromLastOccurrenceOf ("/", false, false).fromLastOccurrenceOf ("\\", false, false);
     juce::Array<juce::File> tries;
     if (ioBase != juce::File())
@@ -54,7 +79,7 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
         tries.add (ioBase.getChildFile ("Audio").getChildFile (name));
         tries.add (ioBase.getParentDirectory().getChildFile ("Recordings").getChildFile (name));
     }
-    for (auto root : { juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"),
+    for (auto root : { hhsHome(),
                        juce::File::getSpecialLocation (juce::File::userDesktopDirectory).getChildFile ("HumHouse Studio") })
     {
         tries.add (root.getChildFile ("Recordings").getChildFile (name));
@@ -124,7 +149,7 @@ juce::ValueTree projectToTree (const Project& p)
         if (c.type == ChannelType::Drummer)
         {
             auto& d = c.drum;
-            const std::pair<const char*, float> fs[] { { "drC", d.complexity }, { "drL", d.loudness }, { "drI", d.intensity }, { "drF", d.fills }, { "drSw", d.swing },
+            const std::pair<const char*, float> fs[] { { "drC", d.complexity }, { "drL", d.loudness }, { "drI", d.intensity }, { "drF", d.fills }, { "drFv", d.fillVar }, { "drSw", d.swing },
                 { "drHu", d.humanize }, { "drGh", d.ghost }, { "drHo", d.hatOpen }, { "drPu", d.punch }, { "drGu", d.glue }, { "drDr", d.drive },
                 { "drMb", d.micBlend }, { "drRm", d.roomMix }, { "drSq", d.squeeze } };
             for (auto& [k, v] : fs) t.setProperty (k, v, nullptr);
@@ -137,6 +162,8 @@ juce::ValueTree projectToTree (const Project& p)
                 for (int g = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) pc.add (juce::String ((*a)[(size_t) g], 3));
                 for (int m : d.sectionMute) sm.add (juce::String (m));
                 juce::StringArray pd; for (float v : d.partDb) pd.add (juce::String (v, 3));
+                { juce::StringArray cc; for (float v : d.pieceComp) cc.add (juce::String (v, 3)); t.setProperty ("drPcc", cc.joinIntoString (","), nullptr); }
+                { juce::StringArray eq; for (float v : d.eqDb) eq.add (juce::String (v, 2)); t.setProperty ("drEq", eq.joinIntoString (","), nullptr); }
                 t.setProperty ("drPd", pd.joinIntoString (","), nullptr);
                 juce::StringArray sv; for (int v : d.sectionVel) sv.add (juce::String (v));
                 t.setProperty ("drSV", sv.joinIntoString (","), nullptr);
@@ -292,7 +319,7 @@ Project projectFromTree (const juce::ValueTree& root)
         if (c.type == ChannelType::Drummer)
         {
             auto& d = c.drum;
-            const std::pair<const char*, float*> fs[] { { "drC", &d.complexity }, { "drL", &d.loudness }, { "drI", &d.intensity }, { "drF", &d.fills }, { "drSw", &d.swing },
+            const std::pair<const char*, float*> fs[] { { "drC", &d.complexity }, { "drL", &d.loudness }, { "drI", &d.intensity }, { "drF", &d.fills }, { "drFv", &d.fillVar }, { "drSw", &d.swing },
                 { "drHu", &d.humanize }, { "drGh", &d.ghost }, { "drHo", &d.hatOpen }, { "drPu", &d.punch }, { "drGu", &d.glue }, { "drDr", &d.drive },
                 { "drMb", &d.micBlend }, { "drRm", &d.roomMix }, { "drSq", &d.squeeze } };
             for (auto& [k, v] : fs) *v = (float) t.getProperty (k, *v);
@@ -304,6 +331,10 @@ Project projectFromTree (const juce::ValueTree& root)
                 const auto pc = juce::StringArray::fromTokens (t["drPc"].toString(), ",", "");
                 if (pc.size() == 20)
                     for (int g = 0, k = 0; g < 5; ++g) for (auto* a : { &d.pieceDb, &d.piecePan, &d.pieceTune, &d.pieceDamp }) (*a)[(size_t) g] = pc[k++].getFloatValue();
+                if (const auto cc = juce::StringArray::fromTokens (t["drPcc"].toString(), ",", ""); cc.size() == 5)
+                    for (int g = 0; g < 5; ++g) d.pieceComp[(size_t) g] = cc[g].getFloatValue();
+                if (const auto eq = juce::StringArray::fromTokens (t["drEq"].toString(), ",", ""); eq.size() == 12)
+                    for (int b = 0; b < 12; ++b) d.eqDb[(size_t) b] = eq[b].getFloatValue();
                 const auto pd = juce::StringArray::fromTokens (t["drPd"].toString(), ",", "");
                 if (pd.size() == (int) d.partDb.size())
                     for (int k = 0; k < pd.size(); ++k) d.partDb[(size_t) k] = pd[k].getFloatValue();
@@ -328,7 +359,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.pluginId = t["plugin"].toString(); c.pluginState.fromBase64Encoding (t["state"].toString());
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.shift = (float) t.getProperty ("shift", 0.0); c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
-        c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xffff8a3d));
+        c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff9b5cff));
         c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
@@ -455,8 +486,36 @@ Project projectFromTree (const juce::ValueTree& root)
 bool saveProject (const Project& p, const juce::File& f)
 {
     IOBaseScope base (f);
-    auto xml = projectToTree (p).createXml();
-    return xml && xml->writeTo (f);
+    auto tree = projectToTree (p);
+    // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
+    if (f.getParentDirectory().getFileName() != "Backup")
+    {
+        juce::ValueTree glued ("GLUED");
+        std::set<juce::String> seen; juce::int64 total = 0;
+        const auto bundled = bundledSoundsRoot();
+        auto glue = [&] (const juce::File& a)
+        {
+            if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
+            if (bundled != juce::File() && a.isAChildOf (bundled)) return;   // built-in sounds ship with every HumHouse app
+            const auto size = a.getSize();
+            if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
+            juce::MemoryBlock mb;
+            if (! a.loadFileAsData (mb)) return;
+            total += size;
+            juce::ValueTree g ("F");
+            g.setProperty ("path", a.getFullPathName(), nullptr);
+            g.setProperty ("data", juce::Base64::toBase64 (mb.getData(), mb.getSize()), nullptr);
+            glued.appendChild (g, nullptr);
+        };
+        for (auto& c : p.channels) { glue (c.sampleFile); glue (c.smpLayerFile); }
+        for (auto& c : p.clips) glue (c.audioFile);
+        for (auto& a : p.audioPool) glue (a);
+        if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
+    }
+    auto xml = tree.createXml();
+    if (! xml) return false;
+    auto tmp = f.getSiblingFile (f.getFileName() + ".saving");   // never leave a half-written song behind
+    return xml->writeTo (tmp) && tmp.moveFileTo (f);
 }
 
 bool loadProject (Project& p, const juce::File& f)
@@ -464,7 +523,16 @@ bool loadProject (Project& p, const juce::File& f)
     auto xml = juce::XmlDocument::parse (f);
     if (! xml || ! xml->hasTagName ("HUMHOUSE_PROJECT")) return false;
     IOBaseScope base (f);
-    p = projectFromTree (juce::ValueTree::fromXml (*xml));
+    auto tree = juce::ValueTree::fromXml (*xml);
+    std::map<juce::String, juce::String> glued;
+    if (auto g = tree.getChildWithName ("GLUED"); g.isValid())
+    {
+        for (auto c : g) glued[c["path"].toString()] = c["data"].toString();
+        tree.removeChild (g, nullptr);
+    }
+    gluedIn = &glued;
+    p = projectFromTree (tree);
+    gluedIn = nullptr;
     p.projectFile = f;
     return true;
 }
@@ -472,7 +540,7 @@ bool loadProject (Project& p, const juce::File& f)
 juce::File writeBackup (const Project& p, int keep)
 {
     auto dir = (p.projectFile.existsAsFile() ? p.projectFile.getParentDirectory()
-                                             : juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("HumHouse Studio"))
+                                             : hhsHome())
                    .getChildFile ("Backup");
     dir.createDirectory();
     const auto base = p.projectFile.existsAsFile() ? p.projectFile.getFileNameWithoutExtension() : p.title;
@@ -571,20 +639,34 @@ void UndoHistory::push (const Project& p, const juce::String& desc)
 {
     auto xml = projectToTree (p).toXmlString();
     if (index >= 0 && states[(size_t) index].first == xml) return;
-    states.resize ((size_t) (index + 1));
+    while ((int) states.size() > index + 1) { bytes -= (size_t) states.back().first.getNumBytesAsUTF8(); states.pop_back(); }
+    bytes += (size_t) xml.getNumBytesAsUTF8();
     states.push_back ({ xml, desc });
-    if ((int) states.size() > maxLevels + 1) states.erase (states.begin());
+   #if JUCE_IOS
+    const size_t budget = (size_t) 48 << 20;    // big songs x 999 levels ran the phone out of memory (iOS kills the app)
+   #else
+    const size_t budget = (size_t) 512 << 20;
+   #endif
+    while (states.size() > 2 && ((int) states.size() > maxLevels + 1 || bytes > budget))
+    { bytes -= (size_t) states.front().first.getNumBytesAsUTF8(); states.erase (states.begin()); }
     index = (int) states.size() - 1;
 }
 
-bool UndoHistory::jumpTo (int i, Project& p)
+bool UndoHistory::stateAt (int i, Project& out) const
 {
     if (i < 0 || i >= (int) states.size()) return false;
     auto xml = juce::XmlDocument::parse (states[(size_t) i].first);
     if (! xml) return false;
-    const auto file = p.projectFile;
-    p = projectFromTree (juce::ValueTree::fromXml (*xml));
-    p.projectFile = file;
+    out = projectFromTree (juce::ValueTree::fromXml (*xml));
+    return true;
+}
+
+bool UndoHistory::jumpTo (int i, Project& p)
+{
+    Project q;
+    if (! stateAt (i, q)) return false;
+    q.projectFile = p.projectFile;
+    p = std::move (q);
     index = i;
     return true;
 }

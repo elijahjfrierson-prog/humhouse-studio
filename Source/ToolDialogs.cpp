@@ -211,7 +211,7 @@ void showToolDialog (Studio& s, Tool t, int channelId)
     o.content.setOwned (panel);
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = false;
-    o.useNativeTitleBar = true;
+    o.useNativeTitleBar = ! phoneUI;
     o.resizable = false;
     o.launchAsync();
 }

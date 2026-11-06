@@ -11,7 +11,7 @@ namespace hhs
 juce::String DrummerParams::performanceKey() const
 {
     juce::String k;
-    for (float v : { complexity, loudness, intensity, fills, swing, humanize, ghost, hatOpen }) k << juce::String (v, 3) << ",";
+    for (float v : { complexity, loudness, intensity, fills, fillVar, swing, humanize, ghost, hatOpen }) k << juce::String (v, 3) << ",";
     return k + juce::String ((int) halfTime) + juce::String ((int) ride) + "," + juce::String (character) + "," + juce::String (seed)
          + "," + juce::String (kickPattern) + juce::String (snarePattern) + juce::String (hatPattern) + juce::String (tomPattern) + juce::String (crashPattern);
 }
@@ -29,6 +29,22 @@ int drumGroupOf (int lane)
     if (lane <= hhx::LaneHatBell) return GroupHats;
     if (lane >= hhx::LaneTom1 && lane <= hhx::LaneTom4) return GroupToms;
     return GroupCymbals;   // ride, crashes, china, splash, perc
+}
+
+int drumLaneForKey (int key)
+{
+    using namespace hhx;
+    switch (key)
+    {
+        case 35: case 36: return LaneKick;   case 37: return LaneSideStick; case 38: return LaneSnare;   case 39: return LaneSnareFlam;
+        case 40: return LaneSnareRim;        case 41: return LaneTom4;      case 42: return LaneHatClosed; case 43: return LaneTom3;
+        case 44: return LaneHatPedal;        case 45: return LaneTom2;      case 46: return LaneHatOpen2; case 47: return LaneTom2;
+        case 48: return LaneTom1;            case 49: return LaneCrashL;    case 50: return LaneTom1;     case 51: return LaneRideBow;
+        case 52: return LaneChina;           case 53: return LaneRideBell;  case 55: return LaneSplash;   case 57: return LaneCrashR;
+        case 59: return LaneRideEdge;        default: break;
+    }
+    static const int byName[12] { LaneKick, LaneSideStick, LaneSnare, LaneSnareFlam, LaneSnareRim, LaneTom4, LaneHatClosed, LaneTom3, LaneHatPedal, LaneTom2, LaneHatOpen2, LaneTom1 };
+    return byName[((key % 12) + 12) % 12];   // C = kick, D = snare, F# = hat ... the same pattern in every octave
 }
 
 int kitPieceOf (int lane)
@@ -81,7 +97,7 @@ static std::vector<DrumHit> render (const DrummerParams& p, double bpm, int bars
     if (! corpus().isLoaded() || bars <= 0) return out;
     hhx::PerformanceSettings s;
     s.complexity = p.complexity; s.intensity = p.loudness; s.sectionVelocity = p.intensity;
-    s.fillAmount = p.fills; s.swing = p.swing; s.humanize = p.humanize; s.ghostAmount = p.ghost; s.hatOpenness = p.hatOpen;
+    s.fillAmount = p.fills; s.fillComplexity = 0.5f + 0.8f * (p.fillVar - 0.5f); s.fillVelVar = 0.3f + 0.4f * (p.fillVar - 0.5f); s.swing = p.swing; s.humanize = p.humanize; s.ghostAmount = p.ghost; s.hatOpenness = p.hatOpen;   // fillVar 0.5 = the classic fills
     s.halfTime = p.halfTime; s.rideInsteadOfHat = p.ride; s.character = p.character; s.tempoBpm = (float) bpm;
     s.seed = (std::uint64_t) juce::jmax (1, p.seed);
     s.kickPattern = p.kickPattern; s.snarePattern = p.snarePattern; s.hatPattern = p.hatPattern;
@@ -133,7 +149,9 @@ juce::Array<juce::File> drumKits()
 {
     juce::Array<juce::File> kits;
     for (auto& f : bundledSoundsDir().getChildFile ("Rock Drums").findChildFiles (juce::File::findDirectories, false))
-        if (f.getChildFile ("kit.json").existsAsFile()) kits.add (f);
+        if (f.getChildFile ("kit.json").existsAsFile()
+            || ! f.findChildFiles (juce::File::findFiles, false, "*.wav;*.flac").isEmpty())
+            kits.add (f);
     kits.sort();
     return kits;
 }
@@ -191,7 +209,12 @@ public:
             juce::Thread::launch ([k, f] { k->loadKitFolder (f); });   // big multi-mic kits load in the background; strokes are skipped until ready
         }
     }
-    void noteOn (int key, float v, bool) override { kit->noteOn (key & 31, v, key >> 5); ring = (juce::int64) (sr * 8.0); }
+    void noteOn (int key, float v, bool) override
+    {
+        if (key >= kDrummerLaneKey) { const int k = key - kDrummerLaneKey; kit->noteOn (k & 31, v, k >> 5); }
+        else kit->noteOn (drumLaneForKey (key), v, 0);   // used to be key & 31: C5 (60) = Tom 4, so the Rack only played toms
+        ring = (juce::int64) (sr * 8.0);
+    }
     void noteOff (int) override {}
     void allNotesOff() override { kit->allNotesOff(); }
     void choke() override {}
@@ -204,6 +227,7 @@ public:
             const int n = juce::jmin (num - done, tmp.getNumSamples());
             tmp.clear (0, n);
             kit->renderNextBlock (tmp, 0, n);
+            applyEq (n);
             for (int ch = 0; ch < out.getNumChannels(); ++ch) out.addFrom (ch, start + done, tmp, juce::jmin (ch, 1), 0, n);
             done += n;
         }
@@ -221,9 +245,44 @@ public:
             const int g = drumGroupOf (l);
             kit->setLaneGainDb (l, d.pieceDb[(size_t) g] + d.partDb[(size_t) kitPieceOf (l)]); kit->setLanePan (l, d.piecePan[(size_t) g]);
             kit->setLaneTune (l, d.pieceTune[(size_t) g]); kit->setLaneDamp (l, d.pieceDamp[(size_t) g]);
+            kit->setLaneCompression (l, d.pieceComp[(size_t) g]);
         }
+        for (size_t b = 0; b < 12; ++b) eqTarget[b].store (d.eqDb[b]);
     }
 private:
+    // KIT MIX 12-band EQ on the whole kit; coefficients are rebuilt on the audio thread only when a band moves
+    struct Band { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z[2][2] {}; };
+    std::array<std::atomic<float>, 12> eqTarget {};
+    std::array<float, 12> eqNow {};
+    std::array<Band, 12> bands;
+    double eqRate = 0;
+    void applyEq (int n)
+    {
+        static constexpr float freqs[12] { 31, 63, 125, 250, 400, 630, 1000, 1600, 2500, 4000, 8000, 16000 };
+        for (size_t b = 0; b < 12; ++b)
+        {
+            const float gdb = eqTarget[b].load();
+            if (gdb == eqNow[b] && eqRate == sr) continue;
+            eqNow[b] = gdb;
+            const double f = juce::jmin ((double) freqs[b], sr * 0.45), A = std::pow (10.0, gdb / 40.0), w = juce::MathConstants<double>::twoPi * f / sr;
+            const double al = std::sin (w) / (2.0 * 1.4), cw = std::cos (w), a0 = 1.0 + al / A;
+            auto& q = bands[b];
+            q.b0 = (float) ((1.0 + al * A) / a0); q.b1 = (float) (-2.0 * cw / a0); q.b2 = (float) ((1.0 - al * A) / a0);
+            q.a1 = q.b1; q.a2 = (float) ((1.0 - al / A) / a0);
+        }
+        eqRate = sr;
+        for (size_t b = 0; b < 12; ++b)
+        {
+            if (std::abs (eqNow[b]) < 0.05f) continue;
+            auto& q = bands[b];
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* x = tmp.getWritePointer (ch); float z0 = q.z[ch][0], z1 = q.z[ch][1];
+                for (int i = 0; i < n; ++i) { const float in = x[i], y = q.b0 * in + z0; z0 = q.b1 * in - q.a1 * y + z1; z1 = q.b2 * in - q.a2 * y; x[i] = y; }
+                q.z[ch][0] = z0; q.z[ch][1] = z1;
+            }
+        }
+    }
     std::shared_ptr<hhx::KitEngine> kit = std::make_shared<hhx::KitEngine>();
     juce::File kitFolder; juce::AudioBuffer<float> tmp;
     double sr = 44100; juce::int64 ring = 0; bool started = false;

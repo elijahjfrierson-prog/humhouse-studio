@@ -342,7 +342,7 @@ class ToolWindow : public juce::DocumentWindow, private juce::Timer
 public:
     ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
-        setUsingNativeTitleBar (true); setContentOwned (c, true); setResizable (true, false);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (c, true); setResizable (true, false);
         centreWithSize (getWidth(), getHeight()); setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
@@ -980,7 +980,11 @@ struct LaneHeader : public juce::Component
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
         arm.setColour (juce::TextButton::buttonOnColourId, col::rec);
-        arm.onClick = [this] { const bool on = arm.getToggleState(); const auto t = targets(); s.edit ("Arm", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].armed = on; }); };
+        arm.onClick = [this] {
+            const bool on = arm.getToggleState(); const auto t = targets();
+            s.edit ("Arm", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].armed = on; });
+            if (on && index >= 0 && index < (int) s.p().lanes.size()) s.selectedTrack = s.p().lanes[(size_t) index].mixerTrack;   // FX you add next go on the track you're singing into
+        };
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
@@ -1117,6 +1121,7 @@ struct LaneHeader : public juce::Component
         }
         else if (e.mods.isCommandDown()) { if (sel.contains (index)) sel.removeValue (index); else sel.add (index); s.laneAnchor = index; }
         else { sel.clear(); sel.add (index); s.laneAnchor = index; }
+        if (index >= 0 && index < (int) s.p().lanes.size()) s.selectedTrack = s.p().lanes[(size_t) index].mixerTrack;   // Plugin House adds FX to this track's insert
         if (getParentComponent() != nullptr) getParentComponent()->repaint();
         for (auto* c : getParentComponent()->getChildren()) c->repaint();
     }
@@ -1273,7 +1278,7 @@ public:
         }
         setupButton (loopRec, "LOOP REC", "Loop recording: the punch range loops and every pass becomes a take", true);
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
-        setupButton (rts, "RETURN", "On stop, jump back to where playback started (FL style)", true);
+        setupButton (rts, "RETURN", "On stop, jump back to where playback started", true);
         rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
         setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
         preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };
@@ -1299,7 +1304,7 @@ public:
     void resized() override
     {
         placeSplitBars();
-        laneH = juce::jmax (60, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
+        laneH = juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
@@ -1362,7 +1367,7 @@ public:
                 g.setColour (col::accent.withAlpha (0.10f));
                 g.fillRect (beatToX (timeSelA), (float) area.getY(), (float) ((timeSelB - timeSelA) * pxPerBeat), (float) area.getHeight());
             }
-            for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) drawClip (g, c);
+            for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) { drawClip (g, c); drawGainDot (g, c); }
             // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
             s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
                 if (lane < 0 || lane >= (int) p.lanes.size() || num <= 0) return;
@@ -1477,6 +1482,13 @@ public:
         }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
+        if (i >= 0 && ! e.mods.isPopupMenu() && ! p.clips[(size_t) i].isAuto() && ! p.clips[(size_t) i].isDrummer()
+            && (tool == PTool::Select || tool == PTool::Paint) && ! (phoneUI && phoneClipTarget == this) && hasGainDot (clipRect (p.clips[(size_t) i]))
+            && e.position.getDistanceFrom (gainDot (clipRect (p.clips[(size_t) i]))) < (phoneUI ? 18.0f : 7.0f))
+        {   // the dB dot: drag up / down for the clip level, double-click (double tap) = 0 dB
+            if (e.getNumberOfClicks() >= 2) { const int uid = p.clips[(size_t) i].uid; s.edit ("Clip volume 0 dB", [uid] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.gain = 1.0f; }); repaint(); return; }
+            drag = Drag::Gain; dragClip = i; gainDb0 = juce::Decibels::gainToDecibels (p.clips[(size_t) i].gain, -60.0f); repaint(); return;
+        }
         if (i >= 0 && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) timeSelA = timeSelB = -1;   // picking another clip drops the old ruler range
         if (i >= 0 && p.clips[(size_t) i].isAuto() && tool != PTool::Delete && tool != PTool::Slice && tool != PTool::Mute)
         {
@@ -1578,6 +1590,15 @@ public:
     {
         auto& p = s.p();
         lastMouse = e.getPosition();
+        if (drag == Drag::Gain)
+        {
+            if (dragClip < 0 || dragClip >= (int) p.clips.size()) return;
+            float db = juce::jlimit (-60.0f, p.clips[(size_t) dragClip].isAudio() ? 12.0f : 0.0f, gainDb0 - (e.position.y - dragStart.y) * (e.mods.isShiftDown() ? 0.05f : 0.25f));
+            if (std::abs (db) < 0.3f) db = 0.0f;
+            const int uid = p.clips[(size_t) dragClip].uid; const float gn = db <= -59.9f ? 0.0f : juce::Decibels::decibelsToGain (db);
+            s.live ([uid, gn] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid) c.gain = gn; });
+            changed = true; repaint(); return;
+        }
         if (drag == Drag::Pan)
         {
             if (e.source.getIndex() < 2) touchPos[e.source.getIndex()] = e.position;
@@ -1694,6 +1715,7 @@ public:
     void mouseUp (const juce::MouseEvent& e) override
     {
         auto& p = s.p();
+        if (drag == Drag::Gain) { drag = Drag::None; if (changed) s.commit ("Clip volume"); repaint(); return; }
         if (drag == Drag::Pan && pinching)
         {
             pinching = false;   // the finger still down keeps panning, whichever one lifted first
@@ -1913,7 +1935,7 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = cellStart (s.engine.positionBeats() + 1.0e-6);   // always at the playhead marker: set it to bar 49, it pastes on bar 49
+            const double at = juce::jmax (0.0, s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -1948,12 +1970,13 @@ public:
     bool isInterestedInDragSource (const SourceDetails& d) override
     {
         const auto t = d.description.toString();
-        return t == "sample" || t.startsWith ("pattern:") || t.startsWith ("audio:");
+        return t == "sample" || t.startsWith ("sample:") || t.startsWith ("pattern:") || t.startsWith ("audio:");
     }
     void itemDropped (const SourceDetails& d) override   // drag from the Samples browser / PATTERNS tab
     {
         const auto desc = d.description.toString();
         if (desc.startsWith ("audio:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("audio:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
+        if (desc.startsWith ("sample:")) { filesDropped ({ desc.fromFirstOccurrenceOf ("sample:", false, false) }, d.localPosition.x, d.localPosition.y); return; }
         if (desc.startsWith ("pattern:"))
         {
             const int pat = desc.fromFirstOccurrenceOf ("pattern:", false, false).getIntValue();
@@ -2019,7 +2042,7 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, Pan };
+    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, Pan, Gain };
     juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
@@ -2067,7 +2090,8 @@ private:
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
-    Drag drag = Drag::None; int dragClip = -1; bool changed = false;
+    void lookAndFeelChanged() override { resized(); repaint(); }   // Layout: new track height
+    Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
@@ -2227,6 +2251,28 @@ private:
             g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
         }
     }
+    // FL-style clip level: the little dot at the bottom of each pattern / audio clip, drag up or down for dB
+    static bool hasGainDot (juce::Rectangle<float> r) { return r.getWidth() >= 22.0f && r.getHeight() >= 26.0f; }
+    static juce::Point<float> gainDot (juce::Rectangle<float> r) { return { r.getX() + (phoneUI ? 14.0f : 9.0f), r.getBottom() - (phoneUI ? 10.0f : 7.0f) }; }
+    void drawGainDot (juce::Graphics& g, const Clip& c)
+    {
+        if (c.isAuto() || c.isDrummer()) return;   // drummer regions keep their own per-piece dB
+        const auto r = clipRect (c);
+        if (! hasGainDot (r) || r.getRight() < headerW) return;
+        const auto pt = gainDot (r); const float rad = phoneUI ? 6.0f : 4.0f;
+        const bool held = drag == Drag::Gain && dragClip >= 0 && dragClip < (int) s.p().clips.size() && s.p().clips[(size_t) dragClip].uid == c.uid;
+        const bool set = std::abs (c.gain - 1.0f) > 1.0e-4f;
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillEllipse (pt.x - rad - 1, pt.y - rad - 1, rad * 2 + 2, rad * 2 + 2);
+        g.setColour (set || held ? col::accent.brighter (0.5f) : col::text.withAlpha (0.8f)); g.fillEllipse (pt.x - rad, pt.y - rad, rad * 2, rad * 2);
+        if (set || held)
+        {
+            const float db = juce::Decibels::gainToDecibels (c.gain, -60.0f);
+            g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 12.0f : 10.5f, juce::Font::bold));
+            g.drawText (db <= -60.0f ? juce::String ("-inf dB") : (db > 0.0f ? "+" : "") + juce::String (db, 1) + " dB",
+                        juce::Rectangle<float> (pt.x + rad + 3, pt.y - 8, 70, 16), juce::Justification::centredLeft, false);
+        }
+    }
+
     void drawClip (juce::Graphics& g, const Clip& c)
     {
         auto& p = s.p();
@@ -2749,7 +2795,7 @@ private:
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
         m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
-        m.addItem (19, "Clip settings (FL wrench): Main / Func / Scope...", clip.isAudio());
+        m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
         {
             juce::PopupMenu tm;
             tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");

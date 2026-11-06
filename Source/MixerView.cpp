@@ -18,13 +18,14 @@ struct Strip : public juce::Component
         fader.setPopupDisplayEnabled (true, true, nullptr, 1500);
         fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels ((v / 0.8) * (v / 0.8)), 1) + " dB"; };
         fader.setName ("Volume");
-        fader.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.volume = (float) fader.getValue(); }); if (! fader.isMouseButtonDown()) s.commit ("Volume"); };
+        fader.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.volume = (float) fader.getValue(); }); if (! touchHeld()) s.commit ("Volume"); };
         fader.onDragEnd = [this] { s.commit ("Volume"); };
-        pan.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.pan = (float) pan.getValue(); }); if (! pan.isMouseButtonDown()) s.commit ("Pan"); };
+        pan.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.pan = (float) pan.getValue(); }); if (! touchHeld()) s.commit ("Pan"); };
         pan.onDragEnd = [this] { s.commit ("Pan"); };
-        duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! duck.isMouseButtonDown()) s.commit ("Duck"); };
+        duck.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.duck = (float) duck.getValue(); }); if (! touchHeld()) s.commit ("Duck"); };
         duck.onDragEnd = [this] { s.commit ("Duck"); };
-        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); }); if (! sep.isMouseButtonDown()) s.commit ("Stereo separation"); };
+        sep.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.stereoSep = (float) sep.getValue(); });
+            if (auto& ro = Studio::readout()) { const float v = (float) sep.getValue(); ro ("Stereo:  " + juce::String (juce::roundToInt (std::abs (v) * 100.0f)) + "% " + (v > 0.001f ? "separation (wider)" : v < -0.001f ? "merged (toward mono)" : "(as recorded)")); } if (! touchHeld()) s.commit ("Stereo separation"); };
         sep.onDragEnd = [this] { s.commit ("Stereo separation"); };
         addAndMakeVisible (sep);
         setupButton (scBtn, "SC", "Sidechain: pick the source (default = armed vocal) + ratio / threshold / attack / release");
@@ -217,7 +218,7 @@ struct Strip : public juce::Component
     Studio& s; int index; float level = 0;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
-    Knob sep { "M/S", "stereo separation (FL): left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
+    Knob sep { "M/S", "stereo separation: left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
     juce::TextButton scBtn;
     juce::TextButton mute, solo, route;
@@ -294,7 +295,7 @@ public:
             auto* mx = mixes.add (new Knob ("Mix", "dry / wet for this slot", 0.0, 1.0, 1.0));
             mx->onValueChange = [this, i, mx] {
                 s.live ([&] (Project& p) { auto& fx = p.mixer[(size_t) track()].fx; if (i < (int) fx.size()) fx[(size_t) i].mix = (float) mx->getValue(); });
-                if (! mx->isMouseButtonDown()) s.commit ("Mix");
+                if (! touchHeld()) s.commit ("Mix");
             };
             mx->onDragEnd = [this] { s.commit ("Mix"); };
             addAndMakeVisible (mx);
@@ -327,7 +328,7 @@ public:
                     s.live ([&] (Project& p) {
                         auto& mt = p.mixer[(size_t) track()];
                         (k == 0 ? mt.meqFreq : k == 1 ? mt.meqGain : mt.meqQ)[(size_t) b] = (float) kn->getValue(); });
-                    if (! kn->isMouseButtonDown()) s.commit ("Mini EQ");
+                    if (! touchHeld()) s.commit ("Mini EQ");
                 };
                 kn->onDragEnd = [this] { s.commit ("Mini EQ"); };
                 addAndMakeVisible (kn);
@@ -385,7 +386,7 @@ public:
             kn->setValue (t.sends[k].level, juce::dontSendNotification);
             kn->onValueChange = [this, k, kn] {
                 s.live ([&] (Project& pr) { auto& sends = pr.mixer[(size_t) track()].sends; if (k < sends.size()) sends[k].level = (float) kn->getValue(); });
-                if (! kn->isMouseButtonDown()) s.commit ("Send level");
+                if (! touchHeld()) s.commit ("Send level");
             };
             kn->onDragEnd = [this] { s.commit ("Send level"); };
             addAndMakeVisible (kn);
@@ -417,7 +418,7 @@ public:
         for (int i = 0; i < maxSlots; ++i)
         {
             auto row = r.removeFromTop (30);
-            bypass[i]->setBounds (row.removeFromLeft (14).reduced (0, 8));
+            bypass[i]->setBounds (phoneUI ? row.removeFromLeft (30).reduced (0, 2) : row.removeFromLeft (14).reduced (0, 8));
             row.removeFromLeft (4);
             mixes[i]->setBounds (row.removeFromRight (28));
             slots[i]->setBounds (row.reduced (0, 2));
@@ -771,7 +772,7 @@ struct PatchWindow : juce::DocumentWindow, private juce::Timer
 {
     PatchWindow (const juce::String& t, PatchMethodView* v, int id) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton), view (v), chId (id)
     {
-        setUsingNativeTitleBar (true);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
         setContentOwned (v, true);
         setResizable (true, false);
         centreWithSize (getWidth(), getHeight());
