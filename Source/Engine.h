@@ -104,6 +104,7 @@ public:
     juce::AudioPluginInstance* fxPlugin (int track, int slotUid);
     BuiltinEffect* builtinFx (int track, int slotUid);
     void storePluginStates();
+    void releaseMemory();   // low-memory warning: RAM takes stream from disk, unused samples are freed
 
     // offline
     bool renderToWav (const juce::File& out, bool songMode, std::function<bool (float)> progress, int track = -1, int bits = 24, double rate = 0, int format = 0);   // bits 16/24/32 float/64 float, rate 0 = engine rate, format 0 WAV / 1 MP3 / 2 M4A
@@ -142,6 +143,7 @@ public:
     struct ClipRuntime;
 private:
     void prepareRuntimes();
+    void rememberTake (const juce::String& path);
     void renderSegment (double b0, double b1, int off, int n);
     void renderChannels (int n);
     void mixTracks (const float* const* in, int numIn, int n);

@@ -343,19 +343,19 @@ void resetTheme()
 
 namespace
 {
-struct LayoutLook { const char* name; juce::uint32 bg, panel, panel2, gridBar, text, accent; bool light; int laneH; const char* keys; };
+struct LayoutLook { const char* name; juce::uint32 bg, panel, panel2, gridBar, text, accent; bool light; int laneH; const char* keys; const char* build = ""; };
 const LayoutLook layoutLooks[] {
     { "HumHouse (default)",     0xff0e1013, 0xff16191e, 0xff1d2127, 0xff3c434e, 0xffdfe4ec, 0xff9b5cff, false, 60, "" },
-    { "Logic Dark",             0xff1e1e1e, 0xff2a2a2a, 0xff333333, 0xff4a4a4a, 0xffe6e6e6, 0xff3fa9f5, false, 56, "Logic" },
-    { "Logic Light",            0xffececec, 0xffdcdcdc, 0xffcfcfcf, 0xffa0a0a0, 0xff1c1c1c, 0xff2f80ed, true,  56, "Logic" },
-    { "Pro Tools Classic",      0xff3c4048, 0xff4b505a, 0xff565c67, 0xff727985, 0xfff0f0f0, 0xff5fb3e6, false, 72, "Pro Tools" },
-    { "Pro Tools Dark",         0xff202327, 0xff2b2f35, 0xff343941, 0xff4c535d, 0xffe8eaed, 0xff4fb3ff, false, 72, "Pro Tools" },
-    { "Reaper Default",         0xff333333, 0xff3d3d3d, 0xff464646, 0xff5e5e5e, 0xffdcdcdc, 0xff39c0a8, false, 64, "Reaper" },
-    { "Reaper Classic",         0xffc0c4c8, 0xffb0b4b8, 0xffa4a8ac, 0xff7a7e82, 0xff101010, 0xff2c6fbb, true,  64, "Reaper" },
+    { "Logic Dark",             0xff1e1e1e, 0xff2a2a2a, 0xff333333, 0xff4a4a4a, 0xffe6e6e6, 0xff3fa9f5, false, 56, "Logic", "bR=1;mD=1;mH=240" },
+    { "Logic Light",            0xffececec, 0xffdcdcdc, 0xffcfcfcf, 0xffa0a0a0, 0xff1c1c1c, 0xff2f80ed, true,  56, "Logic", "bR=1;mD=1;mH=240" },
+    { "Pro Tools Classic",      0xff3c4048, 0xff4b505a, 0xff565c67, 0xff727985, 0xfff0f0f0, 0xff5fb3e6, false, 72, "Pro Tools", "mD=1;mH=300;tb=logo,beat,record,mix,bpm,pos,metro,count|start,play,stop,rec,song,retro,piano,cpu,scope,browser,save" },
+    { "Pro Tools Dark",         0xff202327, 0xff2b2f35, 0xff343941, 0xff4c535d, 0xffe8eaed, 0xff4fb3ff, false, 72, "Pro Tools", "mD=1;mH=300;tb=logo,beat,record,mix,bpm,pos,metro,count|start,play,stop,rec,song,retro,piano,cpu,scope,browser,save" },
+    { "Reaper Default",         0xff333333, 0xff3d3d3d, 0xff464646, 0xff5e5e5e, 0xffdcdcdc, 0xff39c0a8, false, 64, "Reaper", "mD=1;mH=220;tbB=1;tbH=42" },
+    { "Reaper Classic",         0xffc0c4c8, 0xffb0b4b8, 0xffa4a8ac, 0xff7a7e82, 0xff101010, 0xff2c6fbb, true,  64, "Reaper", "mD=1;mH=220;tbB=1;tbH=42" },
     { "Studio One Blue",        0xff1b2129, 0xff232b35, 0xff2b3540, 0xff44515f, 0xffe3e9f0, 0xff3e8ed0, false, 60, "" },
     { "Cubase Slate",           0xff2b2f33, 0xff34393e, 0xff3d4349, 0xff5a6168, 0xffe0e3e6, 0xffe2a33c, false, 60, "" },
     { "Live Gray",              0xff3a3a3a, 0xff444444, 0xff4e4e4e, 0xff666666, 0xffe8e8e8, 0xfff0d43a, false, 52, "" },
-    { "BandLab Night",          0xff121218, 0xff1b1b24, 0xff24242f, 0xff3a3a4a, 0xfff2f2f7, 0xfff2295b, false, 64, "" },
+    { "BandLab Night",          0xff121218, 0xff1b1b24, 0xff24242f, 0xff3a3a4a, 0xfff2f2f7, 0xfff2295b, false, 64, "", "rB=1;bR=1" },
     { "Midnight Purple",        0xff0d0a14, 0xff161021, 0xff1f172d, 0xff3a2c55, 0xffece6f7, 0xffb06cff, false, 60, "" },
     { "Studio White",           0xfff6f6f6, 0xffebebeb, 0xffe0e0e0, 0xffb5b5b5, 0xff151515, 0xff9b5cff, true,  60, "" },
     { "Neon",                   0xff07070a, 0xff0f0f14, 0xff16161e, 0xff2a2a3a, 0xfff0f0ff, 0xff00f0c8, false, 60, "" },
@@ -382,13 +382,35 @@ juce::String lookDesc (const LayoutLook& l)
 {
     auto c = [] (juce::uint32 x) { return juce::Colour (x).toString(); };
     return joinLayout ({ { "bg", c (l.bg) }, { "panel", c (l.panel) }, { "panel2", c (l.panel2) }, { "gridBar", c (l.gridBar) },
-                         { "text", c (l.text) }, { "accent", c (l.accent) }, { "light", l.light ? "1" : "0" }, { "laneH", juce::String (l.laneH) } });
+                         { "text", c (l.text) }, { "accent", c (l.accent) }, { "light", l.light ? "1" : "0" }, { "laneH", juce::String (l.laneH) } })
+           + (juce::String (l.build).isNotEmpty() ? ";" + juce::String (l.build) : juce::String());
 }
+void putBuild (std::map<juce::String, juce::String>& v)
+{
+    v["tb"] = build::toolbar; v["bR"] = build::browserRight ? "1" : "0"; v["rB"] = build::rackBelow ? "1" : "0";
+    v["tbB"] = build::toolbarBottom ? "1" : "0"; v["mD"] = build::mixDock ? "1" : "0"; v["hint"] = build::hint ? "1" : "0";
+    v["bW"] = juce::String (build::browserW); v["mH"] = juce::String (build::mixH); v["tbH"] = juce::String (build::toolbarH); v["font"] = build::font;
+}
+void readBuild (std::map<juce::String, juce::String>& v)
+{
+    const auto oldFont = build::font;
+    build::reset();
+    auto flag = [&v] (const char* k, bool def) { auto it = v.find (k); return it == v.end() ? def : it->second == "1"; };
+    auto num = [&v] (const char* k, int lo, int hi, int def) { auto it = v.find (k); return it == v.end() || it->second.isEmpty() ? def : juce::jlimit (lo, hi, it->second.getIntValue()); };
+    if (auto it = v.find ("tb"); it != v.end() && it->second.isNotEmpty()) build::toolbar = it->second.removeCharacters (" ;=");
+    build::browserRight = flag ("bR", false); build::rackBelow = flag ("rB", false); build::toolbarBottom = flag ("tbB", false);
+    build::mixDock = flag ("mD", false); build::hint = flag ("hint", true);
+    build::browserW = num ("bW", 160, 520, 260); build::mixH = num ("mH", 140, 700, 260); build::toolbarH = num ("tbH", 36, 72, 48);
+    if (auto it = v.find ("font"); it != v.end()) build::font = it->second;
+    if (build::font != oldFont) juce::Typeface::clearTypefaceCache();
+}
+void relayout() { if (relayoutMain) relayoutMain(); }
 juce::String currentLayout()
 {
     return joinLayout ({ { "bg", col::bg.toString() }, { "panel", col::panel.toString() }, { "panel2", col::panel2.toString() }, { "gridBar", col::gridBar.toString() },
                          { "text", col::text.toString() }, { "accent", col::accent.toString() }, { "light", col::lightMode ? "1" : "0" }, { "laneH", juce::String (col::laneMinH) } });
 }
+juce::String currentLayoutWithBuild() { auto v = parseLayout (currentLayout()); putBuild (v); return joinLayout (v); }
 void applyLayoutDesc (const juce::String& d)
 {
     auto v = parseLayout (d);
@@ -402,7 +424,9 @@ void applyLayoutDesc (const juce::String& d)
     col::scale = col::bg.interpolatedWith (col::accent, 0.10f); col::root = col::bg.interpolatedWith (col::accent, 0.2f);
     const int lh = v["laneH"].getIntValue();
     col::laneMinH = juce::jlimit (36, 220, lh > 0 ? lh : 60);
+    readBuild (v);
     refreshAll();
+    relayout();
 }
 
 struct ColourPick : juce::Component, juce::ChangeListener
@@ -426,7 +450,7 @@ struct LayoutPanel : juce::Component
         addAndMakeVisible (title); title.setText ("LAYOUT: pick a look or make your own", juce::dontSendNotification); title.setFont (juce::FontOptions (16.0f, juce::Font::bold));
         addAndMakeVisible (pick); loadMine(); fillPick();
         pick.onChange = [this] { choose (pick.getSelectedId()); };
-        addAndMakeVisible (withKeys); withKeys.setButtonText ("Use that DAW's key commands too (Logic, Pro Tools, Reaper)");
+        addAndMakeVisible (withKeys); withKeys.setButtonText ("Use the matching key commands too");
         withKeys.setToggleState (s.settings == nullptr || s.settings->getBoolValue ("layoutKeys", true), juce::dontSendNotification);
         withKeys.onClick = [this] { if (s.settings) s.settings->setValue ("layoutKeys", withKeys.getToggleState()); };
         addAndMakeVisible (customLbl); customLbl.setText ("CUSTOM: tap a color to change it", juce::dontSendNotification);
@@ -477,7 +501,8 @@ struct LayoutPanel : juce::Component
         {
             col::laneMinH = 60;
             if (s.settings) { s.settings->removeValue ("layout"); s.settings->setValue ("layoutName", label); }
-            col::lightMode = false; applyTheme (juce::Colour (0xff9b5cff), 0.15f, false);
+            col::lightMode = false; if (build::font.isNotEmpty()) juce::Typeface::clearTypefaceCache();
+            build::reset(); applyTheme (juce::Colour (0xff9b5cff), 0.15f, false); relayout();
         }
         else
         {
@@ -490,7 +515,7 @@ struct LayoutPanel : juce::Component
     }
     void setCustom (const juce::String& key, const juce::String& value)
     {
-        auto v = parseLayout (currentLayout()); v[key] = value;
+        auto v = parseLayout (currentLayoutWithBuild()); v[key] = value;
         const auto desc = joinLayout (v);
         applyLayoutDesc (desc);
         if (s.settings) { s.settings->setValue ("layout", desc); s.settings->setValue ("layoutName", "Custom"); s.settings->saveIfNeeded(); }
@@ -513,7 +538,7 @@ struct LayoutPanel : juce::Component
     {
         auto n = name.getText().removeCharacters ("|;\r\n").trim();
         if (n.isEmpty()) n = "My layout " + juce::String ((int) mine.size() + 1);
-        auto v = parseLayout (currentLayout());
+        auto v = parseLayout (currentLayoutWithBuild());
         if (s.settings) v["keys"] = s.settings->getValue ("layoutKeySet");
         bool replaced = false;
         for (auto& m : mine) if (m.first == n) { m.second = joinLayout (v); replaced = true; }
@@ -569,6 +594,305 @@ struct LayoutPanel : juce::Component
     juce::TextButton saveBtn { "Save as my layout" }, delBtn { "Delete my layout" }, resetBtn { "Reset to HumHouse default" };
     std::vector<std::pair<juce::String, juce::String>> mine;
 };
+
+// picture cards: each option is a tiny drawing of the screen; tap one to pick it
+struct Cards : juce::Component
+{
+    juce::StringArray names;
+    std::function<void (juce::Graphics&, juce::Rectangle<float>, int)> draw;
+    std::function<int()> current;
+    std::function<void (int)> pick;
+    void paint (juce::Graphics& g) override
+    {
+        if (names.isEmpty() || ! draw || ! current) return;
+        auto r = getLocalBounds().toFloat();
+        const float w = r.getWidth() / (float) names.size();
+        for (int i = 0; i < names.size(); ++i)
+        {
+            auto c = r.removeFromLeft (w).reduced (3);
+            const bool on = current() == i;
+            g.setColour (on ? col::accent.withAlpha (0.22f) : col::bg.brighter (0.06f)); g.fillRoundedRectangle (c, 8.0f);
+            if (on) { g.setColour (col::accent); g.drawRoundedRectangle (c, 8.0f, 1.5f); }
+            auto txt = c.removeFromBottom (16);
+            g.setColour (on ? col::text : col::dim); g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+            g.drawText (names[i], txt, juce::Justification::centred);
+            auto th = c.reduced (6, 4);
+            g.setColour (col::bg); g.fillRoundedRectangle (th, 4.0f);
+            g.setColour ((on ? col::accent : col::dim).withAlpha (0.7f));
+            draw (g, th.reduced (3), i);
+        }
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (names.isEmpty() || getWidth() <= 0 || ! pick || ! current) return;
+        const int i = juce::jlimit (0, names.size() - 1, e.x * names.size() / getWidth());
+        if (i != current()) pick (i);
+    }
+};
+
+struct BuildPanel : juce::Component
+{
+    explicit BuildPanel (Studio& st) : s (st)
+    {
+        addAndMakeVisible (title); title.setText ("BUILD: put everything where you want it", juce::dontSendNotification); title.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+        addAndMakeVisible (note); note.setText ("Drag blocks and buttons on the mini screen (drop a button off the bar to hide it). Save on LOOK.", juce::dontSendNotification); note.setColour (juce::Label::textColourId, col::dim);
+        auto combo = [this] (juce::ComboBox& c, juce::Label& l, const char* text, juce::StringArray items, std::function<void (int)> fn)
+        {
+            addAndMakeVisible (c); addAndMakeVisible (l); l.setText (text, juce::dontSendNotification);
+            c.addItemList (items, 1); c.onChange = [&c, fn] { if (c.getSelectedId() > 0) fn (c.getSelectedId()); };
+        };
+        combo (browserSide, browserLbl, "Browser", { "Left", "Right" }, [this] (int id) { commit ("bR", id == 2 ? "1" : "0"); });
+        combo (rackPos, rackLbl, "Channel Rack", { "Above Piano Roll", "Below Piano Roll" }, [this] (int id) { commit ("rB", id == 2 ? "1" : "0"); });
+        combo (toolbarPos, toolbarLbl, "Toolbar", { "Top", "Bottom" }, [this] (int id) { commit ("tbB", id == 2 ? "1" : "0"); });
+        combo (mixerPos, mixerLbl, "Mixer", { "Own page (MIX)", "Docked under every page" }, [this] (int id) { commit ("mD", id == 2 ? "1" : "0"); });
+        for (auto* c : { &browserSide, &rackPos, &toolbarPos, &mixerPos }) c->setVisible (false);   // shown as picture cards
+        auto cards = [this] (Cards& c, juce::StringArray names, const char* key, bool* flag, std::function<void (juce::Graphics&, juce::Rectangle<float>, int)> draw)
+        {
+            addAndMakeVisible (c); c.names = names; c.draw = std::move (draw);
+            c.current = [flag] { return *flag ? 1 : 0; };
+            const juce::String k (key);
+            c.pick = [this, k] (int i) { commit (k, i == 1 ? "1" : "0"); };
+        };
+        cards (browserC, { "Left", "Right" }, "bR", &build::browserRight, [] (juce::Graphics& g, juce::Rectangle<float> a, int i)
+               { g.fillRoundedRectangle (i == 0 ? a.removeFromLeft (a.getWidth() * 0.28f) : a.removeFromRight (a.getWidth() * 0.28f), 2.0f); });
+        cards (rackC, { "Above", "Below" }, "rB", &build::rackBelow, [] (juce::Graphics& g, juce::Rectangle<float> a, int i)
+               { auto b = i == 0 ? a.removeFromTop (a.getHeight() * 0.4f) : a.removeFromBottom (a.getHeight() * 0.4f);
+                 g.fillRoundedRectangle (b, 2.0f); g.drawRoundedRectangle (a.reduced (0, 2), 2.0f, 1.0f); });
+        cards (toolbarC, { "Top", "Bottom" }, "tbB", &build::toolbarBottom, [] (juce::Graphics& g, juce::Rectangle<float> a, int i)
+               { g.fillRoundedRectangle (i == 0 ? a.removeFromTop (6) : a.removeFromBottom (6), 2.0f); });
+        cards (mixerC, { "MIX page", "Docked" }, "mD", &build::mixDock, [] (juce::Graphics& g, juce::Rectangle<float> a, int i)
+               { auto m = i == 0 ? a : a.removeFromBottom (a.getHeight() * 0.45f);
+                 for (int k = 0; k < 6; ++k) g.fillRect (m.getX() + 3 + (float) k * (m.getWidth() - 6) / 6.0f, m.getY() + 2, 2.0f, m.getHeight() - 4); });
+        combo (hintPos, hintLbl, "Hint bar", { "Show", "Hide" }, [this] (int id) { commit ("hint", id == 1 ? "1" : "0"); });
+        juce::StringArray fonts { "Options > Font choice", "HumHouse Pro (Barlow)" };
+        const auto have = juce::Font::findAllTypefaceNames();
+        for (auto* f : { "Helvetica Neue", "SF Pro Text", "Avenir Next", "Futura", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" })
+            if (have.contains (f)) fonts.add (f);
+        for (int i = 0; fonts.size() < 8 && i < have.size(); ++i) fonts.addIfNotAlreadyThere (have[i]);
+        fontNames = fonts;
+        combo (fontBox, fontLbl, "Font", fonts, [this] (int id) { commit ("font", id == 1 ? juce::String() : id == 2 ? juce::String ("Barlow") : fontNames[id - 1]); });
+        auto slider = [this] (juce::Slider& sl, juce::Label& l, const char* text, int lo, int hi, const char* key)
+        {
+            addAndMakeVisible (sl); addAndMakeVisible (l); l.setText (text, juce::dontSendNotification);
+            sl.setRange (lo, hi, 1); sl.setSliderStyle (juce::Slider::LinearHorizontal); sl.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 22);
+            const juce::String k (key);
+            sl.onDragEnd = [this, &sl, k] { commit (k, juce::String ((int) sl.getValue())); };
+            sl.onValueChange = [this, &sl, k] { if (! sl.isMouseButtonDown()) commit (k, juce::String ((int) sl.getValue())); };
+        };
+        slider (browserW, browserWLbl, "Browser width", 160, 520, "bW");
+        slider (mixH, mixHLbl, "Docked mixer height", 140, 700, "mH");
+        slider (toolbarH, toolbarHLbl, "Toolbar height", 36, 72, "tbH");
+        addAndMakeVisible (tbLbl); tbLbl.setText ("TOOLBAR BUTTONS: show, side and order", juce::dontSendNotification); tbLbl.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        addAndMakeVisible (view); view.setViewedComponent (&rowsHolder, false); view.setScrollBarsShown (true, false);
+        for (int i = 0; i < (int) std::size (build::toolbarItems); ++i)
+        {
+            auto* r = rows.add (new Row()); rowsHolder.addAndMakeVisible (r);
+            r->show.onClick = [this, i] { if (i < (int) order.size()) { order[(size_t) i].shown = rows[i]->show.getToggleState(); storeOrder(); } };
+            r->side.onClick = [this, i] { if (i < (int) order.size()) { order[(size_t) i].right = ! order[(size_t) i].right; storeOrder(); } };
+            r->up.onClick = [this, i] { if (i > 0 && i < (int) order.size()) { std::swap (order[(size_t) i], order[(size_t) i - 1]); storeOrder(); } };
+            r->down.onClick = [this, i] { if (i + 1 < (int) order.size()) { std::swap (order[(size_t) i], order[(size_t) i + 1]); storeOrder(); } };
+        }
+        addAndMakeVisible (resetTb); resetTb.onClick = [this] { commit ("tb", build::defaultToolbar); };
+        addAndMakeVisible (map);
+        sync();
+        setSize (560, 740);
+    }
+    struct Item { juce::String id, name; bool shown = true, right = false; };
+    struct Map : juce::Component   // mini screen: drag the blocks and toolbar buttons where you want them
+    {
+        explicit Map (BuildPanel& o) : owner (o) {}
+        BuildPanel& owner;
+        juce::Rectangle<float> tb, br, rack, piano, mix, hint;
+        std::vector<std::pair<juce::String, juce::Rectangle<float>>> chips;
+        juce::String dragging; juce::Point<float> dragPos;
+        void compute()
+        {
+            auto a = getLocalBounds().toFloat().reduced (4);
+            hint = build::hint ? a.removeFromBottom (6) : juce::Rectangle<float>();
+            const float th = juce::jmax (12.0f, a.getHeight() * (float) build::toolbarH / 700.0f);
+            tb = build::toolbarBottom ? a.removeFromBottom (th) : a.removeFromTop (th);
+            const float bw = a.getWidth() * (float) build::browserW / 1400.0f;
+            br = build::browserRight ? a.removeFromRight (bw) : a.removeFromLeft (bw);
+            mix = build::mixDock ? a.removeFromBottom (a.getHeight() * juce::jmin (0.5f, (float) build::mixH / 900.0f)) : juce::Rectangle<float>();
+            const float rh = a.getHeight() * 0.4f;
+            rack = build::rackBelow ? a.removeFromBottom (rh) : a.removeFromTop (rh);
+            piano = a;
+            chips.clear();
+            juce::StringArray l, r;
+            for (auto& it : owner.order) if (it.shown) (it.right ? r : l).add (it.id);
+            const float cw = juce::jmin (34.0f, tb.getWidth() / (float) juce::jmax (1, l.size() + r.size() + 1));
+            auto t = tb.reduced (2);
+            for (auto& id : l) chips.push_back ({ id, t.removeFromLeft (cw).reduced (1) });
+            juce::Rectangle<float> rt = t.removeFromRight (cw * (float) r.size());
+            for (auto& id : r) chips.push_back ({ id, rt.removeFromLeft (cw).reduced (1) });
+        }
+        void paint (juce::Graphics& g) override
+        {
+            compute();
+            g.fillAll (col::bg);
+            auto box = [&g] (juce::Rectangle<float> b, juce::Colour c, const char* label)
+            {
+                if (b.isEmpty()) return;
+                g.setColour (c); g.fillRoundedRectangle (b.reduced (1), 3.0f);
+                g.setColour (col::text.withAlpha (0.8f)); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+                g.drawText (label, b, juce::Justification::centred);
+            };
+            box (tb, col::panel2, ""); box (br, col::panel.brighter (0.15f), "BROWSER"); box (rack, col::panel.brighter (0.08f), "CHANNEL RACK");
+            box (piano, col::panel, "PIANO ROLL / PLAYLIST"); box (mix, col::panel2.brighter (0.1f), "MIXER (docked)"); box (hint, col::panel2, "");
+            g.setFont (juce::FontOptions (8.0f));
+            for (auto& [id, c] : chips)
+            {
+                g.setColour (id == dragging ? col::accent : col::accent.withAlpha (0.35f)); g.fillRoundedRectangle (c, 2.0f);
+                g.setColour (col::text); g.drawFittedText (id.toUpperCase().substring (0, 5), c.toNearestInt(), juce::Justification::centred, 1);
+            }
+            if (dragging.isNotEmpty())
+            {
+                g.setColour (col::accent); g.drawRoundedRectangle (juce::Rectangle<float> (60, 18).withCentre (dragPos), 3.0f, 1.5f);
+                g.drawText (dragging.toUpperCase(), juce::Rectangle<float> (60, 18).withCentre (dragPos), juce::Justification::centred);
+            }
+            g.setColour (col::dim); g.drawRect (getLocalBounds());
+        }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            compute(); const auto p = e.position; dragging = {};
+            for (auto& [id, c] : chips) if (c.contains (p)) dragging = id;
+            if (dragging.isEmpty())
+                dragging = tb.contains (p) ? "#toolbar" : br.contains (p) ? "#browser" : rack.contains (p) ? "#rack" : mix.contains (p) ? "#mixer" : piano.contains (p) ? "#piano" : "";
+            dragPos = p; repaint();
+        }
+        void mouseDrag (const juce::MouseEvent& e) override { dragPos = e.position; repaint(); }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            const auto id = dragging; dragging = {}; repaint();
+            if (id.isEmpty() || e.getDistanceFromDragStart() < 4) return;
+            const auto b = getLocalBounds().toFloat(); const auto p = e.position;
+            if (id == "#toolbar") owner.commit ("tbB", p.y > b.getCentreY() ? "1" : "0");
+            else if (id == "#browser") owner.commit ("bR", p.x > b.getCentreX() ? "1" : "0");
+            else if (id == "#rack" || id == "#piano") owner.commit ("rB", (p.y > piano.getUnion (rack).getCentreY()) == (id == "#rack") ? "1" : "0");
+            else if (id == "#mixer") owner.commit ("mD", p.y > b.getY() + b.getHeight() * 0.6f ? "1" : "0");
+            else
+            {
+                juce::StringArray l, r;
+                for (auto& it : owner.order) if (it.shown && it.id != id) (it.right ? r : l).add (it.id);
+                if (tb.expanded (0, 20).contains (p))   // dropped back on the toolbar: that side, at that spot
+                {
+                    auto& side = p.x > tb.getCentreX() ? r : l;
+                    int at = side.size();
+                    for (int i = 0; i < side.size(); ++i)
+                        for (auto& [cid, c] : chips) if (cid == side[i] && p.x < c.getCentreX() && at == side.size()) at = i;
+                    side.insert (at, id);
+                }   // dropped off the toolbar: hidden
+                owner.commit ("tb", l.joinIntoString (",") + "|" + r.joinIntoString (","));
+            }
+        }
+    };
+    struct Row : juce::Component
+    {
+        Row() { for (auto* c : std::initializer_list<juce::Component*> { &name, &show, &side, &up, &down }) addAndMakeVisible (c); show.setButtonText ("Show"); }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (2, 1);
+            down.setBounds (r.removeFromRight (30)); up.setBounds (r.removeFromRight (30)); r.removeFromRight (4);
+            side.setBounds (r.removeFromRight (70)); r.removeFromRight (4); show.setBounds (r.removeFromRight (64)); name.setBounds (r);
+        }
+        juce::Label name; juce::ToggleButton show; juce::TextButton side, up { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, down { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) };
+    };
+    void loadOrder()
+    {
+        order.clear();
+        const auto halves = juce::StringArray::fromTokens (build::toolbar, "|", "");
+        for (int h = 0; h < juce::jmin (2, halves.size()); ++h)
+            for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
+                for (auto& [k, n] : build::toolbarItems)
+                    if (id == k && std::none_of (order.begin(), order.end(), [&id] (const Item& it) { return it.id == id; }))
+                        order.push_back ({ k, n, true, h == 1 });
+        for (auto& [k, n] : build::toolbarItems)
+            if (std::none_of (order.begin(), order.end(), [k] (const Item& it) { return it.id == k; })) order.push_back ({ k, n, false, false });
+    }
+    void storeOrder()
+    {
+        juce::StringArray l, r;
+        for (auto& it : order) if (it.shown) (it.right ? r : l).add (it.id);
+        commit ("tb", l.joinIntoString (",") + "|" + r.joinIntoString (","));
+    }
+    void commit (const juce::String& key, const juce::String& value)
+    {
+        auto v = parseLayout (currentLayoutWithBuild()); v[key] = value;
+        const auto desc = joinLayout (v);
+        applyLayoutDesc (desc);
+        if (s.settings) { s.settings->setValue ("layout", desc); s.settings->setValue ("layoutName", "Custom"); s.settings->saveIfNeeded(); }
+        sync();
+    }
+    void sync()
+    {
+        browserSide.setSelectedId (build::browserRight ? 2 : 1, juce::dontSendNotification);
+        rackPos.setSelectedId (build::rackBelow ? 2 : 1, juce::dontSendNotification);
+        toolbarPos.setSelectedId (build::toolbarBottom ? 2 : 1, juce::dontSendNotification);
+        mixerPos.setSelectedId (build::mixDock ? 2 : 1, juce::dontSendNotification);
+        hintPos.setSelectedId (build::hint ? 1 : 2, juce::dontSendNotification);
+        const int fi = build::font.isEmpty() ? 0 : build::font == "Barlow" ? 1 : fontNames.indexOf (build::font);
+        if (fi >= 0) fontBox.setSelectedItemIndex (fi, juce::dontSendNotification); else fontBox.setText (build::font, juce::dontSendNotification);
+        browserW.setValue (build::browserW, juce::dontSendNotification); mixH.setValue (build::mixH, juce::dontSendNotification); toolbarH.setValue (build::toolbarH, juce::dontSendNotification);
+        loadOrder();
+        map.repaint();
+        for (auto* c : { &browserC, &rackC, &toolbarC, &mixerC }) c->repaint();
+        for (int i = 0; i < rows.size() && i < (int) order.size(); ++i)
+        {
+            auto& it = order[(size_t) i]; auto* r = rows[i];
+            r->name.setText (it.name, juce::dontSendNotification);
+            r->name.setColour (juce::Label::textColourId, it.shown ? col::text : col::dim);
+            r->show.setToggleState (it.shown, juce::dontSendNotification);
+            r->side.setButtonText (it.right ? "RIGHT" : "LEFT"); r->side.setEnabled (it.shown);
+        }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (10);
+        title.setBounds (r.removeFromTop (24)); note.setBounds (r.removeFromTop (20)); r.removeFromTop (4);
+        map.setBounds (r.removeFromTop (phoneUI ? 120 : 160)); r.removeFromTop (6);
+        auto line = [&r] (juce::Label& l, juce::Component& c) { auto a = r.removeFromTop (30); l.setBounds (a.removeFromLeft (150)); c.setBounds (a.reduced (0, 2)); };
+        auto pair = [&r] (juce::Label& l1, Cards& c1, juce::Label& l2, Cards& c2)
+        {
+            auto a = r.removeFromTop (78); auto b = a.removeFromRight (a.getWidth() / 2);
+            l1.setBounds (a.removeFromTop (16)); c1.setBounds (a); l2.setBounds (b.removeFromTop (16)); c2.setBounds (b);
+        };
+        pair (browserLbl, browserC, rackLbl, rackC); pair (toolbarLbl, toolbarC, mixerLbl, mixerC);
+        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (hintLbl, hintPos); line (fontLbl, fontBox);
+        r.removeFromTop (6);
+        auto tl = r.removeFromTop (26); resetTb.setBounds (tl.removeFromRight (150).reduced (0, 1)); tbLbl.setBounds (tl);
+        view.setBounds (r);
+        rowsHolder.setSize (juce::jmax (100, r.getWidth() - 12), rows.size() * 30);
+        for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, i * 30, rowsHolder.getWidth(), 30);
+    }
+    Studio& s;
+    juce::Label title, note, browserLbl, rackLbl, toolbarLbl, mixerLbl, hintLbl, fontLbl, browserWLbl, mixHLbl, toolbarHLbl, tbLbl;
+    juce::ComboBox browserSide, rackPos, toolbarPos, mixerPos, hintPos, fontBox;
+    juce::Slider browserW, mixH, toolbarH;
+    juce::StringArray fontNames;
+    juce::Viewport view; juce::Component rowsHolder; juce::OwnedArray<Row> rows;
+    juce::TextButton resetTb { "Reset toolbar" };
+    std::vector<Item> order;
+    Map map { *this };
+    Cards browserC, rackC, toolbarC, mixerC;
+};
+
+struct LayoutTabs : juce::TabbedComponent
+{
+    explicit LayoutTabs (Studio& s) : juce::TabbedComponent (juce::TabbedButtonBar::TabsAtTop)
+    {
+        setTabBarDepth (phoneUI ? 44 : 32);
+        addTab ("BUILD", col::panel, new BuildPanel (s), true);
+        addTab ("LOOK", col::panel, new LayoutPanel (s), true);
+        juce::Rectangle<int> area (560, 780);   // phones: fit the screen, the lists scroll
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) area = d->userArea;
+        setSize (juce::jmin (560, area.getWidth() - 10), juce::jmin (780, area.getHeight() - 60));
+    }
+    void currentTabChanged (int, const juce::String&) override   // each tab shows what the other one changed
+    {
+        if (auto* b = dynamic_cast<BuildPanel*> (getCurrentContentComponent())) b->sync();
+        if (auto* l = dynamic_cast<LayoutPanel*> (getCurrentContentComponent())) { l->fillPick(); l->sync(); }
+    }
+};
 }
 
 void applySavedLayout (Studio& s)
@@ -581,7 +905,7 @@ void showLayoutDialog (Studio& s)
     static juce::Component::SafePointer<juce::DialogWindow> open;
     if (open != nullptr) { delete open.getComponent(); return; }   // tap LAYOUT again to close it
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new LayoutPanel (s));
+    o.content.setOwned (new LayoutTabs (s));
     o.dialogTitle = "Layout";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;

@@ -285,6 +285,12 @@ struct Engine::TrackRuntime
 };
 
 // short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
+#if JUCE_IOS
+static constexpr int maxRamTakeSeconds = 300, maxRamTakes = 3;   // phones: a full session of takes in RAM got the app killed
+#else
+static constexpr int maxRamTakeSeconds = 1200, maxRamTakes = 64;
+#endif
+
 struct MemoryClipReader : juce::AudioFormatReader
 {
     explicit MemoryClipReader (juce::AudioFormatReader& src) : juce::AudioFormatReader (nullptr, "HHS memory")
@@ -548,12 +554,14 @@ void Engine::sync()
     {
         if (! c.isAudio()) continue;
         auto it = clipRt.find (c.uid);
-        if (it != clipRt.end() && it->second->file == c.audioFile) continue;
+        // a RAM take that is no longer "fresh" (phone memory cap / low-memory warning) goes back to streaming from disk
+        if (it != clipRt.end() && it->second->file == c.audioFile
+            && (freshTakes.count (c.audioFile.getFullPathName()) > 0 || dynamic_cast<MemoryClipReader*> (it->second->reader.get()) == nullptr)) continue;
         auto rt = std::make_unique<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
         // a take you just recorded (punch / loop) is loaded into RAM, so it plays the moment the loop comes back round
         if (freshTakes.count (c.audioFile.getFullPathName()) > 0)
-            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * 1200))
+            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * maxRamTakeSeconds))
             {
                 rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
                 rt->reader = std::make_unique<MemoryClipReader> (*r);
@@ -1019,7 +1027,7 @@ bool Engine::retroRecord()
         const juce::ScopedLock sl (lock);
         proj.clips.push_back (c);
     }
-    freshTakes.insert (file.getFullPathName());
+    rememberTake (file.getFullPathName());
     juce::MessageManager::callAsync ([this, al = alive] { if (! al->load()) return; sync(); primeClipReaders (position.load()); if (onRecordingAdded) onRecordingAdded(); });
     return true;
 }
@@ -1038,7 +1046,7 @@ void Engine::finishRecordingWriters()
     {
         const juce::int64 written = t->samplesWritten;
         t->writer.reset();       // flushes
-        freshTakes.insert (t->file.getFullPathName());
+        rememberTake (t->file.getFullPathName());
         if (written <= 0) { t->file.deleteFile(); continue; }   // nothing was recorded at all
         if (! t->started) continue;                             // never delete a take that holds audio
         if (t->lane < 0 || t->lane >= (int) proj.lanes.size()) continue;   // lane deleted while recording: keep the WAV
@@ -2168,5 +2176,22 @@ bool Engine::freezeTrack (int track)
     mt.frozen = true; mt.frozenFile = file;
     sync();
     return true;
+}
+}
+
+namespace hhs
+{
+void Engine::rememberTake (const juce::String& path)
+{
+    if ((int) freshTakes.size() >= maxRamTakes) freshTakes.clear();   // older takes stream from disk on the next sync
+    freshTakes.insert (path);
+}
+
+void Engine::releaseMemory()
+{
+    freshTakes.clear();
+    for (auto it = sampleCache.begin(); it != sampleCache.end();)
+        it = it->second.use_count() <= 1 ? sampleCache.erase (it) : std::next (it);
+    sync();
 }
 }

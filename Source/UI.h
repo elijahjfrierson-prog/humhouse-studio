@@ -449,6 +449,22 @@ void showThemeDialog (Studio&);
 void showLayoutDialog (Studio&);   // Options > Layout: DAW-style looks + your own
 void applySavedLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
+namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
+{
+    inline const char* const defaultToolbar = "logo,beat,record,mix,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,scope,theme,browser,save";
+    inline const std::pair<const char*, const char*> toolbarItems[] {
+        { "logo", "HumHouse logo" }, { "beat", "BEAT page" }, { "record", "RECORD page" }, { "mix", "MIX page" }, { "song", "PAT / SONG" },
+        { "start", "Go to start" }, { "play", "Play" }, { "stop", "Stop" }, { "rec", "Record" }, { "bpm", "BPM" }, { "pos", "Position" },
+        { "metro", "Metronome" }, { "count", "Count-in" }, { "retro", "RETRO" }, { "piano", "PIANO keys" }, { "cpu", "CPU meter" },
+        { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
+    inline juce::String toolbar = defaultToolbar;
+    inline bool browserRight = false, rackBelow = false, toolbarBottom = false, mixDock = false, hint = true;
+    inline int browserW = 260, mixH = 260, toolbarH = 48;
+    inline juce::String font;   // "" = the font picked in Options > Font
+    inline void reset() { toolbar = defaultToolbar; browserRight = rackBelow = toolbarBottom = mixDock = false; hint = true; browserW = 260; mixH = 260; toolbarH = 48; font = {}; }
+}
+inline std::function<void()> relayoutMain;
+inline std::function<void()> lowMemoryMain, saveBackupMain;   // phone: OS memory warning / app sent to background
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area, bool withText);
 
 enum class Tool { Arp, Strum, Chop, Flam, Quantize, Randomize, Limit, Articulate, ScaleLevels, Flip, Claw, Lfo };
