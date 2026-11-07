@@ -1298,7 +1298,7 @@ if (phoneUI)
             }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
-            m.addItem (4712, "Layout builder...");
+            m.addItem (4712, "Layout...");
             m.addItem (4713, "Mini keyboard (pop-out)", true, miniKb != nullptr);
             {
                 juce::PopupMenu sc;
