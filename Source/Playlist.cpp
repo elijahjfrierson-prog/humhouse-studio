@@ -2295,7 +2295,10 @@ private:
                     for (auto& o : dragOrig)
                         if (o.uid == c.uid && o.length > 0 && std::abs (o.length - c.length) > 1.0e-6) { stretchK = c.length / o.length; secs = beatsToSeconds (o.length, p.bpm); }
                 g.setColour (stretchK != 1.0 ? colour.brighter (0.4f).withRotatedHue (0.08f) : colour.brighter (0.4f));
-                t->drawChannels (g, body.toNearestInt(), c.sourceOffset, c.sourceOffset + secs, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
+                const auto vis = body.getIntersection ({ (float) headerW, body.getY(), (float) (getWidth() - headerW), body.getHeight() });   // deep zoom: draw only the on-screen slice, not a 100k-px clip
+                const double t0 = c.sourceOffset + secs * (vis.getX() - body.getX()) / juce::jmax (1.0f, body.getWidth());
+                const double t1 = c.sourceOffset + secs * (vis.getRight() - body.getX()) / juce::jmax (1.0f, body.getWidth());
+                if (vis.getWidth() >= 1.0f) t->drawChannels (g, vis.toNearestInt(), t0, t1, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
                 if (stretchK != 1.0)
                 {
                     const double add = c.length - c.length / stretchK;

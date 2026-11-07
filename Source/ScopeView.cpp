@@ -37,12 +37,15 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (col::bg);
-        g.setColour (col::text); g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        g.drawText (title, 12, 8, 140, 26, juce::Justification::centredLeft);
+        g.setColour (col::accent); g.fillEllipse (13.0f, 17.0f, 8.0f, 8.0f);
+        g.setColour (col::text); g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
+        g.drawText (title, 28, 8, 140, 26, juce::Justification::centredLeft);
         auto area = getLocalBounds().reduced (10).withTrimmedTop (34).toFloat();
-        g.setColour (col::panel); g.fillRoundedRectangle (area, 6);
+        g.setGradientFill (juce::ColourGradient (col::panel.brighter (0.05f), 0.0f, area.getY(), col::panel.darker (0.15f), 0.0f, area.getBottom(), false));
+        g.fillRoundedRectangle (area, 8);
+        g.setColour (juce::Colours::black.withAlpha (0.4f)); g.drawRoundedRectangle (area.reduced (0.5f), 8, 1.0f);
         auto a = area.reduced (8);
-        g.setColour (col::grid);
+        g.setColour (col::grid.withAlpha (0.55f));
         for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8), a.getY(), a.getBottom());
         for (int i = 1; i < 4; ++i) g.drawHorizontalLine ((int) (a.getY() + a.getHeight() * (float) i / 4), a.getX(), a.getRight());
         if (mode == 0) drawOsc (g, a); else if (mode == 1) drawHist (g, a); else drawSpec (g, a);

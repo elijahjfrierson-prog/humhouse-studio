@@ -324,7 +324,10 @@ public:
     void drawRotarySlider (juce::Graphics&, int x, int y, int w, int h, float pos, float a0, float a1, juce::Slider&) override;
     void drawButtonBackground (juce::Graphics&, juce::Button&, const juce::Colour&, bool over, bool down) override;
     void drawButtonText (juce::Graphics&, juce::TextButton&, bool over, bool down) override;   // Font = Gradient
-    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;   // phone: a bit bigger
+    juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
+    void drawTabButton (juce::TabBarButton&, juce::Graphics&, bool isMouseOver, bool isMouseDown) override;
+    void drawTabbedButtonBarBackground (juce::TabbedButtonBar&, juce::Graphics&) override;
+    void drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int w, int h) override;   // phone: a bit bigger
     juce::Font getPopupMenuFont() override;
     void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;

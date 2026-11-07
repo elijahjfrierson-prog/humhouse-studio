@@ -130,13 +130,14 @@ public:
         }
         heading.setText (title, juce::dontSendNotification);
         heading.setFont (juce::FontOptions (16.0f, juce::Font::bold));
-        heading.setColour (juce::Label::textColourId, col::accent);
+        heading.setColour (juce::Label::textColourId, col::text);
         addAndMakeVisible (heading);
         for (auto& p : params)
         {
             auto* l = labels.add (new juce::Label ({}, p.name));
             l->setJustificationType (juce::Justification::centred);
-            l->setFont (juce::FontOptions (11.0f));
+            l->setFont (juce::FontOptions (11.0f, juce::Font::bold));
+            l->setColour (juce::Label::textColourId, col::dim);
             addAndMakeVisible (l);
             const auto id = p.id;
             if (p.choices.size() == 2 && juce::String (p.choices[0]) == "Off")
@@ -214,13 +215,24 @@ public:
         }
         layoutSize();
     }
-    void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        g.setColour (col::accent); g.fillRoundedRectangle (10.0f, 16.0f, 3.0f, 16.0f, 1.5f);
+        for (int i = 0; i < controls.size(); ++i)   // each control sits on its own card
+            if (controls[i]->isVisible())
+            {
+                auto cell = labels[i]->getBounds().getUnion (controls[i]->getBounds()).toFloat().expanded (1.0f);
+                g.setColour (col::panel2.withAlpha (0.6f)); g.fillRoundedRectangle (cell, 6.0f);
+                g.setColour (juce::Colours::white.withAlpha (0.045f)); g.drawRoundedRectangle (cell.reduced (0.5f), 6.0f, 1.0f);
+            }
+    }
     void resized() override
     {
         auto r = getLocalBounds().reduced (10);
         auto top = r.removeFromTop (28);
         if (kind.isNotEmpty()) presetBtn.setBounds (top.removeFromRight (80).reduced (0, 2));
-        heading.setBounds (top);
+        heading.setBounds (top.withTrimmedLeft (8));
         const int cols = juce::jlimit (1, 6, visibleCount);
         for (int i = 0, v = 0; i < controls.size(); ++i)
         {

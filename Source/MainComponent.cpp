@@ -168,19 +168,24 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (2.0f);
     const float size = std::min (r.getWidth(), r.getHeight());
     auto c = r.withSizeKeepingCentre (size, size);
-    const float ang = a0 + pos * (a1 - a0), rad = size * 0.5f - 2.0f;
-    g.setColour (col::panel2.brighter (0.05f));
-    g.fillEllipse (c.reduced (3.0f));
+    const float ang = a0 + pos * (a1 - a0), rad = size * 0.5f - 2.5f;
+    const auto body = c.reduced (size * 0.17f);
+    const float br = body.getWidth() * 0.5f;
+    const juce::PathStrokeType ring (2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+    g.setColour (juce::Colours::black.withAlpha (0.4f)); g.fillEllipse (body.translated (0.0f, 1.5f));   // machined cap with drop shadow
+    g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.3f), body.getCentreX(), body.getY(), col::panel2.darker (0.35f), body.getCentreX(), body.getBottom(), false));
+    g.fillEllipse (body);
+    g.setColour (juce::Colours::white.withAlpha (0.09f)); g.drawEllipse (body.reduced (0.5f), 1.0f);
     juce::Path track, arc;
     track.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, a1, true);
-    g.setColour (col::bg);
-    g.strokePath (track, juce::PathStrokeType (3.0f));
+    g.setColour (col::bg.darker (0.3f));
+    g.strokePath (track, ring);
     arc.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, ang, true);
-    g.setColour (s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim);
-    g.strokePath (arc, juce::PathStrokeType (3.0f));
-    g.setColour (col::text);
-    g.drawLine (juce::Line<float> (c.getCentre().getPointOnCircumference (rad * 0.25f, ang),
-                                   c.getCentre().getPointOnCircumference (rad - 3.0f, ang)), 2.0f);
+    const auto fill = s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim;
+    g.setColour (fill.withAlpha (0.22f)); g.strokePath (arc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (fill); g.strokePath (arc, ring);
+    juce::Path ptr; ptr.startNewSubPath (c.getCentre().getPointOnCircumference (br * 0.35f, ang)); ptr.lineTo (c.getCentre().getPointOnCircumference (br - 2.0f, ang));
+    g.setColour (col::text); g.strokePath (ptr, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
@@ -197,6 +202,26 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + 3.0f, r.getRight() - 3.0f);
     if (b.getToggleState() && r.getHeight() > 12.0f) { g.setColour (col::accent); g.fillRoundedRectangle (r.getX() + 4.0f, r.getBottom() - 3.0f, r.getWidth() - 8.0f, 2.0f, 1.0f); }
 }
+
+void HHLookAndFeel::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, bool)
+{
+    auto r = b.getActiveArea().toFloat();
+    const bool front = b.isFrontTab();
+    g.setColour (front ? col::panel2 : over ? col::panel2.withAlpha (0.5f) : col::panel);
+    g.fillRect (r);
+    if (front) { g.setColour (col::accent); g.fillRect (r.removeFromBottom (2.0f).reduced (8.0f, 0.0f)); }
+    g.setColour (front ? col::text : col::dim);
+    g.setFont (juce::FontOptions (phoneUI ? 15.0f : 12.0f, juce::Font::bold));
+    g.drawText (b.getButtonText(), b.getTextArea(), juce::Justification::centred, false);
+}
+
+void HHLookAndFeel::drawTabbedButtonBarBackground (juce::TabbedButtonBar& bar, juce::Graphics& g)
+{
+    g.setColour (col::panel); g.fillRect (bar.getLocalBounds());
+    g.setColour (juce::Colours::black.withAlpha (0.35f)); g.drawHorizontalLine (bar.getHeight() - 1, 0.0f, (float) bar.getWidth());
+}
+
+void HHLookAndFeel::drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int, int) {}
 
 juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
 {
