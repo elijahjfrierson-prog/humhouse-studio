@@ -136,6 +136,8 @@ public:
         window = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
+    void memoryWarningReceived() override { if (hhs::lowMemoryMain) hhs::lowMemoryMain(); }
+    void suspended() override { if (hhs::saveBackupMain) hhs::saveBackupMain(); }   // phone backgrounded: the OS may kill it next
     void systemRequestedQuit() override
     {
         if (window != nullptr) hhs::requestQuit (window->getContentComponent());

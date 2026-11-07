@@ -30,6 +30,13 @@ public:
     int  current() const { return index; }
     juce::String description (int i) const { return states[(size_t) i].second; }
     void clear() { states.clear(); index = -1; bytes = 0; }
+    void trimTo (int keep)   // low memory: drop the oldest levels, keep the current one
+    {
+        while ((int) states.size() > juce::jmax (2, keep) && index > 0)
+        { bytes -= (size_t) states.front().first.getNumBytesAsUTF8(); states.erase (states.begin()); --index; }
+        while ((int) states.size() > juce::jmax (2, keep) && index + 1 < (int) states.size())
+        { bytes -= (size_t) states.back().first.getNumBytesAsUTF8(); states.pop_back(); }
+    }
 private:
     std::vector<std::pair<juce::String, juce::String>> states; // xml, description
     int index = -1;

@@ -150,15 +150,19 @@ public:
             for (int k = top; k >= bottom; --k)
             {
                 const float y = keyToY (k);
-                juce::Colour c = isBlack (k) ? col::bg : col::panel;
+                juce::Colour c = isBlack (k) ? col::bg.interpolatedWith (col::panel, 0.3f) : col::panel;
                 if (p.highlightScale && inScale (k, p.keyRoot, p.scaleIndex)) c = ((k - p.keyRoot) % 12 == 0) ? col::root : col::scale;
                 g.setColour (c); g.fillRect ((float) ga.getX(), y, (float) ga.getWidth(), rowH);
-                g.setColour (col::grid); g.drawHorizontalLine ((int) (y + rowH) - 1, (float) ga.getX(), (float) ga.getRight());
+                g.setColour (k % 12 == 0 ? col::gridBar : col::grid.withAlpha (0.6f));   // octave lines stand out, note lines stay quiet
+                g.drawHorizontalLine ((int) (y + rowH) - 1, (float) ga.getX(), (float) ga.getRight());
             }
             // vertical lines
             const double b0 = scrollX, b1 = xToBeat ((float) ga.getRight());
             double step = p.snap > 0 ? p.snap : 0.25;
             while (step * pxPerBeat < 6) step *= 2;
+            g.setColour (juce::Colours::white.withAlpha (col::lightMode ? 0.0f : 0.025f));   // every other bar shaded
+            for (int bar = (int) (b0 / p.beatsPerBar); bar * p.beatsPerBar <= b1; ++bar)
+                if (bar % 2 == 1) g.fillRect ((float) beatToX (bar * p.beatsPerBar), (float) ga.getY(), (float) (beatToX ((bar + 1) * p.beatsPerBar) - beatToX (bar * p.beatsPerBar)), (float) ga.getHeight());
             for (double b = std::floor (b0 / step) * step; b <= b1; b += step)
             {
                 const bool bar = std::fmod (b + 1e-9, (double) p.beatsPerBar) < 1e-6, beat = std::fmod (b + 1e-9, 1.0) < 1e-6;
@@ -190,9 +194,11 @@ public:
                 const bool playing = ! n.muted && playLocal >= n.start && playLocal < n.start + n.length;
                 auto c = n.muted ? col::dim : ch->colour.withMultipliedBrightness (0.55f + 0.45f * n.velocity);
                 if (playing) { g.setColour (ch->colour.brighter (0.9f).withAlpha (0.35f)); g.fillRoundedRectangle (r.expanded (2.0f), 3.5f); c = c.brighter (0.8f); }
-                g.setColour (c); g.fillRoundedRectangle (r, 2.5f);
-                g.setColour (n.selected ? juce::Colours::white : juce::Colours::black.withAlpha (0.5f));
-                g.drawRoundedRectangle (r, 2.5f, n.selected ? 1.6f : 1.0f);
+                g.setGradientFill (juce::ColourGradient (c.brighter (0.12f), 0.0f, r.getY(), c.darker (0.12f), 0.0f, r.getBottom(), false));
+                g.fillRoundedRectangle (r, 3.0f);
+                if (r.getWidth() > 6.0f) { g.setColour (juce::Colours::white.withAlpha (0.15f + 0.45f * n.velocity)); g.fillRoundedRectangle (r.getX() + 1.0f, r.getY() + 1.0f, 2.0f, r.getHeight() - 2.0f, 1.0f); }   // velocity edge
+                g.setColour (n.selected ? juce::Colours::white : c.darker (0.6f));
+                g.drawRoundedRectangle (r, 3.0f, n.selected ? 1.6f : 1.0f);
                 if (n.slide)
                 {
                     juce::Path tri; tri.addTriangle (r.getRight() - 9, r.getY() + 2, r.getRight() - 2, r.getCentreY(), r.getRight() - 9, r.getBottom() - 2);
@@ -200,8 +206,8 @@ public:
                 }
                 if (r.getWidth() > 30 && rowH >= 11)
                 {
-                    g.setColour (juce::Colours::black.withAlpha (0.75f)); g.setFont (juce::FontOptions (10.0f));
-                    g.drawText (noteName (n.key), r.reduced (3, 0), juce::Justification::centredLeft);
+                    g.setColour (c.getPerceivedBrightness() > 0.55f ? juce::Colours::black.withAlpha (0.8f) : juce::Colours::white.withAlpha (0.9f)); g.setFont (juce::FontOptions (10.0f));
+                    g.drawText (noteName (n.key), r.reduced (5, 0), juce::Justification::centredLeft);
                 }
             }
             if (drag == Drag::Select) { g.setColour (col::accent2.withAlpha (0.15f)); g.fillRect (selRect); g.setColour (col::accent2); g.drawRect (selRect); }
@@ -221,8 +227,12 @@ public:
                 const float y = keyToY (k);
                 if (y > ga.getBottom() || y + rowH < ga.getY()) continue;
                 const bool sel = k == previewKey;
-                g.setColour (sel ? col::accent : isBlack (k) ? juce::Colour (0xff202329) : juce::Colour (0xffcfd4dc));
-                g.fillRect (0.0f, y, (float) (isBlack (k) ? keyW - 18 : keyW), rowH - 1);
+                const float kw = isBlack (k) ? (float) keyW * 0.62f : (float) keyW;
+                if (sel) g.setColour (col::accent);
+                else if (isBlack (k)) g.setGradientFill (juce::ColourGradient (juce::Colour (0xff15171a), 0.0f, 0.0f, juce::Colour (0xff34373e), kw, 0.0f, false));
+                else g.setGradientFill (juce::ColourGradient (juce::Colour (0xffc9ced6), 0.0f, 0.0f, juce::Colour (0xfff1f3f6), kw, 0.0f, false));
+                g.fillRoundedRectangle (0.0f, y, kw, rowH - 1, isBlack (k) ? 2.0f : 1.0f);
+                if (! isBlack (k)) { g.setColour (juce::Colour (0xff9aa0aa)); g.drawHorizontalLine ((int) (y + rowH) - 1, 0.0f, (float) keyW); }
                 if (p.highlightScale && inScale (k, p.keyRoot, p.scaleIndex)) { g.setColour (col::good); g.fillRect ((float) keyW - 4, y + 1, 3.0f, rowH - 3); }
                 if (k % 12 == 0) { g.setColour (juce::Colours::black); g.setFont (juce::FontOptions (10.0f)); g.drawText (noteName (k), 2, (int) y, keyW - 8, (int) rowH, juce::Justification::centredRight); }
             }
@@ -264,8 +274,8 @@ public:
             if (x < keyW || x > getWidth()) continue;
             const float h = (velH - 8) * n.velocity;
             g.setColour (n.selected ? juce::Colours::white : ch->colour);
-            g.fillRect (x, (float) vel.getBottom() - 4 - h, 4.0f, h);
-            g.fillEllipse (x - 3.0f, (float) vel.getBottom() - 7 - h, 10.0f, 6.0f);
+            g.fillRect (x, (float) vel.getBottom() - 4 - h, 2.0f, h);   // slim bar with a flat cap
+            g.fillRoundedRectangle (x - 2.0f, (float) vel.getBottom() - 6 - h, 8.0f, 3.0f, 1.0f);
         }
         if (drag == Drag::Velocity && velReadout >= 0.0f)
         {

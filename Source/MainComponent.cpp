@@ -63,6 +63,14 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
     static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
     static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
     static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
+    if (build::font == "Barlow" && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
+    if (build::font.isNotEmpty() && build::font != "Barlow")   // Layout > BUILD font
+    {
+        static juce::String last; static juce::Typeface::Ptr plain, bold;
+        if (last != build::font) { last = build::font; plain = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::plain)));
+                                   bold = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::bold))); }
+        if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
+    }
     if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
     if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
     if (fontStyle() == 1 && flash != nullptr) return flash;
@@ -168,32 +176,60 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     auto r = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h).reduced (2.0f);
     const float size = std::min (r.getWidth(), r.getHeight());
     auto c = r.withSizeKeepingCentre (size, size);
-    const float ang = a0 + pos * (a1 - a0), rad = size * 0.5f - 2.0f;
-    g.setColour (col::panel2.brighter (0.05f));
-    g.fillEllipse (c.reduced (3.0f));
+    const float ang = a0 + pos * (a1 - a0), rad = size * 0.5f - 2.5f;
+    const auto body = c.reduced (size * 0.17f);
+    const float br = body.getWidth() * 0.5f;
+    const juce::PathStrokeType ring (2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+    g.setColour (juce::Colours::black.withAlpha (0.4f)); g.fillEllipse (body.translated (0.0f, 1.5f));   // machined cap with drop shadow
+    g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.3f), body.getCentreX(), body.getY(), col::panel2.darker (0.35f), body.getCentreX(), body.getBottom(), false));
+    g.fillEllipse (body);
+    g.setColour (juce::Colours::white.withAlpha (0.09f)); g.drawEllipse (body.reduced (0.5f), 1.0f);
     juce::Path track, arc;
     track.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, a1, true);
-    g.setColour (col::bg);
-    g.strokePath (track, juce::PathStrokeType (3.0f));
+    g.setColour (col::bg.darker (0.3f));
+    g.strokePath (track, ring);
     arc.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, ang, true);
-    g.setColour (s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim);
-    g.strokePath (arc, juce::PathStrokeType (3.0f));
-    g.setColour (col::text);
-    g.drawLine (juce::Line<float> (c.getCentre().getPointOnCircumference (rad * 0.25f, ang),
-                                   c.getCentre().getPointOnCircumference (rad - 3.0f, ang)), 2.0f);
+    const auto fill = s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim;
+    g.setColour (fill.withAlpha (0.22f)); g.strokePath (arc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (fill); g.strokePath (arc, ring);
+    juce::Path ptr; ptr.startNewSubPath (c.getCentre().getPointOnCircumference (br * 0.35f, ang)); ptr.lineTo (c.getCentre().getPointOnCircumference (br - 2.0f, ang));
+    g.setColour (col::text); g.strokePath (ptr, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
 {
     auto r = b.getLocalBounds().toFloat().reduced (0.5f);
     auto base = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : b.findColour (juce::TextButton::buttonColourId);
-    if (down) base = base.brighter (0.2f);
-    else if (over) base = base.brighter (0.08f);
-    g.setColour (base);
-    g.fillRoundedRectangle (r, 4.0f);
-    g.setColour (col::gridBar.withAlpha (0.7f));
-    g.drawRoundedRectangle (r, 4.0f, 1.0f);
+    if (down) base = base.brighter (0.15f);
+    else if (over) base = base.brighter (0.06f);
+    g.setGradientFill (juce::ColourGradient (base.brighter (0.07f), 0.0f, r.getY(), base.darker (0.07f), 0.0f, r.getBottom(), false));   // studio console look: soft top light
+    g.fillRoundedRectangle (r, 3.0f);
+    g.setColour (juce::Colours::black.withAlpha (0.35f));
+    g.drawRoundedRectangle (r, 3.0f, 1.0f);
+    g.setColour (juce::Colours::white.withAlpha (0.05f));
+    g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + 3.0f, r.getRight() - 3.0f);
+    if (b.getToggleState() && r.getHeight() > 12.0f) { g.setColour (col::accent); g.fillRoundedRectangle (r.getX() + 4.0f, r.getBottom() - 3.0f, r.getWidth() - 8.0f, 2.0f, 1.0f); }
 }
+
+void HHLookAndFeel::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, bool over, bool)
+{
+    auto r = b.getActiveArea().toFloat();
+    const bool front = b.isFrontTab();
+    g.setColour (front ? col::panel2 : over ? col::panel2.withAlpha (0.5f) : col::panel);
+    g.fillRect (r);
+    if (front) { g.setColour (col::accent); g.fillRect (r.removeFromBottom (2.0f).reduced (8.0f, 0.0f)); }
+    g.setColour (front ? col::text : col::dim);
+    g.setFont (juce::FontOptions (phoneUI ? 15.0f : 12.0f, juce::Font::bold));
+    g.drawText (b.getButtonText(), b.getTextArea(), juce::Justification::centred, false);
+}
+
+void HHLookAndFeel::drawTabbedButtonBarBackground (juce::TabbedButtonBar& bar, juce::Graphics& g)
+{
+    g.setColour (col::panel); g.fillRect (bar.getLocalBounds());
+    g.setColour (juce::Colours::black.withAlpha (0.35f)); g.drawHorizontalLine (bar.getHeight() - 1, 0.0f, (float) bar.getWidth());
+}
+
+void HHLookAndFeel::drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int, int) {}
 
 juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
 {
@@ -512,12 +548,16 @@ struct KeyCmdEditor : juce::Component
             b->onClick = [this, i] { waiting = (int) i; refresh(); grabKeyboardFocus(); };
             auto* r = resetBtns.add (new juce::TextButton ("Default")); r->setWantsKeyboardFocus (false); addAndMakeVisible (r);
             r->onClick = [this, i] { keys.erase (keyActions()[i].id); waiting = -1; refresh(); save(); };
+            auto* c = clearBtns.add (new juce::TextButton ("Clear")); c->setWantsKeyboardFocus (false); addAndMakeVisible (c);
+            c->onClick = [this, i] { keys[keyActions()[i].id] = juce::KeyPress(); waiting = -1; refresh(); save(); };
         }
         resetAll.setButtonText ("Reset all to default"); resetAll.setWantsKeyboardFocus (false); addAndMakeVisible (resetAll);
         resetAll.onClick = [this] { keys.clear(); waiting = -1; refresh(); save(); };
         addAndMakeVisible (status);
+        addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search commands...", col::dim);
+        search.onTextChange = [this] { resized(); };
         refresh();
-        setSize (460, 62 + 28 * (int) keyActions().size());
+        setSize (540, 92 + 28 * (int) keyActions().size());
     }
     void refresh()
     {
@@ -525,16 +565,22 @@ struct KeyCmdEditor : juce::Component
         {
             auto& a = keyActions()[i]; const auto it = keys.find (a.id);
             const auto k = it != keys.end() ? it->second : a.def;
-            setBtns[(int) i]->setButtonText (waiting == (int) i ? "Press a key... (Esc = cancel)" : k.getTextDescriptionWithIcons() + (it != keys.end() ? "  (yours)" : ""));
+            setBtns[(int) i]->setButtonText (waiting == (int) i ? "Press a key... (Esc = cancel)" : ! k.isValid() ? juce::String ("(no key) - click to set") : k.getTextDescriptionWithIcons() + (it != keys.end() ? "  (yours)" : ""));
         }
     }
     void resized() override
     {
         auto r = getLocalBounds().reduced (6);
+        search.setBounds (r.removeFromTop (30).reduced (2));
+        const auto q = search.getText().trim().toLowerCase();
         for (int i = 0; i < names.size(); ++i)
         {
+            const bool show = q.isEmpty() || names[i]->getText().toLowerCase().contains (q) || setBtns[i]->getButtonText().toLowerCase().contains (q);
+            for (auto* c : std::initializer_list<juce::Component*> { names[i], resetBtns[i], clearBtns[i], setBtns[i] }) c->setVisible (show);
+            if (! show) continue;
             auto row = r.removeFromTop (28);
-            names[i]->setBounds (row.removeFromLeft (170)); resetBtns[i]->setBounds (row.removeFromRight (72).reduced (2)); setBtns[i]->setBounds (row.reduced (2));
+            names[i]->setBounds (row.removeFromLeft (170)); resetBtns[i]->setBounds (row.removeFromRight (72).reduced (2));
+            clearBtns[i]->setBounds (row.removeFromRight (60).reduced (2)); setBtns[i]->setBounds (row.reduced (2));
         }
         resetAll.setBounds (r.removeFromTop (28).reduced (2));
         status.setBounds (r.removeFromTop (28));
@@ -554,7 +600,7 @@ struct KeyCmdEditor : juce::Component
         waiting = -1; refresh(); return true;
     }
     std::map<juce::String, juce::KeyPress>& keys; std::function<void()> save;
-    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns; juce::TextButton resetAll; juce::Label status; int waiting = -1;
+    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns, clearBtns; juce::TextButton resetAll; juce::TextEditor search; juce::Label status; int waiting = -1;
 };
 
 class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
@@ -586,7 +632,7 @@ public:
         }
         if (studio.settings->containsKey ("themeColour"))
             applyTheme (juce::Colour::fromString (studio.settings->getValue ("themeColour")), (float) studio.settings->getDoubleValue ("themeTint", 0.5), studio.settings->getBoolValue ("themeBlack", false));
-        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.35f, false);   // default look: HumHouse purple
+        if (! studio.settings->containsKey ("themeColour")) applyTheme (juce::Colour (0xff9b5cff), 0.15f, false);   // default look: HumHouse purple
         if (studio.settings->containsKey ("gradColours")) applyGradient (studio.settings->getValue ("gradColours"));
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         applySavedLayout (studio);
@@ -624,7 +670,12 @@ public:
         pianoSplit.onDrag = [this] (int y) {
             if (splitTotal <= 0) return;
             pianoMin = y > splitTop + splitTotal - 70;
-            if (! pianoMin) rackFrac = juce::jlimit (0.15f, 0.9f, (float) (y - splitTop) / (float) splitTotal);
+            if (build::rackBelow && ! phoneUI)   // rack under the Piano Roll: the split works upside down
+            {
+                pianoMin = y < splitTop + 70;
+                if (! pianoMin) rackFrac = juce::jlimit (0.15f, 0.9f, (float) (splitTop + splitTotal - y) / (float) splitTotal);
+            }
+            else if (! pianoMin) rackFrac = juce::jlimit (0.15f, 0.9f, (float) (y - splitTop) / (float) splitTotal);
             resized(); };
         pianoSplit.onToggle = [this] { pianoMin = ! pianoMin; resized(); };
 
@@ -733,6 +784,16 @@ public:
         hostKeyHandler = [this] (const juce::KeyPress& k) { return keyPressed (k); };
         for (auto& kv : juce::StringArray::fromTokens (studio.settings->getValue ("keymap"), ";", ""))
             if (kv.contains ("=")) userKeys[kv.upToFirstOccurrenceOf ("=", false, false)] = juce::KeyPress::createFromDescription (kv.fromFirstOccurrenceOf ("=", false, false));
+        relayoutMain = [sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp != nullptr) { sp->resized(); sp->repaint(); } };
+        lowMemoryMain = [sp = juce::Component::SafePointer<MainComponent> (this)]
+        {
+            if (sp == nullptr) return;
+            sp->studio.undo.trimTo (20);
+            sp->engine.releaseMemory();
+            if (sp->studio.dirty) { sp->engine.storePluginStates(); writeBackupAsync (sp->engine.project()); }
+        };
+        saveBackupMain = [sp = juce::Component::SafePointer<MainComponent> (this)]
+        { if (sp != nullptr && sp->studio.dirty) { sp->engine.storePluginStates(); writeBackup (sp->engine.project()); } };   // finish before iOS may kill us
         applyKeySet = [this] (const juce::String& set)   // Layout: the matching DAW's key commands (none of them clash with another command)
         {
             const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
@@ -844,6 +905,8 @@ public:
 
     ~MainComponent() override
     {
+        relayoutMain = nullptr; lowMemoryMain = nullptr; saveBackupMain = nullptr;
+        miniKb = nullptr;
         kbState.removeListener (&kbListen);
         rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
@@ -868,7 +931,7 @@ public:
         g.fillAll (col::bg);
         g.setColour (col::panel);
         g.fillRect (topBar);
-        drawLogo (g, logoArea.toFloat(), true);
+        if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
     }
 
     void resized() override
@@ -913,31 +976,52 @@ if (phoneUI)
 #if ! JUCE_MAC
         menuBar.setBounds (r.removeFromTop (22));
 #endif
-        topBar = r.removeFromTop (48);
-        auto t = topBar.reduced (8, 8);
-        logoArea = t.removeFromLeft (150);
-        for (auto* b : { &beatTab, &recordTab, &mixTab }) { b->setBounds (t.removeFromLeft (84)); t.removeFromLeft (4); }
-        t.removeFromLeft (16);
-        songBtn.setBounds (t.removeFromLeft (48)); t.removeFromLeft (4);
-        for (auto* b : { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setBounds (t.removeFromLeft (40)); t.removeFromLeft (4); }
-        t.removeFromLeft (8);
-        bpm.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
-        posLabel.setBounds (t.removeFromLeft (110)); t.removeFromLeft (6);
-        metroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
-        countBtn.setBounds (t.removeFromLeft (80)); t.removeFromLeft (4);
-        retroBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (4);
-        pianoBtn.setBounds (t.removeFromLeft (62)); t.removeFromLeft (8);
-        saveBtn.setBounds (t.removeFromRight (70)); t.removeFromRight (6);
-        browserBtn.setBounds (t.removeFromRight (120)); t.removeFromRight (8);
-        themeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
-        scopeBtn.setBounds (t.removeFromRight (64)); t.removeFromRight (6);
+        topBar = build::toolbarBottom ? r.removeFromBottom (build::toolbarH) : r.removeFromTop (build::toolbarH);
+        auto t = topBar.reduced (8, juce::jmax (4, (build::toolbarH - 32) / 2));
         mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
-        mixPopBtn.setBounds (t.removeFromRight (40)); t.removeFromRight (6);
         rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
-        rackPopBtn.setBounds (t.removeFromRight (52)); t.removeFromRight (6);
-        cpuLabel.setBounds (t.removeFromRight (86));
+        const std::pair<const char*, std::pair<juce::Component*, int>> tbItems[] {   // Layout > BUILD decides which show, on which side, in what order
+            { "logo", { nullptr, 150 } }, { "beat", { &beatTab, 84 } }, { "record", { &recordTab, 84 } }, { "mix", { &mixTab, 84 } }, { "song", { &songBtn, 48 } },
+            { "start", { &startBtn, 40 } }, { "play", { &playBtn, 40 } }, { "stop", { &stopBtn, 40 } }, { "rec", { &recBtn, 40 } }, { "bpm", { &bpm, 110 } },
+            { "pos", { &posLabel, 110 } }, { "metro", { &metroBtn, 62 } }, { "count", { &countBtn, 80 } }, { "retro", { &retroBtn, 62 } }, { "piano", { &pianoBtn, 62 } },
+            { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "scope", { &scopeBtn, 64 } },
+            { "theme", { &themeBtn, 64 } }, { "browser", { &browserBtn, 120 } }, { "save", { &saveBtn, 70 } } };
+        auto find = [&tbItems] (const juce::String& id) -> const std::pair<juce::Component*, int>* { for (auto& it : tbItems) if (id == it.first) return &it.second; return nullptr; };
+        for (auto& it : tbItems) if (it.second.first != nullptr) it.second.first->setVisible (false);
+        logoArea = {};
+        const auto halves = juce::StringArray::fromTokens (build::toolbar, "|", "");
+        std::set<juce::String> placed;
+        std::vector<std::pair<const std::pair<juce::Component*, int>*, juce::String>> leftItems, rightItems;
+        for (int h = 0; h < juce::jmin (2, halves.size()); ++h)
+            for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
+                if (auto* it = find (id); it != nullptr && placed.insert (id).second) (h == 0 ? leftItems : rightItems).push_back ({ it, id });
+        if (placed.count ("mixpop") == 0) rightItems.insert (rightItems.begin(), { find ("mixpop"), "mixpop" });   // the Mixer pop-out never disappears
+        auto place = [this] (const std::pair<juce::Component*, int>& it, juce::Rectangle<int> cell)
+        {
+            if (it.first == nullptr) logoArea = cell; else { it.first->setBounds (cell); it.first->setVisible (true); }
+        };
+        int need = 0;   // a narrow window squeezes every button a little before any of them drops off
+        for (auto& [it, id] : leftItems) need += it->second + 6;
+        for (auto& [it, id] : rightItems) need += it->second + 6;
+        const float f = need > 0 ? juce::jlimit (0.45f, 1.0f, (float) t.getWidth() / (float) need) : 1.0f;
+        auto w = [f] (int px) { return juce::roundToInt ((float) px * f); };
+        int rightW = 0;
+        for (auto& [it, id] : rightItems) rightW += w (it->second) + 6;
+        auto rt = t.removeFromRight (juce::jmin (rightW, t.getWidth()));
+        for (auto& [it, id] : leftItems)
+        {
+            const int gap = (id == "song" || id == "bpm") ? 10 : 4;
+            if (t.getWidth() < w (it->second)) break;   // no room left: it stays hidden instead of overlapping
+            place (*it, t.removeFromLeft (w (it->second))); t.removeFromLeft (gap);
         }
-        hintBar.setBounds (r.removeFromBottom (22));
+        for (auto& [it, id] : rightItems)
+        {
+            if (rt.getWidth() < w (it->second) && id != "mixpop") continue;
+            place (*it, rt.removeFromLeft (w (it->second))); rt.removeFromLeft (6);
+        }
+        }
+        hintBar.setVisible (build::hint || phoneUI);
+        if (build::hint || phoneUI) hintBar.setBounds (r.removeFromBottom (22));
         if (kbInset != nullptr)
         {
             kbInset->setVisible (pianoBtn.getToggleState());
@@ -950,12 +1034,19 @@ if (phoneUI)
             browserTab.setButtonText (showBrowser ? "<" : ">");
             browserTab.setBounds (tab.withSizeKeepingCentre (32, juce::jmin (140, tab.getHeight())));
         }
-        if (here (browser)) { browser->setVisible (showBrowser); if (showBrowser) browser->setBounds (r.removeFromLeft (phoneUI ? juce::jmin (260, r.getWidth() * 36 / 100) : 260)); }
+        if (here (browser))
+        {
+            browser->setVisible (showBrowser);
+            if (showBrowser && phoneUI) browser->setBounds (r.removeFromLeft (juce::jmin (260, r.getWidth() * 36 / 100)));
+            else if (showBrowser) { const int bw = juce::jlimit (160, juce::jmax (160, r.getWidth() / 2), build::browserW); browser->setBounds (build::browserRight ? r.removeFromRight (bw) : r.removeFromLeft (bw)); }
+        }
+        const bool dockMix = build::mixDock && ! phoneUI && view != 2 && here (mixer) && r.getHeight() > 300;
         const bool rackHere = here (rack), pianoHere = here (piano);
         if (rackHere) rack->setVisible (view == 0 && ! (phoneUI && rackHidden && pianoHere));
         if (pianoHere) piano->setVisible (view == 0);
         if (here (playlist)) playlist->setVisible (view == 1);
-        if (here (mixer)) mixer->setVisible (view == 2);
+        if (here (mixer)) mixer->setVisible (view == 2 || dockMix);
+        if (dockMix) mixer->setBounds (r.removeFromBottom (juce::jmin (build::mixH, r.getHeight() / 2)));
         pianoSplit.setVisible (false);
         if (view == 0)
         {
@@ -965,8 +1056,16 @@ if (phoneUI)
                 splitTop = r.getY(); splitTotal = r.getHeight();
                 const int splitH = phoneUI ? 34 : 22;
                 const int rh = pianoMin ? splitTotal - splitH : juce::jlimit (80, juce::jmax (80, splitTotal - 140), (int) (splitTotal * rackFrac));
-                rack->setBounds (r.removeFromTop (rh));
-                pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (splitH)); pianoSplit.repaint();
+                if (build::rackBelow && ! phoneUI)
+                {
+                    rack->setBounds (r.removeFromBottom (rh));
+                    pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromBottom (splitH)); pianoSplit.repaint();
+                }
+                else
+                {
+                    rack->setBounds (r.removeFromTop (rh));
+                    pianoSplit.minimized = pianoMin; pianoSplit.setVisible (true); pianoSplit.setBounds (r.removeFromTop (splitH)); pianoSplit.repaint();
+                }
                 piano->setVisible (! pianoMin); piano->setBounds (r);
             }
             else if (rackHere) rack->setBounds (r);
@@ -1200,7 +1299,8 @@ if (phoneUI)
             }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
-            m.addItem (4712, "Layout... (Logic, Pro Tools, Reaper looks + make your own)");
+            m.addItem (4712, "Layout...");
+            m.addItem (4713, "Mini keyboard (pop-out)", true, miniKb != nullptr);
             {
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -1228,7 +1328,7 @@ if (phoneUI)
                #endif
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
-            m.addItem (4711, "Key commands... (make your own, reset to default)");
+            m.addItem (4711, "Key commands...");
             m.addSeparator();
             add (mShortcuts, "Shortcuts", "Cmd/Ctrl+U", true, shortcutsWin != nullptr && shortcutsWin->isVisible());
         }
@@ -1241,7 +1341,7 @@ if (phoneUI)
 
     void menuItemSelected (int id, int) override
     {
-        if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= mHistory && id < mHistory + 1000) { studio.jumpHistory (id - mHistory); return; }   // 4711+ are Options items
         if (id >= mMidiDevice && id < mMidiDevice + 10 && id - mMidiDevice < midiDevs.size())
         {
             const auto& d = midiDevs[id - mMidiDevice];
@@ -1347,6 +1447,7 @@ if (phoneUI)
             case mTheme: showThemeDialog (studio); break;
             case 4711: showKeyCommands(); break;
             case 4712: showLayoutDialog (studio); break;
+            case 4713: toggleMiniKeyboard(); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
@@ -1397,6 +1498,29 @@ private:
     juce::TextButton retroBtn, pianoBtn;
     juce::MidiKeyboardState kbState;
     std::unique_ptr<juce::MidiKeyboardComponent> kbInset;
+    struct MiniKb : juce::DocumentWindow   // Options > Mini keyboard: a small floating keyboard; click it, then play with the mouse or your computer keys
+    {
+        MiniKb (juce::MidiKeyboardState& st) : juce::DocumentWindow ("Mini keyboard", col::panel, juce::DocumentWindow::closeButton)
+        {
+            auto* k = new juce::MidiKeyboardComponent (st, juce::MidiKeyboardComponent::horizontalKeyboard);
+            k->setAvailableRange (24, 108); k->setLowestVisibleKey (48); k->setKeyWidth (24.0f); k->setOctaveForMiddleC (4);
+            k->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
+            k->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
+            setContentOwned (k, false);
+            setUsingNativeTitleBar (true); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
+            centreWithSize (640, 120); setAlwaysOnTop (true); setVisible (true);
+            k->grabKeyboardFocus();
+        }
+        void closeButtonPressed() override { if (onClose) onClose(); }
+        std::function<void()> onClose;
+    };
+    std::unique_ptr<MiniKb> miniKb;
+    void toggleMiniKeyboard()
+    {
+        if (miniKb != nullptr) { miniKb = nullptr; return; }
+        miniKb = std::make_unique<MiniKb> (kbState);
+        miniKb->onClose = [sp = juce::Component::SafePointer<MainComponent> (this)] { juce::MessageManager::callAsync ([sp] { if (sp != nullptr) sp->miniKb = nullptr; }); };
+    }
     struct KbListen : juce::MidiKeyboardState::Listener
     {
         explicit KbListen (MainComponent& o) : m (o) {}
