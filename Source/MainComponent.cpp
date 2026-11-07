@@ -995,6 +995,7 @@ if (phoneUI)
         for (int h = 0; h < juce::jmin (2, halves.size()); ++h)
             for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
                 if (auto* it = find (id); it != nullptr && placed.insert (id).second) (h == 0 ? leftItems : rightItems).push_back ({ it, id });
+        if (placed.count ("mixpop") == 0) rightItems.insert (rightItems.begin(), { find ("mixpop"), "mixpop" });   // the Mixer pop-out never disappears
         auto place = [this] (const std::pair<juce::Component*, int>& it, juce::Rectangle<int> cell)
         {
             if (it.first == nullptr) logoArea = cell; else { it.first->setBounds (cell); it.first->setVisible (true); }
@@ -1002,7 +1003,7 @@ if (phoneUI)
         int need = 0;   // a narrow window squeezes every button a little before any of them drops off
         for (auto& [it, id] : leftItems) need += it->second + 6;
         for (auto& [it, id] : rightItems) need += it->second + 6;
-        const float f = need > 0 ? juce::jlimit (0.85f, 1.0f, (float) t.getWidth() / (float) need) : 1.0f;
+        const float f = need > 0 ? juce::jlimit (0.45f, 1.0f, (float) t.getWidth() / (float) need) : 1.0f;
         auto w = [f] (int px) { return juce::roundToInt ((float) px * f); };
         int rightW = 0;
         for (auto& [it, id] : rightItems) rightW += w (it->second) + 6;
@@ -1015,7 +1016,7 @@ if (phoneUI)
         }
         for (auto& [it, id] : rightItems)
         {
-            if (rt.getWidth() < w (it->second)) break;
+            if (rt.getWidth() < w (it->second) && id != "mixpop") continue;
             place (*it, rt.removeFromLeft (w (it->second))); rt.removeFromLeft (6);
         }
         }
