@@ -34,6 +34,8 @@ public:
     {
         while ((int) states.size() > juce::jmax (2, keep) && index > 0)
         { bytes -= (size_t) states.front().first.getNumBytesAsUTF8(); states.erase (states.begin()); --index; }
+        while ((int) states.size() > juce::jmax (2, keep) && index + 1 < (int) states.size())
+        { bytes -= (size_t) states.back().first.getNumBytesAsUTF8(); states.pop_back(); }
     }
 private:
     std::vector<std::pair<juce::String, juce::String>> states; // xml, description

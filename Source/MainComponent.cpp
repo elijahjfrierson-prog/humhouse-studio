@@ -793,7 +793,7 @@ public:
             if (sp->studio.dirty) { sp->engine.storePluginStates(); writeBackupAsync (sp->engine.project()); }
         };
         saveBackupMain = [sp = juce::Component::SafePointer<MainComponent> (this)]
-        { if (sp != nullptr && sp->studio.dirty) { sp->engine.storePluginStates(); writeBackupAsync (sp->engine.project()); } };
+        { if (sp != nullptr && sp->studio.dirty) { sp->engine.storePluginStates(); writeBackup (sp->engine.project()); } };   // finish before iOS may kill us
         applyKeySet = [this] (const juce::String& set)   // Layout: the matching DAW's key commands (none of them clash with another command)
         {
             const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
@@ -1340,7 +1340,7 @@ if (phoneUI)
 
     void menuItemSelected (int id, int) override
     {
-        if (id >= mHistory) { studio.jumpHistory (id - mHistory); return; }
+        if (id >= mHistory && id < mHistory + 1000) { studio.jumpHistory (id - mHistory); return; }   // 4711+ are Options items
         if (id >= mMidiDevice && id < mMidiDevice + 10 && id - mMidiDevice < midiDevs.size())
         {
             const auto& d = midiDevs[id - mMidiDevice];
