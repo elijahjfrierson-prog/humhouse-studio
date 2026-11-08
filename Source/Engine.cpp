@@ -1292,9 +1292,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     };
     bool anySolo = false;
     for (auto& c : proj.channels) anySolo |= c.solo;
-    // each pattern's length once per segment, not once per channel (it walks every note)
-    patLen.resize (proj.patterns.size());
-    for (size_t i = 0; i < proj.patterns.size(); ++i) patLen[i] = proj.patterns[i].lengthBeats();
+    // each used pattern's length once per segment, not once per channel (it walks every note)
+    patLen.assign (proj.patterns.size(), -1.0);   // measured on first use, so unused patterns cost nothing
+    auto lenOf = [this] (int i) { auto& L = patLen[(size_t) i]; if (L < 0.0) L = proj.patterns[(size_t) i].lengthBeats(); return L; };
 
     auto emit = [&] (size_t ci, const Note& note, double absStart, double startSec = 0.0)
     {
@@ -1344,7 +1344,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             auto& pat = proj.patterns[(size_t) proj.currentPattern];
             auto it = pat.notes.find (ch.id);
             if (it == pat.notes.end()) continue;
-            const double plen = patLen[(size_t) proj.currentPattern];
+            const double plen = lenOf (proj.currentPattern);
             for (auto& note : it->second)
             {
                 if (note.muted) continue;
@@ -1415,7 +1415,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 auto& pat = proj.patterns[(size_t) clip.patternIndex];
                 auto it = pat.notes.find (ch.id);
                 if (it == pat.notes.end()) continue;
-                const double plen = patLen[(size_t) clip.patternIndex];
+                const double plen = lenOf (clip.patternIndex);
                 const double base = clip.start - std::fmod (juce::jmax (0.0, clip.patOffset), plen);   // a sliced clip starts mid-pattern
                 const int r0 = std::max (0, (int) std::floor ((b0 - base) / plen) - 1);
                 const int r1 = (int) std::floor ((b1 - base) / plen) + 1;
