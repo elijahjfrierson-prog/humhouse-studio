@@ -28,6 +28,7 @@ set(HHS_CORE_SOURCES
     Source/Effects.cpp
     Source/StudioEffects.cpp
     Source/Engine.cpp
+    Source/PluginSandbox.cpp
     Source/ProjectIO.cpp
     Source/ProjectImport.cpp
     Source/DrumSynth.cpp
@@ -155,4 +156,11 @@ target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_ST
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
+endif()
+
+if(TARGET HHSTests AND MSVC)
+    # symbols for readable crash backtraces in CI
+    target_compile_options(HHSTests PRIVATE /Zi)
+    # the test main holds many Engines on its stack; Windows gives only 1 MB by default
+    target_link_options(HHSTests PRIVATE /DEBUG /STACK:67108864)
 endif()

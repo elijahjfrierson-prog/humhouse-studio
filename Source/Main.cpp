@@ -1,3 +1,4 @@
+#include "PluginSandbox.h"
 #include "UI.h"
 
 #if HHS_LICENSED
@@ -26,6 +27,10 @@ struct WelcomePanel : public juce::Component
             "  - Record takes with punch-in, loop recording and instant playback of earlier takes\n"
             "  - AutoPitch (key / scale, speed, Hard Tune), Studio Vocal smoother, de-ess, Noise Gate\n"
             "  - Mono or stereo input per track, works with USB mics\n"
+            "\nZENITH AUDIO ENGINE\n"
+            "  - Lock-free and multicore: edits never pause playback\n"
+            "  - Render-ahead playback, sample-exact automation, delay compensation\n"
+            "  - Crash-protected plug-ins: a crashing plug-in can't take the song down\n"
             "\nMIX\n"
             "  - Mixer with routing wires, sends, sidechain Duck, FX chains and presets\n"
             "  - Studio EQ, Compressor, Limiter, Reverb, Delay, Saturator and more - 0 latency\n"
@@ -89,6 +94,13 @@ public:
             quit();
             return;
         }
+       #if ! JUCE_IOS
+        if (hhs::isPluginHostChild (commandLine))   // crash-protected plug-in helper: no window, runs until the host closes it
+        {
+            if (! hhs::runPluginHostChild (commandLine)) quit();
+            return;
+        }
+       #endif
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
        #if JUCE_IOS   // phone / tablet: scale so the full top bar (~1600 px wide) fits the screen
         if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())

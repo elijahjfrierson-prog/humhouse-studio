@@ -1,3 +1,4 @@
+#include "../Source/PluginSandbox.h"
 #include <cstdlib>
 #include <set>
 #include <thread>
@@ -307,8 +308,27 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
     return r;
 }
 
-int main()
+int main (int argc, char** argv)
 {
+    // CI crash triage: print where a crash happened instead of a bare SEGFAULT
+    juce::SystemStats::setApplicationCrashHandler ([] (void*)
+    {
+        std::fprintf (stderr, "\nCRASH backtrace:\n%s\n", juce::SystemStats::getStackBacktrace().toRawUTF8());
+        std::fflush (stderr);
+        std::_Exit (3);
+    });
+   #if ! JUCE_IOS
+    {   // this test binary doubles as the crash-protected plug-in helper (the sandbox launches its own executable)
+        juce::String cmd;
+        for (int i = 1; i < argc; ++i) cmd << argv[i] << " ";
+        if (isPluginHostChild (cmd))
+        {
+            juce::ScopedJuceInitialiser_GUI gui;
+            if (runPluginHostChild (cmd)) juce::MessageManager::getInstance()->runDispatchLoop();
+            return 0;
+        }
+    }
+   #endif
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
     // phone crash repro: 5-minute beat + vocal + 2 adlibs, 60 FX added one at a time while audio runs, undo/redo, save, reopen
     // engine bench: a 40-track session playing in real time while the screen sends 400 edits; how long each edit blocks the audio
@@ -512,6 +532,48 @@ int main()
         return 0;
     }
     juce::ScopedJuceInitialiser_GUI init;
+   #if ! JUCE_IOS
+    // crash-protected plug-ins: HHS_SANDBOX_VST3=/path/plugin.vst3 runs it in the helper process, compares with in-process,
+    // then kills the helper mid-song: the mix must keep going (dry) without hanging
+    if (const char* vst = std::getenv ("HHS_SANDBOX_VST3"))
+    {
+        juce::AudioPluginFormatManager fm; fm.addDefaultFormats();
+        juce::OwnedArray<juce::PluginDescription> found;
+        for (auto* f : fm.getFormats()) if (f->getName() == "VST3") f->findAllTypesForFile (found, vst);
+        if (found.isEmpty()) { std::printf ("sandbox: no plug-in in %s\n", vst); return 1; }
+        juce::String err;
+        auto sb = createSandboxedPlugin (*found[0], 48000, 512, err);
+        auto local = fm.createPluginInstance (*found[0], 48000, 512, err);
+        if (! sb || ! local) { std::printf ("sandbox: load failed: %s\n", err.toRawUTF8()); return 1; }
+        local->enableAllBuses(); local->prepareToPlay (48000, 512);
+        juce::AudioBuffer<float> a1 (2, 512), a2 (2, 512); juce::MidiBuffer mid;
+        double worstMs = 0, diff = 0, ph = 0, ph2 = 0;
+        for (int k = 0; k < 400; ++k)
+        {
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph); ph += 0.05; a1.setSample (0, i, v); a1.setSample (1, i, v); }
+            for (int i = 0; i < 512; ++i) { const float v = 0.3f * (float) std::sin (ph2); ph2 += 0.05; a2.setSample (0, i, v); a2.setSample (1, i, v); }
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            sb->processBlock (a1, mid);
+            worstMs = std::max (worstMs, juce::Time::getMillisecondCounterHiRes() - t0);
+            local->processBlock (a2, mid);
+            if (k > 50) for (int i = 0; i < 512; ++i) diff = std::max (diff, (double) std::abs (a1.getSample (0, i) - a2.getSample (0, i)));
+        }
+        std::printf ("sandbox %s: max diff vs in-process %.6f, worst round trip %.2f ms\n", found[0]->name.toRawUTF8(), diff, worstMs);
+        juce::MemoryBlock st; sb->getStateInformation (st); sb->setStateInformation (st.getData(), (int) st.getSize());
+        std::printf ("sandbox state: %d bytes\n", (int) st.getSize());
+        std::system ("pkill -9 -f hhs-plugin-host");
+        double afterMs = 0;
+        for (int k = 0; k < 300; ++k)
+        {
+            for (int i = 0; i < 512; ++i) a1.setSample (0, i, 0.25f);
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            sb->processBlock (a1, mid);
+            afterMs = std::max (afterMs, juce::Time::getMillisecondCounterHiRes() - t0);
+        }
+        std::printf ("sandbox after helper crash: crashed=%d, worst block %.2f ms, passes dry %.2f\n", (int) sandboxCrashed (*sb), afterMs, a1.getSample (0, 100));
+        return sandboxCrashed (*sb) && diff < 1.0e-4 ? 0 : 1;
+    }
+   #endif
     {   // Glitch Gate pads: each one is audible, works with the transport stopped, and doesn't click
         auto probe = hhs::createBuiltinEffect ("glitch");
         const int numFx = (int) probe->params()[(size_t) probe->paramIndex ("fx")].choices.size();
