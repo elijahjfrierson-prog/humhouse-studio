@@ -1923,7 +1923,10 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
-        if (isTypingNoteKey (k)) return false;
+        // in the Playlist the tool keys (E select, P/B paint, D delete, T mute, C slice) win over the computer keyboard piano
+        const bool toolKey = ! k.getModifiers().isAnyModifierKeyDown()
+                             && juce::String ("epbdtc").containsChar (juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode()));
+        if (isTypingNoteKey (k) && ! toolKey) return false;
         const int cmd = juce::ModifierKeys::commandModifier;
         if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
         {
@@ -1989,7 +1992,6 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
-            if (timeSelB > timeSelA && timeSelA <= clipLo + 1.0e-6 && timeSelB > clipLo && clipLo - timeSelA < s.p().beatsPerBar) clipLo = timeSelA;   // a time selection starting in the same bar keeps the gap before the first clip; never more than a bar, so a stale selection can't push the paste bars past the playhead
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
