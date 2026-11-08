@@ -1,4 +1,5 @@
 #include "KitEngine.h"
+#include "../FastMath.h"
 
 #if __has_include(<BundledKitData.h>)
  #include <BundledKitData.h>
@@ -1006,13 +1007,13 @@ namespace hhx
                             for (int b = 0; b < 2; ++b)
                             {
                                 const float x = band[b][ch];
-                                band[b][ch] += (std::tanh (x * 1.8f) / 1.8f - x) * glowAmt;
+                                band[b][ch] += (hhs::fastTanh (x * 1.8f) / 1.8f - x) * glowAmt;
                             }
                             break;
                         case GlowTransformer:
                         {
                             const float x = band[1][ch];
-                            band[1][ch] += (std::tanh (x * 2.4f) / 2.4f - x) * glowAmt;
+                            band[1][ch] += (hhs::fastTanh (x * 2.4f) / 2.4f - x) * glowAmt;
                             band[2][ch] *= 1.0f + 0.05f * glowAmt;
                             break;
                         }
@@ -1110,12 +1111,12 @@ namespace hhx
             const float amt   = juce::jlimit (0.0f, 1.0f,
                                               driveAmt + (voicing == MixVintage ? 0.2f : 0.0f));
             const float pre   = 1.0f + 3.0f * amt;
-            const float post  = 1.0f / std::tanh (pre * 0.7f) * 0.7f;
+            const float post  = 1.0f / hhs::fastTanh (pre * 0.7f) * 0.7f;
             for (int i = 0; i < numSamples; ++i)
             {
-                outL[i] = outL[i] * (1.0f - amt) + std::tanh (outL[i] * pre) * post * amt;
+                outL[i] = outL[i] * (1.0f - amt) + hhs::fastTanh (outL[i] * pre) * post * amt;
                 if (outR != nullptr)
-                    outR[i] = outR[i] * (1.0f - amt) + std::tanh (outR[i] * pre) * post * amt;
+                    outR[i] = outR[i] * (1.0f - amt) + hhs::fastTanh (outR[i] * pre) * post * amt;
             }
         }
 
@@ -1729,7 +1730,7 @@ namespace hhx
             for (int i = 0; i < numSamples; ++i)
             {
                 const float mono = 0.5f * (outL[i] + (outR != nullptr ? outR[i] : outL[i]));
-                const float crushed = std::tanh (mono * crushDrive) * 0.35f;
+                const float crushed = hhs::fastTanh (mono * crushDrive) * 0.35f;
                 outL[i] = outL[i] * (1.0f - 0.5f * crushAmt) + crushed * crushAmt;
                 if (outR != nullptr)
                     outR[i] = outR[i] * (1.0f - 0.5f * crushAmt) + crushed * crushAmt;

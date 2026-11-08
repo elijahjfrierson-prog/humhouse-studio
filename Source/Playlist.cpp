@@ -110,6 +110,31 @@ static void insertLane (Project& p, int at)
     p.lanes.insert (p.lanes.begin() + at, l);
 }
 
+// a pattern moved onto a routed track: its channels still on the Master adopt the track's insert (channels already routed keep theirs)
+static void adoptLaneRoute (Project& p, const Clip& c)
+{
+    if (c.patternIndex < 0 || c.patternIndex >= (int) p.patterns.size() || c.lane < 0 || c.lane >= (int) p.lanes.size()) return;
+    const int t = p.lanes[(size_t) c.lane].mixerTrack;
+    if (t <= 0 || t >= (int) p.mixer.size()) return;
+    const auto& pat = p.patterns[(size_t) c.patternIndex];
+    for (auto& ch : p.channels)
+        if (ch.mixerTrack == 0 && ch.type != ChannelType::Drummer)
+            if (auto it = pat.notes.find (ch.id); it != pat.notes.end() && ! it->second.empty()) ch.mixerTrack = t;
+}
+
+// Logic: a copy of the track right under it (same insert, FX and settings); with audio it also copies its clips
+static void duplicateLane (Project& p, int i, bool withClips)
+{
+    if (i < 0 || i >= (int) p.lanes.size()) return;
+    Lane l = p.lanes[(size_t) i]; l.name += " copy"; l.armed = false; l.compLane = -1;
+    std::vector<Clip> copies;
+    if (withClips) for (auto& c : p.clips) if (c.lane == i && ! c.hidden) { Clip x = c; x.uid = p.newUid(); x.selected = false; x.group = 0; x.lane = i + 1; copies.push_back (x); }
+    for (auto& c : p.clips) if (c.lane > i) ++c.lane;
+    for (auto& o : p.lanes) if (o.compLane > i) ++o.compLane;
+    p.lanes.insert (p.lanes.begin() + i + 1, l);
+    for (auto& c : copies) p.clips.push_back (c);
+}
+
 // Pro Tools style: lay a clip over a track, cutting what's under it (the rest keeps playing, 10 ms crossfades)
 static void placeOver (Project& p, Clip piece, int lane)
 {
@@ -408,7 +433,7 @@ private:
 class HumToneView : public LiveClipEditor
 {
 public:
-    HumToneView (Studio& st, int clipUid) : LiveClipEditor (st, clipUid, "HumTone")
+    HumToneView (Studio& st, int clipUid) : LiveClipEditor (st, clipUid, "Perfect Pitch")
     {
         setupButton (snapBtn, "SNAP ALL", "Centre every note on its nearest semitone");
         setupButton (resetBtn, "RESET", "Put every note back where it was sung");
@@ -489,6 +514,29 @@ private:
     int lo = 48, hi = 72, drag = -1; float dragFrom = 0;
     juce::TextButton snapBtn, resetBtn;
 };
+
+// Perfect Pitch SNAP on every selected audio clip at once (or just this one when it isn't selected)
+static void perfectPitchSnapAll (Studio& s, int clickedUid)
+{
+    std::vector<Clip> todo;
+    bool clickedSel = false;
+    for (auto& c : s.p().clips) if (c.uid == clickedUid) clickedSel = c.selected;
+    for (auto& c : s.p().clips)
+        if (c.isAudio() && ! c.hidden && (clickedSel ? c.selected : c.uid == clickedUid)) todo.push_back (c);
+    int done = 0;
+    for (auto& clip : todo)
+    {
+        juce::AudioBuffer<float> audio; double sr = 44100;
+        readClipAudio (clip, s.p().bpm, audio, sr);
+        if (audio.getNumSamples() == 0) continue;
+        auto notes = toneNotes (toneCurve (audio, sr));
+        for (auto& t : notes) t.target = std::round (t.sung);
+        const auto out = toneRender (audio, sr, notes);
+        const auto f = s.p().recordingsFolder().getChildFile ("Perfect Pitch").getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_perfect pitch", ".wav");
+        if (writeClipAudio (f, out, sr)) { useRendered (s, clip.uid, f, "Perfect Pitch"); ++done; }
+    }
+    if (auto& ro = Studio::readout()) ro ("Perfect Pitch snapped " + juce::String (done) + (done == 1 ? " clip" : " clips"));
+}
 
 // HumLab: our own Edison. Drag to select (nothing selected = whole clip), every edit lands on the clip while the song plays
 class HumLabView : public LiveClipEditor
@@ -1161,7 +1209,15 @@ struct LaneHeader : public juce::Component
             for (auto& l : s.p().lanes) comping |= l.compLane == index;
             if (comping) m.addItem (10, "Exit comp (close the take lanes, keep the comp)");
         }
+        if (index < (int) s.p().lanes.size())
+        {   // Logic: the track itself is routed, so every clip on it (and in templates) follows the route
+            juce::PopupMenu rm; const auto& mx = s.p().mixer; const int cur = s.p().lanes[(size_t) index].mixerTrack;
+            for (int t = 0; t < (int) mx.size() && t < 199; ++t)
+                rm.addItem (200 + t, t == 0 ? juce::String ("Master") : "Insert " + juce::String (t) + (mx[(size_t) t].name.isNotEmpty() ? " - " + mx[(size_t) t].name : juce::String()), true, t == cur);
+            m.addSubMenu ("Route to mixer", rm);
+        }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
+        m.addItem (11, "Duplicate track"); m.addItem (12, "Duplicate track with audio");
        #if ! HHS_LICENSED
         m.addItem (7, "HumHouse Drummer (turn this track into drums)");
        #endif
@@ -1187,6 +1243,11 @@ struct LaneHeader : public juce::Component
                 const Clip* best = nullptr;
                 for (auto& c : p.clips) if (c.lane == i && c.hidden && isSurprise (c) && (best == nullptr || c.uid > best->uid)) best = &c;
                 if (best != nullptr) { const Clip c = *best; placeOver (p, c, i); } });
+            else if (r >= 200 && r < 400) { const int t = r - 200; s.edit ("Route track", [i, t] (Project& p) {
+                if (i >= (int) p.lanes.size() || t >= (int) p.mixer.size()) return;
+                p.lanes[(size_t) i].mixerTrack = t;
+                for (auto& c : p.clips) if (c.lane == i) { if (c.isAudio()) c.mixerTrack = -1; else adoptLaneRoute (p, c); } }); }
+            else if (r == 11 || r == 12) { s.selectedLanes.clear(); const bool audio = r == 12; s.edit (audio ? "Duplicate track with audio" : "Duplicate track", [i, audio] (Project& p) { duplicateLane (p, i, audio); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
             else if (r == 7)
@@ -1754,13 +1815,14 @@ public:
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
             if (stretchDrag && dragOrig.size() == p.clips.size()) { stretchClips(); drag = Drag::None; dragClip = -1; stretchDrag = false; repaint(); return; }
             s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
-                // routing follows the recording: a moved audio clip keeps playing through the insert it came from
+                // Logic: a clip moved onto another track plays through that track's route
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
                     for (size_t i = 0; i < p.clips.size(); ++i)
                     {
                         auto& c = p.clips[i];
-                        if (c.isAudio() && c.lane != dragOrig[i].lane && c.mixerTrack < 0 && dragOrig[i].lane < (int) p.lanes.size())
-                            c.mixerTrack = p.lanes[(size_t) dragOrig[i].lane].mixerTrack;
+                        if (c.lane == dragOrig[i].lane || c.lane < 0 || c.lane >= (int) p.lanes.size()) continue;
+                        if (c.isAudio()) c.mixerTrack = -1;
+                        else adoptLaneRoute (p, c);
                     }
                 autoCrossfade (p);
             });
@@ -1861,7 +1923,10 @@ public:
 
     bool keyPressed (const juce::KeyPress& k) override
     {
-        if (isTypingNoteKey (k)) return false;
+        // in the Playlist the tool keys (E select, P/B paint, D delete, T mute, C slice) win over the computer keyboard piano
+        const bool toolKey = ! k.getModifiers().isAnyModifierKeyDown()
+                             && juce::String ("epbdtc").containsChar (juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode()));
+        if (isTypingNoteKey (k) && ! toolKey) return false;
         const int cmd = juce::ModifierKeys::commandModifier;
         if (k == juce::KeyPress::deleteKey || k == juce::KeyPress::backspaceKey)
         {
@@ -1927,7 +1992,6 @@ public:
         {
             clipboard.clear(); clipLo = 1e9;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
-            if (timeSelB > timeSelA && timeSelA <= clipLo + 1.0e-6 && timeSelB > clipLo && clipLo - timeSelA < s.p().beatsPerBar) clipLo = timeSelA;   // a time selection starting in the same bar keeps the gap before the first clip; never more than a bar, so a stale selection can't push the paste bars past the playhead
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
@@ -2508,7 +2572,7 @@ private:
         if (c == nullptr || ! c->isAudio()) return;
         if (a == "humlab") { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
         if (a == "humtime") { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }
-        if (a == "humtone") { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+        if (a == "humtone") { new ToolWindow ("Perfect Pitch - pitch of each note", new HumToneView (s, uid)); return; }
         juce::AudioBuffer<float> b; double sr = 0;
         if (! readClipAudio (*c, s.p().bpm, b, sr)) return;
         if (a == "normalize")
@@ -2796,7 +2860,8 @@ private:
         m.addItem (5, "Split by channel (one clip per instrument)", clip.patternIndex >= 0);
         m.addItem (8, "Select all uses of this pattern", clip.patternIndex >= 0);
         m.addItem (15, "Consolidate (render selected clips to one audio clip)", ! clip.isAuto());
-        m.addItem (17, "HumTone: edit the pitch of each note...", clip.isAudio());
+        m.addItem (17, "Perfect Pitch: edit the pitch of each note...", clip.isAudio());
+        m.addItem (917, "Perfect Pitch: SNAP all selected clips", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
         m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
         {
@@ -2873,7 +2938,8 @@ private:
                 return;
             }
             if (r == 15) { consolidate (uid); return; }
-            if (r == 17) { new ToolWindow ("HumTone - pitch of each note", new HumToneView (s, uid)); return; }
+            if (r == 17) { new ToolWindow ("Perfect Pitch - pitch of each note", new HumToneView (s, uid)); return; }
+            if (r == 917) { perfectPitchSnapAll (s, uid); return; }
             if (r == 18) { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
             if (r == 19) { clipAction = [this] (int u, const juce::String& a) { clipSettingAction (u, a); }; openClipEditor (s, uid); return; }
             if (r == 344) { new ToolWindow ("HumTime - warp hits to the grid", new HumTimeView (s, uid, 0.25, 1.0f)); return; }

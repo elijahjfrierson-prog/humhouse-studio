@@ -1,5 +1,6 @@
 // Studio-grade console set: own DSP modelled on classic stock-plugin workflows.
 #include "Effects.h"
+#include "FastMath.h"
 #include <cmath>
 #include <complex>
 #include <string>
@@ -7,7 +8,7 @@
 namespace hhs
 {
 static inline float dB (float d) { return std::pow (10.0f, d / 20.0f); }
-static inline float toDb (float g) { return 20.0f * std::log10 (std::max (g, 1.0e-7f)); }
+static inline float toDb (float g) { return 20.0f * hhs::fastLog10 (std::max (g, 1.0e-7f)); }
 
 // shared feed-forward compressor core (soft knee, peak/RMS, sidechain HPF)
 struct CompCore
@@ -292,7 +293,7 @@ public:
         core.run (b, n, -18.0f, ratios[ri], ri == 4 ? 0.0f : 2.0f, att, rel, false, 20, 0, p (5));
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         const float drive = ri == 4 ? 1.6f : 1.15f, og = dB (p (1));
-        for (int i = 0; i < n; ++i) { l[i] = std::tanh (l[i] * drive) / drive * og; r[i] = std::tanh (r[i] * drive) / drive * og; }
+        for (int i = 0; i < n; ++i) { l[i] = hhs::fastTanh (l[i] * drive) / drive * og; r[i] = hhs::fastTanh (r[i] * drive) / drive * og; }
     }
 private:
     CompCore core;
@@ -436,7 +437,7 @@ public:
             {
                 const float lvl = std::max (std::abs (band[k][0]), std::abs (band[k][1])) * pre[k];
                 env[k] = lvl > env[k] ? atk[k] * env[k] + (1 - atk[k]) * lvl : rel[k] * env[k] + (1 - rel[k]) * lvl;
-                const float over = juce::Decibels::gainToDecibels (env[k], -120.0f) - thr[k];
+                const float over = 20.0f * hhs::fastLog10 (std::max (env[k], 1.0e-6f)) - thr[k];
                 const float gr = over <= -3.0f ? 0.0f : over < 3.0f ? slope[k] * (over + 3.0f) * (over + 3.0f) / 12.0f : slope[k] * over;   // 6 dB soft knee
                 const float gk = pre[k] * post[k] * dB (-gr);
                 y[0] += band[k][0] * gk; y[1] += band[k][1] * gk;
@@ -444,7 +445,7 @@ public:
             for (auto& v : y)
             {
                 v *= in;
-                if (sat > 0) v = (1.0f - sat) * v + sat * std::tanh (v);
+                if (sat > 0) v = (1.0f - sat) * v + sat * hhs::fastTanh (v);
             }
             const float a = std::max ({ std::abs (y[0]), std::abs (y[1]), std::abs (0.5f * (y[0] + pl)) * 1.05f, std::abs (0.5f * (y[1] + pr)) * 1.05f });
             pl = y[0]; pr = y[1];
@@ -503,8 +504,8 @@ private:
     static double logCosh (double x) { const double a = std::abs (x); return a + std::log1p (std::exp (-2.0 * a)) - 0.69314718055994531; }
     static double shape (double x, int ch)
     {
-        if (ch == 0) return std::tanh (x);
-        if (ch == 1) return x >= 0 ? std::tanh (x) : std::tanh (0.7 * x) / 0.7 * 0.9;
+        if (ch == 0) return hhs::fastTanh (x);
+        if (ch == 1) return x >= 0 ? hhs::fastTanh (x) : hhs::fastTanh (0.7 * x) / 0.7 * 0.9;
         return x / (1.0 + std::abs (x));
     }
     static double prim (double x, int ch)
@@ -609,7 +610,7 @@ public:
                 float target = 1.0f;
                 if (amt[k] > 0.0f && envAll > 1.0e-9f)
                 {
-                    const float over = 10.0f * std::log10 ((env[k] + 1.0e-12f) / envAll) - relTh[k];
+                    const float over = 10.0f * hhs::fastLog10 (std::max ((env[k] + 1.0e-12f) / envAll, 1.0e-30f)) - relTh[k];
                     if (over > 0.0f) target = dB (-std::min (over * (0.4f + 0.6f * amt[k]), 12.0f * amt[k]));
                 }
                 gain[k] += (target - gain[k]) * (target < gain[k] ? atk : rel);
@@ -617,8 +618,8 @@ public:
             }
             for (int c = 0; c < 2; ++c)
             {
-                float y = warm > 0.0f ? std::tanh (drive * x[c]) / drive : x[c];
-                if (silk > 0.0f) { const float h = air.high (stAir[c], y); y += silk * 0.5f * std::tanh (2.5f * h); }
+                float y = warm > 0.0f ? hhs::fastTanh (drive * x[c]) / drive : x[c];
+                if (silk > 0.0f) { const float h = air.high (stAir[c], y); y += silk * 0.5f * hhs::fastTanh (2.5f * h); }
                 x[c] = y;
             }
             L[i] = (dryL * (1.0f - mix) + x[0] * mix) * og;

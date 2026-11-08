@@ -1,5 +1,6 @@
 // Purify: one-knob "make it sound good" (our own Soundgoodizer-style processor). 3-band compression + tone + glow, 0 latency.
 #include "Effects.h"
+#include "FastMath.h"
 #include <cmath>
 
 namespace hhs
@@ -57,7 +58,7 @@ struct Purify : BuiltinEffect
                     out += band[k] * g * bandG[k];
                 }
                 out *= makeup;
-                const float wet = std::tanh (out * drive) / std::tanh (drive);   // glow, unity at small levels' slope
+                const float wet = hhs::fastTanh (out * drive) / hhs::fastTanh (drive);   // glow, unity at small levels' slope
                 y[ch] = juce::jlimit (-0.98f, 0.98f, x + (wet - x) * amt + (out - x) * 0.0f);
             }
             if (nch == 2 && m[4] > 0)

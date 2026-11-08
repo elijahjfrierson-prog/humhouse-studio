@@ -142,6 +142,7 @@ inline void drawHeadline (juce::Graphics& g, const juce::String& text, juce::Rec
 
 // FL typing keyboard: Z S X D C V G B H N J M , = lower octave, Q 2 W 3 E R 5 T 6 Y 7 U I = upper
 inline bool& typingKeyboard() { static bool on = false; return on; }
+inline bool& miniKeyboardOpen() { static bool on = false; return on; }   // Options > Mini keyboard: computer keys play it while it's open
 inline int typingKeyOffset (int keyCode)
 {
     static const juce::String lo ("zsxdcvgbhnjm,"), hi ("q2w3er5t6y7ui");
@@ -153,7 +154,7 @@ inline int typingKeyOffset (int keyCode)
 }
 inline bool isTypingNoteKey (const juce::KeyPress& k)
 {
-    return typingKeyboard() && ! k.getModifiers().isCommandDown() && ! k.getModifiers().isAltDown()
+    return (typingKeyboard() || miniKeyboardOpen()) && ! k.getModifiers().isCommandDown() && ! k.getModifiers().isAltDown()
            && ! k.getModifiers().isCtrlDown() && typingKeyOffset (k.getKeyCode()) >= 0;
 }
 
@@ -366,7 +367,7 @@ struct Studio : public juce::ChangeBroadcaster
     std::function<void (int view)> showView;   // 0 beat, 1 record, 2 mix
 
     Project& p() { return engine.project(); }
-    template <typename F> void live (F&& f) { const juce::ScopedLock sl (engine.getLock()); f (p()); }
+    template <typename F> void live (F&& f) { f (p()); engine.publishProject(); }   // the audio has its own copy: no lock
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
     static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves

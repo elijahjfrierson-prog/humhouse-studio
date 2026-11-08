@@ -9,6 +9,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "../FastMath.h"
 
 #include <algorithm>
 #include <cmath>
@@ -107,7 +108,7 @@ private:
     {
         // Odd tanh core with a touch of even-order asymmetry, memoryless.
         const float asym = 0.06f * x * x;
-        const float y = std::tanh(x + asym) - std::tanh(asym);
+        const float y = hhs::fastTanh (x + asym) - hhs::fastTanh (asym);
         return y;
     }
 

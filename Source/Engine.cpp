@@ -37,6 +37,8 @@ void WorkerPool::workerLoop()
     int wgSeen = -1;
     juce::WorkgroupToken token;
     auto lastWork = std::chrono::steady_clock::now();
+    auto spinFor = std::chrono::microseconds (300);
+    const bool wideSpin = (int) std::thread::hardware_concurrency() >= 4;
     while (! quit.load())
     {
         if (const int g = wgGeneration.load(); g != wgSeen)
@@ -50,14 +52,22 @@ void WorkerPool::workerLoop()
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
-            if (std::chrono::steady_clock::now() - lastWork < std::chrono::microseconds (300)) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
+            if (std::chrono::steady_clock::now() - lastWork < spinFor) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
             else
             {
                 std::unique_lock<std::mutex> lk (m);
                 cv.wait_for (lk, std::chrono::milliseconds (2), [&] { return generation.load() != seen || quit.load(); });
             }
         }
-        lastWork = std::chrono::steady_clock::now();
+        {
+            // stay awake across the gap between audio blocks (a cv wake can land late on a busy machine);
+            // once blocks stop arriving (transport idle, device closed) the worker sleeps again
+            const auto now = std::chrono::steady_clock::now();
+            const auto gap = std::chrono::duration_cast<std::chrono::microseconds> (now - lastWork);
+            // only with cores to spare: on 2-core machines a spinning worker starves the UI thread mid-edit
+            spinFor = std::chrono::microseconds (wideSpin ? juce::jlimit<long long> (300, 6000, (long long) (gap.count() * 5 / 4)) : 300);
+            lastWork = now;
+        }
         seen = generation.load();
         if (quit.load()) return;
         for (;;)
@@ -274,7 +284,7 @@ struct Engine::TrackRuntime
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     float duckGain = 1.0f;
     float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
-    std::vector<std::unique_ptr<FxRuntime>> fx;
+    std::vector<std::shared_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
     int silentSamples = 0;
     double tailSeconds = 0.0;
@@ -360,6 +370,211 @@ static void tpdfDither (juce::AudioBuffer<float>& b, int n, int bits, juce::Rand
         for (auto* x = b.getWritePointer (ch), * e = x + n; x < e; ++x) *x += (rnd.nextFloat() - rnd.nextFloat()) * lsb;
 }
 
+// what the UI hands the audio thread: built and freed on the UI thread, swapped in with pointer swaps
+struct Engine::Staged
+{
+    bool hasProj = false, hasRt = false, hasHits = false, hasPool = false, hasSolo = false;
+    int gen = 0;
+    Project proj;
+    std::map<int, std::shared_ptr<ChannelRuntime>> channelRt;
+    std::vector<ChannelRuntime*> channelOrder;
+    std::vector<std::shared_ptr<TrackRuntime>> trackRt;
+    std::vector<std::vector<std::shared_ptr<FxRuntime>>> fx;
+    std::vector<double> tail;
+    std::vector<std::unique_ptr<juce::AudioFormatReader>> frozen;
+    std::vector<juce::File> frozenFile;
+    std::vector<char> setFrozen, setEdge;
+    std::vector<std::vector<PdcDelay>> edges;
+    std::map<int, std::shared_ptr<ClipRuntime>> clipRt;
+    std::vector<std::vector<int>> levels;
+    Sources sources;
+    std::vector<char> soloMuted;
+    std::vector<float> trackCost, chanCost;
+    std::vector<int> chanJobOrder;
+    std::map<int, std::shared_ptr<const std::vector<DrumHit>>> drumHits;
+    std::unique_ptr<WorkerPool> pool;
+};
+
+Engine::Staged& Engine::beginStage()
+{
+    for (;;)
+    {
+        int s = handoff.load();
+        if ((s == 0 || s == 1 || s == 3) && handoff.compare_exchange_weak (s, 4))
+        {
+            if (s == 3) *staged = Staged();   // what the audio swapped out (old runtimes, old song copy) dies here, never on the audio thread
+            return *staged;                   // s == 1: not taken yet, this edit adds to it
+        }
+        if (s == 2 || s == 5) std::this_thread::yield();   // the audio thread is mid-swap: microseconds
+    }
+}
+
+void Engine::endStage()
+{
+    handoff.store (1);
+    // no audio callback running (device closed / switching): adopt here so the next block starts current
+    if (juce::Time::getMillisecondCounterHiRes() - lastBlockMs.load() > 250.0) adoptNow();
+}
+
+void Engine::adoptNow()
+{
+    int s = 1;
+    if (! handoff.compare_exchange_strong (s, 5)) return;
+    if (inBlock.load()) { handoff.store (1); return; }   // a block just started: it adopts instead
+    adoptStaged();
+    handoff.store (3);
+}
+
+void Engine::adoptStaged()
+{
+    const auto t0 = juce::Time::getHighResolutionTicks();
+    auto& s = *staged;
+    if (s.hasProj) { std::swap (aproj, s.proj); audioGen = s.gen; }
+    if (s.hasHits) drumHits.swap (s.drumHits);
+    if (s.hasPool) std::swap (pool, s.pool);
+    if (s.hasSolo) soloMuted.swap (s.soloMuted);
+    if (s.hasRt)
+    {
+        channelRt.swap (s.channelRt); channelOrder.swap (s.channelOrder); trackRt.swap (s.trackRt); clipRt.swap (s.clipRt);
+        levels.swap (s.levels); sources.swap (s.sources);
+        trackCost.swap (s.trackCost); chanCost.swap (s.chanCost); chanJobOrder.swap (s.chanJobOrder);
+        for (size_t t = 0; t < trackRt.size(); ++t)
+        {
+            auto& tr = *trackRt[t];
+            if (t < s.fx.size()) { tr.fx.swap (s.fx[t]); tr.tailSeconds = s.tail[t]; }
+            if (t < s.setFrozen.size() && s.setFrozen[t]) { std::swap (tr.frozen, s.frozen[t]); std::swap (tr.frozenFile, s.frozenFile[t]); }
+            if (t < s.setEdge.size() && s.setEdge[t]) tr.edge.swap (s.edges[t]);
+        }
+        for (size_t i = 0; i < channelOrder.size() && i < aproj.channels.size(); ++i)
+        {
+            auto* rt = channelOrder[i];
+            if (rt->inst) rt->inst->update (aproj.channels[i]);
+            rt->cutGroup = aproj.channels[i].cutGroup;
+        }
+    }
+    const float us = (float) (1.0e6 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0));
+    swapUsLast = us; if (us > swapUsMax.load()) swapUsMax = us;
+}
+
+void Engine::stageProject (Staged& s)
+{
+    // plugin blobs can be megabytes and the audio never reads them: park them while copying
+    std::vector<juce::MemoryBlock*> blobs;
+    for (auto& ch : proj.channels) blobs.push_back (&ch.pluginState);
+    for (auto& m : proj.mixer) for (auto& f : m.fx) blobs.push_back (&f.pluginState);
+    std::vector<juce::MemoryBlock> parked (blobs.size());
+    for (size_t i = 0; i < blobs.size(); ++i) parked[i].swapWith (*blobs[i]);
+    s.proj = proj;
+    s.gen = uiGen;
+    for (size_t i = 0; i < blobs.size(); ++i) parked[i].swapWith (*blobs[i]);
+    s.hasProj = true;
+}
+
+void Engine::publishProject()
+{
+    if (antState.load() != 0 && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; }))
+        antExit (false, false);   // a track went live (armed / monitoring): back to real time
+    // structure changed and no rebuild yet: the next sync() publishes everything together
+    if (proj.mixer.size() != uiTrackRt.size() || proj.channels.size() != uiChannelIds.size()) return;
+    for (size_t i = 0; i < proj.channels.size(); ++i) if (proj.channels[i].id != uiChannelIds[i]) return;
+    for (size_t t = 0; t < proj.mixer.size(); ++t) if (t < uiFx.size() && proj.mixer[t].fx.size() != uiFx[t].size()) return;
+    std::vector<char> solo;
+    computeSolo (proj, uiSources, solo);
+    auto& s = beginStage();
+    stageProject (s);
+    s.soloMuted = std::move (solo); s.hasSolo = true;
+    endStage();
+}
+
+void Engine::pushAuto (int kind, int index, int sub, float v)
+{
+    int s1, n1, s2, n2;
+    autoFifo.prepareToWrite (1, s1, n1, s2, n2);
+    if (n1 > 0) { autoWrites[(size_t) s1] = { kind, index, sub, v, audioGen }; autoFifo.finishedWrite (1); }
+}
+
+void Engine::tick()
+{
+    // automation moved knobs on the audio copy: show it in the UI's song
+    int s1, n1, s2, n2;
+    const int ready = autoFifo.getNumReady();
+    autoFifo.prepareToRead (ready, s1, n1, s2, n2);
+    auto apply = [this] (const AutoWrite& w) {
+        if (w.gen != uiGen) return;   // written while the previous song was still playing
+        if (w.kind == AutoInsertVol || w.kind == AutoInsertPan)
+        { if (w.index >= 0 && w.index < (int) proj.mixer.size()) (w.kind == AutoInsertVol ? proj.mixer[(size_t) w.index].volume : proj.mixer[(size_t) w.index].pan) = w.value; }
+        else if (w.kind == AutoSendLevel)
+        { if (w.index >= 0 && w.index < (int) proj.mixer.size()) for (auto& sd : proj.mixer[(size_t) w.index].sends) if (sd.target == w.sub) sd.level = w.value; }
+        else if (auto* ch = proj.findChannel (w.sub))
+        { if (w.kind == AutoChanVol) ch->volume = w.value; else if (w.kind == AutoChanPan) ch->pan = w.value; else if (w.kind == AutoChanPitch) ch->pitch = w.value; }
+    };
+    for (int i = 0; i < n1; ++i) apply (autoWrites[(size_t) (s1 + i)]);
+    for (int i = 0; i < n2; ++i) apply (autoWrites[(size_t) (s2 + i)]);
+    autoFifo.finishedRead (n1 + n2);
+    int h = 3;
+    if (handoff.compare_exchange_strong (h, 4)) { *staged = Staged(); handoff.store (0); }   // free leftovers promptly
+    // value edits made straight on the song (knob drags, MIDI learn...) reach the audio copy within a tick
+    if (playing.load() || (++tickCount % 3) == 0) publishProject();
+}
+
+struct Engine::AntThread : juce::Thread
+{
+    Engine& e;
+    explicit AntThread (Engine& en) : juce::Thread ("HHS render ahead"), e (en) {}
+    void run() override { while (! threadShouldExit()) if (! e.antRenderOnce()) e.antWake.wait (2); }
+};
+
+bool Engine::antRenderOnce()
+{
+    antBusy.store (true);
+    struct Idle { std::atomic<bool>& b; ~Idle() { b.store (false); } } idle { antBusy };
+    if (antState.load() != 1) return false;
+    const int chunk = antTmp.getNumSamples();
+    if (chunk <= 0 || antFifo.getNumReady() >= antTarget.load() || antFifo.getFreeSpace() < chunk) return false;
+    float* o[2] { antTmp.getWritePointer (0), antTmp.getWritePointer (1) };
+    processBlock (nullptr, 0, o, 2, chunk);
+    antBpm = ctx.bpm;
+    int s1, n1, s2, n2;
+    antFifo.prepareToWrite (chunk, s1, n1, s2, n2);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        if (n1 > 0) antRing.copyFrom (ch, s1, antTmp, ch, 0, n1);
+        if (n2 > 0) antRing.copyFrom (ch, s2, antTmp, ch, n1, n2);
+    }
+    antFifo.finishedWrite (n1 + n2);
+    return true;
+}
+
+void Engine::antExit (bool discard, bool wait)
+{
+    int s = 3; antState.compare_exchange_strong (s, 0);
+    s = 1; antState.compare_exchange_strong (s, 2);
+    if (discard) antDiscard = true;
+    if (! wait) return;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    while (antState.load() != 0)
+    {
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        // no device callback is coming to finish the hand-back (device stopped): do it here
+        if (now - callbackMs.load() > 100.0 || now - t0 > 1000.0) { antForceRealtime(); break; }
+        std::this_thread::sleep_for (std::chrono::microseconds (200));
+    }
+}
+
+void Engine::antForceRealtime()
+{
+    int s = 3; antState.compare_exchange_strong (s, 0);
+    s = 1; antState.compare_exchange_strong (s, 2);
+    while (antBusy.load()) std::this_thread::yield();
+    if (antState.load() == 2)
+    {
+        int s1, n1, s2, n2;
+        antFifo.prepareToRead (antFifo.getNumReady(), s1, n1, s2, n2); antFifo.finishedRead (n1 + n2);
+        antAheadBeats = 0.0;
+        antState.store (0);
+    }
+}
+
 Engine::Engine()
 {
     formats.addDefaultFormats();
@@ -369,6 +584,13 @@ Engine::Engine()
     proj = Project::createDefault();
     const int hw = (int) std::thread::hardware_concurrency();
     pool = std::make_unique<WorkerPool> (juce::jlimit (0, 31, hw - 1));
+    uiPoolWorkers = pool->size();
+    humWaveFactory (0);   // builds the shared wavetables now, not on the audio thread at the first synth swap
+    staged = std::make_unique<Staged>();
+    publisher = std::make_unique<Publisher> (*this);
+    publisher->startTimerHz (30);
+    antThread = std::make_unique<AntThread> (*this);
+    if (! antThread->startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (9))) antThread->startThread (juce::Thread::Priority::highest);
     diskThread.startThread (juce::Thread::Priority::high);
     recordingFolder = proj.recordingsFolder();
     prepare (44100.0, 512);
@@ -378,12 +600,17 @@ Engine::~Engine()
 {
     alive->store (false);
     deviceManager.removeAudioCallback (this);
+    antForceRealtime();
+    antThread->signalThreadShouldExit(); antWake.signal(); antThread->stopThread (2000);
     finishRecordingWriters();
     {
         // disk readers unregister from diskThread, which is declared after them and would be destroyed first
         const juce::ScopedLock sl (lock);
-        clipRt.clear();
+        publisher.reset();
+        *staged = Staged();
+        uiClipRt.clear(); clipRt.clear();
         for (auto& t : trackRt) if (t) t->frozen.reset();
+        for (auto& t : uiTrackRt) if (t) t->frozen.reset();
     }
     diskThread.stopThread (2000);
 }
@@ -400,33 +627,41 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
         if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
        #endif
     }
+    if (dualOut.load()) setDualOutput (true);
     deviceManager.addAudioCallback (this);
+}
+
+void Engine::setDualOutput (bool on)
+{
+    dualOut = on;
+    if (! on || deviceManager.getCurrentAudioDevice() == nullptr) return;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    if (deviceManager.getCurrentAudioDevice()->getOutputChannelNames().size() < 4) return;   // a 2-out interface: nothing to open
+    juce::BigInteger want = setup.outputChannels; want.setRange (0, 4, true);
+    if (want != setup.outputChannels) { setup.outputChannels = want; setup.useDefaultOutputChannels = false; deviceManager.setAudioDeviceSetup (setup, true); }
 }
 
 void Engine::newProject (Project p)
 {
     if (recording.load()) setRecording (false);
     if (playing.load()) stop();
-    {
-        const juce::ScopedLock sl (lock);
-        playing = false;
-        for (auto& [id, c] : channelRt) if (c->inst) c->inst->allNotesOff();
-    }
-    std::map<int, std::unique_ptr<ChannelRuntime>> oldC;
-    std::vector<std::unique_ptr<TrackRuntime>> oldT;
-    std::map<int, std::unique_ptr<ClipRuntime>> oldClips;
+    playing = false; panicPending = true;
     {
         const juce::ScopedLock sl (lock);
         proj = std::move (p);
         retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0;   // a new song never gets the last song's retro audio
-        std::swap (oldC, channelRt); std::swap (oldT, trackRt); std::swap (oldClips, clipRt);
-        channelOrder.clear(); levels.clear(); sources.clear();
         position = 0.0;
     }
     if (onPluginDiscard)
     {
-        for (auto& [id, c] : oldC) if (c && c->plugin) onPluginDiscard (c->plugin.get());
-        for (auto& t : oldT) if (t) for (auto& f : t->fx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
+        for (auto& [id, c] : uiChannelRt) if (c && c->plugin) onPluginDiscard (c->plugin.get());
+        for (auto& chain : uiFx) for (auto& f : chain) if (f && f->plugin) onPluginDiscard (f->plugin.get());
+    }
+    {   // everything is rebuilt; the audio keeps the old runtimes until it swaps, then they are freed on this thread
+        const juce::ScopedLock sl (lock);
+        uiChannelRt.clear(); uiChannelIds.clear(); uiTrackRt.clear(); uiFx.clear(); uiFrozenFile.clear(); uiEdges.clear(); uiClipRt.clear(); uiSources.clear();
+        freshLayout = true;
+        ++uiGen;
     }
     sync();
 }
@@ -456,23 +691,21 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
 void Engine::sync()
 {
     if (playing.load()) { editChase = true; chasePending = true; }
+    std::map<int, std::shared_ptr<const std::vector<DrumHit>>> hits;
     {   // Drummer regions: resizing one re-writes its part right away (the fill moves to the new end)
-        std::map<int, std::shared_ptr<const std::vector<DrumHit>>> hits;
         for (auto& c : proj.clips)
             if (c.isDrummer())
                 for (auto& ch : proj.channels)
                     if (ch.id == c.drummer && ch.type == ChannelType::Drummer) hits[c.uid] = drummerHits (ch.drum, proj.bpm, c.length);
-        const juce::ScopedLock sl (lock);
-        drumHits.swap (hits);
     }
     // ---- build new objects outside the audio lock (sample loading / plugin creation can be slow)
-    std::map<int, std::unique_ptr<ChannelRuntime>> newC;
+    std::map<int, std::shared_ptr<ChannelRuntime>> newC;
     for (auto& ch : proj.channels)
     {
         const auto sig = channelSignature (ch, proj.bpm);
-        auto it = channelRt.find (ch.id);
-        if (it != channelRt.end() && it->second->signature == sig) continue;
-        auto rt = std::make_unique<ChannelRuntime>();
+        auto it = uiChannelRt.find (ch.id);
+        if (it != uiChannelRt.end() && it->second->signature == sig) continue;
+        auto rt = std::make_shared<ChannelRuntime>();
         rt->id = ch.id; rt->signature = sig;
         if (ch.type == ChannelType::Plugin)
         {
@@ -511,16 +744,16 @@ void Engine::sync()
         newC[ch.id] = std::move (rt);
     }
 
-    std::map<int, std::unique_ptr<FxRuntime>> newFx;
+    std::map<int, std::shared_ptr<FxRuntime>> newFx;
     for (size_t t = 0; t < proj.mixer.size(); ++t)
         for (auto& slot : proj.mixer[t].fx)
         {
             const auto sig = slot.type + "|" + slot.pluginId;
             bool exists = false;
-            if (t < trackRt.size())
-                for (auto& f : trackRt[t]->fx) if (f->uid == slot.uid && f->signature == sig) exists = true;
+            if (t < uiFx.size())
+                for (auto& f : uiFx[t]) if (f->uid == slot.uid && f->signature == sig) exists = true;
             if (exists) continue;
-            auto f = std::make_unique<FxRuntime>();
+            auto f = std::make_shared<FxRuntime>();
             f->uid = slot.uid; f->signature = sig;
             if (slot.type == "plugin")
             {
@@ -545,19 +778,20 @@ void Engine::sync()
                 f->builtin->prepare (sampleRate, maxBlock);
                 f->tail = f->builtin->tailSeconds() + 0.5;
             }
+            if (! f->dryDelay.ready()) f->dryDelay.prepare (8192);
             newFx[slot.uid] = std::move (f);
         }
 
-    std::map<int, std::unique_ptr<ClipRuntime>> newClips;
+    std::map<int, std::shared_ptr<ClipRuntime>> newClips;
     juce::AudioFormatManager fm; fm.registerBasicFormats();
     for (auto& c : proj.clips)
     {
         if (! c.isAudio()) continue;
-        auto it = clipRt.find (c.uid);
+        auto it = uiClipRt.find (c.uid);
         // a RAM take that is no longer "fresh" (phone memory cap / low-memory warning) goes back to streaming from disk
-        if (it != clipRt.end() && it->second->file == c.audioFile
+        if (it != uiClipRt.end() && it->second->file == c.audioFile
             && (freshTakes.count (c.audioFile.getFullPathName()) > 0 || dynamic_cast<MemoryClipReader*> (it->second->reader.get()) == nullptr)) continue;
-        auto rt = std::make_unique<ClipRuntime>();
+        auto rt = std::make_shared<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
         // a take you just recorded (punch / loop) is loaded into RAM, so it plays the moment the loop comes back round
         if (freshTakes.count (c.audioFile.getFullPathName()) > 0)
@@ -608,7 +842,7 @@ void Engine::sync()
     for (size_t t = 0; t < proj.mixer.size(); ++t)
     {
         auto& mt = proj.mixer[t];
-        const bool have = t < trackRt.size() && trackRt[t]->frozen && trackRt[t]->frozenFile == mt.frozenFile;
+        const bool have = t < uiFrozenFile.size() && uiFrozenFile[t] != juce::File() && uiFrozenFile[t] == mt.frozenFile;
         if (mt.frozen && mt.frozenFile.existsAsFile() && ! have)
             if (auto* r = fm.createReaderFor (mt.frozenFile))
             {
@@ -618,114 +852,165 @@ void Engine::sync()
             }
     }
 
-    // ---- swap in under the lock
-    std::vector<std::unique_ptr<ChannelRuntime>> discardC;
-    std::vector<std::unique_ptr<FxRuntime>> discardFx;
-    std::vector<std::unique_ptr<ClipRuntime>> discardClips;
-    std::vector<std::unique_ptr<TrackRuntime>> discardT;
+    // ---- build everything the swap needs out here: the audio thread then waits only for pointer moves, never for allocations
+    const size_t nT = proj.mixer.size();
+    std::vector<std::shared_ptr<TrackRuntime>> freshT (nT);
+    for (size_t t = uiTrackRt.size(); t < nT; ++t)
     {
-        const juce::ScopedLock sl (lock);
-        // channels
-        std::map<int, std::unique_ptr<ChannelRuntime>> merged;
+        auto rt = std::make_shared<TrackRuntime>();
+        rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock);
+        rt->inDelay.prepare (kPdcSize);
+        freshT[t] = std::move (rt);
+    }
+    auto newLevels = proj.processingLevels();
+    std::vector<std::vector<std::pair<int, float>>> newSources (nT);
+    for (int t = 1; t < (int) nT; ++t)
+    {
+        auto& mt = proj.mixer[(size_t) t];
+        for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) nT) newSources[(size_t) s.target].push_back ({ t, s.level });
+        if (mt.routesToMaster) newSources[0].push_back ({ t, 1.0f });
+    }
+    using EdgeVec = decltype (TrackRuntime::edge);
+    std::vector<std::unique_ptr<EdgeVec>> freshEdges (nT);
+    for (size_t t = 0; t < nT; ++t)
+    {
+        const size_t have = t < uiEdges.size() ? uiEdges[t] : 0;
+        if (have != newSources[t].size())
+        {
+            auto e = std::make_unique<EdgeVec> (newSources[t].size());
+            for (auto& d : *e) d.prepare (kPdcSize);
+            freshEdges[t] = std::move (e);
+        }
+    }
+    std::vector<float> newTrackCost (nT + 1, 0.0f), newChanCost (proj.channels.size(), 0.0f);
+    std::vector<int> newJobOrder (proj.channels.size());
+    for (size_t i = 0; i < newJobOrder.size(); ++i) newJobOrder[i] = (int) i;
+
+    // ---- the new layout, built from the UI's own view of the runtimes; the audio thread only swaps it in
+    std::vector<std::shared_ptr<ChannelRuntime>> discardC;
+    std::vector<std::shared_ptr<FxRuntime>> discardFx;
+    {
+        const juce::ScopedLock sl (lock);   // UI vs device setup (prepareRuntimes); the audio thread never takes it
+        std::map<int, std::shared_ptr<ChannelRuntime>> merged;
         for (auto& ch : proj.channels)
         {
             if (auto n = newC.find (ch.id); n != newC.end()) merged[ch.id] = std::move (n->second);
-            else if (auto o = channelRt.find (ch.id); o != channelRt.end()) merged[ch.id] = std::move (o->second);
+            else if (auto o = uiChannelRt.find (ch.id); o != uiChannelRt.end()) merged[ch.id] = o->second;
         }
-        for (auto& [id, rt] : channelRt) if (rt) discardC.push_back (std::move (rt));
-        channelRt = std::move (merged);
-        channelOrder.clear();
-        for (auto& ch : proj.channels)
+        for (auto& [id, rt] : uiChannelRt)
+            if (auto m = merged.find (id); rt && (m == merged.end() || m->second != rt)) discardC.push_back (rt);
+        std::vector<ChannelRuntime*> order;
+        std::vector<int> ids;
+        order.reserve (proj.channels.size()); ids.reserve (proj.channels.size());
+        for (auto& ch : proj.channels) { order.push_back (merged[ch.id].get()); ids.push_back (ch.id); }
+        if (newJobOrder.size() != order.size())
         {
-            auto* rt = channelRt[ch.id].get();
-            if (rt->inst) rt->inst->update (ch);
-            rt->cutGroup = ch.cutGroup;
-            channelOrder.push_back (rt);
+            newJobOrder.resize (order.size());
+            for (size_t i = 0; i < newJobOrder.size(); ++i) newJobOrder[i] = (int) i;
+            newChanCost.assign (order.size(), 0.0f);
         }
-        chanJobOrder.resize (channelOrder.size());
-        for (size_t i = 0; i < chanJobOrder.size(); ++i) chanJobOrder[i] = (int) i;
-        chanCost.assign (channelOrder.size(), 0.0f);
-        trackCost.assign (proj.mixer.size() + 1, 0.0f);
 
-        // tracks
-        std::vector<std::unique_ptr<TrackRuntime>> tracks;
-        for (size_t t = 0; t < proj.mixer.size(); ++t)
+        // tracks: runtimes stay with their mixer slot; FX chains, frozen readers and PDC edges are swapped in by the audio
+        std::vector<std::shared_ptr<TrackRuntime>> tracks;
+        std::vector<std::vector<std::shared_ptr<FxRuntime>>> chains (nT);
+        std::vector<double> tails (nT, 0.5);
+        std::vector<std::unique_ptr<juce::AudioFormatReader>> frozenReaders (nT);
+        std::vector<juce::File> frozenFiles (nT), nextFrozen = uiFrozenFile;
+        nextFrozen.resize (nT);
+        std::vector<char> setFrozen (nT, 0), setEdge (nT, 0);
+        static const std::vector<std::shared_ptr<FxRuntime>> none;
+        for (size_t t = 0; t < nT; ++t)
         {
-            std::unique_ptr<TrackRuntime> rt;
-            if (t < trackRt.size() && trackRt[t]) rt = std::move (trackRt[t]);
-            else { rt = std::make_unique<TrackRuntime>(); rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock); }
-            std::vector<std::unique_ptr<FxRuntime>> chain;
+            auto rt = t < uiTrackRt.size() && uiTrackRt[t] ? uiTrackRt[t] : freshT[t];
+            if (! rt)
+            {
+                rt = std::make_shared<TrackRuntime>();
+                rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock);
+                rt->inDelay.prepare (kPdcSize);
+            }
+            const auto& had = t < uiFx.size() ? uiFx[t] : none;
+            auto& chain = chains[t];
+            chain.reserve (proj.mixer[t].fx.size());
             for (auto& slot : proj.mixer[t].fx)
             {
-                std::unique_ptr<FxRuntime> f;
+                std::shared_ptr<FxRuntime> f;
                 if (auto n = newFx.find (slot.uid); n != newFx.end()) f = std::move (n->second);
-                else for (auto& o : rt->fx) if (o && o->uid == slot.uid) { f = std::move (o); break; }
+                else for (auto& o : had) if (o && o->uid == slot.uid) { f = o; break; }
                 if (f) chain.push_back (std::move (f));
             }
-            for (auto& o : rt->fx) if (o) discardFx.push_back (std::move (o));
-            rt->fx = std::move (chain);
-            for (auto& f : rt->fx) if (! f->dryDelay.ready()) f->dryDelay.prepare (8192);
-            rt->tailSeconds = 0.5;
-            for (auto& f : rt->fx) rt->tailSeconds = std::max (rt->tailSeconds, f->tail);
+            for (auto& o : had) if (o && std::find (chain.begin(), chain.end(), o) == chain.end()) discardFx.push_back (o);
+            for (auto& f : chain) { if (! f->dryDelay.ready()) f->dryDelay.prepare (8192); tails[t] = std::max (tails[t], f->tail); }
             auto& mt = proj.mixer[t];
-            if (newFrozen[t]) { rt->frozen = std::move (newFrozen[t]); rt->frozenFile = mt.frozenFile; }
-            if (! mt.frozen) rt->frozen.reset();
+            if (newFrozen[t]) { frozenReaders[t] = std::move (newFrozen[t]); frozenFiles[t] = mt.frozenFile; nextFrozen[t] = mt.frozenFile; setFrozen[t] = 1; }
+            else if (! mt.frozen && nextFrozen[t] != juce::File()) { nextFrozen[t] = juce::File(); setFrozen[t] = 1; }
             tracks.push_back (std::move (rt));
         }
-        for (auto& o : trackRt) if (o) discardT.push_back (std::move (o));
-        trackRt = std::move (tracks);
+        for (size_t t = nT; t < uiFx.size(); ++t) for (auto& f : uiFx[t]) if (f) discardFx.push_back (f);
 
         // clips
-        std::map<int, std::unique_ptr<ClipRuntime>> mergedClips;
+        std::map<int, std::shared_ptr<ClipRuntime>> mergedClips;
         for (auto& c : proj.clips)
         {
             if (! c.isAudio()) continue;
             if (auto n = newClips.find (c.uid); n != newClips.end()) mergedClips[c.uid] = std::move (n->second);
-            else if (auto o = clipRt.find (c.uid); o != clipRt.end() && o->second) mergedClips[c.uid] = std::move (o->second);
+            else if (auto o = uiClipRt.find (c.uid); o != uiClipRt.end() && o->second) mergedClips[c.uid] = o->second;
         }
-        for (auto& [id, rt] : clipRt) if (rt) discardClips.push_back (std::move (rt));
-        clipRt = std::move (mergedClips);
 
         // routing
-        levels = proj.processingLevels();
-        sources.assign (proj.mixer.size(), {});
-        for (int t = 1; t < (int) proj.mixer.size(); ++t)
+        std::vector<size_t> edgeCount (nT);
+        for (size_t t = 0; t < nT; ++t) { edgeCount[t] = newSources[t].size(); if (freshEdges[t]) setEdge[t] = 1; }
+        std::vector<char> solo;
+        computeSolo (proj, newSources, solo);
+
+        uiChannelRt = merged; uiChannelIds = ids; uiTrackRt = tracks; uiFx = chains; uiFrozenFile = nextFrozen;
+        uiEdges = edgeCount; uiClipRt = mergedClips; uiSources = newSources;
+
+        auto& s = beginStage();
+        if (freshLayout)
         {
-            auto& mt = proj.mixer[(size_t) t];
-            for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) proj.mixer.size()) sources[(size_t) s.target].push_back ({ t, s.level });
-            if (mt.routesToMaster) sources[0].push_back ({ t, 1.0f });
+            s.frozen.clear(); s.frozenFile.clear(); s.setFrozen.clear(); s.edges.clear(); s.setEdge.clear();
+            freshLayout = false;
         }
-        for (size_t t = 0; t < trackRt.size() && t < sources.size(); ++t)
+        s.hasRt = s.hasHits = s.hasSolo = true;
+        s.channelRt = std::move (merged); s.channelOrder = std::move (order); s.trackRt = std::move (tracks);
+        s.fx = std::move (chains); s.tail = std::move (tails);
+        // a frozen reader / PDC edge set the audio hasn't picked up yet stays unless this build replaces it
+        s.frozen.resize (nT); s.frozenFile.resize (nT); s.setFrozen.resize (nT, 0);
+        s.edges.resize (nT); s.setEdge.resize (nT, 0);
+        for (size_t t = 0; t < nT; ++t)
         {
-            auto& rt = *trackRt[t];
-            if (! rt.inDelay.ready()) rt.inDelay.prepare (kPdcSize);
-            if (rt.edge.size() != sources[t].size()) { rt.edge.resize (sources[t].size()); for (auto& d : rt.edge) if (! d.ready()) d.prepare (kPdcSize); }
+            if (setFrozen[t]) { s.frozen[t] = std::move (frozenReaders[t]); s.frozenFile[t] = frozenFiles[t]; s.setFrozen[t] = 1; }
+            if (setEdge[t]) { s.edges[t] = std::move (*freshEdges[t]); s.setEdge[t] = 1; }
         }
-        updateSolo();
+        s.clipRt = std::move (mergedClips);
+        s.levels = std::move (newLevels); s.sources = std::move (newSources); s.soloMuted = std::move (solo);
+        s.trackCost = std::move (newTrackCost); s.chanCost = std::move (newChanCost); s.chanJobOrder = std::move (newJobOrder);
+        s.drumHits = std::move (hits);
+        stageProject (s);
+        endStage();
     }
-    // close editors before their plugin instance is deleted (the discard vectors die at the end of this scope)
+    // close editors before their plugin instance is deleted (it dies with the leftovers once the audio has let go)
     if (onPluginDiscard)
     {
-        for (auto& c : discardC) if (c && c->plugin) onPluginDiscard (c->plugin.get());
+        for (auto& ch : discardC) if (ch && ch->plugin) onPluginDiscard (ch->plugin.get());
         for (auto& f : discardFx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
-        for (auto& t : discardT) if (t) for (auto& f : t->fx) if (f && f->plugin) onPluginDiscard (f->plugin.get());
     }
     sendChangeMessage();
 }
 
-void Engine::updateSolo()
+void Engine::computeSolo (const Project& p, const Sources& src, std::vector<char>& out) const
 {
-    const size_t n = proj.mixer.size();
-    soloMuted.assign (n, 0);
+    const size_t n = p.mixer.size();
+    out.assign (n, 0);
     bool any = false;
-    for (size_t t = 1; t < n; ++t) any |= proj.mixer[t].solo;
+    for (size_t t = 1; t < n; ++t) any |= p.mixer[t].solo;
     if (! any) return;
     // a track stays audible if it is soloed, feeds a soloed track, or is fed by one
     std::vector<char> keep (n, 0);
-    std::function<void (int)> down = [&] (int t) { if (keep[(size_t) t] & 1) return; keep[(size_t) t] |= 1; for (int o : proj.outputsOf (t)) down (o); };
-    std::function<void (int)> up = [&] (int t) { if (keep[(size_t) t] & 2) return; keep[(size_t) t] |= 2; for (auto& s : sources[(size_t) t]) up (s.first); };
-    for (size_t t = 1; t < n; ++t) if (proj.mixer[t].solo) { down ((int) t); keep[t] &= ~1; down ((int) t); up ((int) t); }
-    for (size_t t = 1; t < n; ++t) soloMuted[t] = keep[t] ? 0 : 1;
+    std::function<void (int)> down = [&] (int t) { if (keep[(size_t) t] & 1) return; keep[(size_t) t] |= 1; for (int o : p.outputsOf (t)) down (o); };
+    std::function<void (int)> up = [&] (int t) { if (keep[(size_t) t] & 2) return; keep[(size_t) t] |= 2; if ((size_t) t < src.size()) for (auto& s : src[(size_t) t]) up (s.first); };
+    for (size_t t = 1; t < n; ++t) if (p.mixer[t].solo) { down ((int) t); keep[t] &= ~1; down ((int) t); up ((int) t); }
+    for (size_t t = 1; t < n; ++t) out[t] = keep[t] ? 0 : 1;
 }
 
 void Engine::prepare (double sr, int block)
@@ -733,13 +1018,16 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
+    antTmp.setSize (2, maxBlock);
+    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.025 * sr)));   // ~25 ms ahead
+    patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
 }
 
 void Engine::prepareRuntimes()
 {
-    for (auto& [id, rt] : channelRt)
+    for (auto& [id, rt] : uiChannelRt)
     {
         rt->buf.setSize (rt->buf.getNumChannels(), maxBlock);
         if (rt->inst) rt->inst->prepare (sampleRate, maxBlock);
@@ -749,10 +1037,10 @@ void Engine::prepareRuntimes()
             rt->buf.setSize (pluginChannels (*rt->plugin), maxBlock);
         }
     }
-    for (auto& t : trackRt)
+    for (auto& t : uiTrackRt) if (t) { t->in.setSize (2, maxBlock); t->out.setSize (2, maxBlock); t->dry.setSize (2, maxBlock); }
+    for (auto& chain : uiFx)
     {
-        t->in.setSize (2, maxBlock); t->out.setSize (2, maxBlock); t->dry.setSize (2, maxBlock);
-        for (auto& f : t->fx)
+        for (auto& f : chain)
         {
             if (f->builtin) f->builtin->prepare (sampleRate, maxBlock);
             if (f->plugin)
@@ -762,13 +1050,14 @@ void Engine::prepareRuntimes()
             }
         }
     }
-    for (auto& [id, c] : clipRt) c->tmp.setSize (2, maxBlock * 4 + 8);
+    for (auto& [id, c] : uiClipRt) c->tmp.setSize (2, maxBlock * 4 + 8);
     // sample-based instruments must be rebuilt at the new rate
-    for (auto& [id, rt] : channelRt) if (rt->inst) rt->signature = {};
+    for (auto& [id, rt] : uiChannelRt) if (rt->inst) rt->signature = {};
 }
 
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
+    antForceRealtime();
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
     recordLatency = juce::jmax (0, d->getInputLatencyInSamples() + d->getOutputLatencyInSamples());
     {
@@ -778,7 +1067,7 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
     }
     juce::MessageManager::callAsync ([this, a = alive] { if (a->load()) sync(); });
 }
-void Engine::audioDeviceStopped() {}
+void Engine::audioDeviceStopped() { antForceRealtime(); }
 
 double Engine::cpuLoad() const { return deviceManager.getCpuUsage(); }
 
@@ -787,12 +1076,14 @@ void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
     const int hw = juce::jmax (1, (int) std::thread::hardware_concurrency());
     const int workers = threads <= 0 ? juce::jlimit (0, 31, hw - 1) : juce::jlimit (0, 63, threads - 1);
     std::unique_ptr<WorkerPool> fresh;
-    if (! pool || pool->size() != workers) fresh = std::make_unique<WorkerPool> (workers);
-    {
-        const juce::ScopedLock sl (lock);
-        if (fresh) { fresh->setWorkgroup (deviceWorkgroup); std::swap (pool, fresh); }
-        mtOn = multithreaded; smartOn = smartDisable;
-    }
+    mtOn = multithreaded; smartOn = smartDisable;
+    if (uiPoolWorkers == workers) return;
+    uiPoolWorkers = workers;
+    fresh = std::make_unique<WorkerPool> (workers);
+    fresh->setWorkgroup (deviceWorkgroup);
+    auto& s = beginStage();
+    s.pool = std::move (fresh); s.hasPool = true;   // the old pool comes back with the leftovers and is joined on this thread
+    endStage();
 }
 
 void Engine::forEachLiveTake (const std::function<void (int, double, const float*, int, double)>& fn)
@@ -811,31 +1102,31 @@ void Engine::forEachLiveTake (const std::function<void (int, double, const float
 
 float Engine::fxLoad (int track, int uid) const
 {
-    if (track < 0 || track >= (int) trackRt.size() || ! trackRt[(size_t) track]) return 0.0f;
-    for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->load.load();
+    if (track < 0 || track >= (int) uiFx.size()) return 0.0f;
+    for (auto& f : uiFx[(size_t) track]) if (f->uid == uid) return f->load.load();
     return 0.0f;
 }
 
 float Engine::trackPeak (int t) const
 {
-    return t >= 0 && t < (int) trackRt.size() ? trackRt[(size_t) t]->peak.load() : 0.0f;
+    return t >= 0 && t < (int) uiTrackRt.size() && uiTrackRt[(size_t) t] ? uiTrackRt[(size_t) t]->peak.load() : 0.0f;
 }
 
 juce::AudioPluginInstance* Engine::channelPlugin (int id)
 {
-    auto it = channelRt.find (id);
-    return it != channelRt.end() ? it->second->plugin.get() : nullptr;
+    auto it = uiChannelRt.find (id);
+    return it != uiChannelRt.end() ? it->second->plugin.get() : nullptr;
 }
 juce::AudioPluginInstance* Engine::fxPlugin (int track, int uid)
 {
-    if (track < 0 || track >= (int) trackRt.size()) return nullptr;
-    for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->plugin.get();
+    if (track < 0 || track >= (int) uiFx.size()) return nullptr;
+    for (auto& f : uiFx[(size_t) track]) if (f->uid == uid) return f->plugin.get();
     return nullptr;
 }
 BuiltinEffect* Engine::builtinFx (int track, int uid)
 {
-    if (track < 0 || track >= (int) trackRt.size()) return nullptr;
-    for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->builtin.get();
+    if (track < 0 || track >= (int) uiFx.size()) return nullptr;
+    for (auto& f : uiFx[(size_t) track]) if (f->uid == uid) return f->builtin.get();
     return nullptr;
 }
 
@@ -853,7 +1144,9 @@ void Engine::storePluginStates()
 }
 
 // =============================================================== transport
-double Engine::loopLength() const
+double Engine::loopLength() const { return loopLengthOf (proj); }
+
+double Engine::loopLengthOf (const Project& proj)
 {
     if (! proj.songMode)
         return proj.currentPattern >= 0 && proj.currentPattern < (int) proj.patterns.size()
@@ -872,8 +1165,8 @@ void Engine::primeClipReaders (double beat)
     for (auto& clip : proj.clips)
     {
         if (! clip.isAudio() || beat >= clip.start + clip.length) continue;
-        auto it = clipRt.find (clip.uid);
-        if (it == clipRt.end() || ! it->second->reader) continue;
+        auto it = uiClipRt.find (clip.uid);
+        if (it == uiClipRt.end() || ! it->second->reader) continue;
         auto* br = dynamic_cast<juce::BufferingAudioReader*> (it->second->reader.get());
         if (br == nullptr || juce::Time::getMillisecondCounter() > deadline) continue;
         const double srcSec = clip.sourceOffset + beatsToSeconds (std::max (0.0, beat - clip.start), proj.bpm);
@@ -887,6 +1180,7 @@ void Engine::primeClipReaders (double beat)
 void Engine::play()
 {
     if (playing.load()) return;
+    publishProject();   // start from the song as it is right now (armed lanes, punch, loop)
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
     const double here = position.load();
     const bool loopSel = ! rec && proj.songMode && proj.hasPunch();   // FL: a highlighted range always plays from its start
@@ -894,6 +1188,19 @@ void Engine::play()
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     const bool capture = ! rec && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed; });
     if (rec || capture) startRecordingWriters (capture);     // create take files outside the audio lock, so nothing drops out as recording starts
+    const bool live = rec || capture || std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; });
+    if (anticipativeOn.load() && ! live && ! offline.load() && juce::Time::getMillisecondCounterHiRes() - callbackMs.load() < 200.0)
+    {
+        // nothing live to hear: render playback ~25 ms ahead, so a CPU spike or a slow plugin can't drop out
+        antDiscard = true;
+        int z = 0;
+        if (antState.compare_exchange_strong (z, 3))
+        {
+            const auto until = juce::Time::getMillisecondCounterHiRes() + 200.0;
+            while (antState.load() == 3 && juce::Time::getMillisecondCounterHiRes() < until) std::this_thread::sleep_for (std::chrono::microseconds (200));
+            int three = 3; antState.compare_exchange_strong (three, 0);   // no callback answered: stay real time
+        }
+    }
     const juce::ScopedLock sl (lock);
     if (playing) return;
     if (loopSel) position = from;
@@ -911,17 +1218,13 @@ void Engine::play()
 
 void Engine::stop()
 {
+    antExit (true, true);   // back to real time first: what was rendered ahead is dropped
     stopPreview();
     {
         const juce::ScopedLock sl (lock);
         if (! playing && takes.empty()) { position = 0.0; return; }
         playing = false; countingIn = false;
-        for (auto* c : channelOrder)
-        {
-            if (c->inst) c->inst->allNotesOff();
-            c->numActive = 0;
-            if (c->plugin) { c->midi.clear(); c->midi.addEvent (juce::MidiMessage::allNotesOff (1), 0); }
-        }
+        panicPending = true;   // the audio thread silences every voice at its next block
     }
     finishRecordingWriters();
     if (proj.returnToStart) position = startBeat;
@@ -930,12 +1233,15 @@ void Engine::stop()
 void Engine::setPositionBeats (double b)
 {
     position = std::max (0.0, b); startBeat = position; editChase = false; chasePending = true;
+    if (antState.load() != 0) antDiscard = true;   // what was rendered ahead belongs to the old spot
     if (playing.load()) declickGain = 0.0f;
 }
 
 void Engine::setRecording (bool r)
 {
     if (r == recording.load()) return;
+    if (r) antExit (false, true);   // recording is live: real time
+    publishProject();
     recording = r;
     if (! playing) return;
     finishRecordingWriters();            // punch out (or end the surprise capture that ran before the punch in)
@@ -1152,6 +1458,7 @@ void Engine::finishRecordingWriters()
 // =============================================================== preview
 void Engine::previewNote (int channelId, int key, float vel, bool on)
 {
+    if (on && antState.load() != 0) antExit (false, false);   // you're playing live: no render-ahead delay
     int s1, n1, s2, n2;
     previewFifo.prepareToWrite (1, s1, n1, s2, n2);
     if (n1 > 0) previewEvents[(size_t) s1] = { channelId, key, vel, on };
@@ -1161,6 +1468,7 @@ void Engine::previewNote (int channelId, int key, float vel, bool on)
 
 void Engine::previewFile (const juce::File& f)
 {
+    if (antState.load() != 0) antExit (false, false);
     auto s = loadSampleFile (f, sampleRate);
     const juce::SpinLock::ScopedLockType sl (previewLock);
     previewSample = s; previewPos = s ? 0 : -1;
@@ -1171,10 +1479,10 @@ void Engine::previewFile (const juce::File& f)
 juce::Optional<juce::AudioPlayHead::PositionInfo> Engine::getPosition() const
 {
     PositionInfo info;
-    info.setBpm (proj.bpm);
-    info.setTimeSignature (juce::AudioPlayHead::TimeSignature { proj.beatsPerBar, 4 });
+    info.setBpm (aproj.bpm);
+    info.setTimeSignature (juce::AudioPlayHead::TimeSignature { aproj.beatsPerBar, 4 });
     info.setPpqPosition (position.load());
-    info.setTimeInSeconds (beatsToSeconds (position.load(), proj.bpm));
+    info.setTimeInSeconds (beatsToSeconds (position.load(), aproj.bpm));
     info.setIsPlaying (playing.load());
     info.setIsRecording (recording.load() && playing.load());
     info.setIsLooping (true);
@@ -1184,7 +1492,55 @@ juce::Optional<juce::AudioPlayHead::PositionInfo> Engine::getPosition() const
 void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut, int n,
                                                const juce::AudioIODeviceCallbackContext&)
 {
-    int done = 0;
+    callbackMs = juce::Time::getMillisecondCounterHiRes();
+    int st = antState.load();
+    if (st == 3) { antPrimed = false; antState.store (1); st = 1; antWake.signal(); }
+    if (st == 1 || st == 2)
+    {
+        juce::ScopedNoDenormals noDenormals;
+        int s1, n1, s2, n2;
+        if (antDiscard.exchange (false)) { antFifo.prepareToRead (antFifo.getNumReady(), s1, n1, s2, n2); antFifo.finishedRead (n1 + n2); }
+        const double spb = sampleRate * 60.0 / juce::jmax (1.0, antBpm.load());
+        {   // Retro Record keeps hearing the mic while playback is rendered ahead
+            const int c0 = retroC0.load(), c1 = retroC1.load();
+            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+            const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
+            const bool rolling = playing.load() && ! countingIn.load();
+            if (il != nullptr) writeRetro (il, ir, n, rolling ? positionBeats() : -1.0, n / spb, retroRl.load());
+        }
+        const int ready = antFifo.getNumReady();
+        if (st == 1 && ! antPrimed.load() && ready >= antTarget.load()) antPrimed = true;
+        const int take = st == 2 || antPrimed.load() ? std::min (ready, n) : 0;
+        antFifo.prepareToRead (take, s1, n1, s2, n2);
+        for (int ch = 0; ch < numOut; ++ch)
+        {
+            if (out[ch] == nullptr) continue;
+            const bool dual = dualOut.load (std::memory_order_relaxed) && (ch == 2 || ch == 3);
+            const int src = ch == 0 || (dual && ch == 2) ? 0 : ch == 1 || (dual && ch == 3) ? 1 : -1;
+            if (src < 0) { juce::FloatVectorOperations::clear (out[ch], n); continue; }
+            if (n1 > 0) juce::FloatVectorOperations::copy (out[ch], antRing.getReadPointer (src, s1), n1);
+            if (n2 > 0) juce::FloatVectorOperations::copy (out[ch] + n1, antRing.getReadPointer (src, s2), n2);
+            if (take < n) juce::FloatVectorOperations::clear (out[ch] + take, n - take);
+        }
+        antFifo.finishedRead (n1 + n2);
+        if (st == 1 && antPrimed.load() && take < n) ++antUnderruns;
+        antAheadBeats = (double) antFifo.getNumReady() / spb;
+        antWake.signal();
+        if (st == 2 && antFifo.getNumReady() == 0 && ! antBusy.load())
+        {
+            // everything rendered ahead has been heard: carry on in real time from exactly there
+            antAheadBeats = 0.0;
+            antState.store (0);
+            processRealtime (in, numIn, out, numOut, n, take);
+        }
+        return;
+    }
+    processRealtime (in, numIn, out, numOut, n, 0);
+}
+
+void Engine::processRealtime (const float* const* in, int numIn, float* const* out, int numOut, int n, int from)
+{
+    int done = from;
     while (done < n)
     {
         const int m = std::min (maxBlock, n - done);
@@ -1198,14 +1554,14 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
 
 void Engine::click (float* l, float* r, int n, double b0, double b1)
 {
-    const double spb = sampleRate * 60.0 / proj.bpm;
+    const double spb = sampleRate * 60.0 / aproj.bpm;
     const double firstBeat = std::ceil (b0 - 1.0e-9);
     for (double b = firstBeat; b < b1; b += 1.0)
     {
         const int off = (int) ((b - b0) * spb);
         if (off < 0 || off >= n) continue;
         clickLeft = (int) (sampleRate * 0.03);
-        clickFreq = ((long) std::llround (b) % proj.beatsPerBar) == 0 ? 1600.0 : 1000.0;
+        clickFreq = ((long) std::llround (b) % aproj.beatsPerBar) == 0 ? 1600.0 : 1000.0;
         clickPhase = 0;
         for (int i = off; i < n && clickLeft > 0; ++i, --clickLeft)
         {
@@ -1230,15 +1586,18 @@ static Note clipVel (const Note& n, float g) { if (g == 1.0f) return n; Note c =
 
 void Engine::renderSegment (double b0, double b1, int off, int n)
 {
-    const double spb = sampleRate * 60.0 / proj.bpm;
+    const double spb = sampleRate * 60.0 / aproj.bpm;
     auto toOffset = [&] (double beat) { return juce::jlimit (off, off + n - 1, off + (int) ((beat - b0) * spb)); };
     auto swingBeat = [&] (double s) {
-        if (proj.swing <= 0.0) return s;
+        if (aproj.swing <= 0.0) return s;
         const double six = s / 0.25;
-        return (std::abs (six - std::round (six)) < 1.0e-6 && ((long) std::llround (six) % 2) == 1) ? s + proj.swing * 0.0833 : s;
+        return (std::abs (six - std::round (six)) < 1.0e-6 && ((long) std::llround (six) % 2) == 1) ? s + aproj.swing * 0.0833 : s;
     };
     bool anySolo = false;
-    for (auto& c : proj.channels) anySolo |= c.solo;
+    for (auto& c : aproj.channels) anySolo |= c.solo;
+    // each used pattern's length once per segment, not once per channel (it walks every note)
+    patLen.assign (aproj.patterns.size(), -1.0);   // measured on first use, so unused patterns cost nothing
+    auto lenOf = [this] (int i) { auto& L = patLen[(size_t) i]; if (L < 0.0) L = aproj.patterns[(size_t) i].lengthBeats(); return L; };
 
     auto emit = [&] (size_t ci, const Note& note, double absStart, double startSec = 0.0)
     {
@@ -1266,48 +1625,48 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     auto chaseNote = [&] (size_t ci, const Note& note, double absStart, double limit)
     {
         if (absStart >= b0) return;
-        auto& c = proj.channels[ci];
+        auto& c = aproj.channels[ci];
         const bool shot = c.type == ChannelType::Sampler && c.oneShot;   // one-shots play the whole sample, whatever the note length
         const double end = std::min (absStart + note.length, limit);
         if (shot ? (quietChase || b0 - absStart > 64.0) : end <= b0 + 1.0 / 32.0) return;   // after an edit a one-shot is still ringing: never re-hit it
         auto* rt = channelOrder[ci];
         for (int k = 0; k < rt->numActive; ++k) if (rt->active[(size_t) k].key == note.key) return;
         Note tail = note; tail.length = std::max (end - b0, 1.0 / 32.0); tail.slide = false;
-        emit (ci, tail, b0, (b0 - absStart) * 60.0 / proj.bpm);   // samplers start from the matching point in the sample
+        emit (ci, tail, b0, (b0 - absStart) * 60.0 / aproj.bpm);   // samplers start from the matching point in the sample
         if (! quietChase) declickGain = 0.0f;   // starting mid-note: fade in instead of a hard, boxy cut-in (edits: the voice fades itself, the mix keeps going)
     };
 
-    for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
+    for (size_t ci = 0; ci < aproj.channels.size() && ci < channelOrder.size(); ++ci)
     {
-        auto& ch = proj.channels[ci];
+        auto& ch = aproj.channels[ci];
         if (ch.muted || (anySolo && ! ch.solo)) continue;
-        const double shiftBeats = (double) ch.shift * 0.001 * proj.bpm / 60.0;   // channel Shift (ms) in beats
-        if (! proj.songMode)
+        const double shiftBeats = (double) ch.shift * 0.001 * aproj.bpm / 60.0;   // channel Shift (ms) in beats
+        if (! aproj.songMode)
         {
-            if (proj.currentPattern < 0 || proj.currentPattern >= (int) proj.patterns.size()) continue;
-            auto& pat = proj.patterns[(size_t) proj.currentPattern];
+            if (aproj.currentPattern < 0 || aproj.currentPattern >= (int) aproj.patterns.size()) continue;
+            auto& pat = aproj.patterns[(size_t) aproj.currentPattern];
             auto it = pat.notes.find (ch.id);
             if (it == pat.notes.end()) continue;
-            const double plen = pat.lengthBeats();
+            const double plen = lenOf (aproj.currentPattern);
             for (auto& note : it->second)
             {
                 if (note.muted) continue;
                 double s = swingBeat (note.start) + shiftBeats;
                 if (s < 0.0) s += plen; else if (s >= plen) s -= plen;   // shifted past the loop edge: wraps like FL
                 if (s >= b0 && s < b1) emit (ci, note, s);
-                else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
+                else if (chase) chaseNote (ci, note, s, plen);
             }
         }
         else if (ch.type == ChannelType::Drummer)
         {
             const int srcId = ch.drumLink != 0 ? ch.drumLink : ch.id, mask = ch.drum.groupMask;
             const DrummerParams* src = &ch.drum;
-            for (auto& o : proj.channels) if (o.id == srcId && o.type == ChannelType::Drummer) src = &o.drum;
+            for (auto& o : aproj.channels) if (o.id == srcId && o.type == ChannelType::Drummer) src = &o.drum;
             const auto silent = [src] (int sec, int g) { return sec >= 0 && sec < (int) src->sectionMute.size() && (src->sectionMute[(size_t) sec] >> g & 1) != 0; };
-            for (auto& clip : proj.clips)
+            for (auto& clip : aproj.clips)
             {
                 if (clip.drummer != srcId || clip.muted || clip.hidden) continue;
-                if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
+                if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 auto it = drumHits.find (clip.uid);
                 if (it == drumHits.end() || ! it->second) continue;
@@ -1316,10 +1675,11 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
                     if (s < b0 || s >= b1) continue;
-                    const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
+                    double ss = 0, sl = 32.0;
+                    const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
                     if (auto ms = src->steps.find (sec); ms != src->steps.end() && ms->second[(size_t) g] != 0
-                        && ! (src->fills > 0.02f && std::fmod (clip.start + h.beat, 32.0) >= 28.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
+                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
                     Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
@@ -1330,10 +1690,11 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     const double rel = n * 0.25, at = clip.start + rel, s = at + shiftBeats;
                     if (rel >= clip.length || s >= b1) break;
                     if (s < b0) continue;
-                    const int sec = (int) (at / 32.0), step = (int) (std::llround (at * 4.0) % 16);
+                    double ss = 0, sl = 32.0;
+                    const int sec = drumSectionAt (*src, at, &ss, &sl), step = (int) (std::llround (at * 4.0) % 16);
                     const auto st = src->steps.find (sec);
                     if (st == src->steps.end()) continue;
-                    if (src->fills > 0.02f && std::fmod (at, 32.0) >= 28.0) continue;   // bar 8 of the section: the automatic fill
+                    if (src->fills > 0.02f && at - ss >= sl - 4.0) continue;   // bar 8 of the section: the automatic fill
                     for (int g = 0; g < NumDrumGroups; ++g)
                         if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
                         {
@@ -1348,16 +1709,16 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         }
         else
         {
-            for (auto& clip : proj.clips)
+            for (auto& clip : aproj.clips)
             {
                 if (clip.isAudio() || clip.isDrummer() || clip.patternIndex < 0 || clip.muted || clip.hidden) continue;
-                if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
+                if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
-                if (clip.patternIndex >= (int) proj.patterns.size()) continue;
-                auto& pat = proj.patterns[(size_t) clip.patternIndex];
+                if (clip.patternIndex >= (int) aproj.patterns.size()) continue;
+                auto& pat = aproj.patterns[(size_t) clip.patternIndex];
                 auto it = pat.notes.find (ch.id);
                 if (it == pat.notes.end()) continue;
-                const double plen = pat.lengthBeats();
+                const double plen = lenOf (clip.patternIndex);
                 const double base = clip.start - std::fmod (juce::jmax (0.0, clip.patOffset), plen);   // a sliced clip starts mid-pattern
                 const int r0 = std::max (0, (int) std::floor ((b0 - base) / plen) - 1);
                 const int r1 = (int) std::floor ((b1 - base) / plen) + 1;
@@ -1374,20 +1735,20 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     }
 
     // audio clips -> their insert (FL-style: routing follows the recording)
-    if (proj.songMode)
+    if (aproj.songMode)
     {
-        for (auto& clip : proj.clips)
+        for (auto& clip : aproj.clips)
         {
             if (! clip.isAudio() || clip.muted || clip.hidden) continue;
-            if (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() && proj.lanes[(size_t) clip.lane].muted) continue;
-            const double shB = (clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? proj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * proj.bpm / 60.0;   // Soft
+            if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
+            const double shB = (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() ? aproj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * aproj.bpm / 60.0;   // Soft
             const double c0 = std::max (b0, clip.start + shB), c1 = std::min (b1, clip.start + clip.length + shB);
             if (c1 <= c0) continue;
-            const float laneGain = clip.lane >= 0 && clip.lane < (int) proj.lanes.size() ? juce::Decibels::decibelsToGain (proj.lanes[(size_t) clip.lane].volumeDb, -60.0f) : 1.0f;
+            const float laneGain = clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() ? juce::Decibels::decibelsToGain (aproj.lanes[(size_t) clip.lane].volumeDb, -60.0f) : 1.0f;
             auto it = clipRt.find (clip.uid);
             if (it == clipRt.end() || ! it->second->reader) continue;
             auto& cr = *it->second;
-            const int insert = proj.clipInsert (clip);
+            const int insert = aproj.clipInsert (clip);
             if (insert < 0 || insert >= (int) trackRt.size()) continue;
             auto& dest = trackRt[(size_t) insert]->in;
             const int o0 = off + (int) std::llround ((c0 - b0) * spb);
@@ -1395,7 +1756,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const int len = o1 - o0;
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
-            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, proj.bpm);
+            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, aproj.bpm);
             // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
             const double srcPos = srcSec * cr.fileRate;
             const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
@@ -1428,7 +1789,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         {
             auto& tr = *trackRt[t];
             if (! tr.frozen) continue;
-            const juce::int64 src = (juce::int64) (beatsToSeconds (b0, proj.bpm) * tr.frozen->sampleRate);
+            const juce::int64 src = (juce::int64) (beatsToSeconds (b0, aproj.bpm) * tr.frozen->sampleRate);
             juce::AudioBuffer<float> view (tr.in.getArrayOfWritePointers(), 2, off, n);
             tr.frozen->read (&view, 0, n, src, true, true);
         }
@@ -1526,10 +1887,15 @@ void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
 // Link to controller: every block each link reads its controller (Peak Controller value 0..1) and sets the knob
 void Engine::applyCtlLinks()
 {
-    for (auto& L : proj.ctlLinks)
+    auto fxAt = [this] (int track, int uid) -> BuiltinEffect* {
+        if (track < 0 || track >= (int) trackRt.size()) return nullptr;
+        for (auto& f : trackRt[(size_t) track]->fx) if (f->uid == uid) return f->builtin.get();
+        return nullptr;
+    };
+    for (auto& L : aproj.ctlLinks)
     {
-        auto* src = builtinFx (L.srcTrack, L.srcUid);
-        auto* dst = builtinFx (L.dstTrack, L.dstUid);
+        auto* src = fxAt (L.srcTrack, L.srcUid);
+        auto* dst = fxAt (L.dstTrack, L.dstUid);
         if (src == nullptr || dst == nullptr || src == dst) continue;
         const int i = dst->paramIndex (L.param);
         if (i < 0) continue;
@@ -1545,7 +1911,7 @@ void Engine::processTrack (int t)
 {
     const int n = currentBlock;
     auto& tr = *trackRt[(size_t) t];
-    auto& mt = proj.mixer[(size_t) t];
+    auto& mt = aproj.mixer[(size_t) t];
     tr.out.makeCopyOf (tr.in, true);
     // delay compensation: everything arriving here is lined up with the latest (most delayed) input
     if (tr.inputAlign > 0 && tr.inDelay.ready()) tr.inDelay.delayInPlace (tr.out, n, tr.inputAlign);
@@ -1615,7 +1981,7 @@ void Engine::processTrack (int t)
     if (t > 0 && mt.duck > 0.0f)
     {
         int src = mt.duckSource;
-        if (src < 0) for (auto& ln : proj.lanes) if (ln.armed && ln.mixerTrack > 0) { src = ln.mixerTrack; break; }
+        if (src < 0) for (auto& ln : aproj.lanes) if (ln.armed && ln.mixerTrack > 0) { src = ln.mixerTrack; break; }
         if (src < 0) src = duckAutoSrc.load();
         float target = 1.0f;
         if (src > 0 && src != t && src < (int) trackRt.size())
@@ -1657,19 +2023,29 @@ void Engine::processTrack (int t)
 void Engine::processBlock (const float* const* in, int numIn, float* const* out, int numOut, int n)
 {
     juce::ScopedNoDenormals noDenormals;
-    // an edit holds the lock for a moment: wait briefly for it instead of dropping a silent block (that was the click / pause)
-    bool locked = lock.tryEnter();
-    if (! locked && ! offline.load())
-    {
-        const double until = juce::Time::getMillisecondCounterHiRes() + 0.4 * 1000.0 * n / sampleRate;
-        while (! locked && juce::Time::getMillisecondCounterHiRes() < until) { std::this_thread::yield(); locked = lock.tryEnter(); }
-    }
-    struct Unlock { const juce::CriticalSection* c; ~Unlock() { if (c != nullptr) c->exit(); } } unlock { locked ? &lock : nullptr };
-    if (! locked || trackRt.empty())
+    // lock-free: a new song copy / runtime layout the UI staged is swapped in here (pointer swaps only)
+    inBlock.store (true);
+    struct InBlock { std::atomic<bool>& b; ~InBlock() { b.store (false); } } inBlockGuard { inBlock };
+    if (! offline.load()) lastBlockMs = juce::Time::getMillisecondCounterHiRes();
+    int hs = handoff.load();
+    if (hs == 1 && handoff.compare_exchange_strong (hs, 2)) { adoptStaged(); handoff.store (3); }
+    if (panicPending.exchange (false))
+        for (auto* ch : channelOrder)
+        {
+            if (ch->inst) ch->inst->allNotesOff();
+            ch->numActive = 0;
+            if (ch->plugin) { ch->midi.clear(); ch->midi.addEvent (juce::MidiMessage::allNotesOff (1), 0); }
+        }
+    if (hs == 5 || trackRt.empty())
     {
         for (int c = 0; c < numOut; ++c) if (out[c]) juce::FloatVectorOperations::clear (out[c], n);
         return;
     }
+    struct LoadTrack
+    {
+        std::atomic<float>& frac; juce::int64 t0; double ticks;
+        ~LoadTrack() { const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / ticks); frac = std::max (v, frac.load (std::memory_order_relaxed) * 0.98f); }
+    } loadTrack { blockLoadFrac, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
     currentBlock = n;
     idleThresholdBlocks = std::max (1, (int) (sampleRate * 2.0 / std::max (1, n)));
     for (auto& t : trackRt) t->in.clear (0, n);
@@ -1698,10 +2074,10 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             else { a.remaining -= n; ++k; }
         }
 
-    ctx.bpm = proj.bpm; ctx.keyRoot = proj.keyRoot; ctx.scaleIndex = proj.scaleIndex;
+    ctx.bpm = aproj.bpm; ctx.keyRoot = aproj.keyRoot; ctx.scaleIndex = aproj.scaleIndex;
     ctx.playing = playing.load() && ! countingIn.load();
     ctx.beatPos = position.load();
-    const double spb = sampleRate * 60.0 / proj.bpm;
+    const double spb = sampleRate * 60.0 / aproj.bpm;
     const double blockBeats = n / spb;
     double clickB0 = 0, clickB1 = 0; bool doClick = false;
     juce::int64 recordFrom = -1; // offset in this block where recording audio starts
@@ -1710,7 +2086,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     {
         if (countingIn.load())
         {
-            const double pre = proj.beatsPerBar - countInRemaining;
+            const double pre = aproj.beatsPerBar - countInRemaining;
             clickB0 = pre; clickB1 = pre + blockBeats; doClick = true;
             countInRemaining -= blockBeats;
             if (countInRemaining <= 0) countingIn = false;
@@ -1718,11 +2094,11 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         else
         {
             double pos = position.load();
-            const bool recordSong = recording.load() && proj.songMode && ! (proj.hasPunch() && proj.loopRecord);
-            double loopStart = 0.0, loopEnd = loopLength();
-            if (proj.songMode && proj.hasPunch() && recording.load() && proj.loopRecord)
-            { loopStart = std::max (0.0, proj.punchIn - proj.preRollBars * proj.beatsPerBar); loopEnd = proj.punchOut; }
-            else if (proj.songMode && proj.hasPunch() && ! recording.load() && ! offline.load()) { loopStart = proj.punchIn; loopEnd = proj.punchOut; }
+            const bool recordSong = recording.load() && aproj.songMode && ! (aproj.hasPunch() && aproj.loopRecord);
+            double loopStart = 0.0, loopEnd = loopLengthOf (aproj);
+            if (aproj.songMode && aproj.hasPunch() && recording.load() && aproj.loopRecord)
+            { loopStart = std::max (0.0, aproj.punchIn - aproj.preRollBars * aproj.beatsPerBar); loopEnd = aproj.punchOut; }
+            else if (aproj.songMode && aproj.hasPunch() && ! recording.load() && ! offline.load()) { loopStart = aproj.punchIn; loopEnd = aproj.punchOut; }
             if (metronomeOn.load() || (recording.load() && countInOn.load() && false)) { clickB0 = pos; clickB1 = pos + blockBeats; doClick = metronomeOn.load(); }
             int done = 0;
             recordFrom = 0;
@@ -1751,15 +2127,17 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         }
     }
 
-    if (ctx.playing) applyAutomation (ctx.beatPos);
+    // automation is read at the end of this block: faders/pans/sends ramp across the block from the value at its
+    // first sample to the value at its last, so the curve lands on every sample instead of one block late
+    if (ctx.playing) applyAutomation (position.load());
     renderChannels (n);
 
     // channels -> inserts
     bool anySolo = false;
-    for (auto& c : proj.channels) anySolo |= c.solo;
-    for (size_t ci = 0; ci < proj.channels.size() && ci < channelOrder.size(); ++ci)
+    for (auto& c : aproj.channels) anySolo |= c.solo;
+    for (size_t ci = 0; ci < aproj.channels.size() && ci < channelOrder.size(); ++ci)
     {
-        auto& ch = proj.channels[ci];
+        auto& ch = aproj.channels[ci];
         auto* rt = channelOrder[ci];
         const int t = juce::jlimit (0, (int) trackRt.size() - 1, ch.mixerTrack);
         const float v = (ch.volume / 0.8f) * (ch.volume / 0.8f), gl = v * panGain (ch.pan, false), gr = v * panGain (ch.pan, true);
@@ -1772,34 +2150,23 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     // live input: armed lanes monitor through their insert and record
     const bool rolling = playing.load() && ! countingIn.load();
-    if (numIn > 0 && in != nullptr && ! proj.lanes.empty() && retroBuf.getNumSamples() > n)
+    if (! aproj.lanes.empty())
     {
         // Retro Record: always keep the last 60 s of the first armed track's input (track 1 if none is armed)
         int rl = 0;
-        for (size_t l = 0; l < proj.lanes.size(); ++l) if (proj.lanes[l].armed) { rl = (int) l; break; }
-        const auto& lane = proj.lanes[(size_t) rl];
+        for (size_t l = 0; l < aproj.lanes.size(); ++l) if (aproj.lanes[l].armed) { rl = (int) l; break; }
+        const auto& lane = aproj.lanes[(size_t) rl];
         const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
-        const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
-        if (il != nullptr)
-        {
-            if (ir == nullptr) ir = il;
-            auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
-            const int cap = retroBuf.getNumSamples();
-            int w = retroWrite.load();
-            for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
-            const double prevEnd = retroEndBeat.load(), newEnd = rolling ? position.load() : -1.0;
-            if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
-                retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
-            retroWrite = w; retroTotal += n; retroLane = rl;
-            retroEndBeat = newEnd;
-        }
+        retroRl = rl; retroC0 = c0; retroC1 = c1;   // the device callback records it itself while playback renders ahead
+        const float* il = numIn > 0 && in != nullptr && c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+        const float* ir = numIn > 0 && in != nullptr && c1 >= 0 && c1 < numIn ? in[c1] : il;
+        if (il != nullptr) writeRetro (il, ir, n, rolling ? position.load() : -1.0, blockBeats, rl);
     }
     {
         const juce::SpinLock::ScopedTryLockType tl (takeLock);
-        for (size_t l = 0; l < proj.lanes.size(); ++l)
+        for (size_t l = 0; l < aproj.lanes.size(); ++l)
         {
-            auto& lane = proj.lanes[l];
+            auto& lane = aproj.lanes[l];
             if (! lane.armed) continue;
             const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
             const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
@@ -1855,7 +2222,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     juce::ignoreUnused (recordFrom);
 
     mixTracks (in, numIn, n);
-    if (! proj.ctlLinks.empty()) applyCtlLinks();
+    if (! aproj.ctlLinks.empty()) applyCtlLinks();
 
     auto& master = trackRt[0]->out;
     auto* l = master.getWritePointer (0); auto* r = master.getWritePointer (1);
@@ -1889,10 +2256,26 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     for (int c = 0; c < numOut; ++c)
     {
         if (! out[c]) continue;
-        const float* src = c == 0 ? l : (c == 1 ? r : nullptr);
+        const bool dual = dualOut.load(std::memory_order_relaxed) && (c == 2 || c == 3);
+        const float* src = c == 0 || (dual && c == 2) ? l : (c == 1 || (dual && c == 3) ? r : nullptr);
         if (src) { juce::FloatVectorOperations::copy (out[c], src, n); juce::FloatVectorOperations::clip (out[c], out[c], -4.0f, 4.0f, n); }
         else juce::FloatVectorOperations::clear (out[c], n);
     }
+}
+
+void Engine::writeRetro (const float* il, const float* ir, int n, double newEnd, double blockBeats, int rl)
+{
+    if (retroBuf.getNumSamples() <= n) return;
+    if (ir == nullptr) ir = il;
+    auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
+    const int cap = retroBuf.getNumSamples();
+    int w = retroWrite.load();
+    for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
+    const double prevEnd = retroEndBeat.load();
+    if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
+        retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
+    retroWrite = w; retroTotal += n; retroLane = rl;
+    retroEndBeat = newEnd;
 }
 
 void Engine::renderChannels (int n)
@@ -1920,36 +2303,38 @@ void Engine::renderChannels (int n)
 // automation clips (FL): every block, each clip under the playhead sets its knob; the value stays after the clip ends
 void Engine::applyAutomation (double beat)
 {
-    for (auto& c : proj.clips)
+    for (auto& c : aproj.clips)
     {
         if (! c.isAuto() || c.muted || c.hidden || c.autoPts.empty() || beat < c.start || beat >= c.start + c.length) continue;
         const float v = autoValueAt (c.autoPts, c.patOffset + beat - c.start);
         const auto& at = c.autoTarget;
         if (at.kind == AutoInsertVol || at.kind == AutoInsertPan)
         {
-            if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
-            auto& mt = proj.mixer[(size_t) at.track];
-            (at.kind == AutoInsertVol ? mt.volume : mt.pan) = autoToValue (at.kind, v);
+            if (at.track < 0 || at.track >= (int) aproj.mixer.size()) continue;
+            auto& mt = aproj.mixer[(size_t) at.track];
+            auto& dst = at.kind == AutoInsertVol ? mt.volume : mt.pan;
+            const float x = autoToValue (at.kind, v);
+            if (dst != x) { dst = x; pushAuto (at.kind, at.track, 0, x); }
         }
         else if (at.kind == AutoSendLevel)
         {
-            if (at.track < 0 || at.track >= (int) proj.mixer.size()) continue;
+            if (at.track < 0 || at.track >= (int) aproj.mixer.size()) continue;
             const int bus = at.param.getIntValue();
             const float lv = autoToValue (at.kind, v);
-            for (auto& sd : proj.mixer[(size_t) at.track].sends) if (sd.target == bus) sd.level = lv;
+            for (auto& sd : aproj.mixer[(size_t) at.track].sends) if (sd.target == bus && sd.level != lv) { sd.level = lv; pushAuto (at.kind, at.track, bus, lv); }
             if (bus >= 0 && bus < (int) sources.size())
                 for (auto& src : sources[(size_t) bus]) if (src.first == at.track) src.second = lv;
         }
         else if (at.kind == AutoChanVol || at.kind == AutoChanPan || at.kind == AutoChanPitch)
         {
-            auto* ch = proj.findChannel (at.channel);
+            auto* ch = aproj.findChannel (at.channel);
             if (ch == nullptr) continue;
             const float x = autoToValue (at.kind, v);
-            if (at.kind == AutoChanVol) ch->volume = x;
-            else if (at.kind == AutoChanPan) ch->pan = x;
+            if (at.kind == AutoChanVol) { if (ch->volume != x) { ch->volume = x; pushAuto (at.kind, 0, ch->id, x); } }
+            else if (at.kind == AutoChanPan) { if (ch->pan != x) { ch->pan = x; pushAuto (at.kind, 0, ch->id, x); } }
             else if (std::abs (ch->pitch - x) > 1.0e-4f)
             {
-                ch->pitch = x;
+                ch->pitch = x; pushAuto (at.kind, 0, ch->id, x);
                 auto it = channelRt.find (ch->id);
                 if (it != channelRt.end() && it->second->inst) it->second->inst->update (*ch);
             }
@@ -1986,9 +2371,9 @@ void Engine::mixTracks (const float* const*, int, int)
     for (auto& L : levels)
         for (int t : L)
         {
-            if (t < 0 || t >= (int) trackRt.size() || t >= (int) proj.mixer.size() || t >= (int) sources.size()) continue;
+            if (t < 0 || t >= (int) trackRt.size() || t >= (int) aproj.mixer.size() || t >= (int) sources.size()) continue;
             auto& tr = *trackRt[(size_t) t];
-            auto& mt = proj.mixer[(size_t) t];
+            auto& mt = aproj.mixer[(size_t) t];
             int own = 0;
             if (! tr.frozen)
                 for (size_t k = 0; k < tr.fx.size() && k < mt.fx.size(); ++k)
@@ -2067,6 +2452,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const bool wasPlaying = playing.load();
     if (wasPlaying) stop();
     deviceManager.removeAudioCallback (this);
+    antForceRealtime();
     const double sr = sampleRate; const int block = 512;
     const bool oldSong = proj.songMode;
     proj.songMode = song;
@@ -2088,6 +2474,8 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     }
     if (! writer && ! viaMemory) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
 
+    publishProject();
+    adoptNow();   // no callback runs now: take the staged song here
     {
         const juce::ScopedLock sl (lock);
         for (auto& t : trackRt) { t->silentSamples = 0; }
@@ -2130,6 +2518,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         proj.songMode = oldSong;
         for (auto* c : channelOrder) { if (c->inst) c->inst->allNotesOff(); c->numActive = 0; }
     }
+    publishProject();
     deviceManager.addAudioCallback (this);
     return ok;
 }

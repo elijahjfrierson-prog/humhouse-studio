@@ -1,5 +1,6 @@
 #include <set>
 #include "UI.h"
+#include "ProjectImport.h"
 #include <thread>
 #include "BinaryData.h"
 
@@ -69,6 +70,7 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
         static juce::String last; static juce::Typeface::Ptr plain, bold;
         if (last != build::font) { last = build::font; plain = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::plain)));
                                    bold = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::bold))); }
+        if (plain != nullptr && plain->getName() != last) plain = bold = nullptr;   // font not on this device: the OS stand-in draws boxes, keep ours
         if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
     }
     if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
@@ -621,6 +623,7 @@ public:
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
+        engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
@@ -1225,6 +1228,7 @@ if (phoneUI)
         if (index == 0)
         {
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
+            m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
             {
@@ -1301,6 +1305,7 @@ if (phoneUI)
             add (mTheme, "Theme color wheel...");
             m.addItem (4712, "Layout...");
             m.addItem (4713, "Mini keyboard (pop-out)", true, miniKb != nullptr);
+            m.addItem (4714, "Dual outputs: hear 1-2 and 3-4 together (monitor controllers)", true, engine.dualOut.load());
             {
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -1448,6 +1453,15 @@ if (phoneUI)
             case 4711: showKeyCommands(); break;
             case 4712: showLayoutDialog (studio); break;
             case 4713: toggleMiniKeyboard(); break;
+            case 4714:
+            {
+                const bool on = ! engine.dualOut.load();
+                engine.setDualOutput (on);
+                if (studio.settings) { studio.settings->setValue ("dualOut", on); studio.settings->saveIfNeeded(); }
+                flash (on ? "Dual outputs on: 1-2 and 3-4 play the same mix, sample-locked" : "Dual outputs off");
+                break;
+            }
+            case 4715: convertStems(); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
@@ -1506,11 +1520,14 @@ private:
             k->setAvailableRange (24, 108); k->setLowestVisibleKey (48); k->setKeyWidth (24.0f); k->setOctaveForMiddleC (4);
             k->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
             k->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
+            k->clearKeyMappings(); k->setWantsKeyboardFocus (false);   // computer keys go to the typing keyboard, so E / C / P and the other shortcuts keep working
             setContentOwned (k, false);
             setUsingNativeTitleBar (true); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
-            centreWithSize (640, 120); setAlwaysOnTop (true); setVisible (true);
-            k->grabKeyboardFocus();
+            setWantsKeyboardFocus (false);
+            centreWithSize (640, 120); setAlwaysOnTop (true); addToDesktop (getDesktopWindowStyleFlags()); setVisible (true);
+            miniKeyboardOpen() = true;
         }
+        ~MiniKb() override { miniKeyboardOpen() = false; }
         void closeButtonPressed() override { if (onClose) onClose(); }
         std::function<void()> onClose;
     };
@@ -2067,10 +2084,47 @@ private:
                               });
     }
 
+    // Ableton / Reaper / FL plugins: the installed plugin with that name (effects never match an instrument)
+    juce::String findInstalledPlugin (const juce::String& name, bool instrument)
+    {
+        const auto want = name.trim().toLowerCase();
+        juce::String loose;
+        for (auto& d : engine.knownPlugins.getTypes())
+        {
+            if (! instrument && d.isInstrument) continue;
+            const auto n = d.name.trim().toLowerCase();
+            if (n == want) return d.createIdentifierString();
+            if (loose.isEmpty() && want.isNotEmpty() && (n.startsWith (want) || want.startsWith (n))) loose = d.createIdentifierString();
+        }
+        return loose;
+    }
+    void convertStems()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Pick the folder of exported stems (Logic / Pro Tools / any DAW)", docsDir(), "*");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [safe] (const juce::FileChooser& fc) {
+                                  const auto d = fc.getResult();
+                                  if (safe != nullptr && d.isDirectory()) safe->askToSave ([safe, d] { if (safe != nullptr) safe->load (d); });
+                              });
+    }
+
     void load (const juce::File& f)
     {
         Project q;
-        if (! loadProject (q, f))
+        juce::StringArray converted;
+        if (f.isDirectory() || isForeignProject (f))
+        {
+            const bool ok = f.isDirectory() ? importStemFolder (f, q, converted)
+                                            : importForeignProject (f, q, converted, [this] (const juce::String& n, bool inst) { return findInstalledPlugin (n, inst); });
+            if (! ok)
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Convert", f.isDirectory() ? "No audio files in that folder." : "Couldn't read that project file.");
+                return;
+            }
+            q.projectFile = juce::File();   // Save as... writes the converted song as a .hhs with its audio inside
+        }
+        else if (! loadProject (q, f))
         {
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "Not a HumHouse project.");
             return;
@@ -2082,7 +2136,12 @@ private:
         studio.undo.clear();
         studio.undo.push (engine.project(), "Open");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
-        studio.dirty = false;
+        studio.dirty = ! converted.isEmpty();
+        if (! converted.isEmpty())
+        {
+            hintBar.setText ("Converted " + f.getFileName() + ": " + converted.joinIntoString ("  |  "), juce::dontSendNotification);
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Converted " + f.getFileName(), converted.joinIntoString ("\n") + "\n\nSave as... to keep it as a HumHouse song.");
+        }
         studio.sendChangeMessage();
         juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) { sp->collectAudio(); sp->locateMissingAudio(); } });   // glue: copy outside audio into the song folder
     }
@@ -2146,7 +2205,7 @@ private:
             if (safe == nullptr || r == 0) return;
             if (r >= 1 && r <= songs.size()) { safe->load (songs[r - 1]); return; }
             if (r != 100000) return;
-            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs");
+            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs;*.rpp;*.als;*.flp");
             safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
                 if (safe == nullptr || fc.getURLResults().isEmpty()) return;
                 if (auto f = copyIntoApp (fc.getURLResults()[0]); f.existsAsFile()) safe->load (f);
@@ -2157,7 +2216,7 @@ private:
     void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
-        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project", dir, "*.hhs");
+        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project (or Reaper .rpp, Ableton .als, FL .flp)", dir, backups ? "*.hhs" : "*.hhs;*.rpp;*.als;*.flp");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
@@ -2352,6 +2411,15 @@ private:
 
     void chooseExportFolder (juce::String name, int what, int track)
     {
+       #if JUCE_IOS
+        {   // iPhone can't pick a folder: exports go to Files > On My iPhone > HumHouse Studio > Exports
+            const auto dir = hhsHome().getChildFile ("Exports");
+            dir.createDirectory();
+            hintBar.setText ("Exporting to Files > On My iPhone > HumHouse Studio > Exports", juce::dontSendNotification);
+            exportInto (dir, name, what, track);
+            return;
+        }
+       #endif
         juce::File start (studio.settings ? studio.settings->getValue ("exportDir") : juce::String());
         if (! start.isDirectory()) start = docsDir();
         chooser = std::make_unique<juce::FileChooser> ("Choose the export folder", start);
@@ -2360,6 +2428,12 @@ private:
                                   const auto dir = fc.getResult();
                                   if (! dir.isDirectory()) return;
                                   if (studio.settings) { studio.settings->setValue ("exportDir", dir.getFullPathName()); studio.settings->saveIfNeeded(); }
+                                  exportInto (dir, name, what, track);
+                              });
+    }
+
+    void exportInto (const juce::File& dir, const juce::String& name, int what, int track)
+    {
                                   const juce::String ext = engine.exportFormat == 1 ? ".mp3" : engine.exportFormat == 2 ? ".m4a" : ".wav";
                                   auto& p = engine.project();
                                   std::vector<RenderJob::Item> items;
@@ -2375,7 +2449,6 @@ private:
                                   engine.stop();
                                   // stems always render the whole song from bar 1 so they line up in any DAW
                                   (new RenderJob (engine, std::move (items), what == 2 ? true : p.songMode, what == 2))->launchThread();
-                              });
     }
 
     void showAudioSettings()

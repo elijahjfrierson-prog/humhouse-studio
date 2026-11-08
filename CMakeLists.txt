@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.4.9 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +29,7 @@ set(HHS_CORE_SOURCES
     Source/StudioEffects.cpp
     Source/Engine.cpp
     Source/ProjectIO.cpp
+    Source/ProjectImport.cpp
     Source/DrumSynth.cpp
     Source/AudioEncode.cpp
     Source/StemSplit.cpp

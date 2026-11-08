@@ -1,4 +1,5 @@
 #include "Instruments.h"
+#include "FastMath.h"
 #include "Drummer/DrummerCore.h"
 #include "DrumSynth.h"
 #include <cmath>
@@ -337,6 +338,7 @@ public:
         const float kq = 2.0f - 2.0f * juce::jlimit (0.0f, 0.97f, p.resonance);
         const float a1 = 1.0f / (1.0f + g * (g + kq)), a2 = g * a1, a3 = g * a2;
         const float detRatio = std::pow (2.0f, p.detune / 1200.0f);
+        const float dK = 1.0f + p.drive * 8.0f, dNorm = p.drive > 0.0f ? 1.0f / hhs::fastTanh (dK) : 1.0f;
 
         for (auto& v : voices)
         {
@@ -366,7 +368,8 @@ public:
                     default: v.env *= rCoef; if (v.env < 0.0005f) v.active = false; break;
                 }
                 if (! v.active) break;
-                double hz = keyToHz (v.current);
+                if (v.current != v.hzKey) { v.hzKey = v.current; v.hzBase = keyToHz (v.current); }   // pow only when the pitch moves
+                double hz = v.hzBase;
                 if (p.wave == 4) hz *= 1.0 + 3.0 * p.bDrop * std::exp (-v.age * 40.0 / sampleRate); // 808 pitch drop (HitMaker Drop)
                 if (p.vibrato > 0.0f && p.lfoRate > 0.0f)
                     hz *= std::pow (2.0, p.vibrato * std::sin (juce::MathConstants<double>::twoPi * p.lfoRate * v.age / sampleRate) / 12.0);
@@ -388,7 +391,7 @@ public:
                 if (p.sub > 0.0f) { s += p.sub * std::sin (juce::MathConstants<float>::twoPi * v.subPh); v.subPh += 0.5f * dt; v.subPh -= std::floor (v.subPh); }
                 v.ph1 += dt; if (v.ph1 >= 1.0f) v.ph1 -= 1.0f;
                 v.ph2 += dt * detRatio; if (v.ph2 >= 1.0f) v.ph2 -= 1.0f;
-                if (p.drive > 0.0f) s = std::tanh (s * (1.0f + p.drive * 8.0f)) / std::tanh (1.0f + p.drive * 8.0f) ;
+                if (p.drive > 0.0f) s = hhs::fastTanh (s * dK) * dNorm;
                 // TPT state-variable lowpass
                 const float v3 = s - v.ic2, v1 = a1 * v.ic1 + a2 * v3, v2 = v.ic2 + a2 * v.ic1 + a3 * v3;
                 v.ic1 = 2.0f * v1 - v.ic1; v.ic2 = 2.0f * v2 - v.ic2;
@@ -399,7 +402,7 @@ public:
         }
     }
 private:
-    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1;
+    struct Voice { bool active = false, slid = false; int key = 0, stage = 0, prevStage = 0; double current = 60, target = 60, glideStep = 1.0e9, age = 0, relAge = -1, claim = -1, hzKey = -1.0e9, hzBase = 440.0;
                    float env = 0, velocity = 1, ph1 = 0, ph2 = 0.25f, ic1 = 0, ic2 = 0, fmPh = 0, subPh = 0;
                    std::array<float, 3> xph { 0.0f, 0.31f, 0.67f };
                    std::array<float, 6> sx { 0.11f, 0.37f, 0.53f, 0.71f, 0.89f, 0.23f };
@@ -539,12 +542,12 @@ private:
         constexpr float tp = juce::MathConstants<float>::twoPi;
         switch (m)
         {
-            case 1: { const float k = 1.0f + 9.0f * a; return std::tanh (s * k) / std::tanh (k); }                 // Saturate
+            case 1: { const float k = 1.0f + 9.0f * a; return hhs::fastTanh (s * k) / hhs::fastTanh (k); }                 // Saturate
             case 2: return std::sin (s * (1.0f + 5.0f * a) * juce::MathConstants<float>::halfPi);                   // Fold
             case 3: return juce::jlimit (-1.0f, 1.0f, s * (1.0f + 20.0f * a));                                       // Hard clip
             case 4: { const float lv = std::round (2.0f + (1.0f - a) * (1.0f - a) * 62.0f); return std::round (s * lv) / lv; }   // Bitcrush
             case 5: return std::sin (tp * ph + 3.0f * a * std::sin (2.0f * tp * ph));                               // Growl (FM)
-            case 6: { const float x = s + 0.35f * a * s * s; return std::tanh (x * (1.0f + 3.0f * a)) / std::tanh (1.0f + 3.0f * a); }   // Tape
+            case 6: { const float x = s + 0.35f * a * s * s; return hhs::fastTanh (x * (1.0f + 3.0f * a)) / hhs::fastTanh (1.0f + 3.0f * a); }   // Tape
             default: return s;
         }
     }
@@ -861,12 +864,12 @@ static float warpSampled808 (int m, float a, float s)
 {
     switch (m)
     {
-        case 1: { const float k = 1.0f + 9.0f * a; return std::tanh (s * k) / std::tanh (k); }
+        case 1: { const float k = 1.0f + 9.0f * a; return hhs::fastTanh (s * k) / hhs::fastTanh (k); }
         case 2: return std::sin (s * (1.0f + 5.0f * a) * juce::MathConstants<float>::halfPi);
         case 3: return juce::jlimit (-1.0f, 1.0f, s * (1.0f + 20.0f * a));
         case 4: { const float lv = std::round (2.0f + (1.0f - a) * (1.0f - a) * 62.0f); return std::round (s * lv) / lv; }
         case 5: return std::sin (s * juce::MathConstants<float>::halfPi + 3.0f * a * std::sin (juce::MathConstants<float>::pi * s));
-        case 6: { const float x = s + 0.35f * a * s * s; return std::tanh (x * (1.0f + 3.0f * a)) / std::tanh (1.0f + 3.0f * a); }
+        case 6: { const float x = s + 0.35f * a * s * s; return hhs::fastTanh (x * (1.0f + 3.0f * a)) / hhs::fastTanh (1.0f + 3.0f * a); }
         default: return s;
     }
 }

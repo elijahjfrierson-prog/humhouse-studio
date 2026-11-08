@@ -84,10 +84,11 @@ static const hhx::GrooveCorpus& corpus()
 float drummerDynamics (const DrummerParams& p, double songBeat)
 {
     const auto pct = [&p] (int k) { return k >= 0 && k < (int) p.sectionVel.size() && p.sectionVel[(size_t) k] > 0 ? (float) p.sectionVel[(size_t) k] : 100.0f; };
-    const int k = juce::jmax (0, (int) std::floor (songBeat / 32.0));
-    const double f = songBeat - k * 32.0;
+    double ss = 0, sl = 32.0;
+    const int k = drumSectionAt (p, songBeat, &ss, &sl);
+    const double f = songBeat - ss, ramp = std::min (8.0, sl);
     float v = pct (k);
-    if (f > 24.0) v += (pct (k + 1) - v) * (float) ((f - 24.0) / 8.0);   // build up / break down into the next section
+    if (f > sl - ramp) v += (pct (k + 1) - v) * (float) ((f - (sl - ramp)) / ramp);   // build up / break down into the next section
     return v / 100.0f;
 }
 

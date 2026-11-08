@@ -1,4 +1,5 @@
 #include "DrumSynth.h"
+#include "FastMath.h"
 #include <random>
 #include <cmath>
 
@@ -35,7 +36,7 @@ juce::AudioBuffer<float> renderBuiltinDrum (int which, double sr)
                 phase += twoPi * f / sr;
                 s = (float) (std::sin (phase) * std::exp (-t * 6.0));
                 s += noise * 0.15f * (float) std::exp (-t * 300.0);
-                s = std::tanh (s * 1.6f);
+                s = hhs::fastTanh (s * 1.6f);
                 break;
             }
             case Clap:

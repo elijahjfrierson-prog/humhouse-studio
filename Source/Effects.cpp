@@ -1,4 +1,5 @@
 #include "Effects.h"
+#include "FastMath.h"
 #include "rockglue/RockGlueEngine.h"
 #include "Model.h"
 #include <cmath>
@@ -474,7 +475,7 @@ public:
                 const int i0 = (int) rp % size, i1 = (i0 + 1) % size; const float fr = rp - std::floor (rp);
                 dl = bl[i0] + (bl[i1] - bl[i0]) * fr; dr = br[i0] + (br[i1] - br[i0]) * fr;
                 lp[0] += ct * (dl - lp[0]); lp[1] += ct * (dr - lp[1]);
-                lp[0] += tape * (std::tanh (lp[0]) - lp[0]); lp[1] += tape * (std::tanh (lp[1]) - lp[1]);
+                lp[0] += tape * (hhs::fastTanh (lp[0]) - lp[0]); lp[1] += tape * (hhs::fastTanh (lp[1]) - lp[1]);
             }
             else
             {
@@ -583,7 +584,7 @@ public:
                 // body and a reverb-like snapback instead of a thin comb; the soft limit keeps high feedback musical
                 const float sp = p (7);
                 const float df = diff[c][1].tick (diff[c][0].tick (wet, 0.55f), 0.5f);
-                fb[c] = std::tanh (wet + sp * (df - wet));
+                fb[c] = hhs::fastTanh (wet + sp * (df - wet));
                 x[i] = x[i] * (1.0f - 0.5f * mix) + sign * wet * mix * 0.5f * 1.4f;
             }
             phase += inc; if (phase >= 1.0f) phase -= 1.0f;
@@ -632,7 +633,7 @@ public:
             }
             const float norm = 1.0f / std::sqrt ((float) nv);
             // feedback uses the voice average (loop gain stays < 1 even when voices line up) and a soft limit, so it can't run away
-            auto soft = [] (float x) { return std::isfinite (x) ? std::tanh (x) : 0.0f; };
+            auto soft = [] (float x) { return std::isfinite (x) ? hhs::fastTanh (x) : 0.0f; };
             fb[0] = soft (wl / (float) nv); fb[1] = soft (wr / (float) nv);
             wl *= norm; wr *= norm;
             L[i] = inL * (1.0f - 0.5f * mix) + wl * mix * 0.7f;
@@ -748,7 +749,7 @@ public:
     {
         const float k = 1.0f + p (0) * 30.0f, mix = p (3), og = dbToGain (p (4)), c = 1.0f - std::exp (-2.0f * kPi * p (2) / (float) sr);
         const int mode = (int) p (1);
-        const float norm = 1.0f / std::tanh (k);
+        const float norm = 1.0f / hhs::fastTanh (k);
         for (int ch = 0; ch < 2; ++ch)
         {
             auto* d = b.getWritePointer (ch);
@@ -757,8 +758,8 @@ public:
                 const float x = d[i]; float y;
                 switch (mode)
                 {
-                    case 0: y = std::tanh (k * x) * norm; break;
-                    case 1: y = x >= 0 ? std::tanh (k * x) * norm : std::tanh (k * 0.6f * x) * norm * 0.8f; break;
+                    case 0: y = hhs::fastTanh (k * x) * norm; break;
+                    case 1: y = x >= 0 ? hhs::fastTanh (k * x) * norm : hhs::fastTanh (k * 0.6f * x) * norm * 0.8f; break;
                     case 2: y = juce::jlimit (-1.0f, 1.0f, k * x); break;
                     default: y = std::sin (k * x * 0.5f); break;
                 }
@@ -1121,7 +1122,7 @@ public:
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
     {
         const float g = dbToGain (p (0)), c = dbToGain (p (1));
-        for (int ch = 0; ch < 2; ++ch) { auto* d = b.getWritePointer (ch); for (int i = 0; i < n; ++i) d[i] = c * std::tanh (d[i] * g / c); }
+        for (int ch = 0; ch < 2; ++ch) { auto* d = b.getWritePointer (ch); for (int i = 0; i < n; ++i) d[i] = c * hhs::fastTanh (d[i] * g / c); }
     }
 };
 
@@ -1560,12 +1561,12 @@ public:
             glowF.set (Biquad::HighShelf, sr, 5000.0, 0.7, 1.2 * glow);
             canvasF.set (Biquad::Peak, sr, 320.0, 1.0, -2.0 * canvas);
         }
-        const float drive = 1.0f + 2.5f * chr, bias = 0.25f * chr, tb = std::tanh (bias), satMix = 0.55f * chr;
+        const float drive = 1.0f + 2.5f * chr, bias = 0.25f * chr, tb = hhs::fastTanh (bias), satMix = 0.55f * chr;
         auto colour = [&] (float x, int ch) {
             x = tone[0].tick (x, ch); x = tone[1].tick (x, ch); x = tone[2].tick (x, ch);
             if (satMix > 0.0f)
             {
-                const float y = (std::tanh (drive * x + bias) - tb) / drive;
+                const float y = (hhs::fastTanh (drive * x + bias) - tb) / drive;
                 const float hp = y - dcX[ch] + 0.9995f * dcY[ch]; dcX[ch] = y; dcY[ch] = hp;
                 x += (hp - x) * satMix;
             }

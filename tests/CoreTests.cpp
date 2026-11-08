@@ -6,6 +6,7 @@
 #include "../Source/Drummer/KitEngine.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
+#include "../Source/ProjectImport.h"
 #include "../Source/Effects.h"
 #include "../Source/StemSplit.h"
 #include "../Source/HumLab.h"
@@ -310,6 +311,70 @@ int main()
 {
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
     // phone crash repro: 5-minute beat + vocal + 2 adlibs, 60 FX added one at a time while audio runs, undo/redo, save, reopen
+    // engine bench: a 40-track session playing in real time while the screen sends 400 edits; how long each edit blocks the audio
+    if (std::getenv ("HHS_BENCH") != nullptr)
+    {
+        Engine e;
+        e.prepare (48000, 128);
+        auto& p = e.project();
+        p.songMode = false;
+        const auto& all = builtinEffects();
+        const int nT = std::getenv ("HHS_BENCH_TRACKS") != nullptr ? juce::jlimit (2, 400, std::atoi (std::getenv ("HHS_BENCH_TRACKS"))) : 40;
+        for (int t = 0; t < nT; ++t)
+        {
+            const int mt = p.addMixerTrack ("T" + juce::String (t));
+            for (int k = 0; k < 3; ++k) p.addFx (mt, all[(size_t) ((t * 3 + k) % (int) all.size())].id);
+            Channel ch; ch.type = ChannelType::Synth; ch.name = "S" + juce::String (t); ch.mixerTrack = mt;
+            const int id = p.addChannel (ch);
+            for (int k = 0; k < 8; ++k) { Note nt; nt.key = 48 + (t + k) % 24; nt.start = k * 0.5; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
+        }
+        if (auto* th = std::getenv ("HHS_BENCH_THREADS")) e.setPerformance (std::atoi (th), std::atoi (th) > 1, true);
+        const bool ant = std::getenv ("HHS_BENCH_ANT") != nullptr;   // device callback + render-ahead thread, like the app
+        e.sync(); if (! ant) e.play();
+        const int blocks = 6000; const double deadline = 128.0 / 48000.0;
+        std::atomic<bool> done { false };
+        double worst = 0, total = 0; int late = 0;
+        std::vector<float> times ((size_t) blocks);
+        std::thread audio ([&] {
+            juce::AudioBuffer<float> out (2, 128);
+            auto next = std::chrono::steady_clock::now();
+            for (int b = 0; b < blocks; ++b)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                if (ant) { juce::AudioIODeviceCallbackContext cc {}; e.audioDeviceIOCallbackWithContext (nullptr, 0, o, 2, 128, cc); }
+                else e.processBlock (nullptr, 0, o, 2, 128);
+                const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
+                worst = std::max (worst, dt); total += dt; if (dt > deadline) ++late;
+                times[(size_t) b] = (float) (dt / deadline);
+                next += std::chrono::microseconds ((int) (deadline * 1e6));
+                std::this_thread::sleep_until (next);
+            }
+            done = true;
+        });
+        if (ant) { std::this_thread::sleep_for (std::chrono::milliseconds (30)); e.play(); }
+        int edits = 0;
+        double held = 0, syncMs = 0;
+        const bool noEdits = std::getenv ("HHS_BENCH_NOEDIT") != nullptr;
+        while (noEdits && ! done) std::this_thread::sleep_for (std::chrono::milliseconds (5));
+        while (! done && edits < 400)
+        {
+            p.mixer[(size_t) (1 + edits % nT)].volume = 0.7f + 0.001f * (float) (edits % 50);
+            if (edits % 10 == 0) p.addMixerTrack ("E");
+            if (edits % 7 == 0) p.mixer[(size_t) (1 + edits % (nT - 1))].sends.push_back ({ 40, 0.5f });
+            const auto s0 = juce::Time::getHighResolutionTicks();
+            e.sync(); held += e.swapUsLast.load(); ++edits;
+            syncMs += 1000.0 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - s0);
+            std::this_thread::sleep_for (std::chrono::milliseconds (5));
+        }
+        audio.join();
+        if (ant) std::printf ("BENCH render-ahead: %d underruns (dropouts) of %d blocks\n", e.antUnderruns.load(), blocks);
+        if (auto* dump = std::getenv ("HHS_BENCH_DUMP"))
+            if (auto* f = std::fopen (dump, "w")) { for (auto t : times) std::fprintf (f, "%.3f\n", t); std::fclose (f); }
+        std::printf ("BENCH %d tracks x 3 FX @128, %d edits: audio blocked avg %.0f us / worst %.0f us per edit; avg load %.1f%%, worst block %.0f%% of deadline, %d late blocks of %d; edit rebuild %.2f ms avg (UI thread)\n",
+                     nT, edits, held / juce::jmax (1, edits), (double) e.swapUsMax.load(), 100.0 * total / (blocks * deadline), 100.0 * worst / deadline, late, blocks, syncMs / juce::jmax (1, edits));
+        return 0;
+    }
     if (std::getenv ("HHS_STRESS") != nullptr)
     {
         const double sr = 44100; const int secs = 300;
@@ -715,6 +780,7 @@ int main()
         for (auto& l : p.lanes) l.armed = false;
         p.lanes[0].armed = true; p.lanes[0].monitor = true;
         p.lanes[0].stereoIn = stereo == 1; p.lanes[0].inputCh = 0; p.lanes[0].inputPair = 0;
+        e.publishProject();   // the UI publishes edits; the audio plays its own copy
         juce::AudioBuffer<float> mic (2, 512), out (2, 512);
         mic.clear();
         for (int i = 0; i < 512; ++i) mic.setSample (0, i, 0.3f * std::sin (i * 0.07f));
@@ -820,6 +886,7 @@ int main()
         auto& p = e.project();
         for (auto& l : p.lanes) l.armed = false;
         p.lanes[0].armed = true; p.lanes[0].monitor = true; p.lanes[0].autoNorm = true;
+        e.publishProject();   // the UI publishes edits; the audio plays its own copy
         juce::AudioBuffer<float> mic (2, 512), out (2, 512);
         float pk = 0; double ph = 0;
         for (int b = 0; b < 400; ++b)
@@ -2922,6 +2989,85 @@ int main()
                && q.channels.back().sampleFile.getFileName() == "myshot.wav");
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
         dir.deleteRecursively();
+    }
+
+    // converter: Reaper .rpp, Ableton .als and a Logic / Pro Tools stems folder open as HumHouse songs
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-convert");
+        dir.deleteRecursively(); dir.createDirectory();
+        const auto wav = dir.getChildFile ("Gtr L.wav");
+        {
+            juce::AudioBuffer<float> b (1, 44100 * 2); b.clear();
+            std::unique_ptr<juce::OutputStream> os (wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), 44100, 1, 16, {}, 0));
+            if (w) { os.release(); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+        }
+        juce::StringArray rep;
+        hhs::PluginFinder find = [] (const juce::String& n, bool) { return n == "AmpliTube 5" ? juce::String ("VST3-AmpliTube 5-1") : juce::String(); };
+        const auto rpp = dir.getChildFile ("song.rpp");
+        rpp.replaceWithText ("<REAPER_PROJECT 0.1 \"7.0\" 0\n  TEMPO 90 4 4\n  <TRACK\n    NAME \"Gtr L\"\n    VOLPAN 0.5 -1 -1\n"
+                             "    <FXCHAIN\n      <VST \"VST3: AmpliTube 5 (IK Multimedia)\" AmpliTube.vst3 0 \"\" 0\n        AAAA\n      >\n      <JS utility/volume \"\"\n      >\n    >\n"
+                             "    <ITEM\n      POSITION 2\n      LENGTH 1\n      SOFFS 0.5\n      <SOURCE WAVE\n        FILE \"Gtr L.wav\"\n      >\n    >\n  >\n  <TRACK\n    NAME Bass\n  >\n>\n");
+        hhs::Project q;
+        CHECK (hhs::importForeignProject (rpp, q, rep, find));
+        CHECK (q.bpm == 90.0 && q.lanes.size() == 2 && q.lanes[0].name == "Gtr L" && q.lanes[1].name == "Bass");
+        CHECK (q.clips.size() == 1 && std::abs (q.clips[0].start - 3.0) < 1e-6 && std::abs (q.clips[0].length - 1.5) < 1e-6 && std::abs (q.clips[0].sourceOffset - 0.5) < 1e-6);
+        const auto& gm = q.mixer[(size_t) q.lanes[0].mixerTrack];
+        CHECK (gm.pan == -1.0f && std::abs (gm.volume - 0.8f * std::sqrt (0.5f)) < 1e-4 && gm.fx.size() == 1 && gm.fx[0].pluginId == "VST3-AmpliTube 5-1");
+        CHECK (q.lanes[0].mixerTrack != q.lanes[1].mixerTrack);
+
+        const auto als = dir.getChildFile ("song.als");
+        {
+            const juce::String x = "<?xml version=\"1.0\"?><Ableton><LiveSet><Tracks>"
+                "<AudioTrack><Name><EffectiveName Value=\"Vox\"/></Name><DeviceChain><Mixer><Volume><Manual Value=\"1\"/></Volume><Pan><Manual Value=\"0.25\"/></Pan></Mixer>"
+                "<MainSequencer><ClipSlotList/><Sample><ArrangerAutomation><Events><AudioClip Time=\"4\"><CurrentStart Value=\"4\"/><CurrentEnd Value=\"8\"/>"
+                "<Loop><LoopStart Value=\"0\"/></Loop><SampleRef><FileRef><Path Value=\"" + wav.getFullPathName() + "\"/></FileRef></SampleRef></AudioClip></Events></ArrangerAutomation></Sample></MainSequencer></DeviceChain></AudioTrack>"
+                "<MidiTrack><Name><EffectiveName Value=\"Keys\"/></Name><DeviceChain><Mixer/><MainSequencer><MidiClip Time=\"0\"><CurrentStart Value=\"0\"/><CurrentEnd Value=\"4\"/>"
+                "<Loop><LoopStart Value=\"0\"/><LoopEnd Value=\"16\"/></Loop><Notes><KeyTracks><KeyTrack><Notes><MidiNoteEvent Time=\"1\" Duration=\"0.5\" Velocity=\"127\"/></Notes><MidiKey Value=\"64\"/></KeyTrack></KeyTracks></Notes></MidiClip></MainSequencer></DeviceChain></MidiTrack>"
+                "</Tracks><MasterTrack><DeviceChain><Mixer><Tempo><Manual Value=\"128\"/></Tempo></Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>";
+            juce::FileOutputStream fo (als); fo.setPosition (0); fo.truncate();
+            juce::GZIPCompressorOutputStream gz (fo, 6, 31);
+            gz.writeText (x, false, false, nullptr); gz.flush();
+        }
+        hhs::Project a; rep.clear();
+        CHECK (hhs::importForeignProject (als, a, rep, find));
+        CHECK (a.bpm == 128.0 && a.lanes.size() == 2 && a.lanes[0].name == "Vox" && a.lanes[1].name == "Keys");
+        int audio = 0, pats = 0;
+        for (auto& c : a.clips) { if (c.isAudio() && std::abs (c.start - 4.0) < 1e-6 && std::abs (c.length - 4.0) < 1e-6) ++audio; if (c.patternIndex >= 0) ++pats; }
+        CHECK (audio == 1 && pats == 1);
+        bool note = false;
+        for (auto& pt : a.patterns) for (auto& [id, nl] : pt.notes) for (auto& n : nl) if (n.key == 64 && std::abs (n.start - 1.0) < 1e-6) note = true;
+        CHECK (note);
+        bool loop16 = false;   // a 4-bar Ableton loop repeats every 4 bars, not every bar
+        for (auto& pt : a.patterns) if (! pt.notes.empty()) loop16 = std::abs (pt.lengthBeats() - 16.0) < 1e-6;
+        CHECK (loop16);
+
+        hhs::Project st; rep.clear();
+        dir.getChildFile ("Gtr R.wav").deleteFile(); wav.copyFileTo (dir.getChildFile ("Gtr R.wav"));
+        CHECK (hhs::importStemFolder (dir, st, rep));
+        CHECK (st.lanes.size() == 2 && st.clips.size() == 2 && st.lanes[0].mixerTrack != st.lanes[1].mixerTrack);
+        dir.deleteRecursively();
+    }
+
+    // templates keep track routing, Drummer section bars and plugin FX state (L/R AmpliTube)
+    {
+        Project p = Project::createDefault();
+        const int a = p.addMixerTrack ("Gtr L"), b = p.addMixerTrack ("Gtr R");
+        Lane l; l.name = "Gtr L"; l.mixerTrack = a; p.lanes.push_back (l); l.name = "Gtr R"; l.mixerTrack = b; p.lanes.push_back (l);
+        for (int t : { a, b }) { FxSlot f; f.uid = p.newUid(); f.pluginId = "VST3-AmpliTube 5-1"; const char st[] = "amp-state"; f.pluginState.append (st, sizeof (st)); f.pluginState.append (&t, sizeof (t)); p.mixer[(size_t) t].fx.push_back (f); }
+        Channel d; d.type = ChannelType::Drummer; d.name = "Drummer"; d.drum.sectionBars = { 4, 8, 1, 5 }; d.drum.halfTime = true;
+        const int did = p.addChannel (d);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-template-rt.hhs");
+        CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        const size_t n = q.lanes.size();
+        CHECK (n >= 2 && q.lanes[n - 2].mixerTrack == a && q.lanes[n - 1].mixerTrack == b);
+        CHECK (q.mixer[(size_t) a].fx.size() == 1 && q.mixer[(size_t) a].fx[0].pluginState == p.mixer[(size_t) a].fx[0].pluginState);
+        CHECK (q.mixer[(size_t) b].fx.size() == 1 && q.mixer[(size_t) b].fx[0].pluginState == p.mixer[(size_t) b].fx[0].pluginState);
+        bool drum = false;
+        for (auto& c : q.channels) if (c.id == did) drum = c.drum.sectionBars == std::vector<int> { 4, 8, 1, 5 } && c.drum.halfTime;
+        CHECK (drum);
+        f.deleteFile();
     }
 
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);

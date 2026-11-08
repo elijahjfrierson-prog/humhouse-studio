@@ -1343,7 +1343,8 @@ struct DrumSteps : juce::Component
         const auto it = c->drum.steps.find (section);
         const bool man = it != c->drum.steps.end();
         g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
-        g.drawText ((all > 0 ? "ALL sections (bars 1-" + juce::String (all * 8) + ")" : "Bars " + juce::String (section * 8 + 1) + "-" + juce::String (section * 8 + 8))
+        const int b0 = (int) (drumSectionStart (c->drum, section) / 4.0) + 1, b1 = b0 + drumSectionBars (c->drum, section) - 1;
+        g.drawText ((all > 0 ? "ALL sections (bars 1-" + juce::String ((int) (drumSectionStart (c->drum, all) / 4.0)) + ")" : "Bars " + juce::String (b0) + "-" + juce::String (b1))
                     + (man ? "  |  your steps repeat, the drummer plays around them and fills bar 8" : "  |  AUTO: click a step - one kick and the drummer builds around it"),
                     10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
         const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
@@ -1389,21 +1390,67 @@ struct DrumSequencer : juce::Component
     DrumSequencer (Studio& st, int id) : s (st), channelId (id), steps (st, id, 0)
     {
         addAndMakeVisible (steps);
-        for (int k = -1; k < count(); ++k)
-        {
-            auto* b = btns.add (new juce::TextButton (k < 0 ? juce::String ("ALL") : juce::String (k * 8 + 1) + "-" + juce::String (k * 8 + 8)));
-            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc93d).withAlpha (0.8f));
-            b->onClick = [this, k] { pick (k); };
-            addAndMakeVisible (b);
-        }
-        pick (0);
+        rebuild (0);
         setSize (640, 260);
     }
+    // right-click a section: how many bars it has (1-1 .. 1-8), so the next one starts where you want (halftime chorus at bar 5)
+    void rebuild (int sel)
+    {
+        btns.clear();
+        const auto* c = s.channel (channelId);
+        for (int k = -1; k < count(); ++k)
+        {
+            juce::String label ("ALL");
+            if (k >= 0 && c != nullptr) { const int b0 = (int) (drumSectionStart (c->drum, k) / 4.0) + 1; label = juce::String (b0) + "-" + juce::String (b0 + drumSectionBars (c->drum, k) - 1); }
+            auto* b = btns.add (new SectionBtn (label));
+            b->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc93d).withAlpha (0.8f));
+            b->setTooltip ("Right-click: how many bars this section has");
+            b->onClick = [this, k] { pick (k); };
+            if (k >= 0) b->onRight = [this, k] { sectionMenu (k); };
+            addAndMakeVisible (b);
+        }
+        pick (juce::jlimit (-1, count() - 1, sel));
+        resized();
+    }
+    void sectionMenu (int k)
+    {
+        pick (k);
+        const auto* c = s.channel (channelId); if (c == nullptr) return;
+        const int cur = drumSectionBars (c->drum, k), b0 = (int) (drumSectionStart (c->drum, k) / 4.0) + 1;
+        juce::PopupMenu m;
+        m.addSectionHeader ("Section starting at bar " + juce::String (b0));
+        for (int n = 1; n <= 8; ++n) m.addItem (n, "1-" + juce::String (n) + "  (bars " + juce::String (b0) + "-" + juce::String (b0 + n - 1) + ", next starts at " + juce::String (b0 + n) + ")", true, n == cur);
+        m.addSeparator(); m.addItem (20, "All sections back to 8 bars");
+        m.showMenuAsync ({}, [sp = juce::Component::SafePointer<DrumSequencer> (this), k] (int r) {
+            if (sp == nullptr || r <= 0) return;
+            const int id = sp->channelId;
+            sp->s.edit ("Drummer section bars", [id, k, r] (Project& p) {
+                for (auto& ch : p.channels) if (ch.id == id)
+                {
+                    auto& v = ch.drum.sectionBars;
+                    if (r == 20) { v.clear(); continue; }
+                    if ((int) v.size() <= k) v.resize ((size_t) k + 1, 8);
+                    v[(size_t) k] = r;
+                }
+            });
+            sp->rebuild (k);
+        });
+    }
+    struct SectionBtn : juce::TextButton
+    {
+        using juce::TextButton::TextButton;
+        std::function<void()> onRight;
+        void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && onRight) { onRight(); return; } juce::TextButton::mouseDown (e); }
+    };
     int count() const
     {
         double end = 0;
         for (auto& c : s.p().clips) if (c.drummer == channelId) end = juce::jmax (end, c.start + c.length);
-        return juce::jlimit (1, 32, (int) std::ceil (end / 32.0 - 1e-6));
+        const auto* c = s.channel (channelId);
+        if (c == nullptr) return juce::jlimit (1, 32, (int) std::ceil (end / 32.0 - 1e-6));
+        int n = 1;
+        while (n < 32 && drumSectionStart (c->drum, n) < end - 1e-6) ++n;
+        return n;
     }
     void pick (int k)
     {
@@ -1419,7 +1466,7 @@ struct DrumSequencer : juce::Component
         for (auto* b : btns) b->setBounds (top.removeFromLeft (w).reduced (2, 0));
         steps.setBounds (r);
     }
-    Studio& s; int channelId; DrumSteps steps; juce::OwnedArray<juce::TextButton> btns;
+    Studio& s; int channelId; DrumSteps steps; juce::OwnedArray<SectionBtn> btns;
 };
 
 // SECTIONS: click a cell to turn a drum group off/on for that 8-bar section of the song; double-click = STEPS editor
@@ -1959,7 +2006,7 @@ void openClipEditor (Studio& s, int clipUid)
     func.push_back ({ "normalize", "Normalize", 0, 1, 0, 0.0f, { "-", "Normalize now" } });
     func.push_back ({ "humlab", "HumLab editor", 0, 1, 0, 0.0f, { "-", "Open" } });
     func.push_back ({ "humtime", "HumTime (chop / timing)", 0, 1, 0, 0.0f, { "-", "Open" } });
-    func.push_back ({ "humtone", "HumTone (pitch)", 0, 1, 0, 0.0f, { "-", "Open" } });
+    func.push_back ({ "humtone", "Perfect Pitch", 0, 1, 0, 0.0f, { "-", "Open" } });
     auto* tabs = new ChannelTabs();
     tabs->add ("CLIP", new ParamGrid (name + "  |  Audio clip", mainP, setter, commit, "Audio clip"));
     tabs->add ("SHAPE", new ParamGrid (name + "  |  Functions", func, setter, commit, "Audio clip FUNC"));
