@@ -367,7 +367,7 @@ struct Studio : public juce::ChangeBroadcaster
     std::function<void (int view)> showView;   // 0 beat, 1 record, 2 mix
 
     Project& p() { return engine.project(); }
-    template <typename F> void live (F&& f) { const juce::ScopedLock sl (engine.getLock()); f (p()); }
+    template <typename F> void live (F&& f) { f (p()); engine.publishProject(); }   // the audio has its own copy: no lock
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
     static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves
