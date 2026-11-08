@@ -223,6 +223,7 @@ private:
     std::array<NormState, 256> normState {};
     juce::AudioBuffer<float> normScratch { 2, 8192 };
     int idleThresholdBlocks = 0;
+    std::vector<double> patLen;
     int currentBlock = 0, currentLevel = 0;
     PlayContext ctx;
     std::atomic<bool> offline { false };

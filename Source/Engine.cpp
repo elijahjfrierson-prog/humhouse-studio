@@ -785,6 +785,7 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
+    patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
 }
@@ -1291,6 +1292,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     };
     bool anySolo = false;
     for (auto& c : proj.channels) anySolo |= c.solo;
+    // each pattern's length once per segment, not once per channel (it walks every note)
+    patLen.resize (proj.patterns.size());
+    for (size_t i = 0; i < proj.patterns.size(); ++i) patLen[i] = proj.patterns[i].lengthBeats();
 
     auto emit = [&] (size_t ci, const Note& note, double absStart, double startSec = 0.0)
     {
@@ -1340,14 +1344,14 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             auto& pat = proj.patterns[(size_t) proj.currentPattern];
             auto it = pat.notes.find (ch.id);
             if (it == pat.notes.end()) continue;
-            const double plen = pat.lengthBeats();
+            const double plen = patLen[(size_t) proj.currentPattern];
             for (auto& note : it->second)
             {
                 if (note.muted) continue;
                 double s = swingBeat (note.start) + shiftBeats;
                 if (s < 0.0) s += plen; else if (s >= plen) s -= plen;   // shifted past the loop edge: wraps like FL
                 if (s >= b0 && s < b1) emit (ci, note, s);
-                else if (chase) chaseNote (ci, note, s, pat.lengthBeats());
+                else if (chase) chaseNote (ci, note, s, plen);
             }
         }
         else if (ch.type == ChannelType::Drummer)
@@ -1411,7 +1415,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 auto& pat = proj.patterns[(size_t) clip.patternIndex];
                 auto it = pat.notes.find (ch.id);
                 if (it == pat.notes.end()) continue;
-                const double plen = pat.lengthBeats();
+                const double plen = patLen[(size_t) clip.patternIndex];
                 const double base = clip.start - std::fmod (juce::jmax (0.0, clip.patOffset), plen);   // a sliced clip starts mid-pattern
                 const int r0 = std::max (0, (int) std::floor ((b0 - base) / plen) - 1);
                 const int r1 = (int) std::floor ((b1 - base) / plen) + 1;
