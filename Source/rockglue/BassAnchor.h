@@ -10,6 +10,7 @@
 #pragma once
 
 #include "Biquad.h"
+#include "../FastMath.h"
 
 #include <algorithm>
 #include <cmath>
@@ -80,7 +81,7 @@ private:
     static inline float shapeOdd(float x) noexcept
     {
         const float bent = x + 0.15f * x * x * x;
-        return std::tanh(bent);
+        return hhs::fastTanh (bent);
     }
 
     double fs = 48000.0;

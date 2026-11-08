@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include "../FastMath.h"
 #include <cmath>
 
 namespace rockglue
@@ -100,7 +101,7 @@ private:
 };
 
 inline float dbToGain(float db) noexcept { return std::pow(10.0f, db * 0.05f); }
-inline float gainToDb(float g) noexcept { return 20.0f * std::log10(std::max(g, 1.0e-9f)); }
+inline float gainToDb(float g) noexcept { return 20.0f * hhs::fastLog10(std::max(g, 1.0e-9f)); }
 
 // One-pole coefficient for a time constant in milliseconds.
 inline float timeConstantCoefficient(double ms, double fs) noexcept
