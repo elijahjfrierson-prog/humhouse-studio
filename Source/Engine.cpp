@@ -1,3 +1,4 @@
+#include "PluginSandbox.h"
 #include "Engine.h"
 #include <thread>
 #include "DrumSynth.h"
@@ -675,6 +676,13 @@ std::unique_ptr<juce::AudioPluginInstance> Engine::createPlugin (const juce::Str
         error = desc->name + " crashed before and is disabled (Options > Re-enable crashed plugins)";
         return {};
     }
+   #if ! JUCE_IOS
+    if (pluginSandbox.load())
+    {
+        juce::String sandboxError;   // helper failed to start: fall back to loading it here
+        if (auto sb = createSandboxedPlugin (*desc, sampleRate, maxBlock, sandboxError)) { sb->setPlayHead (this); return sb; }
+    }
+   #endif
     beginRiskyPluginCall (*desc);
     auto inst = formats.createPluginInstance (*desc, sampleRate, maxBlock, error);
     if (inst)

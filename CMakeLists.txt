@@ -28,6 +28,7 @@ set(HHS_CORE_SOURCES
     Source/Effects.cpp
     Source/StudioEffects.cpp
     Source/Engine.cpp
+    Source/PluginSandbox.cpp
     Source/ProjectIO.cpp
     Source/ProjectImport.cpp
     Source/DrumSynth.cpp
