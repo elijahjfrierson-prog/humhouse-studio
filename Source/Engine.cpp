@@ -556,6 +556,7 @@ void Engine::sync()
                 f->builtin->prepare (sampleRate, maxBlock);
                 f->tail = f->builtin->tailSeconds() + 0.5;
             }
+            if (! f->dryDelay.ready()) f->dryDelay.prepare (8192);
             newFx[slot.uid] = std::move (f);
         }
 
@@ -629,6 +630,41 @@ void Engine::sync()
             }
     }
 
+    // ---- build everything the swap needs out here: the audio thread then waits only for pointer moves, never for allocations
+    const size_t nT = proj.mixer.size();
+    std::vector<std::unique_ptr<TrackRuntime>> freshT (nT);
+    for (size_t t = trackRt.size(); t < nT; ++t)
+    {
+        auto rt = std::make_unique<TrackRuntime>();
+        rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock);
+        rt->inDelay.prepare (kPdcSize);
+        freshT[t] = std::move (rt);
+    }
+    auto newLevels = proj.processingLevels();
+    std::vector<std::vector<std::pair<int, float>>> newSources (nT);
+    for (int t = 1; t < (int) nT; ++t)
+    {
+        auto& mt = proj.mixer[(size_t) t];
+        for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) nT) newSources[(size_t) s.target].push_back ({ t, s.level });
+        if (mt.routesToMaster) newSources[0].push_back ({ t, 1.0f });
+    }
+    using EdgeVec = decltype (TrackRuntime::edge);
+    std::vector<std::unique_ptr<EdgeVec>> freshEdges (nT);
+    for (size_t t = 0; t < nT; ++t)
+    {
+        const size_t have = t < trackRt.size() && trackRt[t] ? trackRt[t]->edge.size() : 0;
+        if (have != newSources[t].size())
+        {
+            auto e = std::make_unique<EdgeVec> (newSources[t].size());
+            for (auto& d : *e) d.prepare (kPdcSize);
+            freshEdges[t] = std::move (e);
+        }
+    }
+    std::vector<float> newTrackCost (nT + 1, 0.0f), newChanCost (proj.channels.size(), 0.0f);
+    std::vector<int> newJobOrder (proj.channels.size());
+    for (size_t i = 0; i < newJobOrder.size(); ++i) newJobOrder[i] = (int) i;
+    channelOrder.reserve (proj.channels.size());
+
     // ---- swap in under the lock
     std::vector<std::unique_ptr<ChannelRuntime>> discardC;
     std::vector<std::unique_ptr<FxRuntime>> discardFx;
@@ -636,6 +672,7 @@ void Engine::sync()
     std::vector<std::unique_ptr<TrackRuntime>> discardT;
     {
         const juce::ScopedLock sl (lock);
+        const auto heldFrom = juce::Time::getHighResolutionTicks();
         // channels
         std::map<int, std::unique_ptr<ChannelRuntime>> merged;
         for (auto& ch : proj.channels)
@@ -653,10 +690,15 @@ void Engine::sync()
             rt->cutGroup = ch.cutGroup;
             channelOrder.push_back (rt);
         }
-        chanJobOrder.resize (channelOrder.size());
-        for (size_t i = 0; i < chanJobOrder.size(); ++i) chanJobOrder[i] = (int) i;
-        chanCost.assign (channelOrder.size(), 0.0f);
-        trackCost.assign (proj.mixer.size() + 1, 0.0f);
+        if (newJobOrder.size() != channelOrder.size())
+        {
+            newJobOrder.resize (channelOrder.size());
+            for (size_t i = 0; i < newJobOrder.size(); ++i) newJobOrder[i] = (int) i;
+            newChanCost.assign (channelOrder.size(), 0.0f);
+        }
+        chanJobOrder.swap (newJobOrder);
+        chanCost.swap (newChanCost);
+        trackCost.swap (newTrackCost);
 
         // tracks
         std::vector<std::unique_ptr<TrackRuntime>> tracks;
@@ -664,8 +706,10 @@ void Engine::sync()
         {
             std::unique_ptr<TrackRuntime> rt;
             if (t < trackRt.size() && trackRt[t]) rt = std::move (trackRt[t]);
+            else if (freshT[t]) rt = std::move (freshT[t]);
             else { rt = std::make_unique<TrackRuntime>(); rt->in.setSize (2, maxBlock); rt->out.setSize (2, maxBlock); rt->dry.setSize (2, maxBlock); }
             std::vector<std::unique_ptr<FxRuntime>> chain;
+            chain.reserve (proj.mixer[t].fx.size());
             for (auto& slot : proj.mixer[t].fx)
             {
                 std::unique_ptr<FxRuntime> f;
@@ -698,21 +742,18 @@ void Engine::sync()
         clipRt = std::move (mergedClips);
 
         // routing
-        levels = proj.processingLevels();
-        sources.assign (proj.mixer.size(), {});
-        for (int t = 1; t < (int) proj.mixer.size(); ++t)
-        {
-            auto& mt = proj.mixer[(size_t) t];
-            for (auto& s : mt.sends) if (s.target >= 0 && s.target < (int) proj.mixer.size()) sources[(size_t) s.target].push_back ({ t, s.level });
-            if (mt.routesToMaster) sources[0].push_back ({ t, 1.0f });
-        }
+        levels.swap (newLevels);       // the old ones are freed after the lock, with the other leftovers
+        sources.swap (newSources);
         for (size_t t = 0; t < trackRt.size() && t < sources.size(); ++t)
         {
             auto& rt = *trackRt[t];
             if (! rt.inDelay.ready()) rt.inDelay.prepare (kPdcSize);
+            if (t < freshEdges.size() && freshEdges[t]) std::swap (rt.edge, *freshEdges[t]);
             if (rt.edge.size() != sources[t].size()) { rt.edge.resize (sources[t].size()); for (auto& d : rt.edge) if (! d.ready()) d.prepare (kPdcSize); }
         }
         updateSolo();
+        const float us = (float) (1.0e6 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - heldFrom));
+        swapUsLast = us; if (us > swapUsMax.load()) swapUsMax = us;
     }
     // close editors before their plugin instance is deleted (the discard vectors die at the end of this scope)
     if (onPluginDiscard)
