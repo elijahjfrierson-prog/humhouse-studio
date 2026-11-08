@@ -522,6 +522,7 @@ Engine::Engine()
     const int hw = (int) std::thread::hardware_concurrency();
     pool = std::make_unique<WorkerPool> (juce::jlimit (0, 31, hw - 1));
     uiPoolWorkers = pool->size();
+    humWaveFactory (0);   // builds the shared wavetables now, not on the audio thread at the first synth swap
     staged = std::make_unique<Staged>();
     publisher = std::make_unique<Publisher> (*this);
     publisher->startTimerHz (30);
