@@ -184,6 +184,7 @@ private:
     std::map<int, std::shared_ptr<ClipRuntime>> uiClipRt;
     Sources uiSources;
     int uiPoolWorkers = -1;
+    bool freshLayout = false;   // newProject: pending per-track swaps belong to the old song
     struct AutoWrite { int kind, index, sub; float value; };
     juce::AbstractFifo autoFifo { 1024 };
     std::array<AutoWrite, 1024> autoWrites {};

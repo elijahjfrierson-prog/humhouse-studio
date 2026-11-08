@@ -593,6 +593,7 @@ void Engine::newProject (Project p)
     {   // everything is rebuilt; the audio keeps the old runtimes until it swaps, then they are freed on this thread
         const juce::ScopedLock sl (lock);
         uiChannelRt.clear(); uiChannelIds.clear(); uiTrackRt.clear(); uiFx.clear(); uiFrozenFile.clear(); uiEdges.clear(); uiClipRt.clear(); uiSources.clear();
+        freshLayout = true;
     }
     sync();
 }
@@ -897,6 +898,11 @@ void Engine::sync()
         uiEdges = edgeCount; uiClipRt = mergedClips; uiSources = newSources;
 
         auto& s = beginStage();
+        if (freshLayout)
+        {
+            s.frozen.clear(); s.frozenFile.clear(); s.setFrozen.clear(); s.edges.clear(); s.setEdge.clear();
+            freshLayout = false;
+        }
         s.hasRt = s.hasHits = s.hasSolo = true;
         s.channelRt = std::move (merged); s.channelOrder = std::move (order); s.trackRt = std::move (tracks);
         s.fx = std::move (chains); s.tail = std::move (tails);
