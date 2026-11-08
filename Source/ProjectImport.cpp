@@ -82,6 +82,7 @@ juce::String cleanPluginName (juce::String s)
 void finish (Project& p, juce::StringArray& report, const juce::StringArray& missing, const juce::StringArray& fxOk, const juce::StringArray& fxMissing, int clips)
 {
     if (p.lanes.empty()) addTrack (p, "Track 1", 0.8f, 0.0f);
+    if (p.clips.empty()) p.songMode = false;   // patterns only (no playlist): play the pattern
     report.add (juce::String ((int) p.lanes.size()) + " tracks, " + juce::String (clips) + " clips, " + juce::String (p.bpm, 2) + " BPM");
     if (! fxOk.isEmpty()) report.add ("FX loaded: " + fxOk.joinIntoString (", ") + " (settings start at the plugin's default)");
     if (! fxMissing.isEmpty()) report.add ("FX not installed here: " + fxMissing.joinIntoString (", "));
