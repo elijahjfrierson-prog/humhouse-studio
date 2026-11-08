@@ -185,7 +185,8 @@ private:
     Sources uiSources;
     int uiPoolWorkers = -1;
     bool freshLayout = false;   // newProject: pending per-track swaps belong to the old song
-    struct AutoWrite { int kind, index, sub; float value; };
+    struct AutoWrite { int kind, index, sub; float value; int gen; };
+    int uiGen = 0, audioGen = 0;   // song generation: automation from the previous song never lands on the next
     juce::AbstractFifo autoFifo { 1024 };
     std::array<AutoWrite, 1024> autoWrites {};
     Staged& beginStage();

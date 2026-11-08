@@ -374,6 +374,7 @@ static void tpdfDither (juce::AudioBuffer<float>& b, int n, int bits, juce::Rand
 struct Engine::Staged
 {
     bool hasProj = false, hasRt = false, hasHits = false, hasPool = false, hasSolo = false;
+    int gen = 0;
     Project proj;
     std::map<int, std::shared_ptr<ChannelRuntime>> channelRt;
     std::vector<ChannelRuntime*> channelOrder;
@@ -428,7 +429,7 @@ void Engine::adoptStaged()
 {
     const auto t0 = juce::Time::getHighResolutionTicks();
     auto& s = *staged;
-    if (s.hasProj) std::swap (aproj, s.proj);
+    if (s.hasProj) { std::swap (aproj, s.proj); audioGen = s.gen; }
     if (s.hasHits) drumHits.swap (s.drumHits);
     if (s.hasPool) std::swap (pool, s.pool);
     if (s.hasSolo) soloMuted.swap (s.soloMuted);
@@ -464,6 +465,7 @@ void Engine::stageProject (Staged& s)
     std::vector<juce::MemoryBlock> parked (blobs.size());
     for (size_t i = 0; i < blobs.size(); ++i) parked[i].swapWith (*blobs[i]);
     s.proj = proj;
+    s.gen = uiGen;
     for (size_t i = 0; i < blobs.size(); ++i) parked[i].swapWith (*blobs[i]);
     s.hasProj = true;
 }
@@ -486,7 +488,7 @@ void Engine::pushAuto (int kind, int index, int sub, float v)
 {
     int s1, n1, s2, n2;
     autoFifo.prepareToWrite (1, s1, n1, s2, n2);
-    if (n1 > 0) { autoWrites[(size_t) s1] = { kind, index, sub, v }; autoFifo.finishedWrite (1); }
+    if (n1 > 0) { autoWrites[(size_t) s1] = { kind, index, sub, v, audioGen }; autoFifo.finishedWrite (1); }
 }
 
 void Engine::tick()
@@ -496,6 +498,7 @@ void Engine::tick()
     const int ready = autoFifo.getNumReady();
     autoFifo.prepareToRead (ready, s1, n1, s2, n2);
     auto apply = [this] (const AutoWrite& w) {
+        if (w.gen != uiGen) return;   // written while the previous song was still playing
         if (w.kind == AutoInsertVol || w.kind == AutoInsertPan)
         { if (w.index >= 0 && w.index < (int) proj.mixer.size()) (w.kind == AutoInsertVol ? proj.mixer[(size_t) w.index].volume : proj.mixer[(size_t) w.index].pan) = w.value; }
         else if (w.kind == AutoSendLevel)
@@ -594,6 +597,7 @@ void Engine::newProject (Project p)
         const juce::ScopedLock sl (lock);
         uiChannelRt.clear(); uiChannelIds.clear(); uiTrackRt.clear(); uiFx.clear(); uiFrozenFile.clear(); uiEdges.clear(); uiClipRt.clear(); uiSources.clear();
         freshLayout = true;
+        ++uiGen;
     }
     sync();
 }
