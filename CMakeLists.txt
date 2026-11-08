@@ -161,5 +161,6 @@ endif()
 if(TARGET HHSTests AND MSVC)
     # symbols for readable crash backtraces in CI
     target_compile_options(HHSTests PRIVATE /Zi)
-    target_link_options(HHSTests PRIVATE /DEBUG)
+    # the test main holds many Engines on its stack; Windows gives only 1 MB by default
+    target_link_options(HHSTests PRIVATE /DEBUG /STACK:67108864)
 endif()
