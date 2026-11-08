@@ -622,6 +622,7 @@ public:
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
+        engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
@@ -1302,6 +1303,7 @@ if (phoneUI)
             add (mTheme, "Theme color wheel...");
             m.addItem (4712, "Layout...");
             m.addItem (4713, "Mini keyboard (pop-out)", true, miniKb != nullptr);
+            m.addItem (4714, "Dual outputs: hear 1-2 and 3-4 together (monitor controllers)", true, engine.dualOut.load());
             {
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
@@ -1449,6 +1451,14 @@ if (phoneUI)
             case 4711: showKeyCommands(); break;
             case 4712: showLayoutDialog (studio); break;
             case 4713: toggleMiniKeyboard(); break;
+            case 4714:
+            {
+                const bool on = ! engine.dualOut.load();
+                engine.setDualOutput (on);
+                if (studio.settings) { studio.settings->setValue ("dualOut", on); studio.settings->saveIfNeeded(); }
+                flash (on ? "Dual outputs on: 1-2 and 3-4 play the same mix, sample-locked" : "Dual outputs off");
+                break;
+            }
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;

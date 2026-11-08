@@ -400,7 +400,18 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
         if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
        #endif
     }
+    if (dualOut.load()) setDualOutput (true);
     deviceManager.addAudioCallback (this);
+}
+
+void Engine::setDualOutput (bool on)
+{
+    dualOut = on;
+    if (! on || deviceManager.getCurrentAudioDevice() == nullptr) return;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    if (deviceManager.getCurrentAudioDevice()->getOutputChannelNames().size() < 4) return;   // a 2-out interface: nothing to open
+    juce::BigInteger want = setup.outputChannels; want.setRange (0, 4, true);
+    if (want != setup.outputChannels) { setup.outputChannels = want; setup.useDefaultOutputChannels = false; deviceManager.setAudioDeviceSetup (setup, true); }
 }
 
 void Engine::newProject (Project p)
@@ -1891,7 +1902,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     for (int c = 0; c < numOut; ++c)
     {
         if (! out[c]) continue;
-        const float* src = c == 0 ? l : (c == 1 ? r : nullptr);
+        const bool dual = dualOut.load(std::memory_order_relaxed) && (c == 2 || c == 3);
+        const float* src = c == 0 || (dual && c == 2) ? l : (c == 1 || (dual && c == 3) ? r : nullptr);
         if (src) { juce::FloatVectorOperations::copy (out[c], src, n); juce::FloatVectorOperations::clip (out[c], out[c], -4.0f, 4.0f, n); }
         else juce::FloatVectorOperations::clear (out[c], n);
     }

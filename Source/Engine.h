@@ -75,6 +75,8 @@ public:
     double positionBeats() const { return position.load(); }
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
+    std::atomic<bool> dualOut { false };   // Options > Dual outputs: the master plays on 1-2 AND 3-4, the very same samples (no phasing)
+    void setDualOutput (bool on);
     std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time
     std::atomic<int> duckAutoSrc { -1 };   // vocal insert the one-knob duck follows when no SC source is set
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
