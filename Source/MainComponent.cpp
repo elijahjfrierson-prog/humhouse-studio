@@ -2103,7 +2103,10 @@ private:
         chooser = std::make_unique<juce::FileChooser> ("Pick the folder of exported stems (Logic / Pro Tools / any DAW)", docsDir(), "*");
         juce::Component::SafePointer<MainComponent> safe (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                              [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult().isDirectory()) safe->load (fc.getResult()); });
+                              [safe] (const juce::FileChooser& fc) {
+                                  const auto d = fc.getResult();
+                                  if (safe != nullptr && d.isDirectory()) safe->askToSave ([safe, d] { if (safe != nullptr) safe->load (d); });
+                              });
     }
 
     void load (const juce::File& f)
