@@ -18,7 +18,7 @@ public:
             auto* b = modeBtns.add (new juce::TextButton());
             setupButton (*b, names[i], tips[i], true);
             b->setRadioGroupId (5101);
-            b->onClick = [this, i] { mode = i; repaint(); };
+            b->onClick = [this, i] { mode = i; idleTicks = 0; repaint(); };   // a new mode recomputes from the last capture, even when stopped
             addAndMakeVisible (b);
         }
         modeBtns[0]->setToggleState (true, juce::dontSendNotification);
