@@ -122,13 +122,14 @@ struct Strip : public juce::Component
         float buf[512];
         tap->read (buf, 512, tap->pos.load (std::memory_order_acquire));
         juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
-        for (int i = 0; i < 512; ++i)
+        const int pts = juce::jlimit (16, 512, (int) a.getWidth());   // about a point per pixel, not 512 per strip
+        for (int k = 0; k < pts; ++k)
         {
-            const float x = a.getX() + a.getWidth() * (float) i / 511.0f, y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
-            if (i == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
+            const int i = k * 511 / (pts - 1);
+            const float x = a.getX() + a.getWidth() * (float) k / (float) (pts - 1), y = mid - juce::jlimit (-1.0f, 1.0f, buf[i]) * hh;
+            if (k == 0) p.startNewSubPath (x, y); else p.lineTo (x, y);
         }
-        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh, 0.25f)); g.strokePath (p, juce::PathStrokeType (3.0f));
-        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh)); g.strokePath (p, juce::PathStrokeType (1.0f));
+        g.setGradientFill (col::mirrorGradient (0, mid - hh, mid + hh)); g.strokePath (p, juce::PathStrokeType (1.2f));   // one stroke per strip
     }
     void scMenu()
     {
