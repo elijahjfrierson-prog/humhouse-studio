@@ -37,6 +37,8 @@ void WorkerPool::workerLoop()
     int wgSeen = -1;
     juce::WorkgroupToken token;
     auto lastWork = std::chrono::steady_clock::now();
+    auto spinFor = std::chrono::microseconds (300);
+    const bool wideSpin = (int) std::thread::hardware_concurrency() >= 4;
     while (! quit.load())
     {
         if (const int g = wgGeneration.load(); g != wgSeen)
@@ -50,14 +52,22 @@ void WorkerPool::workerLoop()
         while (generation.load (std::memory_order_acquire) == seen && ! quit.load())
         {
             // stay hot while blocks keep arriving (sleep_for can oversleep 1-15 ms on Windows / macOS)
-            if (std::chrono::steady_clock::now() - lastWork < std::chrono::microseconds (300)) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
+            if (std::chrono::steady_clock::now() - lastWork < spinFor) std::this_thread::yield();   // short spin, then sleep: long spins starve plugin threads + UI
             else
             {
                 std::unique_lock<std::mutex> lk (m);
                 cv.wait_for (lk, std::chrono::milliseconds (2), [&] { return generation.load() != seen || quit.load(); });
             }
         }
-        lastWork = std::chrono::steady_clock::now();
+        {
+            // stay awake across the gap between audio blocks (a cv wake can land late on a busy machine);
+            // once blocks stop arriving (transport idle, device closed) the worker sleeps again
+            const auto now = std::chrono::steady_clock::now();
+            const auto gap = std::chrono::duration_cast<std::chrono::microseconds> (now - lastWork);
+            // only with cores to spare: on 2-core machines a spinning worker starves the UI thread mid-edit
+            spinFor = std::chrono::microseconds (wideSpin ? juce::jlimit<long long> (300, 6000, (long long) (gap.count() * 5 / 4)) : 300);
+            lastWork = now;
+        }
         seen = generation.load();
         if (quit.load()) return;
         for (;;)

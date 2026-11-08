@@ -319,7 +319,8 @@ int main()
         auto& p = e.project();
         p.songMode = false;
         const auto& all = builtinEffects();
-        for (int t = 0; t < 40; ++t)
+        const int nT = std::getenv ("HHS_BENCH_TRACKS") != nullptr ? juce::jlimit (2, 400, std::atoi (std::getenv ("HHS_BENCH_TRACKS"))) : 40;
+        for (int t = 0; t < nT; ++t)
         {
             const int mt = p.addMixerTrack ("T" + juce::String (t));
             for (int k = 0; k < 3; ++k) p.addFx (mt, all[(size_t) ((t * 3 + k) % (int) all.size())].id);
@@ -327,10 +328,12 @@ int main()
             const int id = p.addChannel (ch);
             for (int k = 0; k < 8; ++k) { Note nt; nt.key = 48 + (t + k) % 24; nt.start = k * 0.5; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
         }
+        if (auto* th = std::getenv ("HHS_BENCH_THREADS")) e.setPerformance (std::atoi (th), std::atoi (th) > 1, true);
         e.sync(); e.play();
         const int blocks = 6000; const double deadline = 128.0 / 48000.0;
         std::atomic<bool> done { false };
         double worst = 0, total = 0; int late = 0;
+        std::vector<float> times ((size_t) blocks);
         std::thread audio ([&] {
             juce::AudioBuffer<float> out (2, 128);
             auto next = std::chrono::steady_clock::now();
@@ -341,24 +344,31 @@ int main()
                 e.processBlock (nullptr, 0, o, 2, 128);
                 const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
                 worst = std::max (worst, dt); total += dt; if (dt > deadline) ++late;
+                times[(size_t) b] = (float) (dt / deadline);
                 next += std::chrono::microseconds ((int) (deadline * 1e6));
                 std::this_thread::sleep_until (next);
             }
             done = true;
         });
         int edits = 0;
-        double held = 0;
+        double held = 0, syncMs = 0;
+        const bool noEdits = std::getenv ("HHS_BENCH_NOEDIT") != nullptr;
+        while (noEdits && ! done) std::this_thread::sleep_for (std::chrono::milliseconds (5));
         while (! done && edits < 400)
         {
-            p.mixer[(size_t) (1 + edits % 40)].volume = 0.7f + 0.001f * (float) (edits % 50);
+            p.mixer[(size_t) (1 + edits % nT)].volume = 0.7f + 0.001f * (float) (edits % 50);
             if (edits % 10 == 0) p.addMixerTrack ("E");
-            if (edits % 7 == 0) p.mixer[(size_t) (1 + edits % 39)].sends.push_back ({ 40, 0.5f });
+            if (edits % 7 == 0) p.mixer[(size_t) (1 + edits % (nT - 1))].sends.push_back ({ 40, 0.5f });
+            const auto s0 = juce::Time::getHighResolutionTicks();
             e.sync(); held += e.swapUsLast.load(); ++edits;
+            syncMs += 1000.0 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - s0);
             std::this_thread::sleep_for (std::chrono::milliseconds (5));
         }
         audio.join();
-        std::printf ("BENCH 40 tracks x 3 FX @128, %d edits: audio blocked avg %.0f us / worst %.0f us per edit; avg load %.1f%%, worst block %.0f%% of deadline, %d late blocks of %d\n",
-                     edits, held / juce::jmax (1, edits), (double) e.swapUsMax.load(), 100.0 * total / (blocks * deadline), 100.0 * worst / deadline, late, blocks);
+        if (auto* dump = std::getenv ("HHS_BENCH_DUMP"))
+            if (auto* f = std::fopen (dump, "w")) { for (auto t : times) std::fprintf (f, "%.3f\n", t); std::fclose (f); }
+        std::printf ("BENCH %d tracks x 3 FX @128, %d edits: audio blocked avg %.0f us / worst %.0f us per edit; avg load %.1f%%, worst block %.0f%% of deadline, %d late blocks of %d; edit rebuild %.2f ms avg (UI thread)\n",
+                     nT, edits, held / juce::jmax (1, edits), (double) e.swapUsMax.load(), 100.0 * total / (blocks * deadline), 100.0 * worst / deadline, late, blocks, syncMs / juce::jmax (1, edits));
         return 0;
     }
     if (std::getenv ("HHS_STRESS") != nullptr)
