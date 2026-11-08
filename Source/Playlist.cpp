@@ -110,6 +110,18 @@ static void insertLane (Project& p, int at)
     p.lanes.insert (p.lanes.begin() + at, l);
 }
 
+// a pattern moved onto a routed track: its channels still on the Master adopt the track's insert (channels already routed keep theirs)
+static void adoptLaneRoute (Project& p, const Clip& c)
+{
+    if (c.patternIndex < 0 || c.patternIndex >= (int) p.patterns.size() || c.lane < 0 || c.lane >= (int) p.lanes.size()) return;
+    const int t = p.lanes[(size_t) c.lane].mixerTrack;
+    if (t <= 0 || t >= (int) p.mixer.size()) return;
+    const auto& pat = p.patterns[(size_t) c.patternIndex];
+    for (auto& ch : p.channels)
+        if (ch.mixerTrack == 0 && ch.type != ChannelType::Drummer)
+            if (auto it = pat.notes.find (ch.id); it != pat.notes.end() && ! it->second.empty()) ch.mixerTrack = t;
+}
+
 // Logic: a copy of the track right under it (same insert, FX and settings); with audio it also copies its clips
 static void duplicateLane (Project& p, int i, bool withClips)
 {
@@ -1231,7 +1243,10 @@ struct LaneHeader : public juce::Component
                 const Clip* best = nullptr;
                 for (auto& c : p.clips) if (c.lane == i && c.hidden && isSurprise (c) && (best == nullptr || c.uid > best->uid)) best = &c;
                 if (best != nullptr) { const Clip c = *best; placeOver (p, c, i); } });
-            else if (r >= 200 && r < 400) { const int t = r - 200; s.edit ("Route track", [i, t] (Project& p) { if (i < (int) p.lanes.size() && t < (int) p.mixer.size()) p.lanes[(size_t) i].mixerTrack = t; }); }
+            else if (r >= 200 && r < 400) { const int t = r - 200; s.edit ("Route track", [i, t] (Project& p) {
+                if (i >= (int) p.lanes.size() || t >= (int) p.mixer.size()) return;
+                p.lanes[(size_t) i].mixerTrack = t;
+                for (auto& c : p.clips) if (c.lane == i) { if (c.isAudio()) c.mixerTrack = -1; else adoptLaneRoute (p, c); } }); }
             else if (r == 11 || r == 12) { s.selectedLanes.clear(); const bool audio = r == 12; s.edit (audio ? "Duplicate track with audio" : "Duplicate track", [i, audio] (Project& p) { duplicateLane (p, i, audio); }); }
             else if (r == 5) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i); }); }
             else if (r == 6) { s.selectedLanes.clear(); s.edit ("Insert track", [i] (Project& p) { insertLane (p, i + 1); }); }
@@ -1800,13 +1815,14 @@ public:
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
             if (stretchDrag && dragOrig.size() == p.clips.size()) { stretchClips(); drag = Drag::None; dragClip = -1; stretchDrag = false; repaint(); return; }
             s.edit (drag == Drag::Ruler ? "Punch range" : drag == Drag::FadeIn || drag == Drag::FadeOut || drag == Drag::Curve ? "Fade" : "Edit clips", [&] (Project&) {
-                // routing follows the recording: a moved audio clip keeps playing through the insert it came from
+                // Logic: a clip moved onto another track plays through that track's route
                 if (drag == Drag::Move && dragOrig.size() == p.clips.size())
                     for (size_t i = 0; i < p.clips.size(); ++i)
                     {
                         auto& c = p.clips[i];
-                        if (c.isAudio() && c.lane != dragOrig[i].lane && c.mixerTrack < 0 && dragOrig[i].lane < (int) p.lanes.size())
-                            c.mixerTrack = p.lanes[(size_t) dragOrig[i].lane].mixerTrack;
+                        if (c.lane == dragOrig[i].lane || c.lane < 0 || c.lane >= (int) p.lanes.size()) continue;
+                        if (c.isAudio()) c.mixerTrack = -1;
+                        else adoptLaneRoute (p, c);
                     }
                 autoCrossfade (p);
             });
