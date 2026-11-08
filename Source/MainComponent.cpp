@@ -1,5 +1,6 @@
 #include <set>
 #include "UI.h"
+#include "ProjectImport.h"
 #include <thread>
 #include "BinaryData.h"
 
@@ -1227,6 +1228,7 @@ if (phoneUI)
         if (index == 0)
         {
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
+            m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
             {
@@ -1459,6 +1461,7 @@ if (phoneUI)
                 flash (on ? "Dual outputs on: 1-2 and 3-4 play the same mix, sample-locked" : "Dual outputs off");
                 break;
             }
+            case 4715: convertStems(); break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
@@ -2081,10 +2084,44 @@ private:
                               });
     }
 
+    // Ableton / Reaper / FL plugins: the installed plugin with that name (effects never match an instrument)
+    juce::String findInstalledPlugin (const juce::String& name, bool instrument)
+    {
+        const auto want = name.trim().toLowerCase();
+        juce::String loose;
+        for (auto& d : engine.knownPlugins.getTypes())
+        {
+            if (! instrument && d.isInstrument) continue;
+            const auto n = d.name.trim().toLowerCase();
+            if (n == want) return d.createIdentifierString();
+            if (loose.isEmpty() && want.isNotEmpty() && (n.startsWith (want) || want.startsWith (n))) loose = d.createIdentifierString();
+        }
+        return loose;
+    }
+    void convertStems()
+    {
+        chooser = std::make_unique<juce::FileChooser> ("Pick the folder of exported stems (Logic / Pro Tools / any DAW)", docsDir(), "*");
+        juce::Component::SafePointer<MainComponent> safe (this);
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                              [safe] (const juce::FileChooser& fc) { if (safe != nullptr && fc.getResult().isDirectory()) safe->load (fc.getResult()); });
+    }
+
     void load (const juce::File& f)
     {
         Project q;
-        if (! loadProject (q, f))
+        juce::StringArray converted;
+        if (f.isDirectory() || isForeignProject (f))
+        {
+            const bool ok = f.isDirectory() ? importStemFolder (f, q, converted)
+                                            : importForeignProject (f, q, converted, [this] (const juce::String& n, bool inst) { return findInstalledPlugin (n, inst); });
+            if (! ok)
+            {
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Convert", f.isDirectory() ? "No audio files in that folder." : "Couldn't read that project file.");
+                return;
+            }
+            q.projectFile = juce::File();   // Save as... writes the converted song as a .hhs with its audio inside
+        }
+        else if (! loadProject (q, f))
         {
             juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "Not a HumHouse project.");
             return;
@@ -2096,7 +2133,12 @@ private:
         studio.undo.clear();
         studio.undo.push (engine.project(), "Open");
         studio.selectedChannel = engine.project().channels.empty() ? -1 : engine.project().channels.front().id;
-        studio.dirty = false;
+        studio.dirty = ! converted.isEmpty();
+        if (! converted.isEmpty())
+        {
+            hintBar.setText ("Converted " + f.getFileName() + ": " + converted.joinIntoString ("  |  "), juce::dontSendNotification);
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Converted " + f.getFileName(), converted.joinIntoString ("\n") + "\n\nSave as... to keep it as a HumHouse song.");
+        }
         studio.sendChangeMessage();
         juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this)] { if (sp) { sp->collectAudio(); sp->locateMissingAudio(); } });   // glue: copy outside audio into the song folder
     }
@@ -2160,7 +2202,7 @@ private:
             if (safe == nullptr || r == 0) return;
             if (r >= 1 && r <= songs.size()) { safe->load (songs[r - 1]); return; }
             if (r != 100000) return;
-            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs");
+            safe->chooser = std::make_unique<juce::FileChooser> ("Open project", docsDir(), "*.hhs;*.rpp;*.als;*.flp");
             safe->chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe] (const juce::FileChooser& fc) {
                 if (safe == nullptr || fc.getURLResults().isEmpty()) return;
                 if (auto f = copyIntoApp (fc.getURLResults()[0]); f.existsAsFile()) safe->load (f);
@@ -2171,7 +2213,7 @@ private:
     void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
-        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project", dir, "*.hhs");
+        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project (or Reaper .rpp, Ableton .als, FL .flp)", dir, backups ? "*.hhs" : "*.hhs;*.rpp;*.als;*.flp");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }

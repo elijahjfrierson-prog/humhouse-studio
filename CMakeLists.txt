@@ -29,6 +29,7 @@ set(HHS_CORE_SOURCES
     Source/StudioEffects.cpp
     Source/Engine.cpp
     Source/ProjectIO.cpp
+    Source/ProjectImport.cpp
     Source/DrumSynth.cpp
     Source/AudioEncode.cpp
     Source/StemSplit.cpp

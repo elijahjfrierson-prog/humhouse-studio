@@ -6,6 +6,7 @@
 #include "../Source/Drummer/KitEngine.h"
 #include "../Source/NoteTools.h"
 #include "../Source/ProjectIO.h"
+#include "../Source/ProjectImport.h"
 #include "../Source/Effects.h"
 #include "../Source/StemSplit.h"
 #include "../Source/HumLab.h"
@@ -2921,6 +2922,61 @@ int main()
         CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.getSize() == size
                && q.channels.back().sampleFile.getFileName() == "myshot.wav");
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
+        dir.deleteRecursively();
+    }
+
+    // converter: Reaper .rpp, Ableton .als and a Logic / Pro Tools stems folder open as HumHouse songs
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-convert");
+        dir.deleteRecursively(); dir.createDirectory();
+        const auto wav = dir.getChildFile ("Gtr L.wav");
+        {
+            juce::AudioBuffer<float> b (1, 44100 * 2); b.clear();
+            std::unique_ptr<juce::OutputStream> os (wav.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), 44100, 1, 16, {}, 0));
+            if (w) { os.release(); w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples()); }
+        }
+        juce::StringArray rep;
+        hhs::PluginFinder find = [] (const juce::String& n, bool) { return n == "AmpliTube 5" ? juce::String ("VST3-AmpliTube 5-1") : juce::String(); };
+        const auto rpp = dir.getChildFile ("song.rpp");
+        rpp.replaceWithText ("<REAPER_PROJECT 0.1 \"7.0\" 0\n  TEMPO 90 4 4\n  <TRACK\n    NAME \"Gtr L\"\n    VOLPAN 0.5 -1 -1\n"
+                             "    <FXCHAIN\n      <VST \"VST3: AmpliTube 5 (IK Multimedia)\" AmpliTube.vst3 0 \"\" 0\n        AAAA\n      >\n      <JS utility/volume \"\"\n      >\n    >\n"
+                             "    <ITEM\n      POSITION 2\n      LENGTH 1\n      SOFFS 0.5\n      <SOURCE WAVE\n        FILE \"Gtr L.wav\"\n      >\n    >\n  >\n  <TRACK\n    NAME Bass\n  >\n>\n");
+        hhs::Project q;
+        CHECK (hhs::importForeignProject (rpp, q, rep, find));
+        CHECK (q.bpm == 90.0 && q.lanes.size() == 2 && q.lanes[0].name == "Gtr L" && q.lanes[1].name == "Bass");
+        CHECK (q.clips.size() == 1 && std::abs (q.clips[0].start - 3.0) < 1e-6 && std::abs (q.clips[0].length - 1.5) < 1e-6 && std::abs (q.clips[0].sourceOffset - 0.5) < 1e-6);
+        const auto& gm = q.mixer[(size_t) q.lanes[0].mixerTrack];
+        CHECK (gm.pan == -1.0f && std::abs (gm.volume - 0.8f * std::sqrt (0.5f)) < 1e-4 && gm.fx.size() == 1 && gm.fx[0].pluginId == "VST3-AmpliTube 5-1");
+        CHECK (q.lanes[0].mixerTrack != q.lanes[1].mixerTrack);
+
+        const auto als = dir.getChildFile ("song.als");
+        {
+            const juce::String x = "<?xml version=\"1.0\"?><Ableton><LiveSet><Tracks>"
+                "<AudioTrack><Name><EffectiveName Value=\"Vox\"/></Name><DeviceChain><Mixer><Volume><Manual Value=\"1\"/></Volume><Pan><Manual Value=\"0.25\"/></Pan></Mixer>"
+                "<MainSequencer><ClipSlotList/><Sample><ArrangerAutomation><Events><AudioClip Time=\"4\"><CurrentStart Value=\"4\"/><CurrentEnd Value=\"8\"/>"
+                "<Loop><LoopStart Value=\"0\"/></Loop><SampleRef><FileRef><Path Value=\"" + wav.getFullPathName() + "\"/></FileRef></SampleRef></AudioClip></Events></ArrangerAutomation></Sample></MainSequencer></DeviceChain></AudioTrack>"
+                "<MidiTrack><Name><EffectiveName Value=\"Keys\"/></Name><DeviceChain><Mixer/><MainSequencer><MidiClip Time=\"0\"><CurrentStart Value=\"0\"/><CurrentEnd Value=\"4\"/>"
+                "<Notes><KeyTracks><KeyTrack><Notes><MidiNoteEvent Time=\"1\" Duration=\"0.5\" Velocity=\"127\"/></Notes><MidiKey Value=\"64\"/></KeyTrack></KeyTracks></Notes></MidiClip></MainSequencer></DeviceChain></MidiTrack>"
+                "</Tracks><MasterTrack><DeviceChain><Mixer><Tempo><Manual Value=\"128\"/></Tempo></Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>";
+            juce::FileOutputStream fo (als); fo.setPosition (0); fo.truncate();
+            juce::GZIPCompressorOutputStream gz (fo, 6, 31);
+            gz.writeText (x, false, false, nullptr); gz.flush();
+        }
+        hhs::Project a; rep.clear();
+        CHECK (hhs::importForeignProject (als, a, rep, find));
+        CHECK (a.bpm == 128.0 && a.lanes.size() == 2 && a.lanes[0].name == "Vox" && a.lanes[1].name == "Keys");
+        int audio = 0, pats = 0;
+        for (auto& c : a.clips) { if (c.isAudio() && std::abs (c.start - 4.0) < 1e-6 && std::abs (c.length - 4.0) < 1e-6) ++audio; if (c.patternIndex >= 0) ++pats; }
+        CHECK (audio == 1 && pats == 1);
+        bool note = false;
+        for (auto& pt : a.patterns) for (auto& [id, nl] : pt.notes) for (auto& n : nl) if (n.key == 64 && std::abs (n.start - 1.0) < 1e-6) note = true;
+        CHECK (note);
+
+        hhs::Project st; rep.clear();
+        dir.getChildFile ("Gtr R.wav").deleteFile(); wav.copyFileTo (dir.getChildFile ("Gtr R.wav"));
+        CHECK (hhs::importStemFolder (dir, st, rep));
+        CHECK (st.lanes.size() == 2 && st.clips.size() == 2 && st.lanes[0].mixerTrack != st.lanes[1].mixerTrack);
         dir.deleteRecursively();
     }
 
