@@ -39,7 +39,6 @@ void WorkerPool::workerLoop()
     juce::WorkgroupToken token;
     auto lastWork = std::chrono::steady_clock::now();
     auto spinFor = std::chrono::microseconds (300);
-    const bool wideSpin = (int) std::thread::hardware_concurrency() >= 4;
     while (! quit.load())
     {
         if (const int g = wgGeneration.load(); g != wgSeen)
@@ -66,7 +65,9 @@ void WorkerPool::workerLoop()
             const auto now = std::chrono::steady_clock::now();
             const auto gap = std::chrono::duration_cast<std::chrono::microseconds> (now - lastWork);
             // only with cores to spare: on 2-core machines a spinning worker starves the UI thread mid-edit
-            spinFor = std::chrono::microseconds (wideSpin ? juce::jlimit<long long> (300, 6000, (long long) (gap.count() * 5 / 4)) : 300);
+            // never spin across the whole gap: N real-time workers spinning pin N cores, starving the UI and plug-in processes
+            juce::ignoreUnused (gap);
+            spinFor = std::chrono::microseconds (300);
             lastWork = now;
         }
         seen = generation.load();
@@ -1077,7 +1078,7 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 }
 void Engine::audioDeviceStopped() { antForceRealtime(); }
 
-double Engine::cpuLoad() const { return deviceManager.getCpuUsage(); }
+double Engine::cpuLoad() const { return std::max ((double) deviceManager.getCpuUsage(), (double) renderLoad.load()); }   // render-ahead does the work off the device callback
 
 void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
 {
@@ -2034,6 +2035,17 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     // lock-free: a new song copy / runtime layout the UI staged is swapped in here (pointer swaps only)
     inBlock.store (true);
     struct InBlock { std::atomic<bool>& b; ~InBlock() { b.store (false); } } inBlockGuard { inBlock };
+    struct LoadMeter   // real mix cost per block, whichever thread renders it (peak, slow fall)
+    {
+        Engine& e; int n; double t0;
+        ~LoadMeter()
+        {
+            if (e.offline.load() || n <= 0) return;
+            const float l = (float) ((juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate)));
+            const float o = e.renderLoad.load();
+            e.renderLoad.store (l > o ? l : o + (l - o) * 0.02f);
+        }
+    } loadMeter { *this, n, juce::Time::getMillisecondCounterHiRes() };
     if (! offline.load()) lastBlockMs = juce::Time::getMillisecondCounterHiRes();
     int hs = handoff.load();
     if (hs == 1 && handoff.compare_exchange_strong (hs, 2)) { adoptStaged(); handoff.store (3); }

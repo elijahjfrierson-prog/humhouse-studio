@@ -2,6 +2,13 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <atomic>
 #include <thread>
+#if JUCE_WINDOWS
+ #include <windows.h>
+#else
+ #include <pthread.h>
+ #include <time.h>
+ #include <cerrno>
+#endif
 
 #if ! JUCE_IOS
 namespace hhs
@@ -11,9 +18,79 @@ namespace
 constexpr const char* kHostId = "hhs-plugin-host";
 constexpr int kMaxBlock = 4096, kMaxMidi = 512, kMaxParams = 256;
 
+// cross-process wake-up: the waiting side sleeps in the OS instead of spinning a core
+struct SigMem
+{
+   #if ! JUCE_WINDOWS
+    pthread_mutex_t m; pthread_cond_t c; int flag;
+   #else
+    int unused;
+   #endif
+};
+
+class Signal
+{
+public:
+    ~Signal()
+    {
+       #if JUCE_WINDOWS
+        if (ev != nullptr) CloseHandle (ev);
+       #endif
+    }
+    void attach (SigMem* s, const juce::String& name, bool init)
+    {
+        mem = s;
+       #if JUCE_WINDOWS
+        juce::ignoreUnused (init);
+        ev = CreateEventW (nullptr, FALSE, FALSE, ("Local\\" + name).toWideCharPointer());
+       #else
+        juce::ignoreUnused (name);
+        if (! init) return;
+        pthread_mutexattr_t ma; pthread_mutexattr_init (&ma); pthread_mutexattr_setpshared (&ma, PTHREAD_PROCESS_SHARED);
+        pthread_mutex_init (&s->m, &ma); pthread_mutexattr_destroy (&ma);
+        pthread_condattr_t ca; pthread_condattr_init (&ca); pthread_condattr_setpshared (&ca, PTHREAD_PROCESS_SHARED);
+        pthread_cond_init (&s->c, &ca); pthread_condattr_destroy (&ca);
+        s->flag = 0;
+       #endif
+    }
+    void post()
+    {
+       #if JUCE_WINDOWS
+        if (ev != nullptr) SetEvent (ev);
+       #else
+        if (mem == nullptr) return;
+        pthread_mutex_lock (&mem->m); mem->flag = 1; pthread_cond_signal (&mem->c); pthread_mutex_unlock (&mem->m);
+       #endif
+    }
+    void wait (double ms)
+    {
+        if (ms <= 0.0) return;
+       #if JUCE_WINDOWS
+        if (ev != nullptr) WaitForSingleObject (ev, (DWORD) std::ceil (ms));
+       #else
+        if (mem == nullptr) return;
+        timespec ts; clock_gettime (CLOCK_REALTIME, &ts);
+        const long long ns = (long long) ts.tv_nsec + (long long) (ms * 1.0e6);
+        ts.tv_sec += (time_t) (ns / 1000000000LL); ts.tv_nsec = (long) (ns % 1000000000LL);
+        pthread_mutex_lock (&mem->m);
+        while (mem->flag == 0) if (pthread_cond_timedwait (&mem->c, &mem->m, &ts) == ETIMEDOUT) break;
+        mem->flag = 0;
+        pthread_mutex_unlock (&mem->m);
+       #endif
+    }
+private:
+    SigMem* mem = nullptr;
+   #if JUCE_WINDOWS
+    HANDLE ev = nullptr;
+   #endif
+};
+
+juce::String sigName (const juce::File& shm, const char* which) { return "hhs-" + shm.getFileNameWithoutExtension() + "-" + which; }
+
 // audio + MIDI + transport for one block, in a memory-mapped file both processes see
 struct Shared
 {
+    SigMem req, rsp;
     std::atomic<int> seq, done, n, numMidi, pqWrite, pqRead;
     double sampleRate, bpm, ppq, timeSec;
     int playing, pad;
@@ -77,6 +154,8 @@ public:
         map = std::make_unique<juce::MemoryMappedFile> (shmFile, juce::MemoryMappedFile::readWrite, false);
         if (map->getData() == nullptr || map->getSize() < sizeof (Shared)) { error = "Can't map the plug-in sandbox"; return false; }
         sh = static_cast<Shared*> (map->getData());
+        reqSig.attach (&sh->req, sigName (shmFile, "req"), true);
+        rspSig.attach (&sh->rsp, sigName (shmFile, "rsp"), true);
         if (! coord.launchWorkerProcess (juce::File::getSpecialLocation (juce::File::currentExecutableFile), kHostId, 0))
         { error = "Can't start the plug-in sandbox"; return false; }
         juce::ValueTree msg ("create");
@@ -147,17 +226,18 @@ public:
         sh->sampleRate = getSampleRate();
         const int want = sh->seq.load() + 1;
         sh->seq.store (want);
+        reqSig.post();
         // wait for the helper: at most about one block, so a hung plug-in can't stall the whole mix
         const double until = juce::Time::getMillisecondCounterHiRes() + 2.0 + 1500.0 * n / juce::jmax (1.0, getSampleRate());
         while (sh->done.load() != want)
         {
-            if (juce::Time::getMillisecondCounterHiRes() > until)
+            const double left = until - juce::Time::getMillisecondCounterHiRes();
+            if (left > 0.0) { rspSig.wait (left); continue; }   // sleep in the OS until the helper answers (no spinning)
             {
                 if (++misses > 200) crashed = true;   // ~a second of silence from it: treat as crashed
                 if (desc.isInstrument) b.clear();
                 return;
             }
-            std::this_thread::yield();
         }
         misses = 0;
         for (int c = 0; c < b.getNumChannels(); ++c) std::memcpy (b.getWritePointer (c), sh->out[juce::jmin (c, 1)], sizeof (float) * (size_t) n);
@@ -193,6 +273,7 @@ public:
     juce::File shmFile;
     std::unique_ptr<juce::MemoryMappedFile> map;
     Shared* sh = nullptr;
+    Signal reqSig, rspSig;
     double tail = 0.0;
     bool hasEd = true;
     int misses = 0;
@@ -258,6 +339,12 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
             if (auto xml = juce::parseXML (v["desc"].toString())) d.loadFromXml (*xml);
             map = std::make_unique<juce::MemoryMappedFile> (juce::File (v["shm"].toString()), juce::MemoryMappedFile::readWrite, false);
             sh = map->getData() != nullptr && map->getSize() >= sizeof (Shared) ? static_cast<Shared*> (map->getData()) : nullptr;
+            if (sh != nullptr)
+            {
+                const juce::File shm (v["shm"].toString());
+                reqSig.attach (&sh->req, sigName (shm, "req"), false);
+                rspSig.attach (&sh->rsp, sigName (shm, "rsp"), false);
+            }
             fm.addDefaultFormats();
             juce::String err;
             const double sr = v["sr"]; block = juce::jmin ((int) v["block"], kMaxBlock);
@@ -314,7 +401,6 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
     void run() override
     {
         int last = sh->seq.load();
-        auto lastWork = juce::Time::getMillisecondCounterHiRes();
         juce::MidiBuffer midi;
         midi.ensureSize (4096);
         while (! threadShouldExit())
@@ -322,9 +408,7 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
             const int s = sh->seq.load();
             if (s == last)
             {
-                // blocks arrive every few ms while playing: stay awake then, nap when the host is idle
-                if (juce::Time::getMillisecondCounterHiRes() - lastWork < 50.0) std::this_thread::yield();
-                else juce::Thread::sleep (1);
+                reqSig.wait (50.0);   // sleep until the host sends a block (no spinning: a spinning helper pins a core per plug-in)
                 continue;
             }
             last = s;
@@ -349,7 +433,7 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
             const int outs = juce::jmax (1, plugin->getTotalNumOutputChannels());
             for (int c = 0; c < 2; ++c) std::memcpy (sh->out[c], view.getReadPointer (juce::jmin (c, outs - 1)), sizeof (float) * (size_t) n);
             sh->done.store (s);
-            lastWork = juce::Time::getMillisecondCounterHiRes();
+            rspSig.post();
         }
     }
 
@@ -360,6 +444,7 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
     juce::AudioBuffer<float> buf;
     ChildPlayHead ph;
     Shared* sh = nullptr;
+    Signal reqSig, rspSig;
     int block = 512;
 };
 
