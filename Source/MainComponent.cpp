@@ -624,6 +624,7 @@ public:
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
+        engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
@@ -1327,6 +1328,7 @@ if (phoneUI)
                 pm.addSeparator();
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
+                pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
                 m.addItem (480, "OBS / Discord capture-friendly drawing (untick = faster GPU drawing)", true, captureFriendlyDrawing());
@@ -1387,6 +1389,13 @@ if (phoneUI)
                     const int k = peer->getAvailableRenderingEngines().indexOf (captureFriendlyDrawing() ? "Software Renderer" : "Direct2D");
                     if (k >= 0) peer->setCurrentRenderingEngine (k);
                 }
+            return;
+        }
+        if (id == 472)
+        {
+            engine.pluginSandbox = ! engine.pluginSandbox.load();
+            studio.settings->setValue ("pluginSandbox", engine.pluginSandbox.load());
+            flash (engine.pluginSandbox.load() ? "Crash protection on for plug-ins loaded from now" : "Plug-ins load directly (fastest) from now");
             return;
         }
         if (id >= 460 && id <= 471)

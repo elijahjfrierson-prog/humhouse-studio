@@ -1029,7 +1029,7 @@ void Engine::prepare (double sr, int block)
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
     antTmp.setSize (2, maxBlock);
-    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.025 * sr)));   // ~25 ms ahead
+    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.08 * sr)));   // ~25 ms ahead
     patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();

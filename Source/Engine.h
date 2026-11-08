@@ -59,7 +59,7 @@ public:
     void initialiseAudio (const juce::XmlElement* savedState);
     Project& project() { return proj; }
     void publishProject();
-    std::atomic<bool> pluginSandbox { true };
+    std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };     // third-party plug-ins run crash-protected in a helper process
     std::atomic<bool> anticipativeOn { true };   // render playback ahead (like Reaper's anticipative FX) while nothing is live
     std::atomic<int> antUnderruns { 0 };   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
