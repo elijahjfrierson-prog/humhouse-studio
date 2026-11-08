@@ -157,3 +157,9 @@ target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
 endif()
+
+if(TARGET HHSTests AND MSVC)
+    # symbols for readable crash backtraces in CI
+    target_compile_options(HHSTests PRIVATE /Zi)
+    target_link_options(HHSTests PRIVATE /DEBUG)
+endif()

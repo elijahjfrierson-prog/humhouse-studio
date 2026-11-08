@@ -310,6 +310,13 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main (int argc, char** argv)
 {
+    // CI crash triage: print where a crash happened instead of a bare SEGFAULT
+    juce::SystemStats::setApplicationCrashHandler ([] (void*)
+    {
+        std::fprintf (stderr, "\nCRASH backtrace:\n%s\n", juce::SystemStats::getStackBacktrace().toRawUTF8());
+        std::fflush (stderr);
+        std::_Exit (3);
+    });
    #if ! JUCE_IOS
     {   // this test binary doubles as the crash-protected plug-in helper (the sandbox launches its own executable)
         juce::String cmd;
