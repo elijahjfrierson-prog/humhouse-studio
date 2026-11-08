@@ -472,6 +472,8 @@ void Engine::stageProject (Staged& s)
 
 void Engine::publishProject()
 {
+    if (antState.load() != 0 && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; }))
+        antExit (false, false);   // a track went live (armed / monitoring): back to real time
     // structure changed and no rebuild yet: the next sync() publishes everything together
     if (proj.mixer.size() != uiTrackRt.size() || proj.channels.size() != uiChannelIds.size()) return;
     for (size_t i = 0; i < proj.channels.size(); ++i) if (proj.channels[i].id != uiChannelIds[i]) return;
@@ -515,6 +517,64 @@ void Engine::tick()
     if (playing.load() || (++tickCount % 3) == 0) publishProject();
 }
 
+struct Engine::AntThread : juce::Thread
+{
+    Engine& e;
+    explicit AntThread (Engine& en) : juce::Thread ("HHS render ahead"), e (en) {}
+    void run() override { while (! threadShouldExit()) if (! e.antRenderOnce()) e.antWake.wait (2); }
+};
+
+bool Engine::antRenderOnce()
+{
+    antBusy.store (true);
+    struct Idle { std::atomic<bool>& b; ~Idle() { b.store (false); } } idle { antBusy };
+    if (antState.load() != 1) return false;
+    const int chunk = antTmp.getNumSamples();
+    if (chunk <= 0 || antFifo.getNumReady() >= antTarget.load() || antFifo.getFreeSpace() < chunk) return false;
+    float* o[2] { antTmp.getWritePointer (0), antTmp.getWritePointer (1) };
+    processBlock (nullptr, 0, o, 2, chunk);
+    antBpm = ctx.bpm;
+    int s1, n1, s2, n2;
+    antFifo.prepareToWrite (chunk, s1, n1, s2, n2);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        if (n1 > 0) antRing.copyFrom (ch, s1, antTmp, ch, 0, n1);
+        if (n2 > 0) antRing.copyFrom (ch, s2, antTmp, ch, n1, n2);
+    }
+    antFifo.finishedWrite (n1 + n2);
+    return true;
+}
+
+void Engine::antExit (bool discard, bool wait)
+{
+    int s = 3; antState.compare_exchange_strong (s, 0);
+    s = 1; antState.compare_exchange_strong (s, 2);
+    if (discard) antDiscard = true;
+    if (! wait) return;
+    const auto t0 = juce::Time::getMillisecondCounterHiRes();
+    while (antState.load() != 0)
+    {
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        // no device callback is coming to finish the hand-back (device stopped): do it here
+        if (now - callbackMs.load() > 100.0 || now - t0 > 1000.0) { antForceRealtime(); break; }
+        std::this_thread::sleep_for (std::chrono::microseconds (200));
+    }
+}
+
+void Engine::antForceRealtime()
+{
+    int s = 3; antState.compare_exchange_strong (s, 0);
+    s = 1; antState.compare_exchange_strong (s, 2);
+    while (antBusy.load()) std::this_thread::yield();
+    if (antState.load() == 2)
+    {
+        int s1, n1, s2, n2;
+        antFifo.prepareToRead (antFifo.getNumReady(), s1, n1, s2, n2); antFifo.finishedRead (n1 + n2);
+        antAheadBeats = 0.0;
+        antState.store (0);
+    }
+}
+
 Engine::Engine()
 {
     formats.addDefaultFormats();
@@ -529,6 +589,8 @@ Engine::Engine()
     staged = std::make_unique<Staged>();
     publisher = std::make_unique<Publisher> (*this);
     publisher->startTimerHz (30);
+    antThread = std::make_unique<AntThread> (*this);
+    if (! antThread->startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (9))) antThread->startThread (juce::Thread::Priority::highest);
     diskThread.startThread (juce::Thread::Priority::high);
     recordingFolder = proj.recordingsFolder();
     prepare (44100.0, 512);
@@ -538,6 +600,8 @@ Engine::~Engine()
 {
     alive->store (false);
     deviceManager.removeAudioCallback (this);
+    antForceRealtime();
+    antThread->signalThreadShouldExit(); antWake.signal(); antThread->stopThread (2000);
     finishRecordingWriters();
     {
         // disk readers unregister from diskThread, which is declared after them and would be destroyed first
@@ -954,6 +1018,8 @@ void Engine::prepare (double sr, int block)
     const juce::ScopedLock sl (lock);
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
+    antTmp.setSize (2, maxBlock);
+    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.025 * sr)));   // ~25 ms ahead
     patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
@@ -991,6 +1057,7 @@ void Engine::prepareRuntimes()
 
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
+    antForceRealtime();
     prepare (d->getCurrentSampleRate(), d->getCurrentBufferSizeSamples());
     recordLatency = juce::jmax (0, d->getInputLatencyInSamples() + d->getOutputLatencyInSamples());
     {
@@ -1000,7 +1067,7 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
     }
     juce::MessageManager::callAsync ([this, a = alive] { if (a->load()) sync(); });
 }
-void Engine::audioDeviceStopped() {}
+void Engine::audioDeviceStopped() { antForceRealtime(); }
 
 double Engine::cpuLoad() const { return deviceManager.getCpuUsage(); }
 
@@ -1121,6 +1188,19 @@ void Engine::play()
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     const bool capture = ! rec && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed; });
     if (rec || capture) startRecordingWriters (capture);     // create take files outside the audio lock, so nothing drops out as recording starts
+    const bool live = rec || capture || std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; });
+    if (anticipativeOn.load() && ! live && ! offline.load() && juce::Time::getMillisecondCounterHiRes() - callbackMs.load() < 200.0)
+    {
+        // nothing live to hear: render playback ~25 ms ahead, so a CPU spike or a slow plugin can't drop out
+        antDiscard = true;
+        int z = 0;
+        if (antState.compare_exchange_strong (z, 3))
+        {
+            const auto until = juce::Time::getMillisecondCounterHiRes() + 200.0;
+            while (antState.load() == 3 && juce::Time::getMillisecondCounterHiRes() < until) std::this_thread::sleep_for (std::chrono::microseconds (200));
+            int three = 3; antState.compare_exchange_strong (three, 0);   // no callback answered: stay real time
+        }
+    }
     const juce::ScopedLock sl (lock);
     if (playing) return;
     if (loopSel) position = from;
@@ -1138,6 +1218,7 @@ void Engine::play()
 
 void Engine::stop()
 {
+    antExit (true, true);   // back to real time first: what was rendered ahead is dropped
     stopPreview();
     {
         const juce::ScopedLock sl (lock);
@@ -1152,12 +1233,14 @@ void Engine::stop()
 void Engine::setPositionBeats (double b)
 {
     position = std::max (0.0, b); startBeat = position; editChase = false; chasePending = true;
+    if (antState.load() != 0) antDiscard = true;   // what was rendered ahead belongs to the old spot
     if (playing.load()) declickGain = 0.0f;
 }
 
 void Engine::setRecording (bool r)
 {
     if (r == recording.load()) return;
+    if (r) antExit (false, true);   // recording is live: real time
     publishProject();
     recording = r;
     if (! playing) return;
@@ -1375,6 +1458,7 @@ void Engine::finishRecordingWriters()
 // =============================================================== preview
 void Engine::previewNote (int channelId, int key, float vel, bool on)
 {
+    if (on && antState.load() != 0) antExit (false, false);   // you're playing live: no render-ahead delay
     int s1, n1, s2, n2;
     previewFifo.prepareToWrite (1, s1, n1, s2, n2);
     if (n1 > 0) previewEvents[(size_t) s1] = { channelId, key, vel, on };
@@ -1384,6 +1468,7 @@ void Engine::previewNote (int channelId, int key, float vel, bool on)
 
 void Engine::previewFile (const juce::File& f)
 {
+    if (antState.load() != 0) antExit (false, false);
     auto s = loadSampleFile (f, sampleRate);
     const juce::SpinLock::ScopedLockType sl (previewLock);
     previewSample = s; previewPos = s ? 0 : -1;
@@ -1407,7 +1492,55 @@ juce::Optional<juce::AudioPlayHead::PositionInfo> Engine::getPosition() const
 void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut, int n,
                                                const juce::AudioIODeviceCallbackContext&)
 {
-    int done = 0;
+    callbackMs = juce::Time::getMillisecondCounterHiRes();
+    int st = antState.load();
+    if (st == 3) { antPrimed = false; antState.store (1); st = 1; antWake.signal(); }
+    if (st == 1 || st == 2)
+    {
+        juce::ScopedNoDenormals noDenormals;
+        int s1, n1, s2, n2;
+        if (antDiscard.exchange (false)) { antFifo.prepareToRead (antFifo.getNumReady(), s1, n1, s2, n2); antFifo.finishedRead (n1 + n2); }
+        const double spb = sampleRate * 60.0 / juce::jmax (1.0, antBpm.load());
+        {   // Retro Record keeps hearing the mic while playback is rendered ahead
+            const int c0 = retroC0.load(), c1 = retroC1.load();
+            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+            const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
+            const bool rolling = playing.load() && ! countingIn.load();
+            if (il != nullptr) writeRetro (il, ir, n, rolling ? positionBeats() : -1.0, n / spb, retroRl.load());
+        }
+        const int ready = antFifo.getNumReady();
+        if (st == 1 && ! antPrimed.load() && ready >= antTarget.load()) antPrimed = true;
+        const int take = st == 2 || antPrimed.load() ? std::min (ready, n) : 0;
+        antFifo.prepareToRead (take, s1, n1, s2, n2);
+        for (int ch = 0; ch < numOut; ++ch)
+        {
+            if (out[ch] == nullptr) continue;
+            const bool dual = dualOut.load (std::memory_order_relaxed) && (ch == 2 || ch == 3);
+            const int src = ch == 0 || (dual && ch == 2) ? 0 : ch == 1 || (dual && ch == 3) ? 1 : -1;
+            if (src < 0) { juce::FloatVectorOperations::clear (out[ch], n); continue; }
+            if (n1 > 0) juce::FloatVectorOperations::copy (out[ch], antRing.getReadPointer (src, s1), n1);
+            if (n2 > 0) juce::FloatVectorOperations::copy (out[ch] + n1, antRing.getReadPointer (src, s2), n2);
+            if (take < n) juce::FloatVectorOperations::clear (out[ch] + take, n - take);
+        }
+        antFifo.finishedRead (n1 + n2);
+        if (st == 1 && antPrimed.load() && take < n) ++antUnderruns;
+        antAheadBeats = (double) antFifo.getNumReady() / spb;
+        antWake.signal();
+        if (st == 2 && antFifo.getNumReady() == 0 && ! antBusy.load())
+        {
+            // everything rendered ahead has been heard: carry on in real time from exactly there
+            antAheadBeats = 0.0;
+            antState.store (0);
+            processRealtime (in, numIn, out, numOut, n, take);
+        }
+        return;
+    }
+    processRealtime (in, numIn, out, numOut, n, 0);
+}
+
+void Engine::processRealtime (const float* const* in, int numIn, float* const* out, int numOut, int n, int from)
+{
+    int done = from;
     while (done < n)
     {
         const int m = std::min (maxBlock, n - done);
@@ -2017,28 +2150,17 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
 
     // live input: armed lanes monitor through their insert and record
     const bool rolling = playing.load() && ! countingIn.load();
-    if (numIn > 0 && in != nullptr && ! aproj.lanes.empty() && retroBuf.getNumSamples() > n)
+    if (! aproj.lanes.empty())
     {
         // Retro Record: always keep the last 60 s of the first armed track's input (track 1 if none is armed)
         int rl = 0;
         for (size_t l = 0; l < aproj.lanes.size(); ++l) if (aproj.lanes[l].armed) { rl = (int) l; break; }
         const auto& lane = aproj.lanes[(size_t) rl];
         const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-        const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
-        const float* ir = c1 >= 0 && c1 < numIn ? in[c1] : il;
-        if (il != nullptr)
-        {
-            if (ir == nullptr) ir = il;
-            auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
-            const int cap = retroBuf.getNumSamples();
-            int w = retroWrite.load();
-            for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
-            const double prevEnd = retroEndBeat.load(), newEnd = rolling ? position.load() : -1.0;
-            if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
-                retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
-            retroWrite = w; retroTotal += n; retroLane = rl;
-            retroEndBeat = newEnd;
-        }
+        retroRl = rl; retroC0 = c0; retroC1 = c1;   // the device callback records it itself while playback renders ahead
+        const float* il = numIn > 0 && in != nullptr && c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+        const float* ir = numIn > 0 && in != nullptr && c1 >= 0 && c1 < numIn ? in[c1] : il;
+        if (il != nullptr) writeRetro (il, ir, n, rolling ? position.load() : -1.0, blockBeats, rl);
     }
     {
         const juce::SpinLock::ScopedTryLockType tl (takeLock);
@@ -2139,6 +2261,21 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         if (src) { juce::FloatVectorOperations::copy (out[c], src, n); juce::FloatVectorOperations::clip (out[c], out[c], -4.0f, 4.0f, n); }
         else juce::FloatVectorOperations::clear (out[c], n);
     }
+}
+
+void Engine::writeRetro (const float* il, const float* ir, int n, double newEnd, double blockBeats, int rl)
+{
+    if (retroBuf.getNumSamples() <= n) return;
+    if (ir == nullptr) ir = il;
+    auto* bl = retroBuf.getWritePointer (0); auto* br = retroBuf.getWritePointer (1);
+    const int cap = retroBuf.getNumSamples();
+    int w = retroWrite.load();
+    for (int i = 0; i < n; ++i) { bl[w] = il[i]; br[w] = ir[i]; if (++w >= cap) w = 0; }
+    const double prevEnd = retroEndBeat.load();
+    if (newEnd < 0.0 || prevEnd < 0.0 || std::abs (newEnd - (prevEnd + blockBeats)) > 0.5 * blockBeats)
+        retroRunFrom = retroTotal.load();   // stopped, started, looped or seeked: a new straight run
+    retroWrite = w; retroTotal += n; retroLane = rl;
+    retroEndBeat = newEnd;
 }
 
 void Engine::renderChannels (int n)
@@ -2315,6 +2452,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const bool wasPlaying = playing.load();
     if (wasPlaying) stop();
     deviceManager.removeAudioCallback (this);
+    antForceRealtime();
     const double sr = sampleRate; const int block = 512;
     const bool oldSong = proj.songMode;
     proj.songMode = song;

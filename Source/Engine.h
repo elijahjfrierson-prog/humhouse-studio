@@ -58,7 +58,9 @@ public:
 
     void initialiseAudio (const juce::XmlElement* savedState);
     Project& project() { return proj; }
-    void publishProject();   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
+    void publishProject();
+    std::atomic<bool> anticipativeOn { true };   // render playback ahead (like Reaper's anticipative FX) while nothing is live
+    std::atomic<int> antUnderruns { 0 };   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
     juce::CriticalSection& getLock() { return lock; }
 
     // Rebuild runtime objects (instruments, plugins, fx, clip readers) to match the project. Message thread.
@@ -74,7 +76,7 @@ public:
     bool isRecording() const { return recording.load(); }
     // Retro Record: the last 60 s of mic input is always kept (armed or not); this drops it on REC as a clip
     bool retroRecord();
-    double positionBeats() const { return position.load(); }
+    double positionBeats() const { return std::max (0.0, position.load() - antAheadBeats.load()); }   // what you hear (render-ahead aware)
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
@@ -189,6 +191,22 @@ private:
     int uiGen = 0, audioGen = 0;   // song generation: automation from the previous song never lands on the next
     juce::AbstractFifo autoFifo { 1024 };
     std::array<AutoWrite, 1024> autoWrites {};
+    // render-ahead: a worker renders playback into a ring; the device callback only copies it out
+    struct AntThread;
+    std::unique_ptr<AntThread> antThread;
+    std::atomic<int> antState { 0 };   // 0 real time, 3 requested, 1 rendering ahead, 2 draining back to real time
+    std::atomic<bool> antBusy { false }, antDiscard { false }, antPrimed { false };
+    std::atomic<double> antAheadBeats { 0.0 }, antBpm { 120.0 }, callbackMs { -1.0e9 };
+    std::atomic<int> retroRl { 0 }, retroC0 { 0 }, retroC1 { 0 };
+    juce::AbstractFifo antFifo { 16384 };
+    juce::AudioBuffer<float> antRing { 2, 16384 }, antTmp { 2, 512 };
+    std::atomic<int> antTarget { 2048 };
+    juce::WaitableEvent antWake;
+    bool antRenderOnce();
+    void antExit (bool discard, bool wait);
+    void antForceRealtime();
+    void processRealtime (const float* const* in, int numIn, float* const* out, int numOut, int n, int from);
+    void writeRetro (const float* il, const float* ir, int n, double newEnd, double blockBeats, int rl);
     Staged& beginStage();
     void endStage();
     void stageProject (Staged&);

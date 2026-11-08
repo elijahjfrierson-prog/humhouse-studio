@@ -329,7 +329,8 @@ int main()
             for (int k = 0; k < 8; ++k) { Note nt; nt.key = 48 + (t + k) % 24; nt.start = k * 0.5; nt.length = 0.5; nt.velocity = 0.7f; p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt); }
         }
         if (auto* th = std::getenv ("HHS_BENCH_THREADS")) e.setPerformance (std::atoi (th), std::atoi (th) > 1, true);
-        e.sync(); e.play();
+        const bool ant = std::getenv ("HHS_BENCH_ANT") != nullptr;   // device callback + render-ahead thread, like the app
+        e.sync(); if (! ant) e.play();
         const int blocks = 6000; const double deadline = 128.0 / 48000.0;
         std::atomic<bool> done { false };
         double worst = 0, total = 0; int late = 0;
@@ -341,7 +342,8 @@ int main()
             {
                 float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
                 const auto t0 = juce::Time::getHighResolutionTicks();
-                e.processBlock (nullptr, 0, o, 2, 128);
+                if (ant) { juce::AudioIODeviceCallbackContext cc {}; e.audioDeviceIOCallbackWithContext (nullptr, 0, o, 2, 128, cc); }
+                else e.processBlock (nullptr, 0, o, 2, 128);
                 const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
                 worst = std::max (worst, dt); total += dt; if (dt > deadline) ++late;
                 times[(size_t) b] = (float) (dt / deadline);
@@ -350,6 +352,7 @@ int main()
             }
             done = true;
         });
+        if (ant) { std::this_thread::sleep_for (std::chrono::milliseconds (30)); e.play(); }
         int edits = 0;
         double held = 0, syncMs = 0;
         const bool noEdits = std::getenv ("HHS_BENCH_NOEDIT") != nullptr;
@@ -365,6 +368,7 @@ int main()
             std::this_thread::sleep_for (std::chrono::milliseconds (5));
         }
         audio.join();
+        if (ant) std::printf ("BENCH render-ahead: %d underruns (dropouts) of %d blocks\n", e.antUnderruns.load(), blocks);
         if (auto* dump = std::getenv ("HHS_BENCH_DUMP"))
             if (auto* f = std::fopen (dump, "w")) { for (auto t : times) std::fprintf (f, "%.3f\n", t); std::fclose (f); }
         std::printf ("BENCH %d tracks x 3 FX @128, %d edits: audio blocked avg %.0f us / worst %.0f us per edit; avg load %.1f%%, worst block %.0f%% of deadline, %d late blocks of %d; edit rebuild %.2f ms avg (UI thread)\n",
