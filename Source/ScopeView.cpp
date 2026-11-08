@@ -118,7 +118,7 @@ private:
         const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
         const int wpx = juce::jmax (1, (int) a.getWidth());
         fill.startNewSubPath (a.getX(), mid);
-        for (int x = 0; x < wpx; ++x)
+        for (int x = 0; x < wpx; x += 2)   // a point every 2 px: same look, half the path
         {
             const float v = juce::jlimit (-1.0f, 1.0f, snap[(size_t) (start + x * span / wpx)]);
             const float px = a.getX() + (float) x, py = mid - v * hh;
@@ -128,10 +128,8 @@ private:
         fill.lineTo (a.getRight(), mid); fill.closeSubPath();
         const float top = mid - hh, bot = mid + hh;
         g.setGradientFill (col::mirrorGradient (0, top, bot, 0.22f)); g.fillPath (fill);
-        g.setGradientFill (col::mirrorGradient (0, top, bot, 0.25f));
-        g.strokePath (line, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         g.setGradientFill (col::mirrorGradient (0, top, bot));
-        g.strokePath (line, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.strokePath (line, juce::PathStrokeType (1.6f));   // one thin stroke: the 5 px rounded glow was the costliest draw on Mac
     }
     void drawHist (juce::Graphics& g, juce::Rectangle<float> a)
     {

@@ -2309,15 +2309,34 @@ private:
         juce::Path line, fill;
         const auto& pts = c.autoPts;
         const float x0 = r.getX(), x1 = r.getRight();
+        const auto vis = g.getClipBounds().toFloat().expanded (8.0f, 0.0f);   // the playhead strip repaints 16 px: only build / draw what lands in it
+        const float v0 = juce::jmax (x0, vis.getX()), v1 = juce::jmin (x1, vis.getRight());
+        if (v1 <= v0) return;
         line.startNewSubPath (x0, autoValueToY (c, autoValueAt (pts, c.patOffset)));
-        for (auto& q : pts) { const float x = autoBeatToX (c, q.beat); if (x > x0 && x < x1) line.lineTo (x, autoValueToY (c, q.value)); }
+        const AutoPoint* before = nullptr;   // last point left of the visible part: the line enters from it
+        for (auto& q : pts)
+        {
+            const float x = autoBeatToX (c, q.beat);
+            if (x <= x0) continue;
+            if (x >= x1) break;
+            if (x < v0) { before = &q; continue; }
+            if (before != nullptr) { line.lineTo (autoBeatToX (c, before->beat), autoValueToY (c, before->value)); before = nullptr; }
+            line.lineTo (x, autoValueToY (c, q.value));
+            if (x >= v1) break;   // first point past the visible part closes the segment
+        }
+        if (before != nullptr) line.lineTo (autoBeatToX (c, before->beat), autoValueToY (c, before->value));
         line.lineTo (x1, autoValueToY (c, autoValueAt (pts, c.patOffset + c.length)));
         fill = line; fill.lineTo (x1, body.getBottom()); fill.lineTo (x0, body.getBottom()); fill.closeSubPath();
         g.setColour (colour.withAlpha (0.22f)); g.fillPath (fill);
         g.setColour (colour.brighter (0.4f)); g.strokePath (line, juce::PathStrokeType (1.6f));
+        float lastDot = -1.0e9f;
         for (auto& q : pts)
         {
             const float x = autoBeatToX (c, q.beat), y = autoValueToY (c, q.value);
+            if (x < v0 - 4.0f) continue;
+            if (x > v1 + 4.0f) break;
+            if (x - lastDot < 6.0f) continue;   // dots closer than 6 px overlap anyway: draw one
+            lastDot = x;
             g.setColour (juce::Colours::white); g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
             g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
         }
