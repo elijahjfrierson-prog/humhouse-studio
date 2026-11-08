@@ -369,7 +369,10 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
                     ps.appendChild (p, nullptr);
                 }
                 r.appendChild (ps, nullptr);
-                startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (9)) || startThread (juce::Thread::Priority::highest);
+                startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (9)
+                                         .withPeriodMs (1000.0 * juce::jmax (32, block) / juce::jmax (8000.0, sr))
+                                         .withApproximateAudioProcessingTime (juce::jmax (32, block), juce::jmax (8000.0, sr)))
+                    || startThread (juce::Thread::Priority::highest);
             }
             else { r.setProperty ("ok", false, nullptr); r.setProperty ("error", err.isEmpty() ? juce::String ("Plug-in failed to load") : err, nullptr); }
         }
@@ -441,6 +444,7 @@ struct HostWorker : juce::ChildProcessWorker, juce::Thread
     std::unique_ptr<juce::AudioPluginInstance> plugin;
     std::unique_ptr<juce::MemoryMappedFile> map;
     std::unique_ptr<juce::DocumentWindow> window;
+    juce::ScopedLowPowerModeDisabler noAppNap;   // macOS: a windowless helper would get App Napped and answer late
     juce::AudioBuffer<float> buf;
     ChildPlayHead ph;
     Shared* sh = nullptr;

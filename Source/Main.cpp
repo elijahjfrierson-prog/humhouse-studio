@@ -30,7 +30,7 @@ struct WelcomePanel : public juce::Component
             "\nZENITH AUDIO ENGINE\n"
             "  - Lock-free and multicore: edits never pause playback\n"
             "  - Render-ahead playback, sample-exact automation, delay compensation\n"
-            "  - Crash-protected plug-ins: a crashing plug-in can't take the song down\n"
+            "  - Plug-ins run directly in the engine (fastest); optional crash protection in Options > Performance\n"
             "\nMIX\n"
             "  - Mixer with routing wires, sends, sidechain Duck, FX chains and presets\n"
             "  - Studio EQ, Compressor, Limiter, Reverb, Delay, Saturator and more - 0 latency\n"
@@ -74,6 +74,7 @@ struct WelcomeWindow : public juce::DocumentWindow
 
 class HumHouseApp : public juce::JUCEApplication
 {
+    juce::ScopedLowPowerModeDisabler noAppNap;   // macOS: stay full speed while OBS is in front
 public:
     const juce::String getApplicationName() override { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override

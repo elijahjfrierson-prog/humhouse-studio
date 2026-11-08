@@ -26,7 +26,7 @@ public:
         addAndMakeVisible (freezeBtn);
         setSize (760, 380);
         setOpaque (true);   // fills its own background: repaints never redraw what's underneath
-        startTimerHz (30);  // 30 fps: what OBS captures; 60 doubled the FFT + drawing for frames nobody sees
+        startTimerHz (60);  // smooth motion; the FFT only runs on the Spectrum tab
     }
     void resized() override
     {
@@ -104,7 +104,7 @@ private:
         {
             const float db = juce::Decibels::gainToDecibels (fftBuf[(size_t) i] * 4.0f / (float) fftSize, -100.0f);
             auto& sp = spec[(size_t) i];
-            sp = db > sp ? db : sp * 0.85f + db * 0.15f;   // fall time tuned for 30 Hz
+            sp = db > sp ? db : sp * 0.92f + db * 0.08f;   // fall time tuned for 60 Hz
         }
         repaint (graphArea());
     }
