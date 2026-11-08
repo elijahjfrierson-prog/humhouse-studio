@@ -3030,6 +3030,27 @@ int main()
         dir.deleteRecursively();
     }
 
+    // templates keep track routing, Drummer section bars and plugin FX state (L/R AmpliTube)
+    {
+        Project p = Project::createDefault();
+        const int a = p.addMixerTrack ("Gtr L"), b = p.addMixerTrack ("Gtr R");
+        Lane l; l.name = "Gtr L"; l.mixerTrack = a; p.lanes.push_back (l); l.name = "Gtr R"; l.mixerTrack = b; p.lanes.push_back (l);
+        for (int t : { a, b }) { FxSlot f; f.uid = p.newUid(); f.pluginId = "VST3-AmpliTube 5-1"; const char st[] = "amp-state"; f.pluginState.append (st, sizeof (st)); f.pluginState.append (&t, sizeof (t)); p.mixer[(size_t) t].fx.push_back (f); }
+        Channel d; d.type = ChannelType::Drummer; d.name = "Drummer"; d.drum.sectionBars = { 4, 8, 1, 5 }; d.drum.halfTime = true;
+        const int did = p.addChannel (d);
+        auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-template-rt.hhs");
+        CHECK (saveProject (p, f));
+        Project q; CHECK (loadProject (q, f));
+        const size_t n = q.lanes.size();
+        CHECK (n >= 2 && q.lanes[n - 2].mixerTrack == a && q.lanes[n - 1].mixerTrack == b);
+        CHECK (q.mixer[(size_t) a].fx.size() == 1 && q.mixer[(size_t) a].fx[0].pluginState == p.mixer[(size_t) a].fx[0].pluginState);
+        CHECK (q.mixer[(size_t) b].fx.size() == 1 && q.mixer[(size_t) b].fx[0].pluginState == p.mixer[(size_t) b].fx[0].pluginState);
+        bool drum = false;
+        for (auto& c : q.channels) if (c.id == did) drum = c.drum.sectionBars == std::vector<int> { 4, 8, 1, 5 } && c.drum.halfTime;
+        CHECK (drum);
+        f.deleteFile();
+    }
+
     std::printf (failures ? "%d FAILURES\n" : "ALL TESTS PASSED\n", failures);
     return failures ? 1 : 0;
 }
