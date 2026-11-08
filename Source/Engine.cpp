@@ -474,8 +474,9 @@ void Engine::stageProject (Staged& s)
 
 void Engine::publishProject()
 {
-    if (antState.load() != 0 && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; }))
-        antExit (false, false);   // a track went live (armed / monitoring): back to real time
+    // L (listen) only passes input on an armed track, so only arming makes playback live
+    if (antState.load() != 0 && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed; }))
+        antExit (false, false);   // a track was armed: back to real time
     // structure changed and no rebuild yet: the next sync() publishes everything together
     if (proj.mixer.size() != uiTrackRt.size() || proj.channels.size() != uiChannelIds.size()) return;
     for (size_t i = 0; i < proj.channels.size(); ++i) if (proj.channels[i].id != uiChannelIds[i]) return;
@@ -1197,7 +1198,7 @@ void Engine::play()
     primeClipReaders (from);              // load earlier takes/beats where playback really starts (incl. punch pre-roll)
     const bool capture = ! rec && std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed; });
     if (rec || capture) startRecordingWriters (capture);     // create take files outside the audio lock, so nothing drops out as recording starts
-    const bool live = rec || capture || std::any_of (proj.lanes.begin(), proj.lanes.end(), [] (const Lane& l) { return l.armed || l.monitor; });
+    const bool live = rec || capture;
     if (anticipativeOn.load() && ! live && ! offline.load() && juce::Time::getMillisecondCounterHiRes() - callbackMs.load() < 200.0)
     {
         // nothing live to hear: render playback ~25 ms ahead, so a CPU spike or a slow plugin can't drop out
@@ -1604,6 +1605,11 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
     };
     bool anySolo = false;
     for (auto& c : aproj.channels) anySolo |= c.solo;
+    const bool laneSolo = std::any_of (aproj.lanes.begin(), aproj.lanes.end(), [] (const Lane& l) { return l.solo; });
+    auto laneOff = [&] (int lane) {   // Playlist track M / S
+        if (lane < 0 || lane >= (int) aproj.lanes.size()) return false;
+        const auto& L = aproj.lanes[(size_t) lane];
+        return L.muted || (laneSolo && ! L.solo); };
     // each used pattern's length once per segment, not once per channel (it walks every note)
     patLen.assign (aproj.patterns.size(), -1.0);   // measured on first use, so unused patterns cost nothing
     auto lenOf = [this] (int i) { auto& L = patLen[(size_t) i]; if (L < 0.0) L = aproj.patterns[(size_t) i].lengthBeats(); return L; };
@@ -1675,7 +1681,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             for (auto& clip : aproj.clips)
             {
                 if (clip.drummer != srcId || clip.muted || clip.hidden) continue;
-                if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
+                if (laneOff (clip.lane)) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 auto it = drumHits.find (clip.uid);
                 if (it == drumHits.end() || ! it->second) continue;
@@ -1721,7 +1727,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             for (auto& clip : aproj.clips)
             {
                 if (clip.isAudio() || clip.isDrummer() || clip.patternIndex < 0 || clip.muted || clip.hidden) continue;
-                if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
+                if (laneOff (clip.lane)) continue;
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 if (clip.patternIndex >= (int) aproj.patterns.size()) continue;
                 auto& pat = aproj.patterns[(size_t) clip.patternIndex];
@@ -1749,7 +1755,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
         for (auto& clip : aproj.clips)
         {
             if (! clip.isAudio() || clip.muted || clip.hidden) continue;
-            if (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() && aproj.lanes[(size_t) clip.lane].muted) continue;
+            if (laneOff (clip.lane)) continue;
             const double shB = (clip.lane >= 0 && clip.lane < (int) aproj.lanes.size() ? aproj.lanes[(size_t) clip.lane].shiftMs : 0.0f) * 0.001 * aproj.bpm / 60.0;   // Soft
             const double c0 = std::max (b0, clip.start + shB), c1 = std::min (b1, clip.start + clip.length + shB);
             if (c1 <= c0) continue;

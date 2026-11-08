@@ -113,6 +113,7 @@ static std::vector<DrumHit> render (const DrummerParams& p, double bpm, int bars
     hhx::PerformanceEngine e; e.setCorpus (&corpus());
     for (auto& h : e.renderBars (s, 0, bars))
         out.push_back ({ (double) h.beat, (int) h.lane, (float) h.velocity / 127.0f, (int) h.variant });
+    std::stable_sort (out.begin(), out.end(), [] (const DrumHit& x, const DrumHit& y) { return x.beat < y.beat; });   // time order: drawing jumps straight to the visible bars
     return out;
 }
 

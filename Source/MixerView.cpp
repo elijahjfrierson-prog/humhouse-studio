@@ -213,9 +213,13 @@ struct Strip : public juce::Component
     {
         const float pk = s.engine.trackPeak (index);
         level = juce::jmax (pk, level * 0.85f);
-        repaint (meterArea()); repaint (scopeArea);
+        // only redraw what moved: idle strips stay still instead of adding dirty regions every frame
+        if (std::abs (level - drawnLevel) > 0.002f) { drawnLevel = level; repaint (meterArea()); }
+        const bool live = level > 0.0005f;
+        if (live || scopeLive) repaint (scopeArea);
+        scopeLive = live;
     }
-    Studio& s; int index; float level = 0;
+    Studio& s; int index; float level = 0, drawnLevel = -1.0f; bool scopeLive = true;
     juce::Slider fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
     Knob sep { "M/S", "stereo separation: left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };

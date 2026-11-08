@@ -1036,6 +1036,10 @@ struct LaneHeader : public juce::Component
         setupButton (mute, "M", "Mute this track", true);
         mute.setColour (juce::TextButton::buttonOnColourId, col::dim);
         mute.onClick = [this] { const bool on = mute.getToggleState(); const auto t = targets(); s.edit ("Mute track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].muted = on; }); };
+        setupButton (solo, "S", "Solo: hear only the soloed tracks", true);
+        solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffffc93d));
+        solo.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+        solo.onClick = [this] { const bool on = solo.getToggleState(); const auto t = targets(); s.edit ("Solo track", [&] (Project& p) { for (int i : t) if (i < (int) p.lanes.size()) p.lanes[(size_t) i].solo = on; }); };
         soft.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); soft.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         soft.setRange (-80.0, 80.0, 1.0); soft.setDoubleClickReturnValue (true, 0.0); soft.setTextValueSuffix (" ms");
         soft.setTooltip ("Soft: slide this whole track earlier (left) or later (right) in ms to line the vocal up with the beat. Double-click = 0");
@@ -1073,7 +1077,7 @@ struct LaneHeader : public juce::Component
         insert.setTooltip ("Mixer insert this track plays and records through - every take stays on it");
         insert.getProperties().set ("smallArrow", true); input.getProperties().set ("smallArrow", true);
         insert.onChange = [this] { const int v = insert.getSelectedItemIndex(); s.edit ("Route track", [&] (Project& p) { p.lanes[(size_t) index].mixerTrack = v; }); };
-        for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &mon, (juce::Component*) &norm,
+        for (juce::Component* c : { (juce::Component*) &name, (juce::Component*) &arm, (juce::Component*) &mute, (juce::Component*) &solo, (juce::Component*) &mon, (juce::Component*) &norm,
                                     (juce::Component*) &input, (juce::Component*) &insert })
             addAndMakeVisible (c);
         refresh();
@@ -1088,6 +1092,7 @@ struct LaneHeader : public juce::Component
         name.setFont (col::laneNameFont (l.nameFont, 15.0f));
         arm.setToggleState (l.armed, juce::dontSendNotification);
         mute.setToggleState (l.muted, juce::dontSendNotification);
+        solo.setToggleState (l.solo, juce::dontSendNotification);
         mon.setToggleState (l.monitor, juce::dontSendNotification);
         norm.setToggleState (l.autoNorm, juce::dontSendNotification);
         if (! soft.isMouseButtonDown()) { soft.setValue (l.shiftMs, juce::dontSendNotification); softPrev = l.shiftMs; }
@@ -1133,6 +1138,7 @@ struct LaneHeader : public juce::Component
         auto top = r.removeFromTop (r.getHeight() / 2);
         arm.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
         mute.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
+        solo.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
         name.setBounds (top);
         r.removeFromTop (2);
         mon.setBounds (r.removeFromLeft (38)); r.removeFromLeft (3);
@@ -1261,7 +1267,7 @@ struct LaneHeader : public juce::Component
     }
     Studio& s; int index;
     struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
-    juce::Label name; juce::TextButton arm, mute, mon, norm; juce::ComboBox input, insert;
+    juce::Label name; juce::TextButton arm, mute, solo, mon, norm; juce::ComboBox input, insert;
 };
 
 class Playlist : public juce::Component, public juce::FileDragAndDropTarget, public juce::DragAndDropTarget, public juce::TooltipClient,
@@ -1349,6 +1355,7 @@ public:
         thumbCache = std::make_unique<juce::AudioThumbnailCache> (256);
         setWantsKeyboardFocus (true);
         refresh();
+        setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
         startTimerHz (60);
     }
     ~Playlist() override { s.removeChangeListener (this); }
@@ -2406,9 +2413,14 @@ private:
                 if (auto hits = drummerHits (dc->drum, p.bpm, c.length))
                 {
                     const float rowH = (body.getHeight() - 6) / 3.0f;
-                    for (auto& h : *hits)
+                    // only the hits inside the area being redrawn (a playhead strip or the visible window), not all of them
+                    const auto cb = g.getClipBounds().toFloat();
+                    const double vb0 = (cb.getX() - body.getX()) / pxPerBeat - 0.05, vb1 = (cb.getRight() - body.getX()) / pxPerBeat + 0.05;
+                    for (auto it = std::lower_bound (hits->begin(), hits->end(), vb0, [] (const DrumHit& h, double b) { return h.beat < b; });
+                         it != hits->end(); ++it)
                     {
-                        if (h.beat >= c.length) break;
+                        const auto& h = *it;
+                        if (h.beat >= c.length || h.beat > vb1) break;
                         const int row = h.lane == 0 ? 2 : (h.lane <= 6 || (h.lane >= 25 && h.lane <= 28)) ? 1 : 0;
                         g.setColour (colour.brighter (0.6f).withAlpha (0.35f + 0.65f * h.vel));
                         g.fillRect (body.getX() + (float) (h.beat * pxPerBeat), body.getY() + 3 + row * rowH + rowH * 0.2f, 2.0f, rowH * 0.6f);
@@ -2426,11 +2438,14 @@ private:
             if (hi >= lo)
             {
                 g.setColour (colour.brighter (0.5f));
+                const auto cb = g.getClipBounds().toFloat();
                 for (double off = -std::fmod (juce::jmax (0.0, c.patOffset), len); off < c.length; off += len)
                     for (auto& [id, list] : pat.notes)
                         for (auto& n : list)
                         {
                             if (off + n.start >= c.length || off + n.start < 0.0) continue;
+                            const float nx = body.getX() + (float) ((off + n.start) * pxPerBeat);
+                            if (nx > cb.getRight() || nx + juce::jmax (1.5f, (float) (n.length * pxPerBeat)) < cb.getX()) continue;   // off the redrawn area
                             const float y = body.getBottom() - 3 - (body.getHeight() - 6) * (float) (n.key - lo) / (float) juce::jmax (1, hi - lo);
                             g.fillRect (body.getX() + (float) ((off + n.start) * pxPerBeat), y, juce::jmax (1.5f, (float) (n.length * pxPerBeat)), 2.0f);
                         }

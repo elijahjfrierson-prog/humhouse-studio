@@ -226,7 +226,7 @@ struct Lane
     float shiftMs = 0.0f;          // Soft: shift the whole track later (+) / earlier (-) in ms to line vocals up
     bool autoNorm = false;         // zero-latency leveler: brings the voice to a steady strong level
     int  mixerTrack = 0;
-    bool armed = false, muted = false;
+    bool armed = false, muted = false, solo = false;
     bool monitor = true;
     int  compLane = -1;            // take lane made by Comp takes: the comp track it feeds
     float height = 56.0f;

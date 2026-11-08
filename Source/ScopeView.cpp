@@ -25,7 +25,8 @@ public:
         setupButton (freezeBtn, "FREEZE", "Freeze the display", true);
         addAndMakeVisible (freezeBtn);
         setSize (760, 380);
-        startTimerHz (60);
+        setOpaque (true);   // fills its own background: repaints never redraw what's underneath
+        startTimerHz (30);  // 30 fps: what OBS captures; 60 doubled the FFT + drawing for frames nobody sees
     }
     void resized() override
     {
@@ -50,6 +51,7 @@ public:
         for (int i = 1; i < 4; ++i) g.drawHorizontalLine ((int) (a.getY() + a.getHeight() * (float) i / 4), a.getX(), a.getRight());
         if (mode == 0) drawOsc (g, a); else if (mode == 1) drawHist (g, a); else drawSpec (g, a);
     }
+    juce::Rectangle<int> graphArea() const { return getLocalBounds().reduced (10).withTrimmedTop (34); }
 
 private:
     static constexpr int fftOrder = 12, fftSize = 1 << fftOrder, histMax = 4096, chunk = 128;
@@ -57,7 +59,7 @@ private:
     juce::String title;
     juce::OwnedArray<juce::TextButton> modeBtns;
     juce::TextButton freezeBtn;
-    int mode = 0, histPos = 0, lastPos = -1;
+    int mode = 0, histPos = 0, lastPos = -1, idleTicks = 0;
     double rate = 44100.0;
     std::vector<float> snap = std::vector<float> ((size_t) fftSize, 0.0f);
     std::vector<std::pair<float, float>> hist = std::vector<std::pair<float, float>> ((size_t) histMax, { 0.0f, 0.0f });
@@ -68,11 +70,13 @@ private:
 
     void timerCallback() override
     {
-        if (freezeBtn.getToggleState()) return;
+        if (freezeBtn.getToggleState() || ! isShowing()) return;
         auto* tap = source ? source() : nullptr;
-        if (tap == nullptr) { std::fill (snap.begin(), snap.end(), 0.0f); repaint(); return; }
+        if (tap == nullptr) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); return; }
         rate = tap->rate.load();
         const int w = tap->pos.load();
+        if (w == lastPos && ++idleTicks > 30) return;   // no new audio (stopped): stop redrawing a still picture
+        if (w != lastPos) idleTicks = 0;
         tap->read (snap.data(), fftSize, w);
         if (lastPos < 0) lastPos = w;
         int raw = (w - lastPos + ScopeTap::size) % ScopeTap::size;
@@ -90,6 +94,7 @@ private:
             histPos = (histPos + 1) % histMax;
         }
         lastPos = (lastPos + fresh) % ScopeTap::size;
+        if (mode != 2) { repaint (graphArea()); return; }   // the spectrum FFT only runs while it's on screen
 
         std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
         std::copy (snap.begin(), snap.end(), fftBuf.begin());
@@ -99,9 +104,9 @@ private:
         {
             const float db = juce::Decibels::gainToDecibels (fftBuf[(size_t) i] * 4.0f / (float) fftSize, -100.0f);
             auto& sp = spec[(size_t) i];
-            sp = db > sp ? db : sp * 0.922f + db * 0.078f;   // same fall time as 0.85 at 30 Hz
+            sp = db > sp ? db : sp * 0.85f + db * 0.15f;   // fall time tuned for 30 Hz
         }
-        repaint();
+        repaint (graphArea());
     }
     void drawOsc (juce::Graphics& g, juce::Rectangle<float> a)
     {
@@ -157,7 +162,7 @@ private:
         p.startNewSubPath (a.getX(), a.getBottom());
         const double binHz = rate / fftSize;
         const int wpx = juce::jmax (1, (int) a.getWidth());
-        for (int x = 0; x <= wpx; ++x)
+        for (int x = 0; x <= wpx; x += 2)   // a point every 2 px: same look, half the path
         {
             const double hz = 20.0 * std::pow (1000.0, x / (double) wpx);
             const int bin = juce::jlimit (1, fftSize / 2 - 1, (int) (hz / binHz));
