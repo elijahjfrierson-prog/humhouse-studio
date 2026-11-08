@@ -1994,7 +1994,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         }
     }
 
-    if (ctx.playing) applyAutomation (ctx.beatPos);
+    // automation is read at the end of this block: faders/pans/sends ramp across the block from the value at its
+    // first sample to the value at its last, so the curve lands on every sample instead of one block late
+    if (ctx.playing) applyAutomation (position.load());
     renderChannels (n);
 
     // channels -> inserts
