@@ -3007,7 +3007,7 @@ int main()
                 "<MainSequencer><ClipSlotList/><Sample><ArrangerAutomation><Events><AudioClip Time=\"4\"><CurrentStart Value=\"4\"/><CurrentEnd Value=\"8\"/>"
                 "<Loop><LoopStart Value=\"0\"/></Loop><SampleRef><FileRef><Path Value=\"" + wav.getFullPathName() + "\"/></FileRef></SampleRef></AudioClip></Events></ArrangerAutomation></Sample></MainSequencer></DeviceChain></AudioTrack>"
                 "<MidiTrack><Name><EffectiveName Value=\"Keys\"/></Name><DeviceChain><Mixer/><MainSequencer><MidiClip Time=\"0\"><CurrentStart Value=\"0\"/><CurrentEnd Value=\"4\"/>"
-                "<Notes><KeyTracks><KeyTrack><Notes><MidiNoteEvent Time=\"1\" Duration=\"0.5\" Velocity=\"127\"/></Notes><MidiKey Value=\"64\"/></KeyTrack></KeyTracks></Notes></MidiClip></MainSequencer></DeviceChain></MidiTrack>"
+                "<Loop><LoopStart Value=\"0\"/><LoopEnd Value=\"16\"/></Loop><Notes><KeyTracks><KeyTrack><Notes><MidiNoteEvent Time=\"1\" Duration=\"0.5\" Velocity=\"127\"/></Notes><MidiKey Value=\"64\"/></KeyTrack></KeyTracks></Notes></MidiClip></MainSequencer></DeviceChain></MidiTrack>"
                 "</Tracks><MasterTrack><DeviceChain><Mixer><Tempo><Manual Value=\"128\"/></Tempo></Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>";
             juce::FileOutputStream fo (als); fo.setPosition (0); fo.truncate();
             juce::GZIPCompressorOutputStream gz (fo, 6, 31);
@@ -3022,6 +3022,9 @@ int main()
         bool note = false;
         for (auto& pt : a.patterns) for (auto& [id, nl] : pt.notes) for (auto& n : nl) if (n.key == 64 && std::abs (n.start - 1.0) < 1e-6) note = true;
         CHECK (note);
+        bool loop16 = false;   // a 4-bar Ableton loop repeats every 4 bars, not every bar
+        for (auto& pt : a.patterns) if (! pt.notes.empty()) loop16 = std::abs (pt.lengthBeats() - 16.0) < 1e-6;
+        CHECK (loop16);
 
         hhs::Project st; rep.clear();
         dir.getChildFile ("Gtr R.wav").deleteFile(); wav.copyFileTo (dir.getChildFile ("Gtr R.wav"));

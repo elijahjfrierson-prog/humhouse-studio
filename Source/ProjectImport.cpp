@@ -259,6 +259,7 @@ bool importAls (const juce::File& f, Project& p, juce::StringArray& report, cons
             }
             Pattern pat; pat.name = val (c, "Name").isNotEmpty() ? val (c, "Name") : name;
             const double loopStart = val (path (c, { "Loop" }), "LoopStart").getDoubleValue();
+            pat.loopBeats = juce::jmax (0.0, val (path (c, { "Loop" }), "LoopEnd").getDoubleValue() - loopStart);   // repeat at the Ableton loop, not every bar
             auto& notes = pat.notes[chId];
             forEachDeep (path (c, { "Notes" }), "KeyTrack", [&] (const juce::XmlElement* k)
             {

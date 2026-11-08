@@ -168,6 +168,7 @@ struct Pattern
     juce::String name;
     juce::Colour colour { 0xff3d8aff };
     std::map<int, NoteList> notes;         // by channel id
+    double loopBeats = 0.0;                // imported loop length (0 = from the notes)
     double lengthBeats() const;            // rounded up to whole bars (min 1 bar)
     bool   stepOn (int channelId, int step, double stepLen = 0.25) const;
     void   toggleStep (int channelId, int step, int rootKey, double stepLen = 0.25);

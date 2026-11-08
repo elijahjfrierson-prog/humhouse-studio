@@ -64,7 +64,7 @@ double secondsToBeats (double secs, double bpm)  { return secs * bpm / 60.0; }
 // ---------------------------------------------------------------- pattern
 double Pattern::lengthBeats() const
 {
-    double end = 0.0;
+    double end = loopBeats;
     for (auto& [id, list] : notes)
         for (auto& n : list) end = std::max (end, n.end());
     return std::max (4.0, std::ceil (end / 4.0 - 1.0e-9) * 4.0);
