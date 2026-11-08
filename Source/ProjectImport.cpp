@@ -31,6 +31,7 @@ juce::File resolve (const juce::String& path, const juce::File& base)
 Project blank()
 {
     Project p;
+    p.songMode = true;   // converted songs play their arrangement, not an empty pattern
     MixerTrack master; master.name = "Master"; master.routesToMaster = false;
     p.mixer.push_back (master);
     Pattern pat; pat.name = "Pattern 1";
