@@ -76,6 +76,7 @@ public:
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
+    std::atomic<float> blockLoadFrac { 0.3f };   // recent peak share of the block deadline the audio callback used
     std::atomic<float> swapUsLast { 0 }, swapUsMax { 0 };   // how long the last / longest edit held the audio lock (microseconds)   // Options > Dual outputs: the master plays on 1-2 AND 3-4, the very same samples (no phasing)
     void setDualOutput (bool on);
     std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time

@@ -1729,7 +1729,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     bool locked = lock.tryEnter();
     if (! locked && ! offline.load())
     {
-        const double until = juce::Time::getMillisecondCounterHiRes() + 0.4 * 1000.0 * n / sampleRate;
+        // wait only as long as this block can still finish on time (light sessions can wait longer, heavy ones less)
+        const double budget = juce::jlimit (0.2, 0.8, 0.9 - 1.1 * (double) blockLoadFrac.load (std::memory_order_relaxed));
+        const double until = juce::Time::getMillisecondCounterHiRes() + budget * 1000.0 * n / sampleRate;
         while (! locked && juce::Time::getMillisecondCounterHiRes() < until) { std::this_thread::yield(); locked = lock.tryEnter(); }
     }
     struct Unlock { const juce::CriticalSection* c; ~Unlock() { if (c != nullptr) c->exit(); } } unlock { locked ? &lock : nullptr };
@@ -1738,6 +1740,11 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         for (int c = 0; c < numOut; ++c) if (out[c]) juce::FloatVectorOperations::clear (out[c], n);
         return;
     }
+    struct LoadTrack
+    {
+        std::atomic<float>& frac; juce::int64 t0; double ticks;
+        ~LoadTrack() { const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / ticks); frac = std::max (v, frac.load (std::memory_order_relaxed) * 0.98f); }
+    } loadTrack { blockLoadFrac, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
     currentBlock = n;
     idleThresholdBlocks = std::max (1, (int) (sampleRate * 2.0 / std::max (1, n)));
     for (auto& t : trackRt) t->in.clear (0, n);
