@@ -1729,8 +1729,8 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
     bool locked = lock.tryEnter();
     if (! locked && ! offline.load())
     {
-        // wait only as long as this block can still finish on time (light sessions can wait longer, heavy ones less)
-        const double budget = juce::jlimit (0.2, 0.8, 0.9 - 1.1 * (double) blockLoadFrac.load (std::memory_order_relaxed));
+        // light sessions can wait longer for an edit and still finish on time; never less than the old 40%
+        const double budget = juce::jlimit (0.4, 0.8, 0.95 - (double) blockLoadFrac.load (std::memory_order_relaxed));
         const double until = juce::Time::getMillisecondCounterHiRes() + budget * 1000.0 * n / sampleRate;
         while (! locked && juce::Time::getMillisecondCounterHiRes() < until) { std::this_thread::yield(); locked = lock.tryEnter(); }
     }
