@@ -69,6 +69,7 @@ struct WelcomeWindow : public juce::DocumentWindow
 
 class HumHouseApp : public juce::JUCEApplication
 {
+    juce::ScopedLowPowerModeDisabler noAppNap;   // macOS: stay full speed while OBS is in front
 public:
     const juce::String getApplicationName() override { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override
