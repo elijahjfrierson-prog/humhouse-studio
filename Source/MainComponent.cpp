@@ -69,6 +69,7 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
         static juce::String last; static juce::Typeface::Ptr plain, bold;
         if (last != build::font) { last = build::font; plain = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::plain)));
                                    bold = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::bold))); }
+        if (plain != nullptr && plain->getName() != last) plain = bold = nullptr;   // font not on this device: the OS stand-in draws boxes, keep ours
         if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
     }
     if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
@@ -1506,11 +1507,14 @@ private:
             k->setAvailableRange (24, 108); k->setLowestVisibleKey (48); k->setKeyWidth (24.0f); k->setOctaveForMiddleC (4);
             k->setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
             k->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
+            k->clearKeyMappings(); k->setWantsKeyboardFocus (false);   // computer keys go to the typing keyboard, so E / C / P and the other shortcuts keep working
             setContentOwned (k, false);
             setUsingNativeTitleBar (true); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
-            centreWithSize (640, 120); setAlwaysOnTop (true); setVisible (true);
-            k->grabKeyboardFocus();
+            setWantsKeyboardFocus (false);
+            centreWithSize (640, 120); setAlwaysOnTop (true); addToDesktop (getDesktopWindowStyleFlags()); setVisible (true);
+            miniKeyboardOpen() = true;
         }
+        ~MiniKb() override { miniKeyboardOpen() = false; }
         void closeButtonPressed() override { if (onClose) onClose(); }
         std::function<void()> onClose;
     };
@@ -2352,6 +2356,15 @@ private:
 
     void chooseExportFolder (juce::String name, int what, int track)
     {
+       #if JUCE_IOS
+        {   // iPhone can't pick a folder: exports go to Files > On My iPhone > HumHouse Studio > Exports
+            const auto dir = hhsHome().getChildFile ("Exports");
+            dir.createDirectory();
+            hintBar.setText ("Exporting to Files > On My iPhone > HumHouse Studio > Exports", juce::dontSendNotification);
+            exportInto (dir, name, what, track);
+            return;
+        }
+       #endif
         juce::File start (studio.settings ? studio.settings->getValue ("exportDir") : juce::String());
         if (! start.isDirectory()) start = docsDir();
         chooser = std::make_unique<juce::FileChooser> ("Choose the export folder", start);
@@ -2360,6 +2373,12 @@ private:
                                   const auto dir = fc.getResult();
                                   if (! dir.isDirectory()) return;
                                   if (studio.settings) { studio.settings->setValue ("exportDir", dir.getFullPathName()); studio.settings->saveIfNeeded(); }
+                                  exportInto (dir, name, what, track);
+                              });
+    }
+
+    void exportInto (const juce::File& dir, const juce::String& name, int what, int track)
+    {
                                   const juce::String ext = engine.exportFormat == 1 ? ".mp3" : engine.exportFormat == 2 ? ".m4a" : ".wav";
                                   auto& p = engine.project();
                                   std::vector<RenderJob::Item> items;
@@ -2375,7 +2394,6 @@ private:
                                   engine.stop();
                                   // stems always render the whole song from bar 1 so they line up in any DAW
                                   (new RenderJob (engine, std::move (items), what == 2 ? true : p.songMode, what == 2))->launchThread();
-                              });
     }
 
     void showAudioSettings()

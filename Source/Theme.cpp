@@ -666,9 +666,8 @@ struct BuildPanel : juce::Component
         combo (hintPos, hintLbl, "Hint bar", { "Show", "Hide" }, [this] (int id) { commit ("hint", id == 1 ? "1" : "0"); });
         juce::StringArray fonts { "Options > Font choice", "HumHouse Pro (Barlow)" };
         const auto have = juce::Font::findAllTypefaceNames();
-        for (auto* f : { "Helvetica Neue", "SF Pro Text", "Avenir Next", "Futura", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" })
-            if (have.contains (f)) fonts.add (f);
-        for (int i = 0; fonts.size() < 8 && i < have.size(); ++i) fonts.addIfNotAlreadyThere (have[i]);
+        for (auto* f : { "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" })
+            if (have.contains (f)) fonts.add (f);   // only real text fonts: symbol / emoji fonts turned every label into gibberish
         fontNames = fonts;
         combo (fontBox, fontLbl, "Font", fonts, [this] (int id) { commit ("font", id == 1 ? juce::String() : id == 2 ? juce::String ("Barlow") : fontNames[id - 1]); });
         auto slider = [this] (juce::Slider& sl, juce::Label& l, const char* text, int lo, int hi, const char* key)

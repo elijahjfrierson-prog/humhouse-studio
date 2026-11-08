@@ -101,10 +101,27 @@ struct DrummerParams
     std::array<float, 12> eqDb {};          // KIT MIX: the drums' own 12-band EQ (31 Hz .. 16 kHz), dB   // per drum group: its own compressor 0..1
     std::vector<int> sectionVel;              // per 8-bar section: dynamics % (0 / missing = 100), ramps into the next section
     std::vector<int> sectionMute;             // per 8-bar section of the song: bit g set = drum group g silent there
+    std::vector<int> sectionBars;             // bars in each section (1..8, missing = 8): a 4-bar intro makes the chorus start at bar 5
     int groupMask = 31;                       // bit g = this channel plays drum group g (Split by drum)
     std::map<int, std::array<int, 5>> steps;  // manual 8-bar sections: per drum group a 16-step bar (bit = hit), repeated
     juce::String performanceKey() const;      // only what changes the notes played
 };
+
+inline int drumSectionBars (const DrummerParams& d, int k)
+{
+    return k >= 0 && k < (int) d.sectionBars.size() && d.sectionBars[(size_t) k] >= 1 && d.sectionBars[(size_t) k] <= 8 ? d.sectionBars[(size_t) k] : 8;
+}
+inline double drumSectionStart (const DrummerParams& d, int k) { double b = 0; for (int i = 0; i < k; ++i) b += drumSectionBars (d, i) * 4.0; return b; }
+// the drummer section playing at this song beat, with its first beat and length in beats
+inline int drumSectionAt (const DrummerParams& d, double beat, double* start = nullptr, double* len = nullptr)
+{
+    double b = 0; int k = 0;
+    if (d.sectionBars.empty()) { k = beat > 0 ? (int) (beat / 32.0) : 0; b = k * 32.0; }
+    else while (k < 4096 && beat >= b + drumSectionBars (d, k) * 4.0) b += drumSectionBars (d, k++) * 4.0;
+    if (start != nullptr) *start = b;
+    if (len != nullptr) *len = drumSectionBars (d, k) * 4.0;
+    return k;
+}
 
 struct Channel
 {

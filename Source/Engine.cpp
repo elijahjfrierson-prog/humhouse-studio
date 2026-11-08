@@ -1316,10 +1316,11 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
                     if (s < b0 || s >= b1) continue;
-                    const int g = drumGroupOf (h.lane), sec = (int) ((clip.start + h.beat) / 32.0);
+                    double ss = 0, sl = 32.0;
+                    const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
                     if (auto ms = src->steps.find (sec); ms != src->steps.end() && ms->second[(size_t) g] != 0
-                        && ! (src->fills > 0.02f && std::fmod (clip.start + h.beat, 32.0) >= 28.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
+                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
                     Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
@@ -1330,10 +1331,11 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     const double rel = n * 0.25, at = clip.start + rel, s = at + shiftBeats;
                     if (rel >= clip.length || s >= b1) break;
                     if (s < b0) continue;
-                    const int sec = (int) (at / 32.0), step = (int) (std::llround (at * 4.0) % 16);
+                    double ss = 0, sl = 32.0;
+                    const int sec = drumSectionAt (*src, at, &ss, &sl), step = (int) (std::llround (at * 4.0) % 16);
                     const auto st = src->steps.find (sec);
                     if (st == src->steps.end()) continue;
-                    if (src->fills > 0.02f && std::fmod (at, 32.0) >= 28.0) continue;   // bar 8 of the section: the automatic fill
+                    if (src->fills > 0.02f && at - ss >= sl - 4.0) continue;   // bar 8 of the section: the automatic fill
                     for (int g = 0; g < NumDrumGroups; ++g)
                         if ((mask >> g & 1) != 0 && (st->second[(size_t) g] >> step & 1) != 0 && ! silent (sec, g))
                         {
