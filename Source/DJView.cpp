@@ -382,7 +382,7 @@ struct DjMix : public juce::AudioSource
     std::atomic<float> fade { 0.5f }, master { 0.8f };
 };
 
-class DjView : public juce::Component, private juce::Timer
+class DjView : public juce::Component, private juce::Timer, private juce::MidiInputCallback
 {
 public:
     explicit DjView (Studio& st) : s (st)
@@ -401,6 +401,20 @@ public:
         autoMix.setClickingTogglesState (true);
         autoMix.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2fb36b));
         fadeBtn.onClick = [this] { startFade(); };
+        addAndMakeVisible (learn);
+        learn.setTooltip ("CDJ / controller in MIDI mode (enable it in Options > MIDI): pick a control, then move it on the hardware");
+        learn.onClick = [this] {
+            juce::PopupMenu m;
+            for (int i = 0; i < (int) std::size (kTargets); ++i) m.addItem (i + 1, kTargets[i]);
+            m.addSeparator(); m.addItem (100, "Clear all mappings");
+            m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this)] (int r) {
+                if (safe == nullptr || r <= 0) return;
+                if (r == 100) { safe->maps.clear(); safe->saveMaps(); safe->learn.setButtonText ("LEARN"); return; }
+                safe->armed = r - 1; safe->learn.setButtonText ("MOVE IT...");
+            });
+        };
+        loadMaps();
+        s.engine.deviceManager.addMidiInputDeviceCallback ({}, this);
         player.setSource (&mix);
         startTimerHz (30);
         s.engine.deviceManager.addAudioCallback (&player);
@@ -408,6 +422,7 @@ public:
     }
     ~DjView() override
     {
+        s.engine.deviceManager.removeMidiInputDeviceCallback ({}, this);
         s.engine.deviceManager.removeAudioCallback (&player);
         player.setSource (nullptr);
         io.stopThread (2000);
@@ -427,7 +442,7 @@ public:
             a.setBounds (r.removeFromTop (230)); waves.setBounds (r.removeFromTop (120).reduced (0, 4)); b.setBounds (r.removeFromTop (230));
             auto mix = r.removeFromTop (44); mix.removeFromTop (16);
             vol.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
-            autoMix.setBounds (mix.removeFromLeft (64)); fadeBtn.setBounds (mix.removeFromRight (48)); xf.setBounds (mix.reduced (6, 0));
+            autoMix.setBounds (mix.removeFromLeft (64)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48)); xf.setBounds (mix.reduced (6, 0));
             library.setBounds (r);
             return;
         }
@@ -437,6 +452,7 @@ public:
         waves.setBounds (top.reduced (6, 0));
         auto mix = r.removeFromTop (44); mix.removeFromTop (16);
         vol.setBounds (mix.removeFromRight (180)); mix.removeFromRight (16);
+        learn.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
         autoMix.setBounds (mix.removeFromLeft (90)); mix.removeFromLeft (6); fadeBtn.setBounds (mix.removeFromLeft (64));
         xf.setBounds (mix.withSizeKeepingCentre (juce::jmin (420, mix.getWidth()), mix.getHeight()));
         library.setBounds (r.withTrimmedTop (4));
@@ -472,6 +488,53 @@ private:
         const double lead = cur.liveBpm() > 0.0 ? 16.0 * 60.0 / cur.liveBpm() : 20.0;
         if (cur.tp.isPlaying() && len > lead && cur.tp.getCurrentPosition() >= len - lead) startFade();
     }
+    // MIDI LEARN: CDJ / controller messages (note or CC per channel; pitch bend for pitch) -> deck controls
+    static constexpr const char* kTargets[] { "Deck 1 Play", "Deck 1 Cue", "Deck 1 Sync", "Deck 1 Pitch", "Deck 2 Play", "Deck 2 Cue", "Deck 2 Sync", "Deck 2 Pitch", "Crossfader", "DJ Out volume" };
+    static int midiKey (const juce::MidiMessage& m)
+    {
+        if (m.isNoteOnOrOff()) return 0x10000 | (m.getChannel() << 8) | m.getNoteNumber();
+        if (m.isController()) return 0x20000 | (m.getChannel() << 8) | m.getControllerNumber();
+        if (m.isPitchWheel()) return 0x30000 | (m.getChannel() << 8);
+        return 0;
+    }
+    void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+    {
+        const int k = midiKey (m);
+        if (k == 0) return;
+        const double v = m.isPitchWheel() ? m.getPitchWheelValue() / 16383.0 : m.isController() ? m.getControllerValue() / 127.0 : (m.getVelocity() > 0 ? 1.0 : 0.0);
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<DjView> (this), k, v] { if (safe != nullptr) safe->onMidi (k, v); });
+    }
+    void onMidi (int k, double v)
+    {
+        if (armed >= 0) { maps[k] = armed; armed = -1; learn.setButtonText ("LEARN"); saveMaps(); return; }
+        const auto it = maps.find (k);
+        if (it == maps.end()) return;
+        const int t = it->second;
+        Deck& d = t < 4 ? a : b;
+        const bool button = t < 8 && t % 4 != 3, press = v >= 0.5 && last[k] < 0.5;
+        last[k] = v;
+        if (button) { if (press) (t % 4 == 0 ? d.play : t % 4 == 1 ? d.cue : d.sync).triggerClick(); return; }
+        if (t < 8) d.pitch.setValue (-16.0 + 32.0 * v);
+        else if (t == 8) { fading = false; xf.setValue (v); }
+        else vol.setValue (v);
+    }
+    void saveMaps()
+    {
+        if (s.settings == nullptr) return;
+        juce::StringArray rows;
+        for (const auto& [k, t] : maps) rows.add (juce::String (k) + ":" + juce::String (t));
+        s.settings->setValue ("humVerseMidi", rows.joinIntoString (";")); s.settings->saveIfNeeded();
+    }
+    void loadMaps()
+    {
+        if (s.settings == nullptr) return;
+        for (const auto& row : juce::StringArray::fromTokens (s.settings->getValue ("humVerseMidi"), ";", ""))
+            if (row.contains (":")) maps[row.upToFirstOccurrenceOf (":", false, false).getIntValue()] = juce::jlimit (0, 9, row.fromFirstOccurrenceOf (":", false, false).getIntValue());
+    }
+    juce::TextButton learn { "LEARN" };
+    std::map<int, int> maps;
+    std::map<int, double> last;
+    int armed = -1;
     juce::TextButton autoMix { "AUTO MIX" }, fadeBtn { "FADE" };
     bool fading = false;
     double fadeFrom = 0.5, fadeTo = 0.5, fadeT0 = 0.0;
