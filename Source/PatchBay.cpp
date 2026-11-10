@@ -25,6 +25,31 @@ float lfoAt (const Lfo& l, double ph)
     return l.lo + (l.hi - l.lo) * v;
 }
 std::vector<Lfo>& lfos() { static std::vector<Lfo> v { { 0, 1.0, 0.0f, 1.0f, "LFO 1" } }; return v; }
+// LFO nodes persist in the app settings ("patchBayLfos": shape,perBar,lo,hi,name;...)
+void saveLfos (Studio& s)
+{
+    if (s.settings == nullptr) return;
+    juce::StringArray rows;
+    for (const auto& l : lfos())
+        rows.add (juce::String (l.shape) + "," + juce::String (l.perBar) + "," + juce::String (l.lo) + "," + juce::String (l.hi) + "," + l.name.removeCharacters (",;"));
+    s.settings->setValue ("patchBayLfos", rows.joinIntoString (";"));
+    s.settings->saveIfNeeded();
+}
+void loadLfos (Studio& s)
+{
+    static bool done = false;
+    if (done || s.settings == nullptr) return;
+    done = true;
+    std::vector<Lfo> v;
+    for (const auto& row : juce::StringArray::fromTokens (s.settings->getValue ("patchBayLfos"), ";", ""))
+    {
+        const auto f = juce::StringArray::fromTokens (row, ",", "");
+        if (f.size() < 5) continue;
+        v.push_back ({ juce::jlimit (0, 4, f[0].getIntValue()), juce::jlimit (0.0625, 16.0, f[1].getDoubleValue()),
+                       juce::jlimit (0.0f, 1.0f, f[2].getFloatValue()), juce::jlimit (0.0f, 1.0f, f[3].getFloatValue()), f[4] });
+    }
+    if (! v.empty()) lfos() = v;
+}
 std::map<juce::String, juce::Point<int>>& positions() { static std::map<juce::String, juce::Point<int>> m; return m; }
 
 enum Kind { Seq, Sound, LfoNode, Fx, Out };
@@ -33,7 +58,7 @@ struct Node { Kind kind; int a = 0, b = 0; juce::String key, title; juce::Rectan
 class Canvas : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    explicit Canvas (Studio& st) : s (st) { s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
+    explicit Canvas (Studio& st) : s (st) { loadLfos (s); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
     ~Canvas() override { s.removeChangeListener (this); }
 
     void rebuild()
@@ -138,7 +163,7 @@ public:
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        if (at (e.getPosition()) == nullptr) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); rebuild(); }
+        if (at (e.getPosition()) == nullptr) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); saveLfos (s); rebuild(); }
     }
 
 private:
@@ -295,6 +320,7 @@ private:
             else if (r >= 20 && r < 27) l.perBar = rates[r - 20];
             else if (r >= 30 && r < 34) { const float lo[] { 0, 0.5f, 0, 0.4f }, hi[] { 1, 1, 0.5f, 0.6f }; l.lo = lo[r - 30]; l.hi = hi[r - 30]; }
             else if (r == 40) lfos().erase (lfos().begin() + li);
+            saveLfos (safe->s);
             safe->rebuild();
         });
     }
