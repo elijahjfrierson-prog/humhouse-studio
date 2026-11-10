@@ -346,10 +346,10 @@ namespace
 struct LayoutLook { const char* name; juce::uint32 bg, panel, panel2, gridBar, text, accent; bool light; int laneH; const char* keys; const char* build = ""; };
 const LayoutLook layoutLooks[] {
     { "HumHouse (default)",     0xff0e1013, 0xff16191e, 0xff1d2127, 0xff3c434e, 0xffdfe4ec, 0xff9b5cff, false, 60, "" },
-    { "Logic Dark",             0xff1e1e1e, 0xff2a2a2a, 0xff333333, 0xff4a4a4a, 0xffe6e6e6, 0xff3fa9f5, false, 56, "Logic", "bR=1;mD=1;mH=240" },
-    { "Logic Light",            0xffececec, 0xffdcdcdc, 0xffcfcfcf, 0xffa0a0a0, 0xff1c1c1c, 0xff2f80ed, true,  56, "Logic", "bR=1;mD=1;mH=240" },
+    { "Logic Dark",             0xff2b2b2b, 0xff3a3a3a, 0xff454545, 0xff5a5a5a, 0xffe0e0e0, 0xff3d8bfd, false, 48, "Logic", "bR=1;mD=1;mH=320;tbH=44" },
+    { "Logic Light",            0xffececec, 0xffdcdcdc, 0xffcfcfcf, 0xffa0a0a0, 0xff1c1c1c, 0xff2f80ed, true,  48, "Logic", "bR=1;mD=1;mH=320;tbH=44" },
     { "Pro Tools Classic",      0xff3c4048, 0xff4b505a, 0xff565c67, 0xff727985, 0xfff0f0f0, 0xff5fb3e6, false, 72, "Pro Tools", "mD=1;mH=300;tb=logo,beat,record,mix,bpm,pos,metro,count|start,play,stop,rec,song,retro,piano,cpu,scope,browser,save" },
-    { "Pro Tools Dark",         0xff202327, 0xff2b2f35, 0xff343941, 0xff4c535d, 0xffe8eaed, 0xff4fb3ff, false, 72, "Pro Tools", "mD=1;mH=300;tb=logo,beat,record,mix,bpm,pos,metro,count|start,play,stop,rec,song,retro,piano,cpu,scope,browser,save" },
+    { "Pro Tools Dark",         0xff2c2c2e, 0xff3b3b3d, 0xff47474a, 0xff5e5e62, 0xffeaeaea, 0xff5fd36a, false, 72, "Pro Tools", "mD=1;mH=380;tb=logo,beat,record,mix,bpm,pos,metro,count|start,play,stop,rec,song,retro,piano,cpu,scope,browser,save" },
     { "Reaper Default",         0xff333333, 0xff3d3d3d, 0xff464646, 0xff5e5e5e, 0xffdcdcdc, 0xff39c0a8, false, 64, "Reaper", "mD=1;mH=220;tbB=1;tbH=42" },
     { "Reaper Classic",         0xffc0c4c8, 0xffb0b4b8, 0xffa4a8ac, 0xff7a7e82, 0xff101010, 0xff2c6fbb, true,  64, "Reaper", "mD=1;mH=220;tbB=1;tbH=42" },
     { "Studio One Blue",        0xff1b2129, 0xff232b35, 0xff2b3540, 0xff44515f, 0xffe3e9f0, 0xff3e8ed0, false, 60, "", "bR=1;mD=1;mH=260" },
@@ -357,7 +357,7 @@ const LayoutLook layoutLooks[] {
     { "Live Gray",              0xff3a3a3a, 0xff444444, 0xff4e4e4e, 0xff666666, 0xffe8e8e8, 0xfff0d43a, false, 52, "" },
     { "Ableton Live Dark",      0xff1f1f1f, 0xff2a2a2a, 0xff363636, 0xff4d4d4d, 0xffd6d6d6, 0xffff9d3a, false, 52, "Ableton", "mD=1;mH=230;tbH=40;bW=220" },
     { "Ableton Live Mid",       0xff6b6b6b, 0xff7a7a7a, 0xff878787, 0xff9a9a9a, 0xff0f0f0f, 0xffffb532, true,  52, "Ableton", "mD=1;mH=230;tbH=40;bW=220" },
-    { "Ableton Live Light",     0xffcfcfcf, 0xffbdbdbd, 0xffb0b0b0, 0xff8e8e8e, 0xff141414, 0xfff28c1e, true,  52, "Ableton", "mD=1;mH=230;tbH=40;bW=220" },
+    { "Ableton Live Light",     0xffbababa, 0xffa9a9a9, 0xff9c9c9c, 0xff8a8a8a, 0xff111111, 0xffffb532, true,  52, "Ableton", "mD=1;mH=230;tbH=40;bW=230" },
     { "FL Studio Default",      0xff2f3a42, 0xff3a464f, 0xff44515b, 0xff5b6a75, 0xffd9e0e4, 0xffff8c2e, false, 56, "" },
     { "Bitwig Dark",            0xff222222, 0xff2c2c2c, 0xff363636, 0xff4a4a4a, 0xffdadada, 0xffff5a00, false, 56, "", "bR=1;mD=1;mH=240;tbB=1;tbH=42" },
     { "BandLab Night",          0xff121218, 0xff1b1b24, 0xff24242f, 0xff3a3a4a, 0xfff2f2f7, 0xfff2295b, false, 64, "", "rB=1;bR=1" },
