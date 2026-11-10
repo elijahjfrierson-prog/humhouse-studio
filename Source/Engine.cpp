@@ -5,6 +5,7 @@
 #include "AudioEncode.h"
 #include <algorithm>
 #include <set>
+#include <bitset>
 
 namespace hhs
 {
@@ -118,6 +119,8 @@ struct Engine::ChannelRuntime
     int silentBlocks = 0;
     float gainL = -1.0f, gainR = -1.0f;
     int cutGroup = 0;
+    // plug-in instruments: keys we sent a note-on for, so stop / loop / seek / choke can end every one of them
+    std::bitset<128> held; bool panic = false, cutTails = false;
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
@@ -454,6 +457,7 @@ void Engine::adoptStaged()
             auto* rt = channelOrder[i];
             if (rt->inst) rt->inst->update (aproj.channels[i]);
             rt->cutGroup = aproj.channels[i].cutGroup;
+            rt->cutTails = aproj.channels[i].cutTails;
         }
     }
     const float us = (float) (1.0e6 * juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0));
@@ -1857,19 +1861,35 @@ struct EngineJobs
         if (rt->plugin)
         {
             rt->midi.clear();
+            auto endAll = [rt] (int at) {
+                for (int k = 0; k < 128; ++k) if (rt->held[(size_t) k]) rt->midi.addEvent (juce::MidiMessage::noteOff (1, k), at);
+                rt->held.reset();
+            };
+            bool sentOff = rt->panic;
+            if (rt->panic)
+            {   // many VST3s ignore CC123 alone: explicit note-offs first, then all-notes-off + all-sound-off
+                endAll (0);
+                rt->midi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
+                rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0);
+                rt->panic = false;
+            }
+            std::sort (rt->events.begin(), rt->events.begin() + rt->numEvents, [] (auto& a, auto& b) { return a.offset != b.offset ? a.offset < b.offset : ! a.on && b.on; });
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
-                if (ev.key < 0) continue;
-                rt->midi.addEvent (ev.on ? juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel))
-                                         : juce::MidiMessage::noteOff (1, ev.key), ev.offset);
+                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset); sentOff = true; continue; }
+                if (ev.key > 127) continue;
+                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); continue; }
+                rt->midi.addEvent (juce::MidiMessage::noteOff (1, ev.key), ev.offset);
+                rt->held.reset ((size_t) ev.key); sentOff = true;
+                if (rt->cutTails && rt->held.none()) rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset);   // CUT: no release tail
             }
-            if (rt->numEvents == 0 && rt->numActive == 0 && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
+            if (rt->numEvents == 0 && rt->numActive == 0 && rt->held.none() && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
             auto& pl = *rt->plugin;
             const juce::ScopedTryLock cl (pl.getCallbackLock());
             if (! cl.isLocked() || pl.isSuspended() || pluginChannels (pl) > rt->buf.getNumChannels() || n > rt->buf.getNumSamples())
-            { rt->numEvents = 0; return; }
+            { if (sentOff || rt->held.any()) rt->panic = true; rt->numEvents = 0; return; }   // a dropped note-off would ring forever: end all next block
             juce::AudioBuffer<float> view (rt->buf.getArrayOfWritePointers(), rt->buf.getNumChannels(), n);
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
@@ -2089,7 +2109,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         {
             if (ch->inst) ch->inst->allNotesOff();
             ch->numActive = 0;
-            if (ch->plugin) { ch->midi.clear(); ch->midi.addEvent (juce::MidiMessage::allNotesOff (1), 0); }
+            if (ch->plugin) ch->panic = true;
         }
     if (hs == 5 || trackRt.empty())
     {
@@ -2574,7 +2594,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         const juce::ScopedLock sl (lock);
         playing = false; position = 0.0;
         proj.songMode = oldSong;
-        for (auto* c : channelOrder) { if (c->inst) c->inst->allNotesOff(); c->numActive = 0; }
+        for (auto* c : channelOrder) { if (c->inst) c->inst->allNotesOff(); if (c->plugin) c->panic = true; c->numActive = 0; }
     }
     publishProject();
     deviceManager.addAudioCallback (this);

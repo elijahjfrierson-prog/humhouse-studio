@@ -180,7 +180,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("pitch", c.pitch, nullptr); t.setProperty ("glide", c.glide, nullptr); t.setProperty ("shift", c.shift, nullptr); t.setProperty ("mono", c.mono, nullptr);
         t.setProperty ("mute", c.muted, nullptr); t.setProperty ("solo", c.solo, nullptr); t.setProperty ("root", c.rootKey, nullptr);
         t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
-        t.setProperty ("oneShot", c.oneShot, nullptr); t.setProperty ("cutSelf", c.cutItself, nullptr); t.setProperty ("cutGroup", c.cutGroup, nullptr);
+        t.setProperty ("oneShot", c.oneShot, nullptr); t.setProperty ("cutSelf", c.cutItself, nullptr); t.setProperty ("cutGroup", c.cutGroup, nullptr); t.setProperty ("cutTails", c.cutTails, nullptr);
         t.setProperty ("ampA", c.ampAttack, nullptr); t.setProperty ("ampH", c.ampHold, nullptr); t.setProperty ("ampR", c.ampRelease, nullptr);
         t.setProperty ("smpNorm", c.smpNormalize, nullptr); t.setProperty ("smpRev", c.smpReverse, nullptr); t.setProperty ("smpInv", c.smpInvert, nullptr);
         t.setProperty ("smpDeclick", c.smpDeclick, nullptr); t.setProperty ("keyTrack", c.keyTrack, nullptr); t.setProperty ("smpTrim", c.smpTrim, nullptr); t.setProperty ("smpBoost", c.smpBoostDb, nullptr);
@@ -364,7 +364,7 @@ Project projectFromTree (const juce::ValueTree& root)
         c.mixerTrack = t["mix"]; c.volume = t.getProperty ("vol", 0.8f); c.pan = t["pan"]; c.pitch = t["pitch"];
         c.glide = t["glide"]; c.shift = (float) t.getProperty ("shift", 0.0); c.mono = t["mono"]; c.muted = t["mute"]; c.solo = t["solo"]; c.rootKey = t.getProperty ("root", 60);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff9b5cff));
-        c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"];
+        c.oneShot = t.getProperty ("oneShot", true); c.cutItself = t["cutSelf"]; c.cutGroup = t["cutGroup"]; c.cutTails = t["cutTails"];
         c.ampAttack = t["ampA"]; c.ampHold = t["ampH"]; c.ampRelease = t.getProperty ("ampR", 0.01f);
         c.smpNormalize = t["smpNorm"]; c.smpReverse = t["smpRev"]; c.smpInvert = t["smpInv"]; c.smpDeclick = t.getProperty ("smpDeclick", true); c.keyTrack = t.getProperty ("keyTrack", true);
         c.smpTrim = t["smpTrim"]; c.smpBoostDb = t["smpBoost"]; c.smpWarp = t.getProperty ("smpWarp", 0); c.smpWarpAmt = t.getProperty ("smpWarpAmt", 0.0f);

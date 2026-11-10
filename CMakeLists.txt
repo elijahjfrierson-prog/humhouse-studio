@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.5.2 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.5.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -133,6 +133,8 @@ function(hhs_add_app target product bundle licensed)
         Source/PianoRoll.cpp
         Source/Playlist.cpp
         Source/MixerView.cpp
+        Source/LanesView.cpp
+        Source/DJView.cpp
         Source/Browser.cpp
         Source/ToolDialogs.cpp
         Source/EffectEditors.cpp

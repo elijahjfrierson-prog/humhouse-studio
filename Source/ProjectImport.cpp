@@ -444,9 +444,15 @@ bool importForeignProject (const juce::File& f, Project& out, juce::StringArray&
 bool importStemFolder (const juce::File& dir, Project& out, juce::StringArray& report)
 {
     if (! dir.isDirectory()) return false;
-    auto files = dir.findChildFiles (juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+    return importStemFiles (dir.findChildFiles (juce::File::findFiles, false, "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg;*.m4a;*.caf"), out, report);
+}
+
+bool importStemFiles (juce::Array<juce::File> files, Project& out, juce::StringArray& report)
+{
+    files.removeIf ([] (const juce::File& f) { return ! f.existsAsFile() || ! f.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg;m4a;caf"); });
     if (files.isEmpty()) return false;
     files.sort();
+    const auto dir = files[0].getParentDirectory();
     Project p = blank();
     p.title = dir.getFileName();
     // a tempo in the folder or file names ("Song 92bpm") sets the grid; otherwise keep the default

@@ -190,6 +190,7 @@ struct Channel
     // channels sharing a cut group choke each other (closed hat cuts open hat)
     bool  oneShot = true, cutItself = false;
     int   cutGroup = 0;
+    bool  cutTails = false;            // plug-in instruments: hard-stop the sound when the last note ends (no release ring-out)
     float ampAttack = 0.0f, ampHold = 0.0f, ampRelease = 0.01f;   // seconds; hold 0 = play to the end
     // FL-style sample settings (SMP page): non-destructive, baked when the sample loads
     bool  smpNormalize = false, smpReverse = false, smpInvert = false, smpDeclick = false, smpTrim = false;   // defaults: the sample plays exactly like the WAV

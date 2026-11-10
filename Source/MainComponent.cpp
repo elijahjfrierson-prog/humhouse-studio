@@ -474,7 +474,7 @@ enum MenuIds
 {
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
-    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser,
+    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser, mDJ,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
     mMidiDevice = 90,
@@ -733,7 +733,8 @@ public:
         playlist = createPlaylist (studio);
         mixer = createMixer (studio);
         browser = createBrowser (studio);
-        for (auto* c : { rack.get(), piano.get(), playlist.get(), mixer.get(), browser.get() }) addChildComponent (c);
+        lanes = createLanes (studio);
+        for (auto* c : { rack.get(), piano.get(), playlist.get(), mixer.get(), browser.get(), lanes.get() }) addChildComponent (c);
         addChildComponent (pianoSplit);
         pianoSplit.onDrag = [this] (int y) {
             if (splitTotal <= 0) return;
@@ -801,6 +802,11 @@ public:
         setupButton (browserBtn, "PLUGIN HOUSE", "Show / hide Plugin House and the sample + kit browser (F8)", true);
         browserBtn.setToggleState (true, juce::dontSendNotification);
         browserBtn.onClick = [this] { showBrowser = browserBtn.getToggleState(); resized(); };
+        setupButton (laneBtn, "LANE", "LANE: FX lanes + automation lanes of the selected mixer track (Ableton style). Click again to collapse", true);
+        laneBtn.onClick = [this] { showLanes = laneBtn.getToggleState(); if (popouts.count (lanes.get()) > 0) reattach (lanes.get()); resized(); };
+        setupButton (lanePop, "POP", "Detach the LANE panel into its own window (click again to dock it)");
+        lanePop.onClick = [this] { if (! showLanes) laneBtn.setToggleState (true, juce::sendNotificationSync); toggleDetach (lanes.get(), "Lanes"); };
+        addAndMakeVisible (laneBtn); addChildComponent (lanePop);
         if (phoneUI)
         {
             browserBtn.setToggleState (showBrowser, juce::dontSendNotification);
@@ -977,6 +983,7 @@ public:
 
     ~MainComponent() override
     {
+        closeDjDecks();
         relayoutMain = nullptr; lowMemoryMain = nullptr; saveBackupMain = nullptr;
         miniKb = nullptr;
         kbState.removeListener (&kbListen);
@@ -1093,14 +1100,25 @@ if (phoneUI)
             place (*it, rt.removeFromLeft (w (it->second))); rt.removeFromLeft (6);
         }
         }
-        hintBar.setVisible (build::hint || phoneUI);
-        if (build::hint || phoneUI) hintBar.setBounds (r.removeFromBottom (22));
+        {
+            auto foot = r.removeFromBottom (phoneUI ? 30 : 22);
+            laneBtn.setBounds (foot.removeFromLeft (phoneUI ? 64 : 52).reduced (1));
+            lanePop.setVisible (showLanes);
+            if (showLanes) lanePop.setBounds (foot.removeFromLeft (phoneUI ? 52 : 44).reduced (1));
+            hintBar.setVisible (build::hint || phoneUI);
+            if (build::hint || phoneUI) hintBar.setBounds (foot);
+        }
         if (kbInset != nullptr)
         {
             kbInset->setVisible (pianoBtn.getToggleState());
             if (pianoBtn.getToggleState()) kbInset->setBounds (r.removeFromBottom (phoneUI ? 110 : 76));
         }
         auto here = [this] (const std::unique_ptr<juce::Component>& c) { return popouts.count (c.get()) == 0; };
+        if (here (lanes))
+        {
+            lanes->setVisible (showLanes);
+            if (showLanes) lanes->setBounds (r.removeFromBottom (juce::jlimit (120, juce::jmax (120, r.getHeight() / 2), build::lanesH)));
+        }
         if (phoneUI)
         {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
             auto tab = r.removeFromLeft (34);
@@ -1346,6 +1364,7 @@ if (phoneUI)
             add (mRecord, "Record (Playlist)", "F5", true, view == 1);
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
+            add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
             m.addSeparator();
@@ -1510,6 +1529,7 @@ if (phoneUI)
             case mDetachPlaylist: toggleDetach (playlist.get(), "Playlist"); break;
             case mDetachMixer: toggleDetach (mixer.get(), "Mixer"); break;
             case mDetachBrowser: toggleDetach (browser.get(), "Plugin House"); break;
+            case mDJ: showDjDecks (studio); break;
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;
@@ -1565,7 +1585,7 @@ private:
         void mouseDown (const juce::MouseEvent&) override { e.stopPreview (150); }
         Engine& e;
     } previewStopper { engine };
-    std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser;
+    std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser, lanes;
     struct SplitBar : juce::Component   // drag to resize Channel Rack vs Piano Roll; click to minimize / show the Piano Roll
     {
         SplitBar() { setMouseCursor (juce::MouseCursor::UpDownResizeCursor); }
@@ -1776,6 +1796,8 @@ private:
     int view = 0, ticks = 0, lastView = 0; bool rackHidden = false;
     bool showBrowser = ! phoneUI;
     juce::TextButton browserTab { ">" };
+    juce::TextButton laneBtn, lanePop;
+    bool showLanes = false;
     juce::String flashText;
     juce::uint32 flashUntil = 0;
 
@@ -2189,22 +2211,31 @@ private:
     }
     void convertStems()
     {
-        chooser = std::make_unique<juce::FileChooser> ("Pick the folder of exported stems (Logic / Pro Tools / any DAW)", docsDir(), "*");
+        chooser = std::make_unique<juce::FileChooser> ("Pick the stems (audio files) or their folder (Logic / Pro Tools / any DAW)", docsDir(), "*");
         juce::Component::SafePointer<MainComponent> safe (this);
-        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+        chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories
+                                | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
                               [safe] (const juce::FileChooser& fc) {
-                                  const auto d = fc.getResult();
-                                  if (safe != nullptr && d.isDirectory()) safe->askToSave ([safe, d] { if (safe != nullptr) safe->load (d); });
+                                  juce::Array<juce::File> picked;
+                                 #if JUCE_IOS
+                                  for (auto& u : fc.getURLResults()) if (auto f = copyIntoApp (u); f.exists()) picked.add (f);
+                                 #else
+                                  picked = fc.getResults();
+                                 #endif
+                                  if (safe == nullptr || picked.isEmpty()) return;
+                                  if (picked.size() == 1 && picked[0].isDirectory()) { const auto d = picked[0]; safe->askToSave ([safe, d] { if (safe != nullptr) safe->load (d); }); return; }
+                                  safe->askToSave ([safe, picked] { if (safe != nullptr) safe->load (picked[0], picked); });
                               });
     }
 
-    void load (const juce::File& f)
+    void load (const juce::File& f, const juce::Array<juce::File>& stems = {})
     {
         Project q;
         juce::StringArray converted;
-        if (f.isDirectory() || isForeignProject (f))
+        if (! stems.isEmpty() || f.isDirectory() || isForeignProject (f))
         {
-            const bool ok = f.isDirectory() ? importStemFolder (f, q, converted)
+            const bool ok = ! stems.isEmpty() ? importStemFiles (stems, q, converted)
+                          : f.isDirectory() ? importStemFolder (f, q, converted)
                                             : importForeignProject (f, q, converted, [this] (const juce::String& n, bool inst) { return findInstalledPlugin (n, inst); });
             if (! ok)
             {
@@ -2420,8 +2451,13 @@ public:
             if (t == juce::File()) fail ("FX chain");
             else flash ("FX chain added: " + t.getFileNameWithoutExtension() + " (right-click a track > FX chain presets)");
         }
-        else if (f.hasFileExtension ("hhs"))
+        else if (f.hasFileExtension ("hhs") || isForeignProject (f))
             askToSave ([this, f] { load (f); });
+        else if (f.hasFileExtension ("ptx;ptf;logicx;aaf;omf"))
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Convert " + f.getFileName(),
+                "Pro Tools and Logic sessions are closed formats. Export every track as audio from that DAW "
+                "(Logic: File > Export > All Tracks as Audio Files, Pro Tools: File > Export > Clips as Files), "
+                "then drop the stems folder or File > Convert stems: each file becomes its own track + mixer insert.");
     }
     bool isInterestedInFileDrag (const juce::StringArray& files) override { return allHumHouseShareFiles (files); }
     void filesDropped (const juce::StringArray& files, int, int) override
