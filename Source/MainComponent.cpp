@@ -474,7 +474,7 @@ enum MenuIds
 {
     mNew = 1, mOpen, mOpenBackup, mSave, mSaveAs, mExport, mExportTrack, mQuit, mSaveTemplate, mDefaultTemplate, mClearDefaultTemplate,
     mUndo = 20, mRedo, mBackupFolder,
-    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser, mDJ,
+    mBeat = 40, mRecord, mMix, mBrowser, mSamplesUsed, mDetachRack, mDetachPiano, mDetachPlaylist, mDetachMixer, mDetachBrowser, mDJ, mPatchBay,
     mAudio = 60, mPlugins, mAutoBackup, mTheme, mClearBlacklist, mTypingKeys, mMidiInputs,
     mShortcuts = 80, mAbout,
     mMidiDevice = 90,
@@ -682,6 +682,7 @@ public:
         o.osxLibrarySubFolder = "Application Support";
         props.setStorageParameters (o);
         studio.settings = props.getUserSettings();
+        applyLanguage (studio.settings != nullptr ? studio.settings->getIntValue ("language", 0) : 0);
         kbState.addListener (&kbListen);
 
         if (studio.settings->containsKey ("uiScale"))
@@ -983,7 +984,7 @@ public:
 
     ~MainComponent() override
     {
-        closeDjDecks();
+        closeDjDecks(); closePatchBay();
         relayoutMain = nullptr; lowMemoryMain = nullptr; saveBackupMain = nullptr;
         miniKb = nullptr;
         kbState.removeListener (&kbListen);
@@ -1302,14 +1303,14 @@ if (phoneUI)
     }
 
     // ---- menus
-    juce::StringArray getMenuBarNames() override { return { "File", "Edit", "View", "Options", "Help" }; }
+    juce::StringArray getMenuBarNames() override { return { TRANS ("File"), TRANS ("Edit"), TRANS ("View"), TRANS ("Options"), TRANS ("Help") }; }
 
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
     {
         juce::PopupMenu m;
         auto add = [&m] (int id, const juce::String& text, const juce::String& shortcut = {}, bool enabled = true, bool ticked = false)
         {
-            juce::PopupMenu::Item it (text);
+            juce::PopupMenu::Item it (juce::translate (text));
             it.itemID = id; it.shortcutKeyDescription = shortcut; it.isEnabled = enabled; it.isTicked = ticked;
             m.addItem (it);
         };
@@ -1365,6 +1366,7 @@ if (phoneUI)
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
             add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
+            add (mPatchBay, "Patch Bay (nodes: sequencers, sounds, FX, LFOs)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
             m.addSeparator();
@@ -1530,6 +1532,7 @@ if (phoneUI)
             case mDetachMixer: toggleDetach (mixer.get(), "Mixer"); break;
             case mDetachBrowser: toggleDetach (browser.get(), "Plugin House"); break;
             case mDJ: showDjDecks (studio); break;
+            case mPatchBay: showPatchBay (studio); break;
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;

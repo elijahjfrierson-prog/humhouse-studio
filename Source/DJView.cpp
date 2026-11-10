@@ -1,4 +1,5 @@
 #include "UI.h"
+#include <juce_dsp/juce_dsp.h>
 
 namespace hhs
 {
@@ -23,12 +24,20 @@ struct Deck : public juce::Component, private juce::Timer
         play.onClick = [this] { if (tp.isPlaying()) tp.stop(); else tp.start(); };
         cue.onClick = [this] { if (tp.isPlaying()) { tp.stop(); tp.setPosition (cuePos); } else { cuePos = tp.getCurrentPosition(); tp.setPosition (cuePos); } };
         sync.onClick = [this] { if (onSync) onSync(); };
+        for (auto* lb : { &loop4, &loop8 })
+        {
+            lb->setClickingTogglesState (true);
+            lb->setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2fb36b));
+            addAndMakeVisible (lb);
+        }
+        loop4.onClick = [this] { setLoop (loop4, loop8, 4); };
+        loop8.onClick = [this] { setLoop (loop8, loop4, 8); };
         pitch.setSliderStyle (juce::Slider::LinearVertical); pitch.setRange (-16.0, 16.0, 0.01); pitch.setValue (0.0);
         pitch.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         pitch.setDoubleClickReturnValue (true, 0.0);
         pitch.onValueChange = [this] { rs.setResamplingRatio (1.0 + pitch.getValue() / 100.0); };
         addAndMakeVisible (pitch);
-        startTimerHz (30);
+        startTimerHz (60);
     }
     ~Deck() override { tp.setSource (nullptr); }
     static juce::Colour padColour (int i) { const juce::Colour c[] { juce::Colours::red, juce::Colours::orange, juce::Colours::yellow, juce::Colours::limegreen }; return c[i & 3]; }
@@ -51,6 +60,7 @@ struct Deck : public juce::Component, private juce::Timer
         if (r == nullptr) return;
         const double sr = r->sampleRate;
         bpm = guessBpm (*r, f.getFileNameWithoutExtension());
+        analyse (*r);
         tp.stop(); tp.setSource (nullptr);
         src = std::make_unique<juce::AudioFormatReaderSource> (r.release(), true);
         tp.setSource (src.get(), 32768, &io, sr, 2);   // read-ahead on its own thread: the audio callback never touches the disk
@@ -91,6 +101,57 @@ struct Deck : public juce::Component, private juce::Timer
         }
         return bestBpm;
     }
+    // key (Krumhansl profiles on a 30 s chroma) + first strong beat for the grid
+    void analyse (juce::AudioFormatReader& r)
+    {
+        const double sr = r.sampleRate;
+        {
+            juce::AudioBuffer<float> head (1, (int) juce::jmin ((juce::int64) (sr * 15.0), r.lengthInSamples));
+            r.read (&head, 0, head.getNumSamples(), 0, true, false);
+            const float pk = head.getMagnitude (0, head.getNumSamples());
+            gridStart = 0.0;
+            for (int i = 0; i < head.getNumSamples(); ++i) if (std::abs (head.getSample (0, i)) > pk * 0.5f) { gridStart = i / sr; break; }
+        }
+        constexpr int order = 13, N = 1 << order;
+        juce::dsp::FFT fft (order);
+        const juce::int64 len = juce::jmin ((juce::int64) (sr * 30.0), r.lengthInSamples);
+        const juce::int64 start = juce::jmax ((juce::int64) 0, r.lengthInSamples / 2 - len / 2);
+        juce::AudioBuffer<float> b (1, (int) len);
+        r.read (&b, 0, (int) len, start, true, false);
+        std::array<double, 12> chroma {};
+        std::vector<float> w ((size_t) N * 2);
+        for (juce::int64 pos = 0; pos + N <= len; pos += N / 2)
+        {
+            std::fill (w.begin(), w.end(), 0.0f);
+            for (int i = 0; i < N; ++i) w[(size_t) i] = b.getSample (0, (int) pos + i) * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * i / N));
+            fft.performFrequencyOnlyForwardTransform (w.data());
+            for (int k = 1; k < N / 2; ++k)
+            {
+                const double hz = k * sr / N;
+                if (hz < 55.0 || hz > 2000.0) continue;
+                const int pc = ((int) std::lround (12.0 * std::log2 (hz / 440.0)) + 9 + 1200) % 12;
+                chroma[(size_t) pc] += w[(size_t) k];
+            }
+        }
+        static const double maj[] { 6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88 };
+        static const double mnr[] { 6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17 };
+        double best = -1e9; int bestPc = 0; bool minor = false;
+        for (int root = 0; root < 12; ++root)
+            for (int m = 0; m < 2; ++m)
+            {
+                double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+                for (int i = 0; i < 12; ++i)
+                {
+                    const double x = chroma[(size_t) ((root + i) % 12)], y = m ? mnr[i] : maj[i];
+                    sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+                }
+                const double c = (12 * sxy - sx * sy) / std::sqrt (juce::jmax (1e-12, (12 * sxx - sx * sx) * (12 * syy - sy * sy)));
+                if (c > best) { best = c; bestPc = root; minor = m == 1; }
+            }
+        static const int cam[] { 8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1 };
+        static const char* names[] { "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
+        key = juce::String (cam[minor ? (bestPc + 3) % 12 : bestPc]) + (minor ? "A" : "B") + "  " + names[bestPc] + (minor ? "m" : "");
+    }
     double liveBpm() const { return bpm * (1.0 + pitch.getValue() / 100.0); }
     void matchTo (const Deck& o) { if (bpm > 0 && o.bpm > 0) pitch.setValue (juce::jlimit (-16.0, 16.0, (o.liveBpm() / bpm - 1.0) * 100.0)); }
     static juce::String clock (double s) { s = juce::jmax (0.0, s); return juce::String::formatted ("%02d:%04.1f", (int) s / 60, std::fmod (s, 60.0)); }
@@ -112,6 +173,8 @@ struct Deck : public juce::Component, private juce::Timer
         g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
         g.drawText (juce::String (liveBpm(), 1), getWidth() - 86, 4, 78, 22, juce::Justification::centredRight);
         g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f)); g.drawText ("BPM", getWidth() - 86, 24, 78, 12, juce::Justification::centredRight);
+        g.setColour (juce::Colour (0xff6ad1ff)); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawText (key, getWidth() - 160, 4, 70, 18, juce::Justification::centredRight);
         // platter: spinning marker, pitch, elapsed / remaining
         const auto pr = platter().toFloat().reduced (4.0f);
         const double len = tp.getLengthInSeconds(), pos = tp.getCurrentPosition();
@@ -140,13 +203,29 @@ struct Deck : public juce::Component, private juce::Timer
         auto padRow = bottom.removeFromTop (34);
         const int pw = padRow.getWidth() / 4;
         for (auto* p : pads) p->setBounds (padRow.removeFromLeft (pw).reduced (2));
-        const int w = bottom.getWidth() / 4;
+        const int w = bottom.getWidth() / 6;
         load.setBounds (bottom.removeFromLeft (w).reduced (2)); cue.setBounds (bottom.removeFromLeft (w).reduced (2));
-        play.setBounds (bottom.removeFromLeft (w).reduced (2)); sync.setBounds (bottom.reduced (2));
+        play.setBounds (bottom.removeFromLeft (w).reduced (2)); sync.setBounds (bottom.removeFromLeft (w).reduced (2));
+        loop4.setBounds (bottom.removeFromLeft (w).reduced (2)); loop8.setBounds (bottom.reduced (2));
         r.removeFromTop (40);
         pitch.setBounds (mirror ? r.removeFromRight (28) : r.removeFromLeft (28));
     }
-    void timerCallback() override { play.setButtonText (tp.isPlaying() ? "PAUSE" : "PLAY"); repaint (platter()); }
+    // beat loop from the grid beat at the press; checked every 1/60 s
+    void setLoop (juce::TextButton& on, juce::TextButton& other, int beats)
+    {
+        other.setToggleState (false, juce::dontSendNotification);
+        if (! on.getToggleState() || bpm <= 0.0) { on.setToggleState (false, juce::dontSendNotification); loopLen = 0.0; return; }
+        const double beat = 60.0 / bpm, pos = tp.getCurrentPosition();
+        loopStart = gridStart + std::floor ((pos - gridStart) / beat) * beat;
+        loopLen = beats * beat;
+    }
+    void timerCallback() override
+    {
+        play.setButtonText (tp.isPlaying() ? "PAUSE" : "PLAY");
+        if (loopLen > 0.0 && tp.getCurrentPosition() >= loopStart + loopLen)
+            tp.setPosition (loopStart + std::fmod (tp.getCurrentPosition() - loopStart, loopLen));
+        repaint (platter());
+    }
 
     juce::AudioFormatManager& fm; juce::TimeSliceThread& io;
     juce::String title, name;
@@ -156,10 +235,12 @@ struct Deck : public juce::Component, private juce::Timer
     juce::ResamplingAudioSource rs { &tp, false, 2 };
     std::unique_ptr<juce::AudioFormatReaderSource> src;
     std::unique_ptr<juce::FileChooser> chooser;
-    double bpm = 0.0, cuePos = 0.0;
+    double bpm = 0.0, cuePos = 0.0, gridStart = 0.0;
+    juce::String key;
     std::array<double, 4> cues { -1.0, -1.0, -1.0, -1.0 };
     std::function<void()> onSync;
-    juce::TextButton load { "LOAD" }, play { "PLAY" }, cue { "CUE" }, sync { "SYNC" };
+    juce::TextButton load { "LOAD" }, play { "PLAY" }, cue { "CUE" }, sync { "SYNC" }, loop4 { "LOOP 4" }, loop8 { "LOOP 8" };
+    double loopStart = 0.0, loopLen = 0.0;
     juce::OwnedArray<juce::TextButton> pads;
     juce::Slider pitch;
 };
@@ -191,7 +272,7 @@ struct Waves : public juce::Component, private juce::Timer
         {   // beat grid from the song start (rough, BPM-based)
             const double beat = 60.0 / d.bpm;
             g.setColour (juce::Colours::white.withAlpha (0.18f));
-            for (double t = std::ceil ((pos - span) / beat) * beat; t < pos + span; t += beat)
+            for (double t = d.gridStart + std::ceil ((pos - span - d.gridStart) / beat) * beat; t < pos + span; t += beat)
                 g.drawVerticalLine (r.getX() + (int) ((t - pos + span) / (2 * span) * r.getWidth()), (float) r.getY(), (float) r.getBottom());
         }
         for (size_t i = 0; i < d.cues.size(); ++i)
@@ -223,7 +304,8 @@ struct Library : public juce::Component, private juce::ListBoxModel
     {
         list.setModel (this); list.setRowHeight (phoneUI ? 34 : 22);
         list.setColour (juce::ListBox::backgroundColourId, col::bg);
-        for (auto* c : { &folder, &toA, &toB }) addAndMakeVisible (c);
+        for (auto* c : { &downloads, &folder, &toA, &toB }) addAndMakeVisible (c);
+        downloads.onClick = [this] { scan (juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads")); };
         addAndMakeVisible (list);
         folder.onClick = [this] {
             chooser = std::make_unique<juce::FileChooser> ("Music folder for Hum Verse", dir);
@@ -261,19 +343,19 @@ struct Library : public juce::Component, private juce::ListBoxModel
     {
         g.fillAll (col::panel);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText ("#    SONG  -  " + dir.getFullPathName() + "  (" + juce::String (files.size()) + ")", 8, 4, getWidth() - 300, 18, juce::Justification::centredLeft, true);
+        g.drawText ("#    SONG  -  " + dir.getFullPathName() + "  (" + juce::String (files.size()) + ")", 8, 4, getWidth() - 400, 18, juce::Justification::centredLeft, true);
     }
     void resized() override
     {
         auto r = getLocalBounds();
         auto top = r.removeFromTop (26).reduced (2);
-        toB.setBounds (top.removeFromRight (80)); toA.setBounds (top.removeFromRight (80)); folder.setBounds (top.removeFromRight (90));
+        toB.setBounds (top.removeFromRight (80)); toA.setBounds (top.removeFromRight (80)); folder.setBounds (top.removeFromRight (90)); downloads.setBounds (top.removeFromRight (100));
         list.setBounds (r);
     }
     juce::AudioFormatManager& fm; Deck& a; Deck& b;
     juce::File dir; juce::Array<juce::File> files;
     juce::ListBox list;
-    juce::TextButton folder { "FOLDER..." }, toA { "LOAD A" }, toB { "LOAD B" };
+    juce::TextButton downloads { "DOWNLOADS" }, folder { "FOLDER..." }, toA { "LOAD A" }, toB { "LOAD B" };
     std::unique_ptr<juce::FileChooser> chooser;
 };
 
@@ -300,7 +382,7 @@ struct DjMix : public juce::AudioSource
     std::atomic<float> fade { 0.5f }, master { 0.8f };
 };
 
-class DjView : public juce::Component
+class DjView : public juce::Component, private juce::Timer, private juce::MidiInputCallback
 {
 public:
     explicit DjView (Studio& st) : s (st)
@@ -315,13 +397,32 @@ public:
         vol.setSliderStyle (juce::Slider::LinearHorizontal); vol.setRange (0.0, 1.0); vol.setValue (0.8);
         vol.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         vol.onValueChange = [this] { mix.master = (float) vol.getValue(); };
-        for (auto* c : { (juce::Component*) &xf, (juce::Component*) &vol }) addAndMakeVisible (c);
+        for (auto* c : { (juce::Component*) &xf, (juce::Component*) &vol, (juce::Component*) &autoMix, (juce::Component*) &fadeBtn }) addAndMakeVisible (c);
+        autoMix.setClickingTogglesState (true);
+        autoMix.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2fb36b));
+        fadeBtn.onClick = [this] { startFade(); };
+        addAndMakeVisible (learn);
+        learn.setTooltip ("CDJ / controller in MIDI mode (enable it in Options > MIDI): pick a control, then move it on the hardware");
+        learn.onClick = [this] {
+            juce::PopupMenu m;
+            for (int i = 0; i < (int) std::size (kTargets); ++i) m.addItem (i + 1, kTargets[i]);
+            m.addSeparator(); m.addItem (100, "Clear all mappings");
+            m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this)] (int r) {
+                if (safe == nullptr || r <= 0) return;
+                if (r == 100) { safe->maps.clear(); safe->saveMaps(); safe->learn.setButtonText ("LEARN"); return; }
+                safe->armed = r - 1; safe->learn.setButtonText ("MOVE IT...");
+            });
+        };
+        loadMaps();
+        s.engine.deviceManager.addMidiInputDeviceCallback ({}, this);
         player.setSource (&mix);
+        startTimerHz (30);
         s.engine.deviceManager.addAudioCallback (&player);
         setSize (phoneUI ? 380 : 1200, phoneUI ? 760 : 760);
     }
     ~DjView() override
     {
+        s.engine.deviceManager.removeMidiInputDeviceCallback ({}, this);
         s.engine.deviceManager.removeAudioCallback (&player);
         player.setSource (nullptr);
         io.stopThread (2000);
@@ -340,7 +441,8 @@ public:
         {
             a.setBounds (r.removeFromTop (230)); waves.setBounds (r.removeFromTop (120).reduced (0, 4)); b.setBounds (r.removeFromTop (230));
             auto mix = r.removeFromTop (44); mix.removeFromTop (16);
-            vol.setBounds (mix.removeFromRight (120)); mix.removeFromRight (10); xf.setBounds (mix);
+            vol.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
+            autoMix.setBounds (mix.removeFromLeft (64)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48)); xf.setBounds (mix.reduced (6, 0));
             library.setBounds (r);
             return;
         }
@@ -350,10 +452,92 @@ public:
         waves.setBounds (top.reduced (6, 0));
         auto mix = r.removeFromTop (44); mix.removeFromTop (16);
         vol.setBounds (mix.removeFromRight (180)); mix.removeFromRight (16);
+        learn.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
+        autoMix.setBounds (mix.removeFromLeft (90)); mix.removeFromLeft (6); fadeBtn.setBounds (mix.removeFromLeft (64));
         xf.setBounds (mix.withSizeKeepingCentre (juce::jmin (420, mix.getWidth()), mix.getHeight()));
         library.setBounds (r.withTrimmedTop (4));
     }
 private:
+    // FADE: 8 s crossfade to the other deck (synced + started); AUTO MIX fires it 16 beats before the playing deck ends
+    void startFade()
+    {
+        const bool toB = xf.getValue() < 0.5;
+        Deck& from = toB ? a : b; Deck& to = toB ? b : a;
+        if (to.tp.getLengthInSeconds() <= 0.0) return;
+        to.matchTo (from);
+        if (! to.tp.isPlaying()) to.tp.start();
+        fadeFrom = xf.getValue(); fadeTo = toB ? 1.0 : 0.0; fadeT0 = juce::Time::getMillisecondCounterHiRes(); fading = true;
+    }
+    void timerCallback() override
+    {
+        if (fading)
+        {
+            const double k = juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - fadeT0) / 8000.0);
+            xf.setValue (fadeFrom + (fadeTo - fadeFrom) * k);
+            if (k >= 1.0)
+            {
+                fading = false;
+                Deck& old = fadeTo > 0.5 ? a : b;
+                if (autoMix.getToggleState()) old.tp.stop();
+            }
+            return;
+        }
+        if (! autoMix.getToggleState()) return;
+        Deck& cur = xf.getValue() < 0.5 ? a : b;
+        const double len = cur.tp.getLengthInSeconds();
+        const double lead = cur.liveBpm() > 0.0 ? 16.0 * 60.0 / cur.liveBpm() : 20.0;
+        if (cur.tp.isPlaying() && len > lead && cur.tp.getCurrentPosition() >= len - lead) startFade();
+    }
+    // MIDI LEARN: CDJ / controller messages (note or CC per channel; pitch bend for pitch) -> deck controls
+    static constexpr const char* kTargets[] { "Deck 1 Play", "Deck 1 Cue", "Deck 1 Sync", "Deck 1 Pitch", "Deck 2 Play", "Deck 2 Cue", "Deck 2 Sync", "Deck 2 Pitch", "Crossfader", "DJ Out volume" };
+    static int midiKey (const juce::MidiMessage& m)
+    {
+        if (m.isNoteOnOrOff()) return 0x10000 | (m.getChannel() << 8) | m.getNoteNumber();
+        if (m.isController()) return 0x20000 | (m.getChannel() << 8) | m.getControllerNumber();
+        if (m.isPitchWheel()) return 0x30000 | (m.getChannel() << 8);
+        return 0;
+    }
+    void handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& m) override
+    {
+        const int k = midiKey (m);
+        if (k == 0) return;
+        const double v = m.isPitchWheel() ? m.getPitchWheelValue() / 16383.0 : m.isController() ? m.getControllerValue() / 127.0 : (m.getVelocity() > 0 ? 1.0 : 0.0);
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<DjView> (this), k, v] { if (safe != nullptr) safe->onMidi (k, v); });
+    }
+    void onMidi (int k, double v)
+    {
+        if (armed >= 0) { maps[k] = armed; armed = -1; learn.setButtonText ("LEARN"); saveMaps(); return; }
+        const auto it = maps.find (k);
+        if (it == maps.end()) return;
+        const int t = it->second;
+        Deck& d = t < 4 ? a : b;
+        const bool button = t < 8 && t % 4 != 3, press = v >= 0.5 && last[k] < 0.5;
+        last[k] = v;
+        if (button) { if (press) (t % 4 == 0 ? d.play : t % 4 == 1 ? d.cue : d.sync).triggerClick(); return; }
+        if (t < 8) d.pitch.setValue (-16.0 + 32.0 * v);
+        else if (t == 8) { fading = false; xf.setValue (v); }
+        else vol.setValue (v);
+    }
+    void saveMaps()
+    {
+        if (s.settings == nullptr) return;
+        juce::StringArray rows;
+        for (const auto& [k, t] : maps) rows.add (juce::String (k) + ":" + juce::String (t));
+        s.settings->setValue ("humVerseMidi", rows.joinIntoString (";")); s.settings->saveIfNeeded();
+    }
+    void loadMaps()
+    {
+        if (s.settings == nullptr) return;
+        for (const auto& row : juce::StringArray::fromTokens (s.settings->getValue ("humVerseMidi"), ";", ""))
+            if (row.contains (":")) maps[row.upToFirstOccurrenceOf (":", false, false).getIntValue()] = juce::jlimit (0, 9, row.fromFirstOccurrenceOf (":", false, false).getIntValue());
+    }
+    juce::TextButton learn { "LEARN" };
+    std::map<int, int> maps;
+    std::map<int, double> last;
+    int armed = -1;
+    juce::TextButton autoMix { "AUTO MIX" }, fadeBtn { "FADE" };
+    bool fading = false;
+    double fadeFrom = 0.5, fadeTo = 0.5, fadeT0 = 0.0;
     Studio& s;
     juce::AudioFormatManager fm;
     juce::TimeSliceThread io { "Hum Verse read-ahead" };
