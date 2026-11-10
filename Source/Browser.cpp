@@ -46,7 +46,7 @@ void showPluginScanner (Studio& s)
     c->setNumberOfThreadsForScanning (2);   // each plugin is probed in its own child process, so this is crash-safe
     c->setSize (780, 540);
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (c);
+    o.content.setOwned (fitToScreen (c));
     o.dialogTitle = "Plugin House - scan for VST3 / AU plugins (Options > Scan)";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;

@@ -8,11 +8,25 @@
 
 namespace hhs
 {
-#if JUCE_IOS
+#if JUCE_IOS || defined (HHS_PHONE_UI)   // HHS_PHONE_UI: phone layout on desktop, to debug it
 inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one MENU folder, X close-all, finger panning
 #else
 inline constexpr bool phoneUI = false;
 #endif
+// phone: a panel bigger than the screen goes in a finger-scrolled view instead of being cut off (desktop: unchanged)
+inline juce::Component* fitToScreen (juce::Component* c)
+{
+    if (! phoneUI || c == nullptr) return c;
+    const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    if (d == nullptr) return c;
+    const int maxW = d->userArea.getWidth() - 8, maxH = d->userArea.getHeight() - 60;   // room for the title bar
+    if (c->getWidth() <= maxW && c->getHeight() <= maxH) return c;
+    auto* v = new juce::Viewport();
+    v->setViewedComponent (c, true);
+    v->setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+    v->setSize (juce::jmin (c->getWidth() + v->getScrollBarThickness(), maxW), juce::jmin (c->getHeight(), maxH));
+    return v;
+}
 // a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
 inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)

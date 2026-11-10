@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(HumHouseStudio VERSION 1.5.0 LANGUAGES C CXX)
+project(HumHouseStudio VERSION 1.5.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,9 +49,6 @@ set(HHS_DEFS
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_USE_MP3AUDIOFORMAT=1
-    # macOS: draw only the regions that changed (Metal layer). Without it macOS merges every dirty spot (playhead,
-    # meters, scope) into one big rectangle, so the whole window redraws each frame and scrolling / OBS stutter
-    JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
 )
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)

@@ -57,6 +57,8 @@ const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
 void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 
+std::atomic<int>& scopeLag();   // samples rendered ahead but not heard yet: visuals hold back by this much
+
 // lock-free audio tap for the Scope (written on the audio thread, read by the UI)
 struct ScopeTap
 {
@@ -69,6 +71,11 @@ struct ScopeTap
         int w = pos.load (std::memory_order_relaxed);
         for (int i = 0; i < n; ++i) { buf[(size_t) w] = r != nullptr ? 0.5f * (l[i] + r[i]) : l[i]; w = (w + 1) & (size - 1); }
         pos.store (w, std::memory_order_release);
+    }
+    int heard() const
+    {
+        const int lag = juce::jlimit (0, size / 2, scopeLag().load (std::memory_order_relaxed));
+        return (pos.load (std::memory_order_acquire) - lag + size) & (size - 1);
     }
     void read (float* dst, int n, int end) const
     {

@@ -697,7 +697,7 @@ private:
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
-            t->read (snap.data(), fftN, t->pos.load());
+            t->read (snap.data(), fftN, t->heard());
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
             for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
             fft.performFrequencyOnlyForwardTransform (fftBuf.data());

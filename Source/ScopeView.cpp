@@ -74,7 +74,7 @@ private:
         auto* tap = source ? source() : nullptr;
         if (tap == nullptr) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); return; }
         rate = tap->rate.load();
-        const int w = tap->pos.load();
+        const int w = tap->heard();
         if (w == lastPos && ++idleTicks > 30) return;   // no new audio (stopped): stop redrawing a still picture
         if (w != lastPos) idleTicks = 0;
         tap->read (snap.data(), fftSize, w);

@@ -208,7 +208,7 @@ void showToolDialog (Studio& s, Tool t, int channelId)
     auto* panel = new ToolPanel (s, t, channelId);
     juce::DialogWindow::LaunchOptions o;
     o.dialogTitle = panel->title();
-    o.content.setOwned (panel);
+    o.content.setOwned (fitToScreen (panel));
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = false;
     o.useNativeTitleBar = ! phoneUI;

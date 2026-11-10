@@ -307,6 +307,8 @@ namespace hhx
             covers it through the usual fallback chain. */
         void dropRinglessShutHat();
         std::shared_ptr<Sample> readSample (juce::InputStream* stream);
+        /** Decoded once per file for the whole app: a kit split into 5 channels shares one copy instead of decoding 5. */
+        std::shared_ptr<Sample> readSampleFile (const juce::File& file);
         int loadFromManifest (const juce::File& folder, const juce::var& manifest);
         void startVoice (const std::shared_ptr<Sample>& sample, int lane, int articulation,
                          int mic, float gainL, float gainR, double increment,
@@ -328,6 +330,8 @@ namespace hhx
         /** Held while a kit is being swapped in, so a stroke arriving mid-load
             is dropped instead of reading a lane that is being rebuilt. */
         mutable juce::CriticalSection  layerLock;
+        /** Set when a kit finishes loading: the audio thread reads it instead of locking the lanes (a load holds the lock for seconds). */
+        std::atomic<bool>              kickFarMics { false };
         juce::AudioFormatManager       formats;
         double                         currentRate = 48000.0;
 

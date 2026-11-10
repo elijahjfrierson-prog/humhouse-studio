@@ -383,7 +383,7 @@ void Studio::commit (const juce::String& what)
     undo.push (p(), what);
     engine.sync();
     dirty = true;
-    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits
+    if (++editsSinceBackup >= 8 && ! engine.isPlaying()) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits; never mid-playback (plug-in state + disk write)
     sendChangeMessage();
 }
 
@@ -605,6 +605,70 @@ struct KeyCmdEditor : juce::Component
     juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns, clearBtns; juce::TextButton resetAll; juce::TextEditor search; juce::Label status; int waiting = -1;
 };
 
+// phone: menus taller than the screen scroll with a finger (JUCE's popup menu only scrolls by holding its edge arrows)
+struct PhoneMenuList : juce::Component
+{
+    struct Row { juce::String text; int id = 0; bool header = false, enabled = true, ticked = false; };
+    static void flatten (const juce::PopupMenu& m, std::vector<Row>& out)
+    {
+        for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+        {
+            const auto& i = it.getItem();
+            if (i.isSeparator || i.text.isEmpty()) continue;
+            if (i.subMenu != nullptr) { out.push_back ({ i.text, 0, true, true, false }); flatten (*i.subMenu, out); continue; }
+            out.push_back ({ i.text, i.itemID, i.isSectionHeader, i.isEnabled, i.isTicked });
+        }
+    }
+    struct Body : juce::Component
+    {
+        PhoneMenuList& o;
+        explicit Body (PhoneMenuList& m) : o (m) {}
+        void paint (juce::Graphics& g) override
+        {
+            const auto clip = g.getClipBounds();
+            for (int i = juce::jmax (0, clip.getY() / rowH); i < (int) o.rows.size() && i * rowH < clip.getBottom(); ++i)
+            {
+                const auto& r = o.rows[(size_t) i];
+                auto a = juce::Rectangle<int> (0, i * rowH, getWidth(), rowH);
+                if (r.header) { g.setColour (col::accent); g.setFont (juce::FontOptions (15.0f, juce::Font::bold)); }
+                else { g.setColour (r.enabled ? col::text : col::dim); g.setFont (juce::FontOptions (18.0f)); }
+                g.drawText ((r.ticked ? juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 ")) : juce::String()) + r.text, a.reduced (16, 0), juce::Justification::centredLeft, true);
+                g.setColour (col::gridBar); g.fillRect (a.removeFromBottom (1));
+            }
+        }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (e.mouseWasDraggedSinceMouseDown()) return;   // that was a scroll
+            const int i = e.y / rowH;
+            if (i < 0 || i >= (int) o.rows.size()) return;
+            const auto& r = o.rows[(size_t) i];
+            if (! r.header && r.enabled && r.id != 0 && o.done) o.done (r.id);
+        }
+    };
+    static constexpr int rowH = 46;
+    std::vector<Row> rows;
+    std::function<void (int)> done;
+    Body body { *this };
+    juce::Viewport view;
+    juce::TextButton close { "X  CLOSE" };
+    explicit PhoneMenuList (const juce::PopupMenu& m)
+    {
+        flatten (m, rows);
+        setOpaque (true);
+        addAndMakeVisible (view); view.setViewedComponent (&body, false);
+        view.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all); view.setScrollBarsShown (true, false);
+        addAndMakeVisible (close); close.onClick = [this] { if (done) done (0); };
+    }
+    void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        close.setBounds (r.removeFromTop (48).reduced (6));
+        view.setBounds (r);
+        body.setSize (r.getWidth() - view.getScrollBarThickness(), (int) rows.size() * rowH);
+    }
+};
+
 class MainComponent : public juce::Component, public juce::DragAndDropContainer, public juce::FileDragAndDropTarget, public juce::MenuBarModel, private juce::Timer, private juce::ChangeListener
 {
 public:
@@ -818,6 +882,10 @@ public:
                 put ("rec", juce::KeyPress ('r', cmd, 0)); put ("export", juce::KeyPress ('r', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd, 0));
                 put ("metro", juce::KeyPress ('m', cmd | shift, 0)); put ("browser", juce::KeyPress ('x', cmd | alt, 0)); put ("home", juce::KeyPress ('w'));
             }
+            else if (set == "Ableton")
+            {
+                put ("browser", juce::KeyPress ('b', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd | alt, 0));
+            }
             studio.settings->setValue ("layoutKeySet", set);
             saveKeys();
         };
@@ -941,6 +1009,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
+        if (phoneMenu != nullptr) phoneMenu->setBounds (r);   // phone turned while the menu is open
 if (phoneUI)
         {
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
@@ -1089,7 +1158,7 @@ if (phoneUI)
     void showKeyCommands()
     {
         juce::DialogWindow::LaunchOptions o;
-        o.content.setOwned (new KeyCmdEditor (userKeys, [this] { saveKeys(); }));
+        o.content.setOwned (fitToScreen (new KeyCmdEditor (userKeys, [this] { saveKeys(); })));
         o.dialogTitle = "Key commands"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
         o.launchAsync();
     }
@@ -1630,6 +1699,17 @@ private:
         }
         else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
     }
+    std::unique_ptr<PhoneMenuList> phoneMenu;
+    void showMenuOrList (juce::PopupMenu m, const juce::PopupMenu::Options& o, std::function<void (int)> cb)
+    {
+        if (! phoneUI) { m.showMenuAsync (o, std::move (cb)); return; }
+        phoneMenu = std::make_unique<PhoneMenuList> (m);
+        juce::Component::SafePointer<MainComponent> safe (this);
+        phoneMenu->done = [safe, cb] (int r) {
+            juce::MessageManager::callAsync ([safe, cb, r] { if (safe == nullptr) return; safe->phoneMenu.reset(); if (cb) cb (r); });
+        };
+        addAndMakeVisible (*phoneMenu); phoneMenu->setBounds (getLocalBounds()); phoneMenu->toFront (true);
+    }
     void showAllMenus()
     {
         juce::PopupMenu m;
@@ -1642,7 +1722,7 @@ private:
             for (juce::PopupMenu::MenuItemIterator it (sub); it.next();) m.addItem (it.getItem());
         }
         juce::Component::SafePointer<MainComponent> safe (this);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
+        showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
                          [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
     }
     void importFiles()
@@ -1856,7 +1936,7 @@ private:
         }
         if (hint != hintBar.getText()) hintBar.setText (hint, juce::dontSendNotification);
 
-        if (++ticks >= 30 * 120)
+        if (++ticks >= 30 * 120 && ! engine.isPlaying())   // overdue backups wait for Stop, like Logic / Reaper
         {
             ticks = 0;
             if (autoBackup() && studio.dirty)
@@ -2210,7 +2290,7 @@ private:
         m.addSeparator();
         m.addItem (100000, "Browse Files (iCloud, Downloads, other apps)...");
         juce::Component::SafePointer<MainComponent> safe (this);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe, songs] (int r) {
+        showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe, songs] (int r) {
             if (safe == nullptr || r == 0) return;
             if (r >= 1 && r <= songs.size()) { safe->load (songs[r - 1]); return; }
             if (r != 100000) return;
@@ -2466,7 +2546,7 @@ private:
         auto* sel = new juce::AudioDeviceSelectorComponent (engine.deviceManager, 0, 32, 0, 2, true, false, true, false);
         sel->setSize (560, 480);
         juce::DialogWindow::LaunchOptions o;
-        o.content.setOwned (sel);
+        o.content.setOwned (fitToScreen (sel));
         o.dialogTitle = "Audio settings - device, inputs, buffer size, sample rate";
         o.dialogBackgroundColour = col::panel;
         o.escapeKeyTriggersCloseButton = true;
@@ -2488,7 +2568,7 @@ private:
         for (int b : sizes)
             m.addItem (b, juce::String (b) + " samples  (" + juce::String (1000.0 * b / sr, 1) + " ms)" + (b <= 128 ? "  fastest" : b == 256 ? "  recommended" : ""), true, b == cur);
         juce::Component::SafePointer<MainComponent> safe (this);
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe] (int b) {
+        showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (40), [safe] (int b) {
             if (safe == nullptr || b <= 0) return;
             juce::MessageManager::callAsync ([safe, b] {   // after the menu is gone: the device restarts cleanly
                 if (safe == nullptr) return;

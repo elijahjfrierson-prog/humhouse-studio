@@ -208,7 +208,7 @@ public:
         {
             started = true;
             auto k = kit; auto f = kitFolder;
-            juce::Thread::launch ([k, f] { k->loadKitFolder (f); });   // big multi-mic kits load in the background; strokes are skipped until ready
+            juce::Thread::launch (juce::Thread::Priority::low, [k, f] { k->loadKitFolder (f); });   // big multi-mic kits load in the background; strokes are skipped until ready
         }
     }
     void noteOn (int key, float v, bool) override

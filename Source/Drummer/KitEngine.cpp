@@ -1,4 +1,6 @@
 #include "KitEngine.h"
+#include <map>
+#include <mutex>
 #include "../FastMath.h"
 
 #if __has_include(<BundledKitData.h>)
@@ -205,6 +207,7 @@ namespace hhx
                     v.release = juce::jmin (v.release, fade);
         }
 
+        kickFarMics.store (false);
         for (auto& l : lanes)
             l.layers.clear();
 
@@ -246,6 +249,7 @@ namespace hhx
 
     void KitEngine::finaliseKit (bool sortByLoudness)
     {
+        kickFarMics.store (laneHasMic (LaneKick, MicRoom) || laneHasMic (LaneKick, MicOverhead));   // the loader holds layerLock (recursive)
         const auto loudness = [] (const Layer& l) -> float
         {
             float peak = 0.0f;
@@ -389,6 +393,25 @@ namespace hhx
             lanes[(std::size_t) LaneHatTight].layers.clear();
         else if (closedRing < tightRing * 0.35f)
             lanes[(std::size_t) LaneHatClosed].layers = lanes[(std::size_t) LaneHatTight].layers;
+    }
+
+    std::shared_ptr<KitEngine::Sample> KitEngine::readSampleFile (const juce::File& file)
+    {
+        // held across the decode on purpose: concurrent loads of one kit wait here and then hit the cache,
+        // and only one background thread decodes at a time instead of all of them fighting the audio for CPU
+        static std::mutex m;
+        static std::map<juce::String, std::weak_ptr<Sample>> cache;
+        const auto key = file.getFullPathName() + "|" + juce::String (file.getLastModificationTime().toMilliseconds());
+        const std::lock_guard<std::mutex> l (m);
+        if (auto it = cache.find (key); it != cache.end())
+            if (auto s = it->second.lock()) return s;
+        auto s = readSample (new juce::FileInputStream (file));
+        if (s != nullptr)
+        {
+            for (auto it = cache.begin(); it != cache.end();) it = it->second.expired() ? cache.erase (it) : std::next (it);
+            cache[key] = s;
+        }
+        return s;
     }
 
     std::shared_ptr<KitEngine::Sample> KitEngine::readSample (juce::InputStream* stream)
@@ -584,7 +607,7 @@ namespace hhx
 
             auto& cached = decoded[name];
             if (cached == nullptr)
-                cached = readSample (new juce::FileInputStream (file));
+                cached = readSampleFile (file);
 
             if (cached != nullptr)
             {
@@ -623,7 +646,7 @@ namespace hhx
                 if (placement.lane < 0)
                     continue;
 
-                if (auto sample = readSample (new juce::FileInputStream (entry.getFile())))
+                if (auto sample = readSampleFile (entry.getFile()))
                 {
                     place (placement, std::move (sample));
                     ++loaded;
@@ -1707,7 +1730,7 @@ namespace hhx
 
         // A close-mic-only kit has no recorded leak, so the bleed control feeds
         // a delayed mono copy of the kit into the room instead.
-        const bool haveFarMics = laneHasMic (LaneKick, MicRoom) || laneHasMic (LaneKick, MicOverhead);
+        const bool haveFarMics = kickFarMics.load();   // never laneHasMic() here: it locks the lanes, and a kit load holds them for seconds
         if (bleedAmt > 0.001f && ! haveFarMics)
         {
             const float send = 0.35f * bleedAmt * (0.4f + 0.6f * blend);

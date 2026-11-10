@@ -288,6 +288,8 @@ struct Engine::TrackRuntime
     float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
     std::vector<std::shared_ptr<FxRuntime>> fx;
     std::atomic<float> peak { 0.0f };
+    std::array<float, 256> peakHist {};   // per-block peaks: meters show the block being heard, not the one rendered ahead
+    std::atomic<unsigned> peakW { 0 };
     int silentSamples = 0;
     double tailSeconds = 0.0;
     std::unique_ptr<juce::AudioFormatReader> frozen;
@@ -527,6 +529,8 @@ struct Engine::AntThread : juce::Thread
     void run() override { while (! threadShouldExit()) if (! e.antRenderOnce()) e.antWake.wait (2); }
 };
 
+static thread_local bool renderingAhead = false;   // master meters are taken when the block is heard instead
+
 bool Engine::antRenderOnce()
 {
     antBusy.store (true);
@@ -535,7 +539,9 @@ bool Engine::antRenderOnce()
     const int chunk = antTmp.getNumSamples();
     if (chunk <= 0 || antFifo.getNumReady() >= antTarget.load() || antFifo.getFreeSpace() < chunk) return false;
     float* o[2] { antTmp.getWritePointer (0), antTmp.getWritePointer (1) };
+    renderingAhead = true;
     processBlock (nullptr, 0, o, 2, chunk);
+    renderingAhead = false;
     antBpm = ctx.bpm;
     int s1, n1, s2, n2;
     antFifo.prepareToWrite (chunk, s1, n1, s2, n2);
@@ -574,6 +580,7 @@ void Engine::antForceRealtime()
         int s1, n1, s2, n2;
         antFifo.prepareToRead (antFifo.getNumReady(), s1, n1, s2, n2); antFifo.finishedRead (n1 + n2);
         antAheadBeats = 0.0;
+        scopeLag().store (0, std::memory_order_relaxed);
         antState.store (0);
     }
 }
@@ -1119,7 +1126,13 @@ float Engine::fxLoad (int track, int uid) const
 
 float Engine::trackPeak (int t) const
 {
-    return t >= 0 && t < (int) uiTrackRt.size() && uiTrackRt[(size_t) t] ? uiTrackRt[(size_t) t]->peak.load() : 0.0f;
+    if (t < 0 || t >= (int) uiTrackRt.size() || ! uiTrackRt[(size_t) t]) return 0.0f;
+    auto& tr = *uiTrackRt[(size_t) t];
+    const int lag = scopeLag().load (std::memory_order_relaxed);
+    const unsigned w = tr.peakW.load (std::memory_order_acquire);
+    if (lag <= 0 || w == 0) return tr.peak.load();
+    const unsigned back = (unsigned) juce::jmin (255, lag / juce::jmax (1, antTmp.getNumSamples()));
+    return tr.peakHist[(w - 1u - juce::jmin (back, w - 1u)) & 255u];
 }
 
 juce::AudioPluginInstance* Engine::channelPlugin (int id)
@@ -1534,17 +1547,26 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
         }
         antFifo.finishedRead (n1 + n2);
         if (st == 1 && antPrimed.load() && take < n) ++antUnderruns;
+        if (numOut > 0 && out[0] != nullptr)
+        {
+            const float* hr = numOut > 1 && out[1] != nullptr ? out[1] : out[0];
+            masterPeakL = std::max (juce::FloatVectorOperations::findMaximum (out[0], n), -juce::FloatVectorOperations::findMinimum (out[0], n));
+            masterPeakR = std::max (juce::FloatVectorOperations::findMaximum (hr, n), -juce::FloatVectorOperations::findMinimum (hr, n));
+        }
+        scopeLag().store (antFifo.getNumReady(), std::memory_order_relaxed);
         antAheadBeats = (double) antFifo.getNumReady() / spb;
         antWake.signal();
         if (st == 2 && antFifo.getNumReady() == 0 && ! antBusy.load())
         {
             // everything rendered ahead has been heard: carry on in real time from exactly there
             antAheadBeats = 0.0;
+            scopeLag().store (0, std::memory_order_relaxed);
             antState.store (0);
             processRealtime (in, numIn, out, numOut, n, take);
         }
         return;
     }
+    scopeLag().store (0, std::memory_order_relaxed);
     processRealtime (in, numIn, out, numOut, n, 0);
 }
 
@@ -1685,11 +1707,17 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 auto it = drumHits.find (clip.uid);
                 if (it == drumHits.end() || ! it->second) continue;
-                for (auto& h : *it->second)
+                // hits are sorted: jump to this block instead of walking the whole song's hits every block (x5 when split)
+                const auto& hv = *it->second;
+                for (auto hi = std::lower_bound (hv.begin(), hv.end(), b0 - clip.start - shiftBeats - 1.0e-9,
+                                                 [] (const DrumHit& x, double b) { return x.beat < b; });
+                     hi != hv.end(); ++hi)
                 {
+                    const auto& h = *hi;
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
-                    if (s < b0 || s >= b1) continue;
+                    if (s >= b1) break;
+                    if (s < b0) continue;
                     double ss = 0, sl = 32.0;
                     const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
@@ -2032,6 +2060,7 @@ void Engine::processTrack (int t)
     tr.gainL = gl; tr.gainR = gr;
     const float pk = std::max (tr.out.getMagnitude (0, 0, n), tr.out.getMagnitude (1, 0, n));
     tr.peak.store (std::max (pk, tr.peak.load() * 0.85f));
+    { const auto w = tr.peakW.load (std::memory_order_relaxed); tr.peakHist[w & 255u] = tr.peak.load(); tr.peakW.store (w + 1, std::memory_order_release); }
     if (auto* sc = trackScope (t)) { sc->rate = sampleRate; sc->push (tr.out.getReadPointer (0), tr.out.getReadPointer (1), n); }
 }
 
@@ -2275,8 +2304,11 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         }
     }
 
-    masterPeakL = std::max (juce::FloatVectorOperations::findMaximum (l, n), -juce::FloatVectorOperations::findMinimum (l, n));
-    masterPeakR = std::max (juce::FloatVectorOperations::findMaximum (r, n), -juce::FloatVectorOperations::findMinimum (r, n));
+    if (! renderingAhead)
+    {
+        masterPeakL = std::max (juce::FloatVectorOperations::findMaximum (l, n), -juce::FloatVectorOperations::findMinimum (l, n));
+        masterPeakR = std::max (juce::FloatVectorOperations::findMaximum (r, n), -juce::FloatVectorOperations::findMinimum (r, n));
+    }
     masterScope().rate = sampleRate;
     masterScope().push (l, r, n);
     for (int c = 0; c < numOut; ++c)
