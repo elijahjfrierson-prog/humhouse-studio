@@ -1403,39 +1403,7 @@ public:
         {
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (area);
-            for (size_t i = 0; i < p.lanes.size(); ++i)
-            {
-                const int y = laneY ((int) i);
-                g.setColour (i % 2 ? col::panel.darker (0.2f) : col::bg.brighter (0.03f));
-                g.fillRect (area.getX(), y, area.getWidth(), laneHOf ((int) i));
-                g.setColour (col::grid); g.drawHorizontalLine (y + laneHOf ((int) i) - 1, (float) area.getX(), (float) area.getRight());
-            }
-            const double b1 = xToBeat ((float) area.getRight());
-            double step = 1.0;
-            while (step * pxPerBeat < 10) step *= 2;
-            for (double b = std::floor (scrollX / step) * step; b <= b1; b += step)
-            {
-                const bool bar = std::fmod (b + 1e-9, (double) p.beatsPerBar) < 1e-6;
-                g.setColour (bar ? col::gridBar : col::grid);
-                g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
-            }
-            if (plSnap > 0 && plSnap < 1.0 && plSnap * pxPerBeat >= 6)
-            {
-                g.setColour (col::grid.withAlpha (0.35f));
-                for (double b = std::floor (scrollX / plSnap) * plSnap; b <= b1; b += plSnap)
-                    if (std::abs (b - std::round (b)) > 1e-6) g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
-            }
-            if (p.hasPunch())
-            {
-                g.setColour (col::rec.withAlpha (0.07f));
-                g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
-            }
-            if (timeSelB > timeSelA)
-            {
-                g.setColour (col::accent.withAlpha (0.10f));
-                g.fillRect (beatToX (timeSelA), (float) area.getY(), (float) ((timeSelB - timeSelA) * pxPerBeat), (float) area.getHeight());
-            }
-            for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) { drawClip (g, c); drawGainDot (g, c); }
+            if (drag != Drag::None || stretchDrag || ! paintCachedContent (g, area)) paintContent (g, area);
             // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
             s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
                 if (lane < 0 || lane >= (int) p.lanes.size() || num <= 0) return;
@@ -2161,7 +2129,7 @@ private:
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
     int laneH = 60;   // even height: tracks fill the view, never thin lines
-    void lookAndFeelChanged() override { resized(); repaint(); }   // Layout: new track height
+    void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
@@ -2367,7 +2335,7 @@ private:
     {
         auto& p = s.p();
         auto r = clipRect (c);
-        if (r.getRight() < headerW || r.getX() > getWidth()) return;
+        if (r.getRight() < headerW || r.getX() > contentRight()) return;
         if (! g.getClipBounds().toFloat().expanded (2).intersects (r)) return;   // playhead strip repaints skip clips they don't touch
         juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
@@ -2385,7 +2353,7 @@ private:
                     for (auto& o : dragOrig)
                         if (o.uid == c.uid && o.length > 0 && std::abs (o.length - c.length) > 1.0e-6) { stretchK = c.length / o.length; secs = beatsToSeconds (o.length, p.bpm); }
                 g.setColour (stretchK != 1.0 ? colour.brighter (0.4f).withRotatedHue (0.08f) : colour.brighter (0.4f));
-                const auto vis = body.getIntersection ({ (float) headerW, body.getY(), (float) (getWidth() - headerW), body.getHeight() });   // deep zoom: draw only the on-screen slice, not a 100k-px clip
+                const auto vis = body.getIntersection ({ (float) headerW, body.getY(), contentRight() - (float) headerW, body.getHeight() });   // deep zoom: draw only the on-screen slice, not a 100k-px clip
                 const double t0 = c.sourceOffset + secs * (vis.getX() - body.getX()) / juce::jmax (1.0f, body.getWidth());
                 const double t1 = c.sourceOffset + secs * (vis.getRight() - body.getX()) / juce::jmax (1.0f, body.getWidth());
                 if (vis.getWidth() >= 1.0f) t->drawChannels (g, vis.toNearestInt(), t0, t1, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
@@ -2490,6 +2458,120 @@ private:
         g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
         else if (c.patternIndex >= 0 && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
+    }
+    // lanes, grid and clips: everything that only changes when the song or the view does
+    void paintContent (juce::Graphics& g, juce::Rectangle<int> area)
+    {
+        auto& p = s.p();
+        for (size_t i = 0; i < p.lanes.size(); ++i)
+        {
+            const int y = laneY ((int) i);
+            g.setColour (i % 2 ? col::panel.darker (0.2f) : col::bg.brighter (0.03f));
+            g.fillRect (area.getX(), y, area.getWidth(), laneHOf ((int) i));
+            g.setColour (col::grid); g.drawHorizontalLine (y + laneHOf ((int) i) - 1, (float) area.getX(), (float) area.getRight());
+        }
+        const double b1 = xToBeat ((float) area.getRight());
+        double step = 1.0;
+        while (step * pxPerBeat < 10) step *= 2;
+        for (double b = std::floor (scrollX / step) * step; b <= b1; b += step)
+        {
+            const bool bar = std::fmod (b + 1e-9, (double) p.beatsPerBar) < 1e-6;
+            g.setColour (bar ? col::gridBar : col::grid);
+            g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
+        }
+        if (plSnap > 0 && plSnap < 1.0 && plSnap * pxPerBeat >= 6)
+        {
+            g.setColour (col::grid.withAlpha (0.35f));
+            for (double b = std::floor (scrollX / plSnap) * plSnap; b <= b1; b += plSnap)
+                if (std::abs (b - std::round (b)) > 1e-6) g.drawVerticalLine ((int) beatToX (b), (float) area.getY(), (float) area.getBottom());
+        }
+        if (p.hasPunch())
+        {
+            g.setColour (col::rec.withAlpha (0.07f));
+            g.fillRect (beatToX (p.punchIn), (float) area.getY(), (float) ((p.punchOut - p.punchIn) * pxPerBeat), (float) area.getHeight());
+        }
+        if (timeSelB > timeSelA)
+        {
+            g.setColour (col::accent.withAlpha (0.10f));
+            g.fillRect (beatToX (timeSelA), (float) area.getY(), (float) ((timeSelB - timeSelA) * pxPerBeat), (float) area.getHeight());
+        }
+        for (auto& c : p.clips) if (! c.hidden && g.clipRegionIntersects (clipRect (c).getSmallestIntegerContainer().expanded (2))) { drawClip (g, c); drawGainDot (g, c); }
+    }
+    // Logic / Reaper style: the clip layer is drawn once into a picture two screens wide, then scrolling and the
+    // playhead only slide / copy that picture. It's redrawn when the song, zoom, size or theme changes.
+    juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0;
+    juce::Rectangle<int> tileArea; float paintRight = -1.0f; juce::uint32 lastKeyMiss = 0;
+    float contentRight() const { return paintRight > 0 ? paintRight : (float) getWidth(); }
+    juce::uint64 contentKey (juce::Rectangle<int> area)
+    {
+        juce::uint64 h = 1469598103934665603ull;
+        auto add = [&h] (auto v) { const auto* b = reinterpret_cast<const unsigned char*> (&v); for (size_t i = 0; i < sizeof (v); ++i) { h ^= b[i]; h *= 1099511628211ull; } };
+        auto str = [&add] (const juce::String& t) { add (t.hashCode64()); };
+        auto& p = s.p();
+        add (tileGen); add (pxPerBeat); add (area.getWidth()); add (area.getHeight()); add (area.getX()); add (area.getY());
+        add (scrollY); add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
+        add (p.punchIn); add (p.punchOut); add (p.hasPunch()); add (timeSelA); add (timeSelB);
+        for (auto c : { col::bg, col::panel, col::grid, col::gridBar, col::accent, col::accent2, col::text, col::dim }) add (c.getARGB());
+        for (auto& [k, v] : laneMul) { add (k); add (v); }
+        for (auto& l : p.lanes) { add (l.colour.getARGB()); add (l.nameColour.getARGB()); str (l.nameFont); }
+        for (auto& m : p.mixer) str (m.name);
+        for (auto& pat : p.patterns)
+        {
+            add (pat.colour.getARGB()); str (pat.name); add (pat.lengthBeats());
+            for (auto& [id, list] : pat.notes) { add (id); for (auto& n : list) { add (n.key); add (n.start); add (n.length); } }
+        }
+        for (auto& c : p.clips)
+        {
+            add (c.uid); add (c.lane); add (c.start); add (c.length); add (c.patternIndex); add (c.patOffset); add (c.sourceOffset);
+            add (c.gain); add (c.muted); add (c.selected); add (c.reversed); add (c.mixerTrack); add (c.fadeIn); add (c.fadeOut);
+            add (c.fadeCurve); add (c.takeGroup); add (c.hidden); add (c.colour.getARGB()); add (c.drummer); add (c.autoTarget.kind);
+            str (c.autoTarget.name); str (c.audioFile.getFullPathName());
+            for (auto& q : c.autoPts) { add (q.beat); add (q.value); }
+            if (c.isDrummer())
+                for (auto& ch : p.channels)
+                    if (ch.id == c.drummer) add (ch.drum.performanceKey().hashCode64());
+        }
+        return h;
+    }
+    bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
+    {
+        const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const int tw = area.getWidth() * 2;
+        if (area.isEmpty() || scale <= 0 || (double) tw * area.getHeight() * scale * scale > 24.0e6) return false;   // ~100 MB cap
+        const auto key = contentKey (area);
+        const double viewBeats = area.getWidth() / (double) pxPerBeat, tileBeats = tw / (double) pxPerBeat;
+        const bool same = tile.isValid() && key == tileKey && scale == tileScale && area == tileArea;
+        if (! same || scrollX < tileScroll - 1.0e-9 || scrollX + viewBeats > tileScroll + tileBeats + 1.0e-9)
+        {
+            const auto now = juce::Time::getMillisecondCounter();
+            if (! same && key != tileKey)
+            {
+                // content changing every frame (a live edit): drawing it straight is cheaper than re-rendering the picture
+                const bool hot = now - lastKeyMiss < 300;
+                lastKeyMiss = now;
+                if (hot) return false;
+            }
+            const int pw = juce::roundToInt ((float) tw * scale), ph = juce::roundToInt ((float) area.getHeight() * scale);
+            if (! tile.isValid() || tile.getWidth() != pw || tile.getHeight() != ph) tile = juce::Image (juce::Image::RGB, pw, ph, false);
+            const double keep = scrollX;
+            tileScroll = scrollX - viewBeats * 0.5;   // half a screen of room on each side
+            {
+                juce::Graphics ig (tile);
+                ig.addTransform (juce::AffineTransform::scale (scale));
+                ig.setOrigin ({ -area.getX(), -area.getY() });
+                const auto tr = area.withWidth (tw);
+                ig.reduceClipRegion (tr);
+                ig.setColour (col::bg); ig.fillRect (tr);
+                scrollX = tileScroll; paintRight = (float) tr.getRight();
+                paintContent (ig, tr);
+                scrollX = keep; paintRight = -1.0f;
+            }
+            tileKey = key; tileScale = scale; tileArea = area;
+        }
+        const float dx = std::round ((float) ((tileScroll - scrollX) * pxPerBeat) * scale) / scale;
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+        g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) area.getY()));
+        return true;
     }
     static void addRollItems (juce::PopupMenu& m)
     {
@@ -3161,6 +3243,7 @@ private:
     }
     void changeListenerCallback (juce::ChangeBroadcaster* src) override
     {
+        ++tileGen;   // song edit or a waveform finished loading
         if (src == &s) refresh(); else repaint();
     }
     void timerCallback() override

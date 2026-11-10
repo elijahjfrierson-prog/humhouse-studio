@@ -383,7 +383,7 @@ void Studio::commit (const juce::String& what)
     undo.push (p(), what);
     engine.sync();
     dirty = true;
-    if (++editsSinceBackup >= 8) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits
+    if (++editsSinceBackup >= 8 && ! engine.isPlaying()) { editsSinceBackup = 0; engine.storePluginStates(); writeBackupAsync (p()); }   // auto-backup every few edits; never mid-playback (plug-in state + disk write)
     sendChangeMessage();
 }
 
@@ -1932,7 +1932,7 @@ private:
         }
         if (hint != hintBar.getText()) hintBar.setText (hint, juce::dontSendNotification);
 
-        if (++ticks >= 30 * 120)
+        if (++ticks >= 30 * 120 && ! engine.isPlaying())   // overdue backups wait for Stop, like Logic / Reaper
         {
             ticks = 0;
             if (autoBackup() && studio.dirty)

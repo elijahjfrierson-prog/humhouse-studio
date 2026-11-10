@@ -120,7 +120,7 @@ struct Strip : public juce::Component
         auto* tap = s.engine.trackScope (index);
         if (tap == nullptr || a.getWidth() < 8) return;
         float buf[512];
-        tap->read (buf, 512, tap->pos.load (std::memory_order_acquire));
+        tap->read (buf, 512, tap->heard());
         juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.48f;
         const int pts = juce::jlimit (16, 512, (int) a.getWidth());   // about a point per pixel, not 512 per strip
         for (int k = 0; k < pts; ++k)

@@ -1965,6 +1965,7 @@ std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
 std::unique_ptr<BuiltinEffect> createPurify();
 
 ScopeTap& masterScope() { static ScopeTap t; return t; }
+std::atomic<int>& scopeLag() { static std::atomic<int> lag { 0 }; return lag; }
 
 const std::vector<EffectInfo>& builtinEffects()
 {
