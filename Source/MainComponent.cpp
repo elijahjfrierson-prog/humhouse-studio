@@ -882,6 +882,10 @@ public:
                 put ("rec", juce::KeyPress ('r', cmd, 0)); put ("export", juce::KeyPress ('r', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd, 0));
                 put ("metro", juce::KeyPress ('m', cmd | shift, 0)); put ("browser", juce::KeyPress ('x', cmd | alt, 0)); put ("home", juce::KeyPress ('w'));
             }
+            else if (set == "Ableton")
+            {
+                put ("browser", juce::KeyPress ('b', cmd | alt, 0)); put ("mixer", juce::KeyPress ('m', cmd | alt, 0));
+            }
             studio.settings->setValue ("layoutKeySet", set);
             saveKeys();
         };
