@@ -1364,7 +1364,7 @@ if (phoneUI)
             add (mRecord, "Record (Playlist)", "F5", true, view == 1);
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
-            add (mDJ, "HumHouse DJ (2 decks + crossfader)");
+            add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
             m.addSeparator();
