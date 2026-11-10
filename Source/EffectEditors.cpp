@@ -1419,7 +1419,7 @@ struct DrumSequencer : juce::Component
         const int cur = drumSectionBars (c->drum, k), b0 = (int) (drumSectionStart (c->drum, k) / 4.0) + 1;
         juce::PopupMenu m;
         m.addSectionHeader ("Section starting at bar " + juce::String (b0));
-        for (int n = 1; n <= 8; ++n) m.addItem (n, "1-" + juce::String (n) + "  (bars " + juce::String (b0) + "-" + juce::String (b0 + n - 1) + ", next starts at " + juce::String (b0 + n) + ")", true, n == cur);
+        for (int n = 1; n <= 8; ++n) m.addItem (n, "1-" + juce::String (n) + "  (bars " + juce::String (b0) + "-" + juce::String (b0 + n - 1) + (n < cur ? ", bars " + juce::String (b0 + n) + "-" + juce::String (b0 + cur - 1) + " become the next section)" : juce::String (")")), true, n == cur);
         m.addSeparator(); m.addItem (20, "All sections back to 8 bars");
         m.showMenuAsync ({}, [sp = juce::Component::SafePointer<DrumSequencer> (this), k] (int r) {
             if (sp == nullptr || r <= 0) return;
@@ -1427,10 +1427,8 @@ struct DrumSequencer : juce::Component
             sp->s.edit ("Drummer section bars", [id, k, r] (Project& p) {
                 for (auto& ch : p.channels) if (ch.id == id)
                 {
-                    auto& v = ch.drum.sectionBars;
-                    if (r == 20) { v.clear(); continue; }
-                    if ((int) v.size() <= k) v.resize ((size_t) k + 1, 8);
-                    v[(size_t) k] = r;
+                    if (r == 20) { ch.drum.sectionBars.clear(); continue; }
+                    drumSetSectionBars (ch.drum, k, r);
                 }
             });
             sp->rebuild (k);

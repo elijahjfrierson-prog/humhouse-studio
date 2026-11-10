@@ -3173,6 +3173,15 @@ int main (int argc, char** argv)
         dir.deleteRecursively();
     }
 
+    // shortening a Drummer section leaves the rest as a new section; later sections never move
+    {
+        DrummerParams d; d.sectionVel = { 120, 80 };
+        drumSetSectionBars (d, 0, 2);
+        CHECK (drumSectionBars (d, 0) == 2 && drumSectionBars (d, 1) == 6 && drumSectionStart (d, 2) == 32.0 && d.sectionVel[1] == 120 && d.sectionVel[2] == 80);
+        drumSetSectionBars (d, 0, 8);
+        CHECK (drumSectionBars (d, 0) == 8 && drumSectionStart (d, 1) == 32.0 && d.sectionVel[1] == 80);
+    }
+
     // templates keep track routing, Drummer section bars and plugin FX state (L/R AmpliTube)
     {
         Project p = Project::createDefault();
