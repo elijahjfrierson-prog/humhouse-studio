@@ -681,6 +681,9 @@ struct BuildPanel : juce::Component
         for (auto* f : kReadableFonts)
             if (have.contains (f)) fonts.add (f);   // only real text fonts: symbol / emoji fonts turned every label into gibberish
         fontNames = fonts;
+        combo (langBox, langLbl, "Language", languageNames(), [this] (int id) {
+            applyLanguage (id - 1);
+            if (s.settings) { s.settings->setValue ("language", id - 1); s.settings->saveIfNeeded(); } });
         combo (fontBox, fontLbl, "Font", fonts, [this] (int id) { commit ("font", id == 1 ? juce::String() : id == 2 ? juce::String ("Barlow") : fontNames[id - 1]); });
         auto slider = [this] (juce::Slider& sl, juce::Label& l, const char* text, int lo, int hi, const char* key)
         {
@@ -837,6 +840,7 @@ struct BuildPanel : juce::Component
     }
     void sync()
     {
+        langBox.setSelectedId ((s.settings ? s.settings->getIntValue ("language", 0) : 0) + 1, juce::dontSendNotification);
         browserSide.setSelectedId (build::browserRight ? 2 : 1, juce::dontSendNotification);
         rackPos.setSelectedId (build::rackBelow ? 2 : 1, juce::dontSendNotification);
         toolbarPos.setSelectedId (build::toolbarBottom ? 2 : 1, juce::dontSendNotification);
@@ -869,7 +873,7 @@ struct BuildPanel : juce::Component
             l1.setBounds (a.removeFromTop (16)); c1.setBounds (a); l2.setBounds (b.removeFromTop (16)); c2.setBounds (b);
         };
         pair (browserLbl, browserC, rackLbl, rackC); pair (toolbarLbl, toolbarC, mixerLbl, mixerC);
-        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (lanesHLbl, lanesH); line (hintLbl, hintPos); line (fontLbl, fontBox);
+        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (lanesHLbl, lanesH); line (hintLbl, hintPos); line (fontLbl, fontBox); line (langLbl, langBox);
         r.removeFromTop (6);
         auto tl = r.removeFromTop (26); resetTb.setBounds (tl.removeFromRight (150).reduced (0, 1)); tbLbl.setBounds (tl);
         view.setBounds (r);
@@ -877,8 +881,8 @@ struct BuildPanel : juce::Component
         for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, i * 30, rowsHolder.getWidth(), 30);
     }
     Studio& s;
-    juce::Label title, note, browserLbl, rackLbl, toolbarLbl, mixerLbl, hintLbl, fontLbl, browserWLbl, mixHLbl, toolbarHLbl, tbLbl, lanesHLbl;
-    juce::ComboBox browserSide, rackPos, toolbarPos, mixerPos, hintPos, fontBox;
+    juce::Label title, note, browserLbl, rackLbl, toolbarLbl, mixerLbl, hintLbl, fontLbl, langLbl, browserWLbl, mixHLbl, toolbarHLbl, tbLbl, lanesHLbl;
+    juce::ComboBox browserSide, rackPos, toolbarPos, mixerPos, hintPos, fontBox, langBox;
     juce::Slider browserW, mixH, toolbarH, lanesH;
     juce::StringArray fontNames;
     juce::Viewport view; juce::Component rowsHolder; juce::OwnedArray<Row> rows;

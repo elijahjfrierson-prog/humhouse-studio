@@ -416,7 +416,11 @@ std::unique_ptr<juce::Component> createMixer (Studio&);
 std::unique_ptr<juce::Component> createBrowser (Studio&);
 std::unique_ptr<juce::Component> createLanes (Studio&);
 void showDjDecks (Studio&);   // HumHouse DJ: two decks + crossfader
-void closeDjDecks();   // Ableton-style FX + automation lanes of the selected mixer track
+void closeDjDecks();
+void showPatchBay (Studio&);   // node patch bay: sequencers > sounds > FX > out, LFO > FX params
+void closePatchBay();
+const juce::StringArray& languageNames();   // Options > Layout > Language
+void applyLanguage (int index);           // 0 = English   // Ableton-style FX + automation lanes of the selected mixer track
 
 void addSampleChannels (Studio&, const juce::Array<juce::File>&, const juce::String& insertName);
 void importKit (Studio&, const juce::File& folder);
