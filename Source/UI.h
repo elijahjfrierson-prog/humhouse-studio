@@ -398,7 +398,8 @@ void openFileInMain (juce::Component* main, const juce::File&);
 inline bool isHumHouseShareFile (const juce::String& path)
 {
     const juce::File f (path);
-    return f.hasFileExtension ("hhpack") || f.hasFileExtension ("hhpreset") || f.hasFileExtension ("hhchain") || f.hasFileExtension ("hhs");
+    // HumHouse files + any DAW project: dropped anywhere they open (other DAWs through the converter)
+    return f.hasFileExtension ("hhpack;hhpreset;hhchain;hhs;rpp;als;flp;ptx;ptf;logicx;aaf;omf");
 }
 inline bool allHumHouseShareFiles (const juce::StringArray& files)
 {
@@ -413,6 +414,9 @@ std::unique_ptr<juce::Component> createPianoRoll (Studio&);
 std::unique_ptr<juce::Component> createPlaylist (Studio&);
 std::unique_ptr<juce::Component> createMixer (Studio&);
 std::unique_ptr<juce::Component> createBrowser (Studio&);
+std::unique_ptr<juce::Component> createLanes (Studio&);
+void showDjDecks (Studio&);   // HumHouse DJ: two decks + crossfader
+void closeDjDecks();   // Ableton-style FX + automation lanes of the selected mixer track
 
 void addSampleChannels (Studio&, const juce::Array<juce::File>&, const juce::String& insertName);
 void importKit (Studio&, const juce::File& folder);
@@ -474,9 +478,9 @@ namespace build   // Options > Layout > BUILD: where things sit on the computer 
         { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
     inline juce::String toolbar = defaultToolbar;
     inline bool browserRight = false, rackBelow = false, toolbarBottom = false, mixDock = false, hint = true;
-    inline int browserW = 260, mixH = 260, toolbarH = 48;
+    inline int browserW = 260, mixH = 260, toolbarH = 48, lanesH = 240;
     inline juce::String font;   // "" = the font picked in Options > Font
-    inline void reset() { toolbar = defaultToolbar; browserRight = rackBelow = toolbarBottom = mixDock = false; hint = true; browserW = 260; mixH = 260; toolbarH = 48; font = {}; }
+    inline void reset() { toolbar = defaultToolbar; browserRight = rackBelow = toolbarBottom = mixDock = false; hint = true; browserW = 260; mixH = 260; toolbarH = 48; lanesH = 240; font = {}; }
 }
 inline std::function<void()> relayoutMain;
 inline std::function<void()> lowMemoryMain, saveBackupMain;   // phone: OS memory warning / app sent to background

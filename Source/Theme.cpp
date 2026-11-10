@@ -394,7 +394,7 @@ void putBuild (std::map<juce::String, juce::String>& v)
 {
     v["tb"] = build::toolbar; v["bR"] = build::browserRight ? "1" : "0"; v["rB"] = build::rackBelow ? "1" : "0";
     v["tbB"] = build::toolbarBottom ? "1" : "0"; v["mD"] = build::mixDock ? "1" : "0"; v["hint"] = build::hint ? "1" : "0";
-    v["bW"] = juce::String (build::browserW); v["mH"] = juce::String (build::mixH); v["tbH"] = juce::String (build::toolbarH); v["font"] = build::font;
+    v["bW"] = juce::String (build::browserW); v["mH"] = juce::String (build::mixH); v["lH"] = juce::String (build::lanesH); v["tbH"] = juce::String (build::toolbarH); v["font"] = build::font;
 }
 static constexpr const char* kReadableFonts[] { "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" };
 static bool isReadableFont (const juce::String& f)
@@ -411,7 +411,7 @@ void readBuild (std::map<juce::String, juce::String>& v)
     if (auto it = v.find ("tb"); it != v.end() && it->second.isNotEmpty()) build::toolbar = it->second.removeCharacters (" ;=");
     build::browserRight = flag ("bR", false); build::rackBelow = flag ("rB", false); build::toolbarBottom = flag ("tbB", false);
     build::mixDock = flag ("mD", false); build::hint = flag ("hint", true);
-    build::browserW = num ("bW", 160, 520, 260); build::mixH = num ("mH", 140, 700, 260); build::toolbarH = num ("tbH", 36, 72, 48);
+    build::browserW = num ("bW", 160, 520, 260); build::mixH = num ("mH", 140, 700, 260); build::lanesH = num ("lH", 120, 700, 240); build::toolbarH = num ("tbH", 36, 72, 48);
     // a font saved by an older version (symbol / emoji fonts) would turn every label into gibberish: only real text fonts
     if (auto it = v.find ("font"); it != v.end()) build::font = it->second == "Barlow" || isReadableFont (it->second) ? it->second : juce::String();
     if (build::font != oldFont) juce::Typeface::clearTypefaceCache();
@@ -692,6 +692,7 @@ struct BuildPanel : juce::Component
         };
         slider (browserW, browserWLbl, "Browser width", 160, 520, "bW");
         slider (mixH, mixHLbl, "Docked mixer height", 140, 700, "mH");
+        slider (lanesH, lanesHLbl, "LANE panel height", 120, 700, "lH");
         slider (toolbarH, toolbarHLbl, "Toolbar height", 36, 72, "tbH");
         addAndMakeVisible (tbLbl); tbLbl.setText ("TOOLBAR BUTTONS: show, side and order", juce::dontSendNotification); tbLbl.setFont (juce::FontOptions (13.0f, juce::Font::bold));
         addAndMakeVisible (view); view.setViewedComponent (&rowsHolder, false); view.setScrollBarsShown (true, false);
@@ -843,7 +844,7 @@ struct BuildPanel : juce::Component
         hintPos.setSelectedId (build::hint ? 1 : 2, juce::dontSendNotification);
         const int fi = build::font.isEmpty() ? 0 : build::font == "Barlow" ? 1 : fontNames.indexOf (build::font);
         if (fi >= 0) fontBox.setSelectedItemIndex (fi, juce::dontSendNotification); else fontBox.setText (build::font, juce::dontSendNotification);
-        browserW.setValue (build::browserW, juce::dontSendNotification); mixH.setValue (build::mixH, juce::dontSendNotification); toolbarH.setValue (build::toolbarH, juce::dontSendNotification);
+        browserW.setValue (build::browserW, juce::dontSendNotification); mixH.setValue (build::mixH, juce::dontSendNotification); lanesH.setValue (build::lanesH, juce::dontSendNotification); toolbarH.setValue (build::toolbarH, juce::dontSendNotification);
         loadOrder();
         map.repaint();
         for (auto* c : { &browserC, &rackC, &toolbarC, &mixerC }) c->repaint();
@@ -868,7 +869,7 @@ struct BuildPanel : juce::Component
             l1.setBounds (a.removeFromTop (16)); c1.setBounds (a); l2.setBounds (b.removeFromTop (16)); c2.setBounds (b);
         };
         pair (browserLbl, browserC, rackLbl, rackC); pair (toolbarLbl, toolbarC, mixerLbl, mixerC);
-        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (hintLbl, hintPos); line (fontLbl, fontBox);
+        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (lanesHLbl, lanesH); line (hintLbl, hintPos); line (fontLbl, fontBox);
         r.removeFromTop (6);
         auto tl = r.removeFromTop (26); resetTb.setBounds (tl.removeFromRight (150).reduced (0, 1)); tbLbl.setBounds (tl);
         view.setBounds (r);
@@ -876,9 +877,9 @@ struct BuildPanel : juce::Component
         for (int i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, i * 30, rowsHolder.getWidth(), 30);
     }
     Studio& s;
-    juce::Label title, note, browserLbl, rackLbl, toolbarLbl, mixerLbl, hintLbl, fontLbl, browserWLbl, mixHLbl, toolbarHLbl, tbLbl;
+    juce::Label title, note, browserLbl, rackLbl, toolbarLbl, mixerLbl, hintLbl, fontLbl, browserWLbl, mixHLbl, toolbarHLbl, tbLbl, lanesHLbl;
     juce::ComboBox browserSide, rackPos, toolbarPos, mixerPos, hintPos, fontBox;
-    juce::Slider browserW, mixH, toolbarH;
+    juce::Slider browserW, mixH, toolbarH, lanesH;
     juce::StringArray fontNames;
     juce::Viewport view; juce::Component rowsHolder; juce::OwnedArray<Row> rows;
     juce::TextButton resetTb { "Reset toolbar" };

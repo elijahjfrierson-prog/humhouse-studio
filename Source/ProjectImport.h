@@ -12,4 +12,6 @@ bool isForeignProject (const juce::File& f);
 bool importForeignProject (const juce::File& f, Project& out, juce::StringArray& report, const PluginFinder& find);
 // Logic / Pro Tools: a folder of exported stems, one track + mixer insert per file, all at bar 1
 bool importStemFolder (const juce::File& dir, Project& out, juce::StringArray& report);
+// any picked audio files as stems (non-audio picks are skipped)
+bool importStemFiles (juce::Array<juce::File> files, Project& out, juce::StringArray& report);
 }

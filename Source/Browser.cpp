@@ -125,6 +125,7 @@ private:
     juce::ListBox list;
     juce::TextButton scan;
     std::vector<Entry> entries;
+    int previewRow = -1;
     juce::Array<juce::PluginDescription> types;
 
     void rebuild()
@@ -164,14 +165,97 @@ private:
             return;
         }
         if (selected) { g.setColour (col::accent.withAlpha (0.3f)); g.fillRect (0, 0, w, h); }
+        int x = 14;
+        if (e.kind == 3)
+        {   // instruments: play icon = hear it before loading
+            juce::Path tri; const float cy = h * 0.5f, sz = juce::jmin (10.0f, h * 0.4f);
+            tri.addTriangle (8.0f, cy - sz * 0.6f, 8.0f, cy + sz * 0.6f, 8.0f + sz, cy);
+            g.setColour (row == previewRow ? col::accent : col::dim); g.fillPath (tri);
+            x = 28;
+        }
         g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 16.0f : 13.0f));
-        g.drawText (e.label, 14, 0, w - 100, h, juce::Justification::centredLeft, true);
+        g.drawText (e.label, x, 0, w - 100 - (x - 14), h, juce::Justification::centredLeft, true);
         g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
         g.drawText (e.sub, w - 110, 0, 104, h, juce::Justification::centredRight, true);
     }
+    void preview (int row)
+    {
+        previewRow = row; list.repaint();
+        const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("HumHouse instrument preview.wav");
+        if (render (row, f, { 60, 64, 67 }, 1.2, 2.0)) s.engine.previewFile (f);
+    }
+    // Resample: the plug-in plays one C4 note into our own sampler instrument (kept in HumHouse Studio/Resampled)
+    void resample (int row)
+    {
+        const auto e = entries[(size_t) row];
+        const auto f = hhsHome().getChildFile ("Resampled").getNonexistentChildFile (juce::File::createLegalFileName (e.label) + " C4", ".wav");
+        f.getParentDirectory().createDirectory();
+        if (render (row, f, { 60 }, 2.5, 4.0)) addSampleChannels (s, { f }, {});
+    }
+    bool render (int row, const juce::File& f, std::initializer_list<int> keys, double holdSec, double lenSec)
+    {
+        const auto e = entries[(size_t) row];
+        juce::String err;
+        s.engine.beginRiskyPluginCall (types.getReference (e.pluginIndex));
+        auto inst = s.engine.createPlugin (e.id, err);
+        s.engine.endRiskyPluginCall();
+        if (inst == nullptr) return false;
+        // offline render of a short chord (never touches the audio thread), played back like a sample preview
+        const double sr = s.engine.getSampleRate() > 0 ? s.engine.getSampleRate() : 48000.0;
+        const int block = 512, len = (int) (sr * lenSec), chans = juce::jmax (2, inst->getTotalNumOutputChannels());
+        inst->setPlayConfigDetails (inst->getTotalNumInputChannels(), chans, sr, block);
+        inst->prepareToPlay (sr, block);
+        juce::AudioBuffer<float> out (2, len), buf (juce::jmax (chans, inst->getTotalNumInputChannels()), block);
+        out.clear();
+        for (int pos = 0; pos < len; pos += block)
+        {
+            const int n = juce::jmin (block, len - pos);
+            juce::MidiBuffer midi;
+            for (int key : keys)
+            {
+                if (pos == 0) midi.addEvent (juce::MidiMessage::noteOn (1, key, 0.8f), 0);
+                const int off = (int) (sr * holdSec);
+                if (off >= pos && off < pos + n) midi.addEvent (juce::MidiMessage::noteOff (1, key), off - pos);
+            }
+            buf.clear();
+            juce::AudioBuffer<float> view (buf.getArrayOfWritePointers(), buf.getNumChannels(), n);
+            inst->processBlock (view, midi);
+            for (int c = 0; c < 2; ++c) out.copyFrom (c, pos, view, juce::jmin (c, view.getNumChannels() - 1), 0, n);
+        }
+        inst->releaseResources();
+        f.deleteFile();
+        auto os = f.createOutputStream();
+        if (os == nullptr) return false;
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> wr (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+        if (wr == nullptr) return false;
+        os.release();
+        const bool ok = wr->writeFromAudioSampleBuffer (out, 0, len);
+        wr.reset();
+        return ok;
+    }
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
     {
-        juce::ignoreUnused (e);
+        if (row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind == 3 && entries[(size_t) row].pluginIndex >= 0
+            && entries[(size_t) row].pluginIndex < types.size() && e.mods.isPopupMenu())
+        {
+            juce::PopupMenu m;
+            m.addItem (1, "Play (hear it first)");
+            m.addItem (2, "Resample into a HumHouse sampler");
+            m.addItem (3, "Add as instrument channel");
+            juce::Component::SafePointer<PluginList> sp (this);
+            m.showMenuAsync (juce::PopupMenu::Options(), [sp, row] (int r) {
+                if (sp == nullptr || row >= (int) sp->entries.size()) return;
+                if (r == 1) sp->preview (row); else if (r == 2) sp->resample (row); else if (r == 3) sp->add (row); });
+            return;
+        }
+        if (row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind == 3 && entries[(size_t) row].pluginIndex >= 0
+            && entries[(size_t) row].pluginIndex < types.size() && e.x < 28)
+        {
+            juce::Component::SafePointer<PluginList> sp (this);
+            juce::MessageManager::callAsync ([sp, row] { if (sp != nullptr && row < (int) sp->entries.size()) sp->preview (row); });
+            return;
+        }
         if (phoneUI && row >= 0 && row < (int) entries.size() && entries[(size_t) row].kind != 0)
         {   // add after the tap finishes: adding + opening the window inside the list's own click rebuilt the list under the finger
             list.deselectAllRows();
@@ -191,7 +275,7 @@ private:
     juce::String getTooltipForRow (int row) override
     {
         if (row < 0 || row >= (int) entries.size() || entries[(size_t) row].kind == 0) return {};
-        return entries[(size_t) row].kind == 3 ? "Double-click: add as a new instrument channel"
+        return entries[(size_t) row].kind == 3 ? "Play icon: hear it first. Right-click: Resample. Double-click: add as a new instrument channel"
                                                : "Double-click: add to mixer insert " + juce::String (s.selectedTrack);
     }
     void changeListenerCallback (juce::ChangeBroadcaster*) override { rebuild(); }

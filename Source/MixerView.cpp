@@ -406,7 +406,8 @@ public:
         if (p.mixer.empty()) return;
         auto& t = p.mixer[(size_t) track()];
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f));
-        for (int k = 0; k < sendKnobs.size(); ++k)
+        // sendKnobs can still hold the previous insert's sends until refresh() runs: bound by both
+        for (int k = 0; k < juce::jmin (sendKnobs.size(), (int) t.sends.size()); ++k)
         {
             const int target = t.sends[(size_t) k].target;
             g.drawText ("> " + (target < (int) p.mixer.size() ? p.mixer[(size_t) target].name : juce::String()),
