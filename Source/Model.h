@@ -112,6 +112,48 @@ inline int drumSectionBars (const DrummerParams& d, int k)
     return k >= 0 && k < (int) d.sectionBars.size() && d.sectionBars[(size_t) k] >= 1 && d.sectionBars[(size_t) k] <= 8 ? d.sectionBars[(size_t) k] : 8;
 }
 inline double drumSectionStart (const DrummerParams& d, int k) { double b = 0; for (int i = 0; i < k; ++i) b += drumSectionBars (d, i) * 4.0; return b; }
+// set section k to n bars without moving any later section: a shorter section leaves its remaining bars as a new
+// section right after it (same dynamics / mutes / steps); a longer one takes bars from the sections that follow
+inline void drumSetSectionBars (DrummerParams& d, int k, int n)
+{
+    if (k < 0 || k > 4096) return;
+    n = n < 1 ? 1 : (n > 8 ? 8 : n);
+    auto grow = [] (std::vector<int>& v, int size, int fill) { if ((int) v.size() < size) v.resize ((size_t) size, fill); };
+    auto shiftSteps = [&d] (int from, int by)
+    {
+        std::map<int, std::array<int, 5>> m;
+        for (auto& [i, st] : d.steps) m[i < from ? i : i + by] = st;
+        d.steps.swap (m);
+    };
+    const int cur = drumSectionBars (d, k);
+    if (n == cur) return;
+    grow (d.sectionBars, k + 2, 8); grow (d.sectionVel, k + 1, 100); grow (d.sectionMute, k + 1, 0);
+    if (n < cur)
+    {
+        d.sectionBars[(size_t) k] = n;
+        d.sectionBars.insert (d.sectionBars.begin() + k + 1, cur - n);
+        d.sectionVel.insert (d.sectionVel.begin() + k + 1, d.sectionVel[(size_t) k]);
+        d.sectionMute.insert (d.sectionMute.begin() + k + 1, d.sectionMute[(size_t) k]);
+        auto own = d.steps.find (k); const bool had = own != d.steps.end(); std::array<int, 5> st {}; if (had) st = own->second;
+        shiftSteps (k + 1, 1);
+        if (had) d.steps[k + 1] = st;
+        return;
+    }
+    int need = n - cur;
+    d.sectionBars[(size_t) k] = n;
+    while (need > 0)
+    {
+        grow (d.sectionBars, k + 2, 8);
+        const int nb = drumSectionBars (d, k + 1), take = need < nb ? need : nb;
+        need -= take;
+        if (take < nb) { d.sectionBars[(size_t) k + 1] = nb - take; break; }
+        d.sectionBars.erase (d.sectionBars.begin() + k + 1);   // swallowed whole
+        if ((int) d.sectionVel.size() > k + 1) d.sectionVel.erase (d.sectionVel.begin() + k + 1);
+        if ((int) d.sectionMute.size() > k + 1) d.sectionMute.erase (d.sectionMute.begin() + k + 1);
+        d.steps.erase (k + 1);
+        shiftSteps (k + 2, -1);
+    }
+}
 // the drummer section playing at this song beat, with its first beat and length in beats
 inline int drumSectionAt (const DrummerParams& d, double beat, double* start = nullptr, double* len = nullptr)
 {
