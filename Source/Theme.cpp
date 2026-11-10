@@ -391,6 +391,12 @@ void putBuild (std::map<juce::String, juce::String>& v)
     v["tbB"] = build::toolbarBottom ? "1" : "0"; v["mD"] = build::mixDock ? "1" : "0"; v["hint"] = build::hint ? "1" : "0";
     v["bW"] = juce::String (build::browserW); v["mH"] = juce::String (build::mixH); v["tbH"] = juce::String (build::toolbarH); v["font"] = build::font;
 }
+static constexpr const char* kReadableFonts[] { "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" };
+static bool isReadableFont (const juce::String& f)
+{
+    for (auto* r : kReadableFonts) if (f == r) return true;
+    return false;
+}
 void readBuild (std::map<juce::String, juce::String>& v)
 {
     const auto oldFont = build::font;
@@ -401,7 +407,8 @@ void readBuild (std::map<juce::String, juce::String>& v)
     build::browserRight = flag ("bR", false); build::rackBelow = flag ("rB", false); build::toolbarBottom = flag ("tbB", false);
     build::mixDock = flag ("mD", false); build::hint = flag ("hint", true);
     build::browserW = num ("bW", 160, 520, 260); build::mixH = num ("mH", 140, 700, 260); build::toolbarH = num ("tbH", 36, 72, 48);
-    if (auto it = v.find ("font"); it != v.end()) build::font = it->second;
+    // a font saved by an older version (symbol / emoji fonts) would turn every label into gibberish: only real text fonts
+    if (auto it = v.find ("font"); it != v.end()) build::font = it->second == "Barlow" || isReadableFont (it->second) ? it->second : juce::String();
     if (build::font != oldFont) juce::Typeface::clearTypefaceCache();
 }
 void relayout() { if (relayoutMain) relayoutMain(); }
@@ -666,7 +673,7 @@ struct BuildPanel : juce::Component
         combo (hintPos, hintLbl, "Hint bar", { "Show", "Hide" }, [this] (int id) { commit ("hint", id == 1 ? "1" : "0"); });
         juce::StringArray fonts { "Options > Font choice", "HumHouse Pro (Barlow)" };
         const auto have = juce::Font::findAllTypefaceNames();
-        for (auto* f : { "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" })
+        for (auto* f : kReadableFonts)
             if (have.contains (f)) fonts.add (f);   // only real text fonts: symbol / emoji fonts turned every label into gibberish
         fontNames = fonts;
         combo (fontBox, fontLbl, "Font", fonts, [this] (int id) { commit ("font", id == 1 ? juce::String() : id == 2 ? juce::String ("Barlow") : fontNames[id - 1]); });
@@ -904,7 +911,7 @@ void showLayoutDialog (Studio& s)
     static juce::Component::SafePointer<juce::DialogWindow> open;
     if (open != nullptr) { delete open.getComponent(); return; }   // tap LAYOUT again to close it
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new LayoutTabs (s));
+    o.content.setOwned (fitToScreen (new LayoutTabs (s)));
     o.dialogTitle = "Layout";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
@@ -919,7 +926,7 @@ void showThemeDialog (Studio& s)
     static juce::Component::SafePointer<juce::DialogWindow> open;
     if (open != nullptr) { delete open.getComponent(); return; }   // tap COLOR again to close it
     juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (new ThemePanel (s));
+    o.content.setOwned (fitToScreen (new ThemePanel (s)));
     o.dialogTitle = "Theme color";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;

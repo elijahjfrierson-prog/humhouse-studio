@@ -332,6 +332,68 @@ int main (int argc, char** argv)
     std::setvbuf (stdout, nullptr, _IONBF, 0);   // a crash on CI still shows the last finished test
     // phone crash repro: 5-minute beat + vocal + 2 adlibs, 60 FX added one at a time while audio runs, undo/redo, save, reopen
     // engine bench: a 40-track session playing in real time while the screen sends 400 edits; how long each edit blocks the audio
+    // song hand-off cost: what the screen pays each tick to give the audio a copy of a real session
+    if (auto* pf = std::getenv ("HHS_BENCH_PUBLISH"))
+    {
+        Engine e;
+        e.prepare (48000, 256);
+        Project q;
+        if (! loadProject (q, juce::File (pf))) { std::printf ("could not load %s\n", pf); return 1; }
+        size_t notes = 0, pts = 0, hits = 0;
+        for (auto& pt : q.patterns) for (auto& [id, v] : pt.notes) notes += v.size();
+        for (auto& c : q.clips) pts += c.autoPts.size();
+        for (auto& c : q.channels) hits += c.drum.steps.size();
+        e.project() = std::move (q);
+        e.sync();
+        const int N = 300;
+        double sum = 0, mx = 0;
+        for (int i = 0; i < N; ++i)
+        {
+            const double t0 = juce::Time::getMillisecondCounterHiRes();
+            e.publishProject();
+            const double dt = juce::Time::getMillisecondCounterHiRes() - t0;
+            sum += dt; mx = std::max (mx, dt);
+        }
+        std::printf ("%s: %d channels, %d tracks, %d clips, %d notes, %d auto pts, %d drum sections | publish+tick avg %.3f ms max %.3f ms\n",
+                     pf, (int) e.project().channels.size(), (int) e.project().mixer.size(), (int) e.project().clips.size(), (int) notes, (int) pts, (int) hits, sum / N, mx);
+        return 0;
+    }
+    if (std::getenv ("HHS_BENCH_DRUM") != nullptr)
+    {   // Drummer playback cost: one 128-bar region, kit split into 5 channels (like Split by drum)
+        Engine e;
+        e.prepare (48000, 128);
+        auto& p = e.project();
+        p.songMode = true;
+        Channel d; d.type = ChannelType::Drummer; d.name = "Drummer";
+        const int did = p.addChannel (d);
+        for (int g = 0; g < NumDrumGroups; ++g)
+        { Channel x; x.type = ChannelType::Drummer; x.name = "Split " + juce::String (g); x.drumLink = did; x.drum.groupMask = 1 << g; p.addChannel (x); }
+        for (auto& ch : p.channels) if (ch.id == did) ch.drum.groupMask = 0;
+        Clip c; c.uid = p.newUid(); c.drummer = did; c.start = 0; c.length = 512; c.lane = 0; p.clips.push_back (c);
+        e.sync(); e.setPositionBeats (256.0); e.play();
+        juce::AudioBuffer<float> out (2, 128);
+        // phase 1 runs while the 5 kits decode in the background (the audio must never wait on that), phase 2 once they're loaded
+        auto run = [&] (const char* label, int blocks)
+        {
+            double total = 0, worst = 0, first = 0; int worstAt = 0, late = 0;
+            for (int b = 0; b < blocks; ++b)
+            {
+                float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+                const auto t0 = juce::Time::getHighResolutionTicks();
+                e.processBlock (nullptr, 0, o, 2, 128);
+                const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0) * 1.0e6;
+                if (b == 0) { first = dt; continue; }
+                total += dt; if (dt > worst) { worst = dt; worstAt = b; }
+                if (dt > 2666.7) ++late;
+            }
+            std::printf ("BENCH drummer 128 bars split x5 @128 [%s]: first block %.0f us, then %.1f us avg (%.2f%% of the 2667 us deadline), worst %.0f us at block %d, %d late of %d\n",
+                         label, first, total / (blocks - 1), 100.0 * total / (blocks - 1) / 2666.7, worst, worstAt, late, blocks - 1);
+        };
+        run ("kits loading", 20000);
+        juce::Thread::sleep (60000);
+        run ("kits loaded", 20000);
+        return 0;
+    }
     if (std::getenv ("HHS_BENCH") != nullptr)
     {
         Engine e;

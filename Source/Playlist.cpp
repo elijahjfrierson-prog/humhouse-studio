@@ -367,7 +367,7 @@ class ToolWindow : public juce::DocumentWindow, private juce::Timer
 public:
     ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (c, true); setResizable (true, false);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (fitToScreen (c), true); setResizable (true, false);
         centreWithSize (getWidth(), getHeight()); setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
@@ -2830,7 +2830,7 @@ private:
             }
         };
         juce::DialogWindow::LaunchOptions o;
-        o.dialogTitle = "Key Finder"; o.content.setOwned (view); o.componentToCentreAround = this;
+        o.dialogTitle = "Key Finder"; o.content.setOwned (fitToScreen (view)); o.componentToCentreAround = this;
         o.dialogBackgroundColour = col::panel; o.escapeKeyTriggersCloseButton = true; o.useNativeTitleBar = false; o.resizable = false;
         o.launchAsync();
     }

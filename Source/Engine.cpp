@@ -1685,11 +1685,17 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 if (clip.start >= b1 || clip.start + clip.length <= b0) continue;
                 auto it = drumHits.find (clip.uid);
                 if (it == drumHits.end() || ! it->second) continue;
-                for (auto& h : *it->second)
+                // hits are sorted: jump to this block instead of walking the whole song's hits every block (x5 when split)
+                const auto& hv = *it->second;
+                for (auto hi = std::lower_bound (hv.begin(), hv.end(), b0 - clip.start - shiftBeats - 1.0e-9,
+                                                 [] (const DrumHit& x, double b) { return x.beat < b; });
+                     hi != hv.end(); ++hi)
                 {
+                    const auto& h = *hi;
                     if (h.beat >= clip.length) break;
                     const double s = clip.start + h.beat + shiftBeats;
-                    if (s < b0 || s >= b1) continue;
+                    if (s >= b1) break;
+                    if (s < b0) continue;
                     double ss = 0, sl = 32.0;
                     const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
