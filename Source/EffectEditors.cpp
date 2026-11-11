@@ -161,6 +161,14 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "gain", { { "+6 dB", { { "gain", 6.0f } } }, { "-6 dB", { { "gain", -6.0f } } }, { "Mono", { { "mono", 1.0f } } }, { "Flip Phase", { { "phase", 1.0f } } } } },
         { "grit", { { "Tape", { { "mode", 0.0f }, { "drive", 0.3f } } }, { "Tube", { { "mode", 1.0f }, { "drive", 0.5f } } }, { "Fuzz", { { "mode", 2.0f }, { "drive", 0.8f }, { "mix", 0.6f } } }, { "Fold", { { "mode", 3.0f }, { "drive", 0.6f } } } } },
         { "crush", { { "8-bit", { { "bits", 8.0f }, { "down", 4.0f } } }, { "Lo-fi", { { "bits", 12.0f }, { "down", 2.0f }, { "mix", 0.6f } } }, { "Destroy", { { "bits", 4.0f }, { "down", 16.0f } } } } },
+        { "hhcurves", { { "Flat", { { "target", 0.0f } } },
+                        { "Punch", { { "target", 1.0f }, { "g1", 2.0f }, { "g2", 2.5f }, { "g3", -1.5f }, { "g4", -1.0f }, { "g6", 1.0f }, { "g7", 1.0f }, { "out", 1.0f } } },
+                        { "Vintage", { { "target", 2.0f }, { "g2", 1.5f }, { "g3", 1.0f }, { "g4", 0.5f }, { "g6", -1.0f }, { "g7", -2.0f }, { "g8", -3.0f }, { "width", 90.0f }, { "monoBelow", 120.0f } } },
+                        { "Modern", { { "target", 0.0f }, { "g1", 1.5f }, { "g3", -1.0f }, { "g5", 0.5f }, { "g7", 1.5f }, { "g8", 2.0f }, { "width", 115.0f }, { "monoBelow", 100.0f }, { "out", 1.0f } } },
+                        { "Rap", { { "target", 3.0f }, { "g1", 3.0f }, { "g2", 1.5f }, { "g3", -2.0f }, { "g4", -1.0f }, { "g5", 1.0f }, { "g7", 1.0f }, { "monoBelow", 120.0f }, { "out", 1.5f } } },
+                        { "Rock", { { "target", 4.0f }, { "g2", 1.0f }, { "g3", 0.5f }, { "g5", 1.5f }, { "g6", 1.0f }, { "g8", 1.0f }, { "width", 110.0f }, { "monoBelow", 90.0f } } },
+                        { "Metal", { { "target", 5.0f }, { "g1", 1.0f }, { "g2", 1.5f }, { "g3", -2.5f }, { "g4", -2.0f }, { "g6", 2.0f }, { "g7", 1.0f }, { "width", 120.0f }, { "monoBelow", 110.0f }, { "out", 1.0f } } },
+                        { "Mono Check", { { "width", 0.0f } } } } },
         { "hhmaster", { { "Master Glue", { { "drive", 8.0f }, { "smashmix", 50.0f }, { "grit", 25.0f }, { "pocket", 100.0f }, { "threshold", -10.0f }, { "makeup", 2.0f } } }, { "Hard Smash", { { "drive", 18.0f }, { "smashmix", 70.0f }, { "grit", 45.0f }, { "threshold", -14.0f }, { "makeup", 4.0f } } }, { "Gentle Polish", { { "drive", 3.0f }, { "smashmix", 25.0f }, { "grit", 10.0f }, { "pocket", 60.0f }, { "threshold", -6.0f }, { "makeup", 1.0f } } } } },
         { "glitch", { { "Stutter All", { { "fx", 0.0f }, { "s1", 1.0f }, { "s2", 1.0f }, { "s3", 1.0f }, { "s4", 1.0f }, { "s5", 1.0f }, { "s6", 1.0f }, { "s7", 1.0f }, { "s8", 1.0f }, { "s9", 1.0f }, { "s10", 1.0f }, { "s11", 1.0f }, { "s12", 1.0f }, { "s13", 1.0f }, { "s14", 1.0f }, { "s15", 1.0f }, { "s16", 1.0f } } }, { "Off-beats", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 1.0f }, { "s3", 0.0f }, { "s4", 1.0f }, { "s5", 0.0f }, { "s6", 1.0f }, { "s7", 0.0f }, { "s8", 1.0f }, { "s9", 0.0f }, { "s10", 1.0f }, { "s11", 0.0f }, { "s12", 1.0f }, { "s13", 0.0f }, { "s14", 1.0f }, { "s15", 0.0f }, { "s16", 1.0f } } }, { "Off", { { "fx", 0.0f }, { "s1", 0.0f }, { "s2", 0.0f }, { "s3", 0.0f }, { "s4", 0.0f }, { "s5", 0.0f }, { "s6", 0.0f }, { "s7", 0.0f }, { "s8", 0.0f }, { "s9", 0.0f }, { "s10", 0.0f }, { "s11", 0.0f }, { "s12", 0.0f }, { "s13", 0.0f }, { "s14", 0.0f }, { "s15", 0.0f }, { "s16", 0.0f } } } } } };
     static const std::vector<FactoryPreset> none;
@@ -784,6 +792,162 @@ private:
 };
 
 // compressor: transfer curve (in -> out), threshold line and live gain-reduction meter
+// Curves Master: spectrum + curve + genre target; drag a band dot up/down for gain, left/right for frequency.
+// ANALYZE listens to the playing mix; APPLY sets band gains + output toward the target.
+class CurvesGraph : public juce::Component, private juce::Timer
+{
+public:
+    CurvesGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, std::function<ScopeTap*()> src)
+        : grid (g), live (std::move (liveFx)), tap (std::move (src))
+    {
+        model = createBuiltinEffect ("hhcurves");
+        if (model) model->prepare (48000, 512);
+        snap.assign (fftN, 0.0f); fftBuf.assign (fftN * 2, 0.0f); spec.assign (fftN / 2, -100.0f);
+        addAndMakeVisible (analyze);
+        analyze.setTooltip ("Play your song, press ANALYZE, let it listen 10+ s, then press APPLY");
+        analyze.onClick = [this] { if (grid.valueOf ("analyze") < 0.5f) start(); else apply(); };
+        startTimerHz (30);
+    }
+    static float targetDb (int t, int k)
+    {
+        static const float tg[6][8] { { 10, 7, 2, -1, 0, -1, -4, -9 },     // Modern
+                                      { 10, 8, 1, -2, 0, 0, -4, -10 },     // Punch
+                                      { 7, 6, 3, 1, 0, -3, -7, -13 },      // Vintage
+                                      { 13, 9, 2, -2, 0, -1, -5, -10 },    // Rap
+                                      { 7, 6, 3, 0, 0, 0, -4, -10 },       // Rock
+                                      { 7, 6, 1, -2, 0, 1, -3, -9 } };     // Metal
+        return tg[juce::jlimit (0, 5, t)][k];
+    }
+    static float targetRms (int t) { static const float r[6] { -9, -9, -12, -8, -10, -9 }; return r[juce::jlimit (0, 5, t)]; }
+    void start() { grid.setExternal ("analyze", 1.0f); grid.commitNow(); analyze.setButtonText ("LISTENING..."); }
+    void apply()
+    {
+        auto* fx = live ? live() : nullptr;
+        grid.setExternal ("analyze", 0.0f);
+        if (fx == nullptr || fx->meter (9) < 3.0f) { grid.commitNow(); analyze.setButtonText ("ANALYZE (play first)"); return; }
+        const int t = (int) grid.valueOf ("target");
+        const float ref = fx->meter (4);
+        double e0 = 0, e1 = 0;
+        for (int k = 0; k < 8; ++k)
+        {
+            const float rel = fx->meter (k) - ref;
+            const float gdb = juce::jlimit (-9.0f, 9.0f, std::round ((targetDb (t, k) - rel) * 0.6f * 2.0f) / 2.0f);
+            grid.setExternal ("g" + juce::String (k + 1), gdb);
+            const double e = std::pow (10.0, fx->meter (k) / 10.0);
+            e0 += e; e1 += e * std::pow (10.0, gdb / 10.0);
+        }
+        const float after = fx->meter (8) + (float) (10.0 * std::log10 (e1 / juce::jmax (1e-12, e0)));
+        grid.setExternal ("out", juce::jlimit (-12.0f, 12.0f, std::round ((targetRms (t) - after) * 2.0f) / 2.0f));
+        grid.commitNow();
+        analyze.setButtonText ("ANALYZE"); repaint();
+    }
+    void resized() override { analyze.setBounds (getWidth() - 160, 8, 150, 24); }
+    juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (8.0f); }
+    float xOf (double f) const { auto a = area(); return a.getX() + a.getWidth() * (float) (std::log (juce::jlimit (20.0, 20000.0, f) / 20.0) / std::log (1000.0)); }
+    double freqAt (float x) const { auto a = area(); return 20.0 * std::pow (1000.0, juce::jlimit (0.0, 1.0, (double) ((x - a.getX()) / a.getWidth()))); }
+    float yOf (float db) const { auto a = area(); return a.getCentreY() - juce::jlimit (-15.0f, 15.0f, db) / 15.0f * a.getHeight() * 0.5f; }
+    juce::Point<float> dot (int k) const { return { xOf (grid.valueOf ("f" + juce::String (k + 1))), yOf (grid.valueOf ("g" + juce::String (k + 1))) }; }
+    void paint (juce::Graphics& g) override
+    {
+        drawPanelBg (g, getLocalBounds().toFloat());
+        auto a = area();
+        g.setColour (col::grid.withAlpha (0.5f));
+        for (double f : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 }) g.drawVerticalLine ((int) xOf (f), a.getY(), a.getBottom());
+        for (float d : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f }) g.drawHorizontalLine ((int) yOf (d), a.getX(), a.getRight());
+        juce::Path sp; bool st = false;
+        for (int i = 1; i < fftN / 2; ++i)
+        {
+            const double f = i * rate / fftN; if (f < 20 || f > 20000) continue;
+            const float y = juce::jmap (juce::jlimit (-90.0f, 0.0f, spec[(size_t) i]), -90.0f, 0.0f, a.getBottom(), a.getY() + a.getHeight() * 0.15f);
+            if (! st) { sp.startNewSubPath (xOf (f), a.getBottom()); st = true; }
+            sp.lineTo (xOf (f), y);
+        }
+        if (st) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); g.setColour (col::accent.withAlpha (0.18f)); g.fillPath (sp); }
+        const int t = (int) grid.valueOf ("target");
+        juce::Path tp;
+        for (int k = 0; k < 8; ++k) { const auto pt = juce::Point<float> (xOf (CurvesGraphCentre (k)), yOf (targetDb (t, k) * 0.5f)); k ? tp.lineTo (pt) : tp.startNewSubPath (pt); }
+        g.setColour (juce::Colours::orange.withAlpha (0.5f)); g.strokePath (tp, juce::PathStrokeType (1.2f, juce::PathStrokeType::curved));
+        if (model)
+        {
+            for (auto& pd : model->params()) { model->setParam (pd.id, grid.valueOf (pd.id)); }
+            model->paramChanged (0);
+            juce::Path cp;
+            for (float x = a.getX(); x <= a.getRight(); x += 2.0f)
+            {
+                const float y = yOf (model->responseDb (freqAt (x)) - grid.valueOf ("out"));
+                x == a.getX() ? cp.startNewSubPath (x, y) : cp.lineTo (x, y);
+            }
+            g.setColour (col::text); g.strokePath (cp, juce::PathStrokeType (2.0f));
+        }
+        static const char* mn[3] { "S", "M", "Sd" };
+        for (int k = 0; k < 8; ++k)
+        {
+            const auto d = dot (k);
+            g.setColour (k == drag ? juce::Colours::white : col::accent); g.fillEllipse (d.x - 6, d.y - 6, 12, 12);
+            g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
+            g.drawText (mn[juce::jlimit (0, 2, (int) grid.valueOf ("m" + juce::String (k + 1)))], (int) d.x - 10, (int) d.y + 7, 20, 12, juce::Justification::centred);
+        }
+        g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
+        static const char* tn[6] { "Modern", "Punch", "Vintage", "Rap", "Rock", "Metal" };
+        g.drawText (juce::String ("0 ms latency  |  target: ") + tn[juce::jlimit (0, 5, t)] + "  |  right-click a dot: Stereo / Mid / Side",
+                    getLocalBounds().reduced (12, 8).removeFromTop (20), juce::Justification::left);
+    }
+    static double CurvesGraphCentre (int k) { static const double f[8] { 40, 100, 250, 600, 1500, 3500, 7500, 14000 }; return f[k]; }
+    int hit (juce::Point<float> p) const { for (int k = 0; k < 8; ++k) if (dot (k).getDistanceFrom (p) < 10) return k; return -1; }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        drag = hit (e.position);
+        if (drag >= 0 && e.mods.isPopupMenu())
+        {
+            const int k = drag; drag = -1;
+            juce::PopupMenu m; m.addItem (1, "Stereo"); m.addItem (2, "Mid"); m.addItem (3, "Side");
+            m.showMenuAsync ({}, [safe = juce::Component::SafePointer<CurvesGraph> (this), k] (int r) {
+                if (safe == nullptr || r <= 0) return;
+                safe->grid.setExternal ("m" + juce::String (k + 1), (float) (r - 1)); safe->grid.commitNow(); safe->repaint();
+            });
+        }
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (drag < 0) return;
+        auto a = area();
+        grid.setExternal ("g" + juce::String (drag + 1), juce::jlimit (-12.0f, 12.0f, (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5f) * 15.0f));
+        grid.setExternal ("f" + juce::String (drag + 1), (float) freqAt (e.position.x));
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) grid.commitNow(); drag = -1; }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (const int k = hit (e.position); k >= 0) { grid.setExternal ("g" + juce::String (k + 1), 0.0f); grid.commitNow(); repaint(); } }
+    void timerCallback() override
+    {
+        if (! isShowing()) return;
+        if (auto* t = tap ? tap() : nullptr)
+        {
+            rate = t->rate.load();
+            t->read (snap.data(), fftN, t->heard());
+            std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
+            for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
+            fft.performFrequencyOnlyForwardTransform (fftBuf.data());
+            for (int i = 0; i < fftN / 2; ++i)
+            {
+                const float db = juce::Decibels::gainToDecibels (fftBuf[(size_t) i] / (float) (fftN / 4), -100.0f);
+                spec[(size_t) i] = db > spec[(size_t) i] ? db : spec[(size_t) i] * 0.85f + db * 0.15f;
+            }
+        }
+        if (grid.valueOf ("analyze") > 0.5f) if (auto* fx = live ? live() : nullptr) analyze.setButtonText ("APPLY (" + juce::String ((int) fx->meter (9)) + " s)");
+        repaint();
+    }
+    static constexpr int fftOrder = 11, fftN = 1 << fftOrder;
+    ParamGrid& grid;
+    std::function<BuiltinEffect*()> live;
+    std::function<ScopeTap*()> tap;
+    std::unique_ptr<BuiltinEffect> model;
+    juce::dsp::FFT fft { fftOrder };
+    std::vector<float> snap, fftBuf, spec;
+    double rate = 48000;
+    int drag = -1;
+    juce::TextButton analyze { "ANALYZE" };
+};
+
 class DynGraph : public juce::Component, private juce::Timer
 {
 public:
@@ -1095,6 +1259,11 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     {
         grid->hideWhere ([] (const juce::String& id) { return id.startsWithChar ('e') || id == "solo"; });   // graph-first: only Output + Phase knobs
         visual = new EqGraph (*grid, liveFx, tapFn); vh = 360;
+    }
+    else if (ty == "hhcurves")
+    {
+        grid->hideWhere ([] (const juce::String& id) { return id == "analyze" || (id.length() == 2 && (id[0] == 'f' || id[0] == 'm')); });
+        visual = new CurvesGraph (*grid, liveFx, tapFn); vh = 340;
     }
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});

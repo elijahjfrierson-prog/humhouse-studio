@@ -11,7 +11,9 @@ struct Deck : public juce::Component, private juce::Timer
     Deck (juce::AudioFormatManager& f, juce::TimeSliceThread& t, juce::AudioThumbnailCache& tc, juce::String nm, bool right)
         : fm (f), io (t), title (std::move (nm)), mirror (right), thumb (256, f, tc)
     {
-        for (auto* b : { &load, &play, &cue, &sync }) addAndMakeVisible (b);
+        for (auto* b : { &load, &play, &cue, &sync, &push }) addAndMakeVisible (b);
+        push.setTooltip ("Send this track to the Record timeline (audio clip), the Beat Channel Rack (long one-shot) or both");
+        push.onClick = [this] { if (onPush && file.existsAsFile()) onPush(); };
         for (int i = 0; i < 4; ++i)
         {
             auto* p = pads.add (new juce::TextButton (juce::String (i + 1)));
@@ -65,7 +67,7 @@ struct Deck : public juce::Component, private juce::Timer
         src = std::make_unique<juce::AudioFormatReaderSource> (r.release(), true);
         tp.setSource (src.get(), 32768, &io, sr, 2);   // read-ahead on its own thread: the audio callback never touches the disk
         thumb.setSource (new juce::FileInputSource (f));   // waveform builds on the thumbnail thread
-        name = f.getFileNameWithoutExtension(); cuePos = 0.0;
+        name = f.getFileNameWithoutExtension(); cuePos = 0.0; file = f;
         for (int i = 0; i < 4; ++i) { cues[(size_t) i] = -1.0; pads[i]->setColour (juce::TextButton::buttonColourId, padColour (i).withAlpha (0.25f)); }
         repaint();
     }
@@ -203,10 +205,10 @@ struct Deck : public juce::Component, private juce::Timer
         auto padRow = bottom.removeFromTop (34);
         const int pw = padRow.getWidth() / 4;
         for (auto* p : pads) p->setBounds (padRow.removeFromLeft (pw).reduced (2));
-        const int w = bottom.getWidth() / 6;
+        const int w = bottom.getWidth() / 7;
         load.setBounds (bottom.removeFromLeft (w).reduced (2)); cue.setBounds (bottom.removeFromLeft (w).reduced (2));
         play.setBounds (bottom.removeFromLeft (w).reduced (2)); sync.setBounds (bottom.removeFromLeft (w).reduced (2));
-        loop4.setBounds (bottom.removeFromLeft (w).reduced (2)); loop8.setBounds (bottom.reduced (2));
+        loop4.setBounds (bottom.removeFromLeft (w).reduced (2)); loop8.setBounds (bottom.removeFromLeft (w).reduced (2)); push.setBounds (bottom.reduced (2));
         r.removeFromTop (40);
         pitch.setBounds (mirror ? r.removeFromRight (28) : r.removeFromLeft (28));
     }
@@ -238,7 +240,9 @@ struct Deck : public juce::Component, private juce::Timer
     double bpm = 0.0, cuePos = 0.0, gridStart = 0.0;
     juce::String key;
     std::array<double, 4> cues { -1.0, -1.0, -1.0, -1.0 };
-    std::function<void()> onSync;
+    std::function<void()> onSync, onPush;
+    juce::File file;
+    juce::TextButton push { "PUSH" };
     juce::TextButton load { "LOAD" }, play { "PLAY" }, cue { "CUE" }, sync { "SYNC" }, loop4 { "LOOP 4" }, loop8 { "LOOP 8" };
     double loopStart = 0.0, loopLen = 0.0;
     juce::OwnedArray<juce::TextButton> pads;
@@ -391,6 +395,7 @@ public:
         io.startThread (juce::Thread::Priority::normal);
         addAndMakeVisible (a); addAndMakeVisible (b); addAndMakeVisible (waves); addAndMakeVisible (library);
         a.onSync = [this] { a.matchTo (b); }; b.onSync = [this] { b.matchTo (a); };
+        a.onPush = [this] { pushMenu (a.file); }; b.onPush = [this] { pushMenu (b.file); };
         xf.setSliderStyle (juce::Slider::LinearHorizontal); xf.setRange (0.0, 1.0); xf.setValue (0.5);
         xf.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); xf.setDoubleClickReturnValue (true, 0.5);
         xf.onValueChange = [this] { mix.fade = (float) xf.getValue(); };
@@ -525,6 +530,37 @@ private:
         juce::StringArray rows;
         for (const auto& [k, t] : maps) rows.add (juce::String (k) + ":" + juce::String (t));
         s.settings->setValue ("humVerseMidi", rows.joinIntoString (";")); s.settings->saveIfNeeded();
+    }
+    // PUSH: a deck's track goes to the Record timeline as a normal audio clip (stacked after the song with a
+    // 16-beat crossfade), to the Beat Channel Rack as one long one-shot, or both
+    void pushMenu (const juce::File& f)
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Record timeline (audio clip)"); m.addItem (2, "Beat Channel Rack (long one-shot)"); m.addItem (3, "Both");
+        m.addSeparator(); m.addItem (4, "Record timeline at playhead");
+        m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this), f] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r != 2) safe->pushToRecord (f, r == 4);
+            if (r == 2 || r == 3) addSampleChannels (safe->s, { f }, {});
+        });
+    }
+    void pushToRecord (const juce::File& f, bool atPlayhead)
+    {
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+        const double secs = rd && rd->sampleRate > 0 ? (double) rd->lengthInSamples / rd->sampleRate : 0.0;
+        if (secs <= 0) return;
+        const double play = s.engine.positionBeats();
+        s.edit ("Push to song", [&] (Project& p) {
+            const double len = secondsToBeats (secs, p.bpm), xfade = juce::jmin (16.0, len * 0.25);
+            double end = 0.0;
+            for (auto& c : p.clips) end = juce::jmax (end, c.start + c.length);
+            Lane l; l.name = f.getFileNameWithoutExtension(); l.mixerTrack = p.addMixerTrack (l.name);
+            p.lanes.push_back (l);
+            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1; c.length = len;
+            c.start = atPlayhead ? play : juce::jmax (0.0, end - (end > 0 ? xfade : 0.0));
+            c.fadeIn = c.start > 0 ? xfade : 0.0; c.fadeOut = xfade;
+            p.clips.push_back (c);
+        });
     }
     void loadMaps()
     {
