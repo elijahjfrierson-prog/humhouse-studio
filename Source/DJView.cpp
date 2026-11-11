@@ -79,7 +79,7 @@ struct Deck : public juce::Component, private juce::Timer
         pitch.setDoubleClickReturnValue (true, 0.0);
         pitch.onValueChange = [this] { rate = 1.0 + pitch.getValue() / 100.0; rs.setResamplingRatio (rate); if (onBpm) onBpm(); };
         addAndMakeVisible (pitch);
-        startTimerHz (phoneUI ? 30 : 60);
+        startTimerHz (60);
     }
     ~Deck() override { tp.setSource (nullptr); }
     static juce::Colour padColour (int i) { const juce::Colour c[] { juce::Colours::red, juce::Colours::orange, juce::Colours::yellow, juce::Colours::limegreen }; return c[i & 3]; }
@@ -327,7 +327,7 @@ struct Deck : public juce::Component, private juce::Timer
 // Serato-style centre: both tracks' zoomed waveforms stacked (playhead in the middle) + full-song overviews
 struct Waves : public juce::Component, private juce::Timer
 {
-    Waves (Deck& x, Deck& y) : a (x), b (y) { startTimerHz (phoneUI ? 30 : 60); }
+    Waves (Deck& x, Deck& y) : a (x), b (y) { startTimerHz (60); }
     void timerCallback() override { if (isShowing()) repaint(); }
     void paint (juce::Graphics& g) override
     {

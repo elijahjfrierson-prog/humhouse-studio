@@ -1385,7 +1385,7 @@ public:
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
-        startTimerHz (phoneUI ? 30 : 60);   // phone: half the playhead ticks, leaves the frame budget for scrolling
+        startTimerHz (60);   // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
     }
     ~Playlist() override { s.removeChangeListener (this); }
 

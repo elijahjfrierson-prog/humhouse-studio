@@ -66,7 +66,7 @@ private:
         win->setContentNonOwned (ed.get(), false);
         win->setResizable (true, true);
         win->centreWithSize (juce::jmax (1180, getWidth()), juce::jmax (720, getHeight()));
-        win->onClose = [this] { juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<EditorView> (this)] { if (safe) safe->dock(); }); };
+        win->onClose = [safe = juce::Component::SafePointer<EditorView> (this)] { juce::MessageManager::callAsync ([safe] { if (safe) safe->dock(); }); };
         win->setVisible (true);
         pop.setButtonText ("DOCK"); repaint();
     }
