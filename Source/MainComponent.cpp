@@ -2041,9 +2041,10 @@ private:
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
         const int bar = (int) (pos / bpb) + 1, beat = (int) std::fmod (pos, (double) bpb) + 1, step = (int) (std::fmod (pos, 1.0) * 4) + 1;
         posLabel.setText (juce::String (bar) + ":" + juce::String (beat) + ":" + juce::String (step), juce::dontSendNotification);
-        const int cpu = juce::roundToInt (engine.cpuLoad() * 100.0);
+        const int cpu = juce::jlimit (0, 100, juce::roundToInt (engine.cpuLoad() * 100.0));
         cpuLabel.setText ("CPU " + juce::String (cpu) + "%", juce::dontSendNotification);
-        cpuLabel.setColour (juce::Label::textColourId, cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good);
+        const auto cc = cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good;
+        if (cpuLabel.findColour (juce::Label::textColourId) != cc) cpuLabel.setColour (juce::Label::textColourId, cc);
         recBtn.setToggleState (engine.isRecording(), juce::dontSendNotification);
         playBtn.setToggleState (engine.isPlaying(), juce::dontSendNotification);
         playBtn.setColour (juce::TextButton::buttonOnColourId, engine.isCountingIn() ? col::accent : col::good);

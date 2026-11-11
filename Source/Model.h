@@ -220,7 +220,7 @@ struct Pattern
 };
 
 // ---------------------------------------------------------------- automation (FL-style automation clips)
-enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch, AutoSendLevel };
+enum AutoKind { AutoNone = 0, AutoFxParam, AutoInsertVol, AutoInsertPan, AutoChanVol, AutoChanPan, AutoChanPitch, AutoSendLevel, AutoChanParam };   // AutoChanParam: an instrument / VST instrument knob ("#index")
 struct AutoTarget
 {
     int kind = AutoNone;

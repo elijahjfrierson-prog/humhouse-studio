@@ -162,6 +162,8 @@ private:
     }
     void timerCallback() override
     {
+        isfx::hostBusy() = s.engine.isRecording();
+        ed->setActive (isShowing() || popped());
         if (! follow.getToggleState() || (! isShowing() && ! popped())) { hostWasPlaying = s.engine.isPlaying(); return; }
         const bool playing = s.engine.isPlaying();
         const double t = beatsToSeconds (s.engine.positionBeats(), s.p().bpm);
