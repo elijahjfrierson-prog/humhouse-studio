@@ -2,7 +2,7 @@
 
 Regular HumHouse Studio activates here; Master has no key gate.
 
-- `POST /v1/activate {key, mid, ver}`: max 3 computers per key, same computer reactivates for free, returns a 14-day pass signed for that Machine ID.
+- `POST /v1/activate {key, mid, ver}`: max 3 computers per key, same computer reactivates for free, returns a pass signed for that Machine ID with no time limit (the app re-checks daily online; revoke locks it).
 - `POST /v1/deactivate {key, mid}`
 - Admin (`Authorization: Bearer ADMIN_TOKEN`): `/v1/admin/lookup|revoke|unrevoke|free {key|hash[, mid]}`, `/v1/admin/feed` (monitor data).
 - `GET /monitor`: live map + suspicious-key flags (green to red), revoke / free buttons. Paste the admin token once.

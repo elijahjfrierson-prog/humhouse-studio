@@ -2,6 +2,7 @@
 #include <map>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
+#include "TextFit.h"
 #include "Engine.h"
 #include "ProjectIO.h"
 #include "NoteTools.h"
@@ -359,7 +360,12 @@ class Knob : public juce::Slider
 {
 public:
     Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix = {});
-    void mouseDoubleClick (const juce::MouseEvent&) override;   // type an exact value (Alt-click resets)
+    void mouseDoubleClick (const juce::MouseEvent&) override;   // same menu as right-click (phone: double tap = right-click)
+    void mouseDown (const juce::MouseEvent&) override;          // right-click: type value, reset, min / mid / max, automate
+    void showMenu();
+    std::function<void()> onAutomate;                           // set by views that can make an automation lane for this knob
+private:
+    double defValue = 0.0;
 };
 
 void setupButton (juce::Button&, const juce::String& text, const juce::String& tooltip, bool toggle = false);
@@ -419,6 +425,7 @@ void showDjDecks (Studio&);   // HumHouse DJ: two decks + crossfader
 void closeDjDecks();
 void showPatchBay (Studio&);   // node patch bay: sequencers > sounds > FX > out, LFO > FX params
 void closePatchBay();
+juce::PopupMenu patchBayRouteMenu (Studio&, std::function<void (Project&, int insert)> apply);   // any track / clip / pattern into a bay or one of its FX stack nodes
 std::unique_ptr<juce::Component> createPatchBayView (Studio&);   // PATCH tab
 std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
 inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll

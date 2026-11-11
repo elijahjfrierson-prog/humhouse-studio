@@ -87,7 +87,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         title.setText ("Activate HumHouse Studio", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
         info.setText ("Enter your license key (HHS-XXXXX-XXXXX-XXXXX-XXXXX). Each key works on up to 3 computers. "
-                      "An internet connection is needed to activate and every 14 days after.", juce::dontSendNotification);
+                      "An internet connection is needed once to activate.", juce::dontSendNotification);
         info.setColour (juce::Label::textColourId, hhs::col::dim);
         info.setJustificationType (juce::Justification::topLeft);
         mid.setText ("Machine ID: " + hhs::license::machineId(), juce::dontSendNotification);
@@ -206,7 +206,7 @@ public:
        #if HHS_KEY_GATE
         launchLine = commandLine;
         if (! hhs::license::storedPass().ok) { showActivation ({}); return; }
-        renewInBackground();
+        renewInBackground (true);   // every launch re-checks the key online
        #endif
         startMain (commandLine);
     }
@@ -321,12 +321,12 @@ private:
         window = nullptr;
         showActivation (why);
     }
-    // renew the 14-day pass when it's 3+ days old; a revoked key or a 4th computer locks right away
-    void renewInBackground()
+    // once a day online, re-check the key; a revoked key or a 4th computer locks right away
+    void renewInBackground (bool force = false)
     {
         watchLicense();
         const auto p = hhs::license::storedPass();
-        if (juce::Time::currentTimeMillis() / 1000 - p.issued < 3 * 86400) return;
+        if (! force && juce::Time::currentTimeMillis() / 1000 - p.issued < 86400) return;
         const auto key = hhs::license::keyFile().loadFileAsString().trim();
         licensePool.addJob ([this, key, alive = alive] {
             const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
@@ -343,7 +343,7 @@ private:
             if (window == nullptr) return;
             const auto p = hhs::license::storedPass();
             if (! p.ok) lockApp (p.error);
-            else if (juce::Time::currentTimeMillis() / 1000 - p.issued >= 3 * 86400) renewInBackground();
+            else if (juce::Time::currentTimeMillis() / 1000 - p.issued >= 86400) renewInBackground();
         };
         licenseWatch.startTimer (20 * 60 * 1000);
     }

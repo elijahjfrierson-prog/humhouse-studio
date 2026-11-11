@@ -246,15 +246,16 @@ juce::Font HHLookAndFeel::getPopupMenuFont()
 
 void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool down)
 {
-    const auto font = getTextButtonFont (b, b.getHeight());
+    auto font = getTextButtonFont (b, b.getHeight());
     juce::ignoreUnused (over, down);
-    g.setFont (font);
     const int yIndent = juce::jmin (4, b.proportionOfHeight (0.3f)), cornerSize = juce::jmin (b.getHeight(), b.getWidth()) / 2;
     const int fontHeight = juce::roundToInt (font.getHeight() * 0.6f);
     const int leftIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnLeft() ? 4 : 2));
     const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
     const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
     if (area.getWidth() <= 0) return;
+    font = fitFont (font, b.getButtonText(), (float) area.getWidth(), area.getHeight() >= font.getHeight() * 2.1f ? 2 : 1);
+    g.setFont (font);
     if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
     {
         // plain text: never the same color as the button it sits on (custom on-colors, user font color, theme accents)
@@ -335,18 +336,47 @@ Knob::Knob (const juce::String& name, const juce::String& help, double mn, doubl
     setNumDecimalPlacesToDisplay (step < 0.1 ? 2 : step < 1.0 ? 1 : 0);
     setVelocityModeParameters (0.4, 1, 0.0, true, juce::ModifierKeys::shiftModifier);   // Shift = fine
     setValue (def, juce::dontSendNotification);
-    setDoubleClickReturnValue (true, def);
+    defValue = def;
     setTextValueSuffix (suffix);
     setPopupDisplayEnabled (true, true, nullptr, 1500);
     setMouseDragSensitivity (180);
 }
 
-void Knob::mouseDoubleClick (const juce::MouseEvent&)
+void Knob::mouseDoubleClick (const juce::MouseEvent&) { showMenu(); }
+
+void Knob::mouseDown (const juce::MouseEvent& e)
 {
+    if (e.mods.isPopupMenu()) { showMenu(); return; }
+    if (e.mods.isAltDown()) { setValue (defValue, juce::sendNotificationSync); return; }
+    juce::Slider::mouseDown (e);
+}
+
+void Knob::showMenu()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader (getName() + ": " + getTextFromValue (getValue()));
+    m.addItem (1, "Type a value...");
+    m.addItem (2, "Reset to default (" + getTextFromValue (defValue) + ")");
+    m.addSeparator();
+    m.addItem (3, "Min"); m.addItem (4, "Middle"); m.addItem (5, "Max");
+    if (onAutomate) { m.addSeparator(); m.addItem (6, "Automate / LFO / link..."); }
     juce::Component::SafePointer<Knob> self (this);
-    askText (getName(), juce::String (getValue(), getNumDecimalPlacesToDisplay()), [self] (juce::String t) {
-        if (self != nullptr && t.trim().isNotEmpty())
-            self->setValue (juce::jlimit (self->getMinimum(), self->getMaximum(), self->getValueFromText (t)), juce::sendNotificationSync);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self] (int r) {
+        if (self == nullptr || r <= 0) return;
+        auto set = [&] (double v) { self->setValue (juce::jlimit (self->getMinimum(), self->getMaximum(), v), juce::sendNotificationSync); if (self != nullptr && self->onDragEnd) self->onDragEnd(); };
+        if (r == 1)
+            askText (self->getName(), juce::String (self->getValue(), self->getNumDecimalPlacesToDisplay()), [self] (juce::String t) {
+                if (self != nullptr && t.trim().isNotEmpty())
+                {
+                    self->setValue (juce::jlimit (self->getMinimum(), self->getMaximum(), self->getValueFromText (t)), juce::sendNotificationSync);
+                    if (self->onDragEnd) self->onDragEnd();
+                }
+            });
+        else if (r == 2) set (self->defValue);
+        else if (r == 3) set (self->getMinimum());
+        else if (r == 4) set (self->proportionOfLengthToValue (0.5));
+        else if (r == 5) set (self->getMaximum());
+        else if (r == 6 && self->onAutomate) self->onAutomate();
     });
 }
 

@@ -170,14 +170,14 @@ struct Deck : public juce::Component, private juce::Timer
         g.fillAll (col::panel);
         g.setColour (col::accent.withAlpha (0.6f)); g.drawRect (getLocalBounds(), 1);
         g.setColour (col::accent); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText (title, 8, 4, 60, 16, juce::Justification::centredLeft);
+        fitText (g, title, 8, 4, 60, 16, juce::Justification::centredLeft);
         g.setColour (col::text); g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        g.drawText (name.isEmpty() ? juce::String ("Load a track") : name, 8, 20, getWidth() - 90, 18, juce::Justification::centredLeft, true);
+        fitText (g, name.isEmpty() ? juce::String ("Load a track") : name, 8, 20, getWidth() - 90, 18, juce::Justification::centredLeft, true);
         g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
-        g.drawText (juce::String (liveBpm(), 1), getWidth() - 86, 4, 78, 22, juce::Justification::centredRight);
-        g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f)); g.drawText ("BPM", getWidth() - 86, 24, 78, 12, juce::Justification::centredRight);
+        fitText (g, juce::String (liveBpm(), 1), getWidth() - 86, 4, 78, 22, juce::Justification::centredRight);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f)); fitText (g, "BPM", getWidth() - 86, 24, 78, 12, juce::Justification::centredRight);
         g.setColour (juce::Colour (0xff6ad1ff)); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText (key, getWidth() - 160, 4, 70, 18, juce::Justification::centredRight);
+        fitText (g, key, getWidth() - 160, 4, 70, 18, juce::Justification::centredRight);
         // platter: spinning marker, pitch, elapsed / remaining
         const auto pr = platter().toFloat().reduced (4.0f);
         const double len = tp.getLengthInSeconds(), pos = tp.getCurrentPosition();
@@ -195,9 +195,9 @@ struct Deck : public juce::Component, private juce::Timer
         }
         g.setColour (col::text); g.setFont (juce::FontOptions (juce::jmax (12.0f, pr.getHeight() * 0.13f), juce::Font::bold));
         const auto ir = pr.reduced (pr.getWidth() * 0.18f).toNearestInt();
-        g.drawText (juce::String (pitch.getValue() >= 0 ? "+" : "") + juce::String (pitch.getValue(), 1) + "%", ir.withHeight (ir.getHeight() / 3), juce::Justification::centred);
-        g.drawText (clock (pos), ir.withTrimmedTop (ir.getHeight() / 3).withHeight (ir.getHeight() / 3), juce::Justification::centred);
-        g.setColour (col::dim); g.drawText ("-" + clock (len - pos), ir.withTrimmedTop (2 * ir.getHeight() / 3), juce::Justification::centred);
+        fitText (g, juce::String (pitch.getValue() >= 0 ? "+" : "") + juce::String (pitch.getValue(), 1) + "%", ir.withHeight (ir.getHeight() / 3), juce::Justification::centred);
+        fitText (g, clock (pos), ir.withTrimmedTop (ir.getHeight() / 3).withHeight (ir.getHeight() / 3), juce::Justification::centred);
+        g.setColour (col::dim); fitText (g, "-" + clock (len - pos), ir.withTrimmedTop (2 * ir.getHeight() / 3), juce::Justification::centred);
     }
     void resized() override
     {
@@ -344,10 +344,10 @@ struct Library : public juce::Component, private juce::ListBoxModel
         if (sel) g.fillAll (col::accent.withAlpha (0.45f)); else if (row % 2) g.fillAll (juce::Colours::white.withAlpha (0.03f));
         const auto& f = files.getReference (row);
         g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 15.0f : 13.0f));
-        g.drawText (juce::String (row + 1), 4, 0, 34, h, juce::Justification::centredRight);
-        g.drawText (f.getFileNameWithoutExtension(), 46, 0, w - 200, h, juce::Justification::centredLeft, true);
+        fitText (g, juce::String (row + 1), 4, 0, 34, h, juce::Justification::centredRight);
+        fitText (g, f.getFileNameWithoutExtension(), 46, 0, w - 200, h, juce::Justification::centredLeft, true);
         g.setColour (col::dim);
-        g.drawText (f.getFileExtension().substring (1).toUpperCase() + "  " + juce::File::descriptionOfSizeInBytes (f.getSize()), w - 150, 0, 144, h, juce::Justification::centredRight);
+        fitText (g, f.getFileExtension().substring (1).toUpperCase() + "  " + juce::File::descriptionOfSizeInBytes (f.getSize()), w - 150, 0, 144, h, juce::Justification::centredRight);
     }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
     {
@@ -357,7 +357,7 @@ struct Library : public juce::Component, private juce::ListBoxModel
     {
         g.fillAll (col::panel);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText ("#    SONG  -  " + dir.getFullPathName() + "  (" + juce::String (files.size()) + ")", 8, 4, getWidth() - 400, 18, juce::Justification::centredLeft, true);
+        fitText (g, "#    SONG  -  " + dir.getFullPathName() + "  (" + juce::String (files.size()) + ")", 8, 4, getWidth() - 400, 18, juce::Justification::centredLeft, true);
     }
     void resized() override
     {
@@ -564,8 +564,8 @@ public:
     {
         g.fillAll (col::bg);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText ("A   <   CROSSFADER   >   B", xf.getBounds().translated (0, -16).withHeight (14), juce::Justification::centred);
-        g.drawText ("DJ OUT", vol.getBounds().translated (0, -16).withHeight (14), juce::Justification::centred);
+        fitText (g, "A   <   CROSSFADER   >   B", xf.getBounds().translated (0, -16).withHeight (14), juce::Justification::centred);
+        fitText (g, "DJ OUT", vol.getBounds().translated (0, -16).withHeight (14), juce::Justification::centred);
     }
     void resized() override
     {

@@ -228,9 +228,7 @@ public:
                 if (p.mx - p.mn > 100 && p.mn > 0) k->setSkewFactorFromMidPoint (std::sqrt (p.mn * p.mx));
                 k->onValueChange = [this, k, id] { set (id, (float) k->getValue()); if (! touchHeld()) onCommit(); };
                 k->onDragEnd = [this] { onCommit(); };
-                auto* rc = rightClicks.add (new RightClick());
-                rc->fn = [this, id] { if (onParamMenu) onParamMenu (id); };
-                k->addMouseListener (rc, false);
+                k->onAutomate = [this, id] { if (onParamMenu) onParamMenu (id); };
                 controls.add (k);
             }
             addAndMakeVisible (controls.getLast());
@@ -509,7 +507,7 @@ public:
         {
             const float x = xOf (f);
             g.setColour (col::grid.withAlpha (0.5f)); g.drawVerticalLine ((int) x, a.getY(), a.getBottom());
-            g.setColour (col::dim); g.drawText (f >= 1000 ? juce::String (f / 1000, 0) + "k" : juce::String (f, 0), (int) x + 2, (int) a.getBottom() - 12, 30, 12, juce::Justification::left);
+            g.setColour (col::dim); fitText (g, f >= 1000 ? juce::String (f / 1000, 0) + "k" : juce::String (f, 0), (int) x + 2, (int) a.getBottom() - 12, 30, 12, juce::Justification::left);
         }
         std::vector<int> ticks;
         const int stepDb = range <= 6 ? 3 : range <= 12 ? 6 : range <= 20 ? 6 : 10;
@@ -517,7 +515,7 @@ public:
         for (int d : ticks)
         {
             g.setColour (col::grid.withAlpha (d == 0 ? 0.9f : 0.35f)); g.drawHorizontalLine ((int) yOf ((float) d), a.getX(), a.getRight());
-            if (d != 0) { g.setColour (col::dim); g.drawText (juce::String (d), (int) a.getX() + 2, (int) yOf ((float) d) - 6, 24, 12, juce::Justification::left); }
+            if (d != 0) { g.setColour (col::dim); fitText (g, juce::String (d), (int) a.getX() + 2, (int) yOf ((float) d) - 6, 24, 12, juce::Justification::left); }
         }
         if (rate > 0)
         {
@@ -571,7 +569,7 @@ public:
             g.setColour (c.withAlpha (k == hot ? 0.45f : 0.2f)); g.fillEllipse (pt.x - 11, pt.y - 11, 22, 22);
             g.setColour (c); g.fillEllipse (pt.x - 7, pt.y - 7, 14, 14);
             g.setColour (juce::Colours::black.withAlpha (0.8f)); g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
-            g.drawText (juce::String (k + 1), juce::Rectangle<float> (pt.x - 7, pt.y - 7, 14, 14), juce::Justification::centred);
+            fitText (g, juce::String (k + 1), juce::Rectangle<float> (pt.x - 7, pt.y - 7, 14, 14), juce::Justification::centred);
             if (k == hot)
             {
                 static const char* tn[] { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Band Pass" };
@@ -579,7 +577,7 @@ public:
                 if (hasGain (k)) t << "  " << juce::String (grid.valueOf (pid (k, "G")), 1) << " dB";
                 t << "  Q " << juce::String (grid.valueOf (pid (k, "Q")), 2);
                 g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-                g.drawText (t, (int) pt.x - 110, (int) pt.y - 30, 220, 14, juce::Justification::centred);
+                fitText (g, t, (int) pt.x - 110, (int) pt.y - 30, 220, 14, juce::Justification::centred);
             }
         }
         if (hover.x >= a.getX() && hot < 0 && drag < 0 && a.contains (hover))
@@ -588,21 +586,21 @@ public:
             static const char* nn[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
             const int midi = juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0));
             g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-            g.drawText (hzText ((float) hz) + "  " + nn[((midi % 12) + 12) % 12] + juce::String (midi / 12) + "  " + juce::String (dbAt (hover.y), 1) + " dB",
+            fitText (g, hzText ((float) hz) + "  " + nn[((midi % 12) + 12) % 12] + juce::String (midi / 12) + "  " + juce::String (dbAt (hover.y), 1) + " dB",
                         (int) a.getX() + 30, (int) a.getY() + 2, 220, 14, juce::Justification::left);
         }
         g.setColour (col::panel2.withAlpha (0.9f)); g.fillRect (getLocalBounds().removeFromBottom (barH + 4).reduced (6, 2).toFloat());
         g.setColour (sel >= 0 ? colourOf (sel) : col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        g.drawText (sel >= 0 ? "BAND " + juce::String (sel + 1) : "Click a dot to edit it here", getLocalBounds().removeFromBottom (barH + 4).reduced (12, 2), juce::Justification::centredLeft);
+        fitText (g, sel >= 0 ? "BAND " + juce::String (sel + 1) : "Click a dot to edit it here", getLocalBounds().removeFromBottom (barH + 4).reduced (12, 2), juce::Justification::centredLeft);
         auto rc = rangeChip();
         g.setColour (col::panel2); g.fillRoundedRectangle (rc, 4.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (juce::String::charToString (0xb1) + juce::String ((int) range) + " dB", rc, juce::Justification::centred);
+        fitText (g, juce::String::charToString (0xb1) + juce::String ((int) range) + " dB", rc, juce::Justification::centred);
         const bool lin = grid.valueOf ("phase") > 0.5f;
         auto chip = modeChip();
         g.setColour (lin ? col::accent2.withAlpha (0.3f) : col::good.withAlpha (0.25f)); g.fillRoundedRectangle (chip, 4.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (lin ? "LINEAR  ~23 ms" : "NATURAL  0 ms", chip, juce::Justification::centred);
+        fitText (g, lin ? "LINEAR  ~23 ms" : "NATURAL  0 ms", chip, juce::Justification::centred);
     }
     void resized() override
     {
@@ -885,11 +883,11 @@ public:
             const auto d = dot (k);
             g.setColour (k == drag ? juce::Colours::white : col::accent); g.fillEllipse (d.x - 6, d.y - 6, 12, 12);
             g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
-            g.drawText (mn[juce::jlimit (0, 2, (int) grid.valueOf ("m" + juce::String (k + 1)))], (int) d.x - 10, (int) d.y + 7, 20, 12, juce::Justification::centred);
+            fitText (g, mn[juce::jlimit (0, 2, (int) grid.valueOf ("m" + juce::String (k + 1)))], (int) d.x - 10, (int) d.y + 7, 20, 12, juce::Justification::centred);
         }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
         static const char* tn[6] { "Modern", "Punch", "Vintage", "Rap", "Rock", "Metal" };
-        g.drawText (juce::String ("0 ms latency  |  target: ") + tn[juce::jlimit (0, 5, t)] + "  |  right-click a dot: Stereo / Mid / Side",
+        fitText (g, juce::String ("0 ms latency  |  target: ") + tn[juce::jlimit (0, 5, t)] + "  |  right-click a dot: Stereo / Mid / Side",
                     getLocalBounds().reduced (12, 8).removeFromTop (20), juce::Justification::left);
     }
     static double CurvesGraphCentre (int k) { static const double f[8] { 40, 100, 250, 600, 1500, 3500, 7500, 14000 }; return f[k]; }
@@ -978,15 +976,15 @@ public:
         g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
         g.setColour (col::accent2.withAlpha (0.7f)); g.drawVerticalLine ((int) px (th), sq.getY(), sq.getBottom());
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText ("THRESH " + juce::String (th, 1) + " dB   RATIO " + juce::String (ratio, 1) + ":1", sq.toNearestInt().removeFromTop (16), juce::Justification::centredLeft);
+        fitText (g, "THRESH " + juce::String (th, 1) + " dB   RATIO " + juce::String (ratio, 1) + ":1", sq.toNearestInt().removeFromTop (16), juce::Justification::centredLeft);
         const float gr = std::abs (live && live() ? live()->meter (0) : 0.0f);
         shown = std::max (gr, shown * 0.9f);
         g.setColour (col::bg); g.fillRoundedRectangle (meter, 4.0f);
         g.setColour (col::rec.withAlpha (0.85f));
         g.fillRoundedRectangle (meter.withHeight (meter.getHeight() * juce::jlimit (0.0f, 1.0f, shown / 24.0f)), 4.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (10.0f));
-        g.drawText ("GR", meter.toNearestInt().removeFromBottom (28), juce::Justification::centred);
-        g.drawText ("-" + juce::String (shown, 1), meter.toNearestInt().removeFromBottom (14), juce::Justification::centred);
+        fitText (g, "GR", meter.toNearestInt().removeFromBottom (28), juce::Justification::centred);
+        fitText (g, "-" + juce::String (shown, 1), meter.toNearestInt().removeFromBottom (14), juce::Justification::centred);
     }
 private:
     void timerCallback() override { if (isShowing()) repaint(); }
@@ -1019,7 +1017,7 @@ public:
                 g.setColour (c.withAlpha (0.35f + 0.6f * (1.0f - t)));
                 g.fillRect (a.getX() + x, a.getBottom() - h * a.getHeight(), 2.0f, h * a.getHeight());
             }
-            g.setColour (col::text); g.drawText ("REVERB TAIL  size " + juce::String ((int) (size * 100)) + "%  damp " + juce::String ((int) (damp * 100)) + "%", a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
+            g.setColour (col::text); fitText (g, "REVERB TAIL  size " + juce::String ((int) (size * 100)) + "%  damp " + juce::String ((int) (damp * 100)) + "%", a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
         else if (type == "delay")
         {
@@ -1036,7 +1034,7 @@ public:
                 g.setColour ((pp && (k % 2 == 0) ? col::accent2 : col::accent).withAlpha (0.9f));
                 g.fillRoundedRectangle (x, a.getBottom() - hh, 4.0f, hh, 2.0f);
             }
-            g.setColour (col::text); g.drawText ("ECHO TAPS  feedback " + juce::String ((int) (fb * 100)) + "%" + (pp ? "  ping-pong" : ""), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
+            g.setColour (col::text); fitText (g, "ECHO TAPS  feedback " + juce::String ((int) (fb * 100)) + "%" + (pp ? "  ping-pong" : ""), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
         else if (type == "filter")
         {
@@ -1055,7 +1053,7 @@ public:
             }
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
             g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
-            g.setColour (col::text); g.drawText ("FILTER  " + juce::String (cut >= 1000 ? juce::String (cut / 1000, 1) + " kHz" : juce::String ((int) cut) + " Hz"), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
+            g.setColour (col::text); fitText (g, "FILTER  " + juce::String (cut >= 1000 ? juce::String (cut / 1000, 1) + " kHz" : juce::String ((int) cut) + " Hz"), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
     }
 private:
@@ -1101,7 +1099,7 @@ public:
             g.setColour (m == 0 ? col::bg : col::accent.withAlpha (0.35f + 0.06f * (float) m)); g.fillRoundedRectangle (c, 3.0f);
             g.setColour (i % 4 == 0 ? col::text : col::dim); g.drawRoundedRectangle (c, 3.0f, 1.0f);
             g.setColour (col::text); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-            g.drawText (shortNames[m], c.toNearestInt(), juce::Justification::centred);
+            fitText (g, shortNames[m], c.toNearestInt(), juce::Justification::centred);
         }
     }
     void mouseDown (const juce::MouseEvent& e) override
@@ -1325,7 +1323,7 @@ struct SampleWaveView : juce::Component, private juce::Timer
         g.setColour (col::grid);
         for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8.0f), a.getY(), a.getBottom());
         g.drawHorizontalLine ((int) a.getCentreY(), a.getX(), a.getRight());
-        if (peaks.empty()) { g.setColour (col::dim); g.drawText ("No sample loaded", a, juce::Justification::centred); return; }
+        if (peaks.empty()) { g.setColour (col::dim); fitText (g, "No sample loaded", a, juce::Justification::centred); return; }
         juce::Path p; const float mid = a.getCentreY(), hh = a.getHeight() * 0.46f;
         for (size_t i = 0; i < peaks.size(); ++i)
             p.lineTo (a.getX() + a.getWidth() * (float) i / (float) (peaks.size() - 1), mid - peaks[i].second * hh);
@@ -1338,7 +1336,7 @@ struct SampleWaveView : juce::Component, private juce::Timer
         if (fadeIn > 0 && seconds > 0) g.drawLine (a.getX(), a.getBottom(), a.getX() + a.getWidth() * (float) juce::jmin (1.0, fadeIn / seconds), a.getY(), 1.5f);
         if (fadeOut > 0 && seconds > 0) g.drawLine (a.getRight() - a.getWidth() * (float) juce::jmin (1.0, fadeOut / seconds), a.getY(), a.getRight(), a.getBottom(), 1.5f);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText (juce::String (seconds, 2) + " s", a.reduced (6), juce::Justification::topRight);
+        fitText (g, juce::String (seconds, 2) + " s", a.reduced (6), juce::Justification::topRight);
     }
     Studio& s; int channelId; juce::String key;
     std::vector<std::pair<float, float>> peaks; double seconds = 0; float fadeIn = 0, fadeOut = 0;
@@ -1407,7 +1405,7 @@ struct HumWaveView : juce::Component, private juce::Timer
         g.setColour (col::accent);
         g.strokePath (path (cur, dx * d, dy * (1.0f - d), true), juce::PathStrokeType (2.2f));
         g.setColour (col::dim); g.setFont (12.0f);
-        g.drawText ((p.wt != nullptr ? p.wtName : humWaveFactoryNames()[p.wtKind]) + "   frame " + juce::String (cur + 1) + "/" + juce::String (frames)
+        fitText (g, (p.wt != nullptr ? p.wtName : humWaveFactoryNames()[p.wtKind]) + "   frame " + juce::String (cur + 1) + "/" + juce::String (frames)
                     + "   warp " + humWarpNames()[p.warp] + "   (drag to draw, right-click = factory)", getLocalBounds().reduced (8, 2), juce::Justification::topLeft);
     }
     void mouseDown (const juce::MouseEvent& e) override
@@ -1517,8 +1515,8 @@ struct DrummerPad : juce::Component, juce::Timer
         g.setColour (col::gridBar); g.drawRoundedRectangle (r, 6.0f, 1.0f);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f));
         auto t = r.reduced (8, 6);
-        g.drawText ("Loud", t, juce::Justification::topLeft); g.drawText ("Soft", t, juce::Justification::bottomLeft);
-        g.drawText ("Complex", t, juce::Justification::bottomRight); g.drawText ("Simple", t.withTrimmedLeft (40), juce::Justification::bottomLeft);
+        fitText (g, "Loud", t, juce::Justification::topLeft); fitText (g, "Soft", t, juce::Justification::bottomLeft);
+        fitText (g, "Complex", t, juce::Justification::bottomRight); fitText (g, "Simple", t.withTrimmedLeft (40), juce::Justification::bottomLeft);
         if (auto* c = s.channel (channelId))
         {
             const float x = r.getX() + r.getWidth() * c->drum.complexity, y = r.getBottom() - r.getHeight() * c->drum.loudness;
@@ -1568,14 +1566,14 @@ struct DrumSteps : juce::Component
         const bool man = it != c->drum.steps.end();
         g.setFont (juce::FontOptions (13.0f)); g.setColour (col::text);
         const int b0 = (int) (drumSectionStart (c->drum, section) / 4.0) + 1, b1 = b0 + drumSectionBars (c->drum, section) - 1;
-        g.drawText ((all > 0 ? "ALL sections (bars 1-" + juce::String ((int) (drumSectionStart (c->drum, all) / 4.0)) + ")" : "Bars " + juce::String (b0) + "-" + juce::String (b1))
+        fitText (g, (all > 0 ? "ALL sections (bars 1-" + juce::String ((int) (drumSectionStart (c->drum, all) / 4.0)) + ")" : "Bars " + juce::String (b0) + "-" + juce::String (b1))
                     + (man ? "  |  your steps repeat, the drummer plays around them and fills bar 8" : "  |  AUTO: click a step - one kick and the drummer builds around it"),
                     10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
         const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
         for (int gi = 0; gi < NumDrumGroups; ++gi)
         {
             g.setColour (col::text);
-            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 62, r.getY() + gi * rh, 58, rh), juce::Justification::centredRight);
+            fitText (g, drumGroupName (gi), juce::Rectangle<float> (r.getX() - 62, r.getY() + gi * rh, 58, rh), juce::Justification::centredRight);
             for (int k = 0; k < 16; ++k)
             {
                 const bool on = man && (it->second[(size_t) gi] >> k & 1) != 0;
@@ -1751,24 +1749,24 @@ struct DrumSections : juce::Component
         for (int k = 0; k < n; ++k)
         {
             g.setColour (col::dim);
-            g.drawText ("Bar " + juce::String (k * 8 + 1), juce::Rectangle<float> (r.getX() + k * cw, r.getY() - 20, cw, 18), juce::Justification::centred);
+            fitText (g, "Bar " + juce::String (k * 8 + 1), juce::Rectangle<float> (r.getX() + k * cw, r.getY() - 20, cw, 18), juce::Justification::centred);
         }
         for (int gi = 0; gi < NumDrumGroups; ++gi)
         {
             g.setColour (col::text);
-            g.drawText (drumGroupName (gi), juce::Rectangle<float> (r.getX() - 68, r.getY() + gi * rh, 64, rh), juce::Justification::centredRight);
+            fitText (g, drumGroupName (gi), juce::Rectangle<float> (r.getX() - 68, r.getY() + gi * rh, 64, rh), juce::Justification::centredRight);
             for (int k = 0; k < n; ++k)
             {
                 const bool off = k < (int) c->drum.sectionMute.size() && (c->drum.sectionMute[(size_t) k] >> gi & 1) != 0;
                 auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
                 g.setColour (off ? col::bg : juce::Colour (0xffffc93d).withAlpha (0.85f)); g.fillRoundedRectangle (cell, 3.0f);
                 g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
-                g.setColour (off ? col::dim : juce::Colours::black); g.drawText (off ? "OFF" : c->drum.steps.count (k) > 0 ? "STEPS" : "ON", cell, juce::Justification::centred);
+                g.setColour (off ? col::dim : juce::Colours::black); fitText (g, off ? "OFF" : c->drum.steps.count (k) > 0 ? "STEPS" : "ON", cell, juce::Justification::centred);
             }
         }
         // DYNAMICS: how hard each section is played (drag up / down, double-click = 100%); it ramps into the next section
         const float y = r.getY() + NumDrumGroups * rh;
-        g.setColour (col::text); g.drawText ("Dynamics", juce::Rectangle<float> (r.getX() - 68, y, 64, rh), juce::Justification::centredRight);
+        g.setColour (col::text); fitText (g, "Dynamics", juce::Rectangle<float> (r.getX() - 68, y, 64, rh), juce::Justification::centredRight);
         for (int k = 0; k < n; ++k)
         {
             const int v = dyn (*c, k);
@@ -1776,7 +1774,7 @@ struct DrumSections : juce::Component
             g.setColour (col::bg); g.fillRoundedRectangle (cell, 3.0f);
             g.setColour (col::accent.withAlpha (0.8f)); g.fillRoundedRectangle (cell.withTrimmedTop (cell.getHeight() * (1.0f - juce::jmin (1.0f, v / 150.0f))), 3.0f);
             g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
-            g.setColour (col::text); g.drawText (juce::String (v) + "%", cell, juce::Justification::centred);
+            g.setColour (col::text); fitText (g, juce::String (v) + "%", cell, juce::Justification::centred);
         }
     }
     static int dyn (const Channel& c, int k) { return k < (int) c.drum.sectionVel.size() && c.drum.sectionVel[(size_t) k] > 0 ? c.drum.sectionVel[(size_t) k] : 100; }

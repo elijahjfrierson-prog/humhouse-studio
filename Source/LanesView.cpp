@@ -58,14 +58,14 @@ public:
         g.setColour (col::grid); g.drawHorizontalLine (barH - 1, 0.0f, (float) getWidth());
         auto& p = s.p(); const int tr = track();
         g.setColour (col::text); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText ("LANES   " + (tr < (int) p.mixer.size() ? p.mixer[(size_t) tr].name : juce::String()),
+        fitText (g, "LANES   " + (tr < (int) p.mixer.size() ? p.mixer[(size_t) tr].name : juce::String()),
                     bar.withTrimmedLeft (10).withRight (juce::jmax (10, fxBtn.getX() - 8)), juce::Justification::centredLeft, true);
         const auto rs = rows();
         g.reduceClipRegion (0, barH, getWidth(), getHeight() - barH);
         if (rs.empty())
         {
             g.setColour (col::dim); g.setFont (juce::FontOptions (13.0f));
-            g.drawText (fxMode() ? "No effects on this track yet: add one in the Mixer or Plugin House"
+            fitText (g, fxMode() ? "No effects on this track yet: add one in the Mixer or Plugin House"
                                  : "No automation on this track yet: right-click here or + LANE to automate volume, pan, a send or any effect knob",
                         getLocalBounds().withTrimmedTop (barH), juce::Justification::centred, true);
             return;
@@ -199,16 +199,30 @@ private:
             for (int i = 0; i < (int) fx.size(); ++i) if (fx[(size_t) i].type.isNotEmpty()) { Row r; r.slot = i; out.push_back (r); }
             return out;
         }
-        for (int i = 0; i < (int) p.clips.size(); ++i)
-        {
-            const auto& c = p.clips[(size_t) i];
-            const int k = c.autoTarget.kind;
-            if (! c.isAuto() || c.autoTarget.track != tr || k == AutoChanVol || k == AutoChanPan || k == AutoChanPitch) continue;
-            Row* hit = nullptr;
-            for (auto& r : out) if (r.t.kind == k && r.t.fxUid == c.autoTarget.fxUid && r.t.param == c.autoTarget.param) hit = &r;
-            if (hit == nullptr) { out.emplace_back(); hit = &out.back(); hit->t = c.autoTarget; }
-            hit->clips.push_back (i);
-        }
+        // every automation clip gets a lane: this insert's FX / volume / pan / sends, the sounds routed into it (Drummer volume, pan...);
+        // a track with none of its own shows all of the song's automation so the lanes are never empty while clips exist
+        const auto mine = [&] (const AutoTarget& a) {
+            if (a.kind == AutoChanVol || a.kind == AutoChanPan || a.kind == AutoChanPitch)
+            {
+                const auto* ch = p.findChannel (a.channel);
+                return ch != nullptr && (ch->mixerTrack == tr || (ch->mixerTrack <= 0 && tr == 0));
+            }
+            return a.track == tr;
+        };
+        const auto collect = [&] (bool all) {
+            for (int i = 0; i < (int) p.clips.size(); ++i)
+            {
+                const auto& c = p.clips[(size_t) i];
+                if (! c.isAuto() || (! all && ! mine (c.autoTarget))) continue;
+                const auto& a = c.autoTarget;
+                Row* hit = nullptr;
+                for (auto& r : out) if (r.t.kind == a.kind && r.t.track == a.track && r.t.channel == a.channel && r.t.fxUid == a.fxUid && r.t.param == a.param) hit = &r;
+                if (hit == nullptr) { out.emplace_back(); hit = &out.back(); hit->t = a; }
+                hit->clips.push_back (i);
+            }
+        };
+        collect (false);
+        if (out.empty()) collect (true);
         return out;
     }
 
@@ -257,12 +271,12 @@ private:
             hb.removeFromRight (36);
             g.setColour (ghost ? ghostAmber : col::panel2); g.fillRoundedRectangle (gb.toFloat(), 3.0f);
             g.setColour (ghost ? juce::Colours::black : col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-            g.drawText ("G", gb, juce::Justification::centred, false);
+            fitText (g, "G", gb, juce::Justification::centred, false);
         }
         g.setColour (ghost ? col::dim : col::text); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-        g.drawText (name, hb.removeFromTop (hb.getHeight() / 2), juce::Justification::bottomLeft, true);
+        fitText (g, name, hb.removeFromTop (hb.getHeight() / 2), juce::Justification::bottomLeft, true);
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText (sub, hb, juce::Justification::topLeft, true);
+        fitText (g, sub, hb, juce::Justification::topLeft, true);
         if (f != nullptr) paintFx (g, *f, body, ghost);
         else paintAuto (g, row, body);
     }
@@ -311,7 +325,7 @@ private:
                     const float v = it != f.params.end() ? it->second : d.def;
                     const float t = juce::jlimit (0.0f, 1.0f, (v - d.min) / juce::jmax (1.0e-6f, d.max - d.min));
                     g.setColour (col::text.withAlpha (0.85f)); g.setFont (juce::FontOptions (10.5f));
-                    g.drawText (d.name, cell.removeFromTop (14), juce::Justification::centredLeft, true);
+                    fitText (g, d.name, cell.removeFromTop (14), juce::Justification::centredLeft, true);
                     auto bar = cell.removeFromTop (8).toFloat();
                     g.setColour (col::panel); g.fillRoundedRectangle (bar, 2.0f);
                     g.setColour (col::accent); g.fillRoundedRectangle (bar.withWidth (juce::jmax (2.0f, bar.getWidth() * t)), 2.0f);
@@ -322,7 +336,7 @@ private:
         {
             g.setColour (juce::Colours::black.withAlpha (0.4f)); g.fillRect (b);
             g.setColour (ghostAmber); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-            g.drawText ("GHOSTED - you hear the track without it (click G)", b, juce::Justification::centred, true);
+            fitText (g, "GHOSTED - you hear the track without it (click G)", b, juce::Justification::centred, true);
         }
     }
 
@@ -381,7 +395,7 @@ private:
         g.setColour (col::accent2.withAlpha (0.8f)); g.drawRoundedRectangle (card, 5.0f, 1.2f);
         auto in = card.reduced (6.0f, 3.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
-        g.drawText (slotLabel (s, *f) + "  " + row.t.param, in.removeFromTop (12.0f), juce::Justification::centredLeft, true);
+        fitText (g, slotLabel (s, *f) + "  " + row.t.param, in.removeFromTop (12.0f), juce::Justification::centredLeft, true);
         auto* m = modelFor (*f);
         const ParamDef* d = nullptr;
         if (m != nullptr) for (auto& q : m->params()) if (row.t.param == q.id) d = &q;
@@ -415,7 +429,7 @@ private:
             g.setColour (v >= 0.0f ? autoRed : col::accent); g.fillRoundedRectangle (meter.withWidth (juce::jmax (2.0f, meter.getWidth() * t)), 2.0f);
             g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
             const juce::String val = d != nullptr ? juce::String (d->min + t * (d->max - d->min), 2) : juce::String (juce::roundToInt (t * 100.0f)) + "%";
-            g.drawText ((d != nullptr ? juce::String (d->name) + "  " : juce::String()) + val + (v >= 0.0f ? "  (automated)" : ""), in, juce::Justification::centredLeft, true);
+            fitText (g, (d != nullptr ? juce::String (d->name) + "  " : juce::String()) + val + (v >= 0.0f ? "  (automated)" : ""), in, juce::Justification::centredLeft, true);
         }
     }
 

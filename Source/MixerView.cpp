@@ -1,4 +1,6 @@
 #include "UI.h"
+#include "Effects.h"
+#include <complex>
 
 namespace hhs
 {
@@ -87,14 +89,14 @@ struct Strip : public juce::Component
         g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
         if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
-        g.drawText (index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
+        fitText (g, index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].colour != juce::Colour (0xff2a2f36))
         {
             g.setColour (p.mixer[(size_t) index].colour); g.fillRoundedRectangle (6.0f, 2.0f, (float) getWidth() - 12.0f, 3.0f, 1.5f);
         }
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].frozen)
         {
-            g.setColour (col::accent2); g.drawText ("FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
+            g.setColour (col::accent2); fitText (g, "FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
         }
         paintScope (g);
         // meter
@@ -108,7 +110,7 @@ struct Strip : public juce::Component
         if (nfx > 0)
         {
             g.setColour (col::accent); g.setFont (juce::FontOptions (10.0f));
-            g.drawText (juce::String (nfx) + " FX", fxLabel, juce::Justification::centred);
+            fitText (g, juce::String (nfx) + " FX", fxLabel, juce::Justification::centred);
         }
     }
     juce::Rectangle<int> meterArea() const { return { getWidth() - 16, 96, 8, getHeight() - 96 - 96 }; }
@@ -257,7 +259,108 @@ struct SlotButton : public juce::TextButton
         if (load < 0.005f) return;
         g.setColour ((load > 0.25f ? col::rec : load > 0.1f ? col::accent : col::good).withAlpha (0.95f));
         g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-        g.drawText (juce::String (juce::roundToInt (load * 100.0f)) + "%", getLocalBounds().reduced (5, 0), juce::Justification::centredRight);
+        fitText (g, juce::String (juce::roundToInt (load * 100.0f)) + "%", getLocalBounds().reduced (5, 0), juce::Justification::centredRight);
+    }
+};
+
+// graphic mini EQ: drag a band's dot (left/right = freq, up/down = gain), wheel = Q, double-click = flat, right-click = band menu
+class MiniEqGraph : public juce::Component
+{
+public:
+    MiniEqGraph (Studio& st, std::function<int()> tr) : s (st), track (std::move (tr)) { setRepaintsOnMouseActivity (true); }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (juce::Colour (0xff121417)); g.fillRoundedRectangle (r, 4.0f);
+        const auto* mt = strip(); if (mt == nullptr) return;
+        g.setColour (juce::Colours::white.withAlpha (0.07f));
+        for (float f : { 100.0f, 1000.0f, 10000.0f }) g.drawVerticalLine ((int) xOf (f), r.getY(), r.getBottom());
+        g.drawHorizontalLine ((int) yOf (0.0f), r.getX(), r.getRight());
+        Biquad bq[5];
+        for (int b = 0; b < 5; ++b) bq[b].set (b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak, 48000.0, juce::jlimit (20.0f, 21000.0f, mt->meqFreq[(size_t) b]), juce::jlimit (0.1f, 18.0f, mt->meqQ[(size_t) b]), mt->meqGain[(size_t) b]);
+        juce::Path curve;
+        for (int x = 0; x <= getWidth(); x += 2)
+        {
+            const double f = freqOf ((float) x), w = juce::MathConstants<double>::twoPi * f / 48000.0;
+            const std::complex<double> z = std::polar (1.0, -w), z2 = z * z;
+            double db = 0.0;
+            for (auto& q : bq) db += 20.0 * std::log10 (std::abs (((double) q.b0 + (double) q.b1 * z + (double) q.b2 * z2) / (1.0 + (double) q.a1 * z + (double) q.a2 * z2)) + 1e-9);
+            const float y = yOf ((float) db);
+            if (x == 0) curve.startNewSubPath ((float) x, y); else curve.lineTo ((float) x, y);
+        }
+        juce::Path fill (curve); fill.lineTo (r.getRight(), yOf (0.0f)); fill.lineTo (r.getX(), yOf (0.0f)); fill.closeSubPath();
+        g.setColour (col::accent.withAlpha (0.15f)); g.fillPath (fill);
+        g.setColour (col::accent); g.strokePath (curve, juce::PathStrokeType (1.6f));
+        static const char* nm[] { "L", "LM", "M", "HM", "H" };
+        g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+        for (int b = 0; b < 5; ++b)
+        {
+            const auto c = dot (b);
+            g.setColour (b == drag || b == hover ? juce::Colours::white : col::accent.brighter (0.3f));
+            g.fillEllipse (c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f);
+            g.setColour (juce::Colours::black); fitText (g, nm[b], juce::Rectangle<float> (c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f), juce::Justification::centred);
+        }
+        if (const int b = drag >= 0 ? drag : hover; b >= 0)
+        {
+            g.setColour (col::text);
+            fitText (g, hz (mt->meqFreq[(size_t) b]) + "  " + juce::String (mt->meqGain[(size_t) b], 1) + " dB  Q " + juce::String (mt->meqQ[(size_t) b], 2),
+                     getLocalBounds().removeFromTop (13).reduced (4, 0), juce::Justification::centredRight);
+        }
+    }
+    void mouseMove (const juce::MouseEvent& e) override { const int h = near (e.position); if (h != hover) { hover = h; repaint(); } }
+    void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        drag = near (e.position);
+        if (drag >= 0 && e.mods.isPopupMenu()) { bandMenu (drag); drag = -1; }
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (drag < 0) return;
+        const int b = drag;
+        const float f = juce::jlimit (20.0f, 20000.0f, freqOf (e.position.x)), gn = juce::jlimit (-18.0f, 18.0f, gainOf (e.position.y));
+        s.live ([&] (Project& p) { if (auto* mt = at (p)) { mt->meqFreq[(size_t) b] = f; mt->meqGain[(size_t) b] = e.mods.isShiftDown() ? mt->meqGain[(size_t) b] : gn; } });
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) s.commit ("Mixer EQ"); drag = -1; repaint(); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        const int b = near (e.position); if (b < 0) return;
+        s.edit ("Mixer EQ: flat band", [&] (Project& p) { if (auto* mt = at (p)) mt->meqGain[(size_t) b] = 0.0f; });
+        repaint();
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const int b = near (e.position); if (b < 0) { Component::mouseWheelMove (e, w); return; }
+        s.live ([&] (Project& p) { if (auto* mt = at (p)) mt->meqQ[(size_t) b] = juce::jlimit (0.1f, 18.0f, mt->meqQ[(size_t) b] * (w.deltaY > 0 ? 1.12f : 1.0f / 1.12f)); });
+        s.commit ("Mixer EQ Q"); repaint();
+    }
+private:
+    Studio& s; std::function<int()> track;
+    int drag = -1, hover = -1;
+    MixerTrack* at (Project& p) const { const int t = track(); return t >= 0 && t < (int) p.mixer.size() ? &p.mixer[(size_t) t] : nullptr; }
+    const MixerTrack* strip() const { return at (s.p()); }
+    float xOf (float f) const { return (float) getWidth() * std::log (f / 20.0f) / std::log (1000.0f); }
+    float freqOf (float x) const { return 20.0f * std::pow (1000.0f, juce::jlimit (0.0f, 1.0f, x / (float) juce::jmax (1, getWidth()))); }
+    float yOf (float db) const { return (float) getHeight() * (0.5f - juce::jlimit (-20.0f, 20.0f, db) / 40.0f); }
+    float gainOf (float y) const { return (0.5f - y / (float) juce::jmax (1, getHeight())) * 40.0f; }
+    juce::Point<float> dot (int b) const { const auto* mt = strip(); return mt == nullptr ? juce::Point<float>() : juce::Point<float> (xOf (mt->meqFreq[(size_t) b]), yOf (mt->meqGain[(size_t) b])); }
+    int near (juce::Point<float> p) const { int best = -1; float d = 14.0f; for (int b = 0; b < 5; ++b) if (dot (b).getDistanceFrom (p) < d) { d = dot (b).getDistanceFrom (p); best = b; } return best; }
+    static juce::String hz (float f) { return f >= 1000.0f ? juce::String (f / 1000.0f, 1) + " kHz" : juce::String (juce::roundToInt (f)) + " Hz"; }
+    void bandMenu (int b)
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Flat (0 dB)"); m.addItem (2, "Wide (Q 0.5)"); m.addItem (3, "Normal (Q 1)"); m.addItem (4, "Narrow (Q 4)"); m.addItem (5, "Surgical (Q 10)");
+        m.addSeparator(); m.addItem (6, "Reset whole EQ");
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [this, b, safe = juce::Component::SafePointer<MiniEqGraph> (this)] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            s.edit ("Mixer EQ", [&] (Project& p) {
+                auto* mt = at (p); if (mt == nullptr) return;
+                if (r == 1) mt->meqGain[(size_t) b] = 0.0f;
+                else if (r <= 5) mt->meqQ[(size_t) b] = r == 2 ? 0.5f : r == 3 ? 1.0f : r == 4 ? 4.0f : 10.0f;
+                else { MixerTrack d; mt->meqFreq = d.meqFreq; mt->meqGain = d.meqGain; mt->meqQ = d.meqQ; } });
+            repaint();
+        });
     }
 };
 
@@ -316,7 +419,9 @@ public:
         setupButton (house, "PLUGIN HOUSE", "Add an effect or plugin to this insert");
         house.onClick = [this] { showPluginHouseMenu (s, track()); };
         addAndMakeVisible (house);
-        eqLabel.setText ("MINI EQ  (5 bands: freq / gain / Q)", juce::dontSendNotification);
+        eqLabel.setText ("EQ  (drag dots, wheel = Q, double-click = flat)", juce::dontSendNotification);
+        eqGraph = std::make_unique<MiniEqGraph> (s, [this] { return track(); });
+        addAndMakeVisible (*eqGraph);
         eqLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         eqLabel.setColour (juce::Label::textColourId, col::accent);
         addAndMakeVisible (eqLabel);
@@ -336,7 +441,6 @@ public:
                     if (! touchHeld()) s.commit ("Mini EQ");
                 };
                 kn->onDragEnd = [this] { s.commit ("Mini EQ"); };
-                addAndMakeVisible (kn);
             }
         sendsLabel.setText ("SENDS (click-to-route arrows on the strips)", juce::dontSendNotification);
         sendsLabel.setFont (juce::FontOptions (11.0f));
@@ -383,6 +487,7 @@ public:
             eqKnobs[b * 3 + 1]->setValue (t.meqGain[(size_t) b], juce::dontSendNotification);
             eqKnobs[b * 3 + 2]->setValue (t.meqQ[(size_t) b], juce::dontSendNotification);
         }
+        if (eqGraph != nullptr) eqGraph->repaint();
         sendKnobs.clear();
         for (size_t k = 0; k < t.sends.size(); ++k)
         {
@@ -410,7 +515,7 @@ public:
         for (int k = 0; k < juce::jmin (sendKnobs.size(), (int) t.sends.size()); ++k)
         {
             const int target = t.sends[(size_t) k].target;
-            g.drawText ("> " + (target < (int) p.mixer.size() ? p.mixer[(size_t) target].name : juce::String()),
+            fitText (g, "> " + (target < (int) p.mixer.size() ? p.mixer[(size_t) target].name : juce::String()),
                         sendKnobs[k]->getRight() + 6, sendKnobs[k]->getY(), 180, sendKnobs[k]->getHeight(), juce::Justification::centredLeft);
         }
     }
@@ -431,14 +536,7 @@ public:
         }
         r.removeFromTop (4);
         eqLabel.setBounds (r.removeFromTop (16));
-        {
-            const int w = r.getWidth() / 5;
-            for (int k = 0; k < 3; ++k)
-            {
-                auto row = r.removeFromTop (32);
-                for (int b = 0; b < 5; ++b) eqKnobs[b * 3 + k]->setBounds (row.removeFromLeft (w).withSizeKeepingCentre (30, 30));
-            }
-        }
+        eqGraph->setBounds (r.removeFromTop (96).reduced (2, 0));
         r.removeFromTop (4);
         sendsLabel.setBounds (r.removeFromTop (18));
         for (auto* k : sendKnobs) k->setBounds (r.removeFromTop (30).removeFromLeft (30));
@@ -497,7 +595,8 @@ private:
     }
     Studio& s;
     juce::Label title, sendsLabel, eqLabel;
-    juce::OwnedArray<Knob> eqKnobs;   // band b: [b*3] freq, [b*3+1] gain, [b*3+2] Q
+    juce::OwnedArray<Knob> eqKnobs;   // kept (hidden) for automation / undo sync; the graph edits the same values
+    std::unique_ptr<MiniEqGraph> eqGraph;   // band b: [b*3] freq, [b*3+1] gain, [b*3+2] Q
     juce::OwnedArray<SlotButton> slots;
     juce::OwnedArray<juce::TextButton> bypass;
     juce::OwnedArray<Knob> mixes, sendKnobs;
