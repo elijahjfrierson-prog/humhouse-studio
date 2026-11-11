@@ -706,7 +706,14 @@ void Inspector::rebuild()
         addCombo ("Clip preset", cps, 0, "Your saved clip effects (Presets > Save clip effects).",
                   [this, clipRef, edited, cpv] (int i) { if (i <= 0) return; st.edit ("Clip preset"); clipRef().fx = cpv[(size_t) i - 1].fx; edited();
                       juce::MessageManager::callAsync ([this] { rebuild(); resized(); }); });
-        addParams (clipParams(), [clipRef]() -> FxStack& { return clipRef().fx; });
+        if (clip->mediaId.isEmpty())
+        {
+            title.setText ("Adjustment layer: " + (clip->name.isNotEmpty() ? clip->name : juce::String ("FX")), juce::dontSendNotification);
+            add (new Heading ("Adjustment layer (affects every track under it)"));
+            addParams (sequenceParams(), [clipRef]() -> FxStack& { return clipRef().fx; });
+        }
+        else
+            addParams (clipParams(), [clipRef]() -> FxStack& { return clipRef().fx; });
     }
     else
     {

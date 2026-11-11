@@ -177,6 +177,19 @@ juce::String addEffectClip (Sequence& s, const FxStack& fx, const juce::String& 
     return c.id;
 }
 
+juce::String addEffectClipOn (Sequence& s, int track, const FxStack& fx, const juce::String& name, Ticks at, Ticks len)
+{
+    if (len <= 0) return {};
+    at = std::max<Ticks> (0, at);
+    bool free = track >= 0 && track < (int) s.tracks.size() && s.tracks[(size_t) track].kind == TrackKind::Video && ! s.tracks[(size_t) track].locked;
+    for (auto& c : s.clips)
+        if (free && c.track == track && c.start < at + len && c.end() > at) free = false;
+    if (! free) return addEffectClip (s, fx, name, at, len);
+    Clip c; c.id = newId(); c.track = track; c.start = at; c.length = len; c.fx = fx; c.name = name;
+    s.clips.push_back (c); s.sortClips();
+    return c.id;
+}
+
 bool setTransitionAtCut (Sequence& s, int track, Ticks at, TransitionType ty, Ticks len, Ticks maxDist)
 {
     if (track < 0 || track >= (int) s.tracks.size() || s.tracks[(size_t) track].locked) return false;

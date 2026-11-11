@@ -31,6 +31,8 @@ juce::String addMediaClip (Project& p, const juce::String& mediaId, int track, T
 int insertVideoTrack (Sequence&);
 // effect layer: a clip with no media whose FX apply to everything under it while it plays (trim/move like any clip)
 juce::String addEffectClip (Sequence&, const FxStack& fx, const juce::String& name, Ticks at, Ticks len);
+// same, on `track` when it's a free unlocked video track over [at, at+len), else on a new layer on top
+juce::String addEffectClipOn (Sequence&, int track, const FxStack& fx, const juce::String& name, Ticks at, Ticks len);
 // drops a transition on the cut nearest `at` on a track (it belongs to the incoming clip, so it stays locked to that cut)
 bool setTransitionAtCut (Sequence&, int track, Ticks at, TransitionType, Ticks len, Ticks maxDist);
 // moves the song; with `withSynced` every synced clip, the beat grid and drum events move with it (sync stays intact)

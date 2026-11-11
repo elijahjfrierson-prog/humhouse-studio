@@ -168,6 +168,7 @@ public:
     void zoomBy (float f, int anchorX);
     void ensureVisible (Ticks t);
     void clipMenu (const juce::String& id);
+    void emptyMenu (int track, Ticks at);   // right-click an empty spot: add adjustment layer
 public:
     void clipMenuSpeed (const juce::String& id);   // Ctrl+R Speed/Duration dialog
     bool switchAngles = true;
