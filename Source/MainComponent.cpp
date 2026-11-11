@@ -404,8 +404,42 @@ static void writeBackupAsync (const Project& p)
     pool.addJob ([copy = std::make_shared<Project> (p)] { writeBackup (*copy); });
 }
 
+// a pattern with notes and no Playlist clip lands on the REC page by itself (own track, bar 1): no dragging it in
+static void autoPlacePatterns (Project& p)
+{
+    for (int i = 0; i < (int) p.patterns.size(); ++i)
+    {
+        auto& pt = p.patterns[(size_t) i];
+        if (pt.autoClip != 0)
+            for (auto& c : p.clips)
+                if (c.uid == pt.autoClip && c.patternIndex == i && c.patOffset == 0.0 && std::abs (c.length - pt.autoLen) < 1.0e-6)
+                    { c.length = pt.autoLen = juce::jmax (c.length, pt.lengthBeats()); break; }
+        if (pt.placed) continue;
+        bool hasNotes = false;
+        for (auto& [id, nl] : pt.notes) hasNotes |= ! nl.empty();
+        if (! hasNotes) continue;
+        pt.placed = true;
+        bool onList = false;
+        for (auto& c : p.clips) onList |= c.patternIndex == i;
+        if (onList) continue;
+        int lane = -1;
+        for (int l = 0; l < (int) p.lanes.size() && lane < 0; ++l)
+        {
+            bool used = p.lanes[(size_t) l].compLane >= 0 || p.lanes[(size_t) l].armed;
+            for (auto& c : p.clips) used |= c.lane == l;
+            if (! used) lane = l;
+        }
+        if (lane < 0) { Lane l; l.name = pt.name; p.lanes.push_back (l); lane = (int) p.lanes.size() - 1; }
+        else if (p.lanes[(size_t) lane].name.startsWith ("Track ")) p.lanes[(size_t) lane].name = pt.name;
+        Clip c; c.uid = p.newUid(); c.lane = lane; c.start = 0.0; c.patternIndex = i; c.length = pt.lengthBeats();
+        pt.autoClip = c.uid; pt.autoLen = c.length;
+        p.clips.push_back (c);
+    }
+}
+
 void Studio::commit (const juce::String& what)
 {
+    autoPlacePatterns (p());
     undo.push (p(), what);
     engine.sync();
     dirty = true;

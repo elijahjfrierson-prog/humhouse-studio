@@ -212,6 +212,8 @@ struct Pattern
     juce::Colour colour { 0xff3d8aff };
     std::map<int, NoteList> notes;         // by channel id
     double loopBeats = 0.0;                // imported loop length (0 = from the notes)
+    bool   placed = false;                 // already put on the Playlist once (auto-place never re-adds a clip the user deleted)
+    int    autoClip = 0; double autoLen = 0.0;   // the auto-placed clip: grows with the pattern until the user resizes it
     double lengthBeats() const;            // rounded up to whole bars (min 1 bar)
     bool   stepOn (int channelId, int step, double stepLen = 0.25) const;
     void   toggleStep (int channelId, int step, int rootKey, double stepLen = 0.25);
@@ -329,7 +331,7 @@ struct Project
     int    keyRoot = 0;            // C
     int    scaleIndex = 1;         // natural minor
     bool   highlightScale = true;
-    bool   songMode = false;
+    bool   songMode = true;    // SONG by default: the Playlist plays (L toggles PAT)
     int    currentPattern = 0;
     double snap = 0.25;            // beats; 0 = no snap
     double swing = 0.0;            // 0..1
