@@ -8,8 +8,11 @@ inline juce::Font fitFont (juce::Font f, const juce::String& text, float width, 
 {
     if (text.isEmpty() || width <= 1.0f) return f;
     const float room = width * (float) juce::jmax (1, lines) * 0.97f;
-    for (int i = 0; i < 24 && f.getHeight() > 7.0f && juce::GlyphArrangement::getStringWidth (f, text) > room; ++i)
-        f = f.withHeight (juce::jmax (7.0f, f.getHeight() * 0.92f));
+    juce::String longest;   // a single word can't wrap: it alone must fit one line
+    for (auto& w : juce::StringArray::fromTokens (text, " ", {})) if (w.length() > longest.length()) longest = w;
+    auto tooWide = [&] { return juce::GlyphArrangement::getStringWidth (f, text) > room || juce::GlyphArrangement::getStringWidth (f, longest) > width * 0.97f; };
+    for (int i = 0; i < 30 && f.getHeight() > 6.0f && tooWide(); ++i)
+        f = f.withHeight (juce::jmax (6.0f, f.getHeight() * 0.92f));
     return f;
 }
 template <typename T>

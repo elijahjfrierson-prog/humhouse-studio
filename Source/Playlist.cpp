@@ -394,6 +394,15 @@ struct LiveClipEditor : public juce::Component, private juce::Timer
         origBtn.onClick = [this] { changed = false; s.edit ("Original take", [this] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = clip.audioFile; c.sourceOffset = clip.sourceOffset; c.length = clip.length; } }); s.engine.sync(); onOriginal(); };
         closeBtn.onClick = [this] { if (auto* w = findParentComponentOfClass<juce::DocumentWindow>()) w->closeButtonPressed(); };
         for (auto* b : { &playBtn, &origBtn, &closeBtn }) addAndMakeVisible (*b);
+        mixKnob.setSliderStyle (juce::Slider::LinearHorizontal);
+        mixKnob.setTextBoxStyle (juce::Slider::TextBoxRight, false, 46, 20);
+        mixKnob.setRange (0.0, 100.0, 1.0); mixKnob.setValue (100.0, juce::dontSendNotification);
+        mixKnob.setTextValueSuffix ("%");
+        mixKnob.setDoubleClickReturnValue (true, 50.0);
+        mixKnob.setTooltip ("MIX: original take vs " + what + " (100% = all edit, double-click = 50/50)");
+        mixKnob.onValueChange = [this] { changedSoon(); };
+        mixLabel.setText ("MIX", juce::dontSendNotification); mixLabel.setJustificationType (juce::Justification::centredRight);
+        addAndMakeVisible (mixKnob); addAndMakeVisible (mixLabel);
         for (auto& c : s.p().clips) if (c.uid == uid) clip = c;
         readClipAudio (clip, s.p().bpm, audio, sr);
         startTimer (120);
@@ -408,11 +417,13 @@ struct LiveClipEditor : public juce::Component, private juce::Timer
         closeBtn.setBounds (r.removeFromRight (100)); r.removeFromRight (6);
         origBtn.setBounds (r.removeFromRight (90)); r.removeFromRight (6);
         playBtn.setBounds (r.removeFromRight (80)); r.removeFromRight (12);
+        mixKnob.setBounds (r.removeFromRight (150)); mixLabel.setBounds (r.removeFromRight (34)); r.removeFromRight (10);
     }
     Studio& s; int uid; juce::String name; Clip clip;
     juce::AudioBuffer<float> audio; double sr = 44100;
 private:
     juce::TextButton playBtn, origBtn, closeBtn;
+    juce::Slider mixKnob; juce::Label mixLabel;
     bool changed = false; juce::uint32 dueAt = 0;
     void timerCallback() override
     {
@@ -423,7 +434,14 @@ private:
         bool still = false;
         for (auto& c : s.p().clips) still |= c.uid == uid;
         if (! still) return;
-        const auto out = render();
+        auto out = render();
+        const float wet = (float) mixKnob.getValue() / 100.0f;   // blend with the original take (same length edits only)
+        if (wet < 0.999f && out.getNumSamples() == audio.getNumSamples())
+            for (int ch = 0; ch < out.getNumChannels(); ++ch)
+            {
+                out.applyGain (ch, 0, out.getNumSamples(), wet);
+                out.addFrom (ch, 0, audio, juce::jmin (ch, audio.getNumChannels() - 1), 0, out.getNumSamples(), 1.0f - wet);
+            }
         const auto f = s.p().recordingsFolder().getChildFile (name).getNonexistentChildFile (clip.audioFile.getFileNameWithoutExtension() + "_" + name.toLowerCase(), ".wav");
         if (writeClipAudio (f, out, sr)) useResult (f, out.getNumSamples());   // no stop: the song keeps playing
     }
@@ -1118,8 +1136,9 @@ struct LaneHeader : public juce::Component
         g.fillAll (col::panel);
         if (s.selectedLanes.contains (index))
         {
-            g.setColour (col::accent.withAlpha (0.16f)); g.fillRect (getLocalBounds());
-            g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (3));
+            g.setColour (col::accent.withAlpha (0.38f)); g.fillRect (getLocalBounds());   // the track you're on: clearly brighter, own color
+            g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (5));
+            g.drawRect (getLocalBounds(), 1);
         }
         if (index < (int) s.p().lanes.size() && ! s.p().lanes[(size_t) index].colour.isTransparent())
         {
@@ -1178,6 +1197,8 @@ struct LaneHeader : public juce::Component
         if (index >= 0 && index < (int) s.p().lanes.size()) s.selectedTrack = s.p().lanes[(size_t) index].mixerTrack;   // Plugin House adds FX to this track's insert
         if (getParentComponent() != nullptr) getParentComponent()->repaint();
         for (auto* c : getParentComponent()->getChildren()) c->repaint();
+        for (auto* c = getParentComponent(); c != nullptr; c = c->getParentComponent())
+            if (dynamic_cast<juce::FileDragAndDropTarget*> (c) != nullptr) { c->repaint(); break; }   // the Playlist row band follows
     }
     void mouseUp (const juce::MouseEvent& e) override
     {
@@ -1413,6 +1434,15 @@ public:
             juce::Graphics::ScopedSaveState ss (g);
             g.reduceClipRegion (area);
             if (drag != Drag::None || stretchDrag || ! paintCachedContent (g, area)) paintContent (g, area);
+            for (int i : s.selectedLanes)   // the selected track's whole row is tinted so you can see which one you're on
+                if (i >= 0 && i < (int) p.lanes.size())
+                {
+                    const int y = laneY (i), h = laneHOf (i);
+                    g.setColour (col::accent.withAlpha (0.10f)); g.fillRect (area.getX(), y, area.getWidth(), h);
+                    g.setColour (col::accent.withAlpha (0.7f));
+                    g.drawHorizontalLine (y, (float) area.getX(), (float) area.getRight());
+                    g.drawHorizontalLine (y + h - 1, (float) area.getX(), (float) area.getRight());
+                }
             // take being recorded: red clip growing with its live waveform (scaled up so quiet singing is visible)
             s.engine.forEachLiveTake ([&] (int lane, double startBeat, const float* pk, int num, double bpp) {
                 if (lane < 0 || lane >= (int) p.lanes.size() || num <= 0) return;

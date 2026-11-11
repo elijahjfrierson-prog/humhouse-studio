@@ -426,7 +426,9 @@ void closeDjDecks();
 void showPatchBay (Studio&);   // node patch bay: sequencers > sounds > FX > out, LFO > FX params
 void closePatchBay();
 juce::PopupMenu patchBayRouteMenu (Studio&, std::function<void (Project&, int insert)> apply);   // any track / clip / pattern into a bay or one of its FX stack nodes
-std::unique_ptr<juce::Component> createPatchBayView (Studio&);   // PATCH tab
+std::unique_ptr<juce::Component> createPatchBayView (Studio&);
+struct BayInfo { juce::String name; std::vector<int> chans; int insert = 0; std::vector<int> stacks; };
+std::vector<BayInfo> bayInfo (Studio&);   // the Patch Bays (loaded from settings), for LANE's BAY filter   // PATCH tab
 std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
 inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll
 const juce::StringArray& languageNames();   // Options > Layout > Language

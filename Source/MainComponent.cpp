@@ -30,7 +30,7 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
-int& fontStyle() { static int st = appDataFile ("font-v2.txt").existsAsFile() ? appDataFile ("font-v2.txt").loadFileAsString().getIntValue() : 3; return st; }
+int& fontStyle() { static int st = 3; return st; }   // Pro is the only clean one: Tattoo / Flash / System drew odd characters
 void setFontStyle (int st)
 {
     fontStyle() = st;
@@ -60,8 +60,6 @@ void HHLookAndFeel::positionComboBoxText (juce::ComboBox& box, juce::Label& labe
 }
 juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
-    static auto tattoo = juce::Typeface::createSystemTypefaceFor (BinaryData::PirataOneRegular_ttf, (size_t) BinaryData::PirataOneRegular_ttfSize);
-    static auto flash = juce::Typeface::createSystemTypefaceFor (BinaryData::RyeRegular_ttf, (size_t) BinaryData::RyeRegular_ttfSize);
     static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
     static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
     if (build::font == "Barlow" && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
@@ -74,8 +72,6 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
         if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
     }
     if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
-    if (fontStyle() == 0 && tattoo != nullptr) return tattoo;
-    if (fontStyle() == 1 && flash != nullptr) return flash;
     return juce::LookAndFeel_V4::getTypefaceForFont (f);
 }
 void showWhatsNewIfUpdated()
@@ -254,7 +250,7 @@ void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool
     const int rightIndent = juce::jmin (fontHeight, 2 + cornerSize / (b.isConnectedOnRight() ? 4 : 2));
     const juce::Rectangle<int> area (leftIndent, yIndent, b.getWidth() - leftIndent - rightIndent, b.getHeight() - yIndent * 2);
     if (area.getWidth() <= 0) return;
-    font = fitFont (font, b.getButtonText(), (float) area.getWidth(), area.getHeight() >= font.getHeight() * 2.1f ? 2 : 1);
+    font = fitFont (font, b.getButtonText(), (float) area.getWidth(), area.getHeight() >= font.getHeight() * 2.1f && b.getButtonText().trim().containsChar (' ') ? 2 : 1);
     g.setFont (font);
     if (! col::fontGradient || b.getToggleState() || ! col::isHeadline (font) || b.findColour (juce::TextButton::textColourOffId) != col::text)
     {
@@ -262,10 +258,10 @@ void HHLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool
         const auto bg = b.findColour (b.getToggleState() ? juce::TextButton::buttonOnColourId : juce::TextButton::buttonColourId);
         const auto txt = b.findColour (b.getToggleState() ? juce::TextButton::textColourOnId : juce::TextButton::textColourOffId);
         g.setColour (col::readableOn (txt, bg).withMultipliedAlpha (b.isEnabled() ? 1.0f : 0.5f));
-        g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2);
+        g.drawFittedText (b.getButtonText(), area, juce::Justification::centred, 2, 1.0f);
         return;
     }
-    col::drawWithHalo (g, b.isEnabled() ? 1.0f : 0.5f, [&] (int dx, int dy) { g.drawFittedText (b.getButtonText(), area.translated (dx, dy), juce::Justification::centred, 2); });
+    col::drawWithHalo (g, b.isEnabled() ? 1.0f : 0.5f, [&] (int dx, int dy) { g.drawFittedText (b.getButtonText(), area.translated (dx, dy), juce::Justification::centred, 2, 1.0f); });
     col::fillGradientText (g, b.getButtonText(), area.toFloat(), juce::Justification::centred, 2, 0.0f, b.isEnabled() ? 1.0f : 0.5f);
 }
 
@@ -1442,8 +1438,7 @@ if (phoneUI)
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
                 juce::PopupMenu fm;
-                const char* fonts[] { "Tattoo (classic lettering)", "Flash (old-school sign)", "System", "Pro (sleek, default)" };
-                for (int i = 0; i < 4; ++i) fm.addItem (250 + i, fonts[i], true, fontStyle() == i);
+                fm.addItem (253, "Pro (sleek, default)", true, true);
                 m.addSubMenu ("Font", fm);
             }
             {
@@ -1503,7 +1498,7 @@ if (phoneUI)
             if (id - 300 < ts.size()) newProject (ts[id - 300]);
             return;
         }
-        if (id >= 250 && id < 254) { setFontStyle (id - 250); return; }
+        if (id >= 250 && id < 254) { setFontStyle (3); return; }
         if (id == 480)
         {
             captureFriendlyDrawing() = ! captureFriendlyDrawing();

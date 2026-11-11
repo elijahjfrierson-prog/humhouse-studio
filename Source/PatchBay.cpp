@@ -113,7 +113,7 @@ bool inBay (int ch) { const auto& b = bay(); return b.chans.empty() || std::find
 
 std::map<juce::String, juce::Point<int>>& positions() { static std::map<juce::String, juce::Point<int>> m; return m; }
 
-enum Kind { Seq, Sound, LfoNode, Fx, Out };
+enum Kind { Seq, Sound, LfoNode, Fx, Out, AutoNode };
 // extra in/out dots per node (right-click a dot to add more) and free cables between any two dots ("from>out>to>in;...")
 std::map<juce::String, std::pair<int, int>>& extraDots() { static std::map<juce::String, std::pair<int, int>> m; return m; }
 struct Link { juce::String from, to; int out = 0, in = 0; };
@@ -192,6 +192,19 @@ public:
             for (auto& cl : p.clips) feeds += cl.mixerTrack == tr;
             place ({ Out, tr, 0, "O" + juce::String (tr), (mt.name.isNotEmpty() ? mt.name : "Insert " + juce::String (tr)) + (feeds > 0 ? "  < " + juce::String (feeds) + " in" : juce::String ("  Out")), {}, col::accent }, x, ty, 150, 70);
         }
+        {   // every automation clip of this bay is its own mini plug-in node (LANE look), pluggable onto any node
+            std::set<juce::String> seen;
+            int ay = 20 + (int) lfos().size() * 130;
+            for (auto& c : p.clips)
+            {
+                if (! c.isAuto() || c.autoTarget.name.startsWith ("LFO ") || ! seen.insert (c.autoTarget.name).second) continue;
+                const auto& a = c.autoTarget;
+                const bool chan = a.kind == AutoChanVol || a.kind == AutoChanPan || a.kind == AutoChanPitch;
+                if (chan ? ! inBay (a.channel) : ! trackY.count (a.track)) continue;
+                place ({ AutoNode, c.uid, 0, "A" + a.name, a.name, {}, juce::Colour (0xffff5a5a) }, 20, ay, 190, 96);
+                ay += 112;
+            }
+        }
         repaint();
     }
 
@@ -212,7 +225,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        moving = nullptr; dragFrom = nullptr;
+        moving = nullptr; dragFrom = nullptr; kKey = {};
         auto* n = at (e.getPosition());
         if (n == nullptr)
         {
@@ -222,6 +235,14 @@ public:
         grabKeyboardFocus();
         if (n->kind == Seq || n->kind == Sound) { lastChan = n->a; lastTrack = -1; }
         if (n->kind == Fx || n->kind == Out) lastTrack = n->a;
+        for (int w = 0; w < 3; ++w)
+            if (hasK (*n, w) && kRect (*n, w).expanded (2).contains (e.getPosition()))
+            {
+                if (w == 2) { autoMenu (*n, -1); return; }
+                if (e.mods.isPopupMenu()) { knobMenu (*n, w); return; }
+                if (e.mods.isAltDown()) { kReset (*n, w); return; }
+                kKey = n->key; kWhich = w; kStart = kGet (*n, w); kY = e.y; return;
+            }
         for (int i = 0; i < outs (*n); ++i)
             if (port (*n, i).getDistanceFrom (e.position) < 10.0f)
             {
@@ -264,6 +285,15 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (dragFrom != nullptr) { dragTo = e.getPosition(); repaint(); return; }
+        if (kKey.isNotEmpty())
+        {
+            if (auto* n = byKey (kKey))
+            {
+                const float range = kWhich == 1 ? 2.0f : 1.0f, lo = kWhich == 1 ? -1.0f : 0.0f;
+                kSet (*n, kWhich, juce::jlimit (lo, lo + range, kStart + (float) (kY - e.y) * range / (e.mods.isShiftDown() ? 600.0f : 150.0f)), false);
+            }
+            return;
+        }
         if (moving == nullptr) return;
         moving->r.setPosition (e.getPosition() - grab);
         positions()[moving->key] = moving->r.getPosition();
@@ -271,6 +301,7 @@ public:
     }
     void mouseUp (const juce::MouseEvent& e) override
     {
+        if (kKey.isNotEmpty()) { kKey = {}; s.commit ("Patch Bay knob"); return; }
         if (dragFrom == nullptr) return;
         auto* from = dragFrom; dragFrom = nullptr; repaint();
         auto* to = at (e.getPosition());
@@ -287,6 +318,9 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         if (phoneUI) return;   // phone: double-tap is right-click
+        if (auto* n = at (e.getPosition()))
+            for (int w = 0; w < 2; ++w)
+                if (hasK (*n, w) && kRect (*n, w).expanded (2).contains (e.getPosition())) { kReset (*n, w); return; }
         if (at (e.getPosition()) == nullptr) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); saveLfos (s); rebuild(); }
     }
 
@@ -329,7 +363,7 @@ private:
     static void wire (juce::Graphics& g, juce::Point<float> a, juce::Point<float> b, juce::Colour c, bool dashed) { drawPath (g, wirePath (a, b), c, dashed); }
 
     // ---- cables: everything the project already connects, plus free cables; each one can be unplugged
-    enum CableType { ChainCable, SeqCable, RouteCable, LfoCable, SendCable, FreeCable };
+    enum CableType { ChainCable, SeqCable, RouteCable, LfoCable, SendCable, FreeCable, AutoCable };
     struct Cable { CableType type; juce::String from, to; int out = 0, in = 0; juce::String autoName; int a = 0, b = 0; juce::Path path; juce::Colour colour; bool dashed = false; };
     std::vector<Cable> cables;
     Node* byKey (const juce::String& k) { for (auto& n : nodes) if (n.key == k) return &n; return nullptr; }
@@ -365,16 +399,71 @@ private:
             auto* from = find (LfoNode, c.autoTarget.name.fromFirstOccurrenceOf ("LFO ", false, false).getIntValue() - 1);
             if (from == nullptr) continue;
             const auto& a = c.autoTarget;
-            Node* to = a.kind == AutoFxParam ? find (Fx, a.track, a.fxUid)
-                     : (a.kind == AutoChanVol || a.kind == AutoChanPan || a.kind == AutoChanPitch) ? find (Sound, a.channel)
-                     : find (Out, a.track);
-            addCable (LfoCable, *from, 0, to, 0, lfoC, true, a.name);
+            addCable (LfoCable, *from, 0, targetNode (a), 0, lfoC, true, a.name);
         }
+        for (auto& n : nodes)
+            if (n.kind == AutoNode)
+                if (auto* c = autoClip (n))
+                    addCable (AutoCable, n, 0, targetNode (c->autoTarget), 0, juce::Colour (0xffff5a5a), true, c->autoTarget.name);
         for (auto& l : links())
         {
             auto* f = byKey (l.from); auto* to = byKey (l.to);
             if (f != nullptr) addCable (FreeCable, *f, l.out, to, l.in, juce::Colours::white.withAlpha (0.7f), false);
         }
+    }
+    Node* targetNode (const AutoTarget& a)
+    {
+        return a.kind == AutoFxParam ? find (Fx, a.track, a.fxUid)
+             : (a.kind == AutoChanVol || a.kind == AutoChanPan || a.kind == AutoChanPitch) ? find (Sound, a.channel)
+             : find (Out, a.track);
+    }
+    const Clip* autoClip (const Node& n)
+    {
+        const auto nm = n.key.substring (1);
+        for (auto& c : s.p().clips) if (c.isAuto() && c.autoTarget.name == nm) return &c;
+        return nullptr;
+    }
+    // point an automation clip node at a new target: FX node = pick a knob, sound = vol/pan/pitch, insert = vol/pan
+    void retarget (const juce::String& oldName, const Node& to)
+    {
+        auto apply = [safe = juce::Component::SafePointer<Canvas> (this), oldName] (AutoTarget t) {
+            if (safe == nullptr) return;
+            safe->s.edit ("Patch Bay: move automation", [&] (Project& p) { for (auto& c : p.clips) if (c.isAuto() && c.autoTarget.name == oldName) c.autoTarget = t; });
+            const auto it = positions().find ("A" + oldName);
+            if (it != positions().end()) positions()["A" + t.name] = it->second;
+            safe->rebuild();
+        };
+        juce::PopupMenu m;
+        auto& p = s.p();
+        if (to.kind == Fx)
+        {
+            std::vector<std::pair<juce::String, juce::String>> ps;
+            if (auto* b = s.engine.builtinFx (to.a, to.b)) for (auto& d : b->params()) ps.push_back ({ d.id, d.name });
+            else if (auto* pl = s.engine.fxPlugin (to.a, to.b))
+                for (int k = 0; k < juce::jmin (128, pl->getParameters().size()); ++k) ps.push_back ({ "#" + juce::String (k), pl->getParameters()[k]->getName (32) });
+            for (int i = 0; i < (int) ps.size(); ++i) m.addItem (i + 1, ps[(size_t) i].second);
+            if (ps.empty()) m.addItem (-1, "This plug-in has no automatable knobs", false);
+            const int tr = to.a, uid = to.b; const auto title = to.title;
+            m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [apply, ps, tr, uid, title] (int r) {
+                if (r <= 0) return;
+                AutoTarget t; t.kind = AutoFxParam; t.track = tr; t.fxUid = uid; t.param = ps[(size_t) r - 1].first;
+                t.name = title + " - " + ps[(size_t) r - 1].second; apply (t);
+            });
+            return;
+        }
+        const bool chan = to.kind == Sound || to.kind == Seq;
+        if (! chan && to.kind != Out) return;
+        m.addItem (1, "Volume"); m.addItem (2, "Pan"); if (chan) m.addItem (3, "Pitch");
+        const int a = to.a;
+        juce::String who = to.title; int track = a;
+        if (chan) if (auto* c = p.findChannel (a)) { who = c->name; track = juce::jmax (0, c->mixerTrack); }
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [apply, chan, a, who, track] (int r) {
+            if (r <= 0) return;
+            AutoTarget t; const char* names[] { "", "Volume", "Pan", "Pitch" };
+            if (chan) { t.kind = r == 1 ? AutoChanVol : r == 2 ? AutoChanPan : AutoChanPitch; t.channel = a; t.track = track; }
+            else { t.kind = r == 1 ? AutoInsertVol : AutoInsertPan; t.track = a; }
+            t.name = who + " - " + names[r]; apply (t);
+        });
     }
     const Cable* cableAt (juce::Point<float> pt) const
     {
@@ -389,8 +478,15 @@ private:
     void connect (const Node& f, int o, const Node& to, int i)
     {
         if (f.kind == Seq && to.kind == Sound) { moveSequence (f.a, to.a); return; }
+        // sound > any sequence (e.g. track 1 808 onto track 12's sequence), sequence > sequence, sound > sound: the target plays that rhythm too
+        if ((f.kind == Sound || f.kind == Seq) && (to.kind == Seq || to.kind == Sound) && f.a != to.a)
+        {
+            const bool soundTakes = f.kind == Sound && to.kind == Seq;
+            copyRhythm (soundTakes ? to.a : f.a, soundTakes ? f.a : to.a);
+        }
         if (f.kind == Sound && (to.kind == Out || to.kind == Fx)) { route (f.a, to.a); return; }
-        if (f.kind == LfoNode && to.kind != LfoNode) { lfoTo (f.a, to); return; }
+        if (f.kind == LfoNode && to.kind != LfoNode && to.kind != AutoNode) { lfoTo (f.a, to); return; }
+        if (f.kind == AutoNode && to.kind != AutoNode && to.kind != LfoNode) { retarget (f.key.substring (1), to); return; }
         if ((f.kind == Fx || f.kind == Out) && (to.kind == Fx || to.kind == Out) && f.a != to.a && f.a > 0)
         {
             bool ok = false;
@@ -412,7 +508,7 @@ private:
                 if (auto* f = byKey (c.from)) { const int ch = f->a; s.edit ("Patch Bay: unplug sound", [&] (Project& p) { if (auto* x = p.findChannel (ch)) x->mixerTrack = 0; }); }
                 break;
             case SendCable: { const int a = c.a, b = c.b; s.edit ("Patch Bay: unplug send", [&] (Project& p) { p.toggleRoute (a, b); }); break; }
-            case LfoCable:
+            case LfoCable: case AutoCable:
             {
                 const auto nm = c.autoName;
                 s.edit ("Patch Bay: unplug LFO", [&] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& x) { return x.isAuto() && x.autoTarget.name == nm; }), p.clips.end()); });
@@ -463,7 +559,8 @@ private:
         g.setColour (juce::Colours::white.withAlpha (0.12f)); g.drawRoundedRectangle (r, 6.0f, 1.0f);
         g.setColour (n.c); g.fillRoundedRectangle (r.withWidth (4.0f), 2.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
-        fitText (g, n.title, n.r.getX() + 10, n.r.getY() + 4, n.r.getWidth() - 20, 18, juce::Justification::centredLeft, true);
+        fitText (g, n.title, n.r.getX() + 10, n.r.getY() + 4, n.r.getWidth() - (n.kind == LfoNode ? 88 : 96), 18, juce::Justification::centredLeft, true);
+        drawKnobs (g, n);
         g.setColour (juce::Colour (0xff6ad1ff));
         for (int i = 0; i < ins (n); ++i) g.fillEllipse (inPort (n, i).x - 5, inPort (n, i).y - 5, 10, 10);
         g.setColour (n.kind == LfoNode ? juce::Colour (0xffd59cff) : juce::Colour (0xff6ad1ff));
@@ -500,6 +597,34 @@ private:
             g.setColour (n.c); g.strokePath (w, juce::PathStrokeType (1.6f));
             g.setColour (col::dim); fitText (g, "right-click: shape / rate / range", n.r.getX() + 10, n.r.getBottom() - 14, 170, 12, juce::Justification::centredLeft);
         }
+        else if (n.kind == AutoNode)
+        {
+            if (auto* c = autoClip (n))
+            {
+                const double pos = s.engine.positionBeats();
+                float v = -1.0f;
+                for (auto& cl : p.clips)
+                    if (cl.isAuto() && cl.autoTarget.name == c->autoTarget.name && ! cl.muted && pos >= cl.start && pos < cl.start + cl.length)
+                        v = autoValueAt (cl.autoPts, cl.patOffset + pos - cl.start);
+                auto box = r.reduced (10.0f).withTrimmedTop (20.0f);
+                auto meter = box.removeFromBottom (8.0f); box.removeFromBottom (4.0f);
+                g.setColour (juce::Colour (0xff15171a)); g.fillRoundedRectangle (box, 3.0f);
+                juce::Path w;
+                const double len = juce::jmax (0.001, c->length);
+                for (int i = 0; i <= 60; ++i)
+                {
+                    const float x = box.getX() + box.getWidth() * i / 60.0f;
+                    const float yv = box.getBottom() - box.getHeight() * juce::jlimit (0.0f, 1.0f, autoValueAt (c->autoPts, c->patOffset + len * i / 60.0));
+                    if (i == 0) w.startNewSubPath (x, yv); else w.lineTo (x, yv);
+                }
+                g.setColour (n.c); g.strokePath (w, juce::PathStrokeType (1.5f));
+                g.setColour (juce::Colour (0xff15171a)); g.fillRoundedRectangle (meter, 2.0f);
+                const float t = v >= 0.0f ? v : autoValueAt (c->autoPts, c->patOffset);
+                g.setColour (v >= 0.0f ? n.c : col::accent); g.fillRoundedRectangle (meter.withWidth (juce::jmax (2.0f, meter.getWidth() * juce::jlimit (0.0f, 1.0f, t))), 2.0f);
+                g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
+                fitText (g, juce::String (juce::roundToInt (t * 100.0f)) + "%" + (v >= 0.0f ? "  automating" : "  drag dot onto a node to move it"), n.r.getX() + 10, n.r.getY() + 20, n.r.getWidth() - 20, 12, juce::Justification::centredLeft);
+            }
+        }
         else if (n.kind == Sound) fitText (g, "SIG OUT  >  insert " + juce::String (n.b), n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
         else if (n.kind == Fx) fitText (g, "right-click: automate / gate / LFO", n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
         else if (n.kind == Out) fitText (g, "drop a sound here to route it", n.r.getX() + 10, n.r.getY() + 30, 140, 14, juce::Justification::centredLeft);
@@ -526,6 +651,123 @@ private:
             dst.insert (dst.end(), it->second.begin(), it->second.end());
             pt.notes.erase (fromCh);
         });
+    }
+    void copyRhythm (int fromCh, int toCh)
+    {
+        s.edit ("Patch Bay: link rhythm", [&] (Project& p) {
+            if (p.patterns.empty()) return;
+            auto& pt = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
+            auto it = pt.notes.find (fromCh);
+            if (it == pt.notes.end() || it->second.empty()) return;
+            auto& dst = pt.notes[toCh];
+            const int shift = dst.empty() ? 0 : dst.front().key - it->second.front().key;   // keep the target's own pitch
+            auto src = it->second;
+            dst.clear();
+            for (auto nt : src) { nt.key = juce::jlimit (0, 127, nt.key + shift); dst.push_back (nt); }
+        });
+    }
+    // quick knobs on every node: 0 level, 1 pan, 2 automate (LFO: 0 = depth)
+    static bool hasK (const Node& n, int w) { return n.kind == AutoNode ? false : n.kind == LfoNode ? w == 0 : true; }
+    static juce::Rectangle<int> kRect (const Node& n, int w) { return { n.r.getRight() - 80 + w * 22, n.r.getY() + 3, 18, 18 }; }
+    float kGet (const Node& n, int w)
+    {
+        auto& p = s.p();
+        if (n.kind == LfoNode) return n.a < (int) lfos().size() ? lfos()[(size_t) n.a].hi : 1.0f;
+        if (n.kind == Seq || n.kind == Sound) { if (auto* c = p.findChannel (n.a)) return w == 0 ? c->volume : c->pan; return 0.0f; }
+        if (n.a < 0 || n.a >= (int) p.mixer.size()) return 0.0f;
+        auto& t = p.mixer[(size_t) n.a];
+        if (n.kind == Fx && w == 0) { for (auto& f : t.fx) if (f.uid == n.b) return f.mix; return 1.0f; }
+        return w == 0 ? t.volume : t.pan;
+    }
+    void kSet (const Node& n, int w, float v, bool commit)
+    {
+        if (n.kind == LfoNode) { if (n.a < (int) lfos().size()) { lfos()[(size_t) n.a].hi = juce::jlimit (lfos()[(size_t) n.a].lo, 1.0f, v); saveLfos (s); } repaint(); return; }
+        const Kind k = n.kind; const int a = n.a, b = n.b;
+        s.live ([&] (Project& p) {
+            if (k == Seq || k == Sound) { if (auto* c = p.findChannel (a)) (w == 0 ? c->volume : c->pan) = v; return; }
+            if (a < 0 || a >= (int) p.mixer.size()) return;
+            auto& t = p.mixer[(size_t) a];
+            if (k == Fx && w == 0) { for (auto& f : t.fx) if (f.uid == b) f.mix = v; return; }
+            (w == 0 ? t.volume : t.pan) = v;
+        });
+        if (auto& ro = Studio::readout()) ro ((w == 0 ? (k == Fx ? "Mix " : "Level ") + juce::String (juce::roundToInt (v * 100)) + "%"
+                                                   : "Pan " + juce::String (juce::roundToInt (v * 100))));
+        if (commit) s.commit ("Patch Bay knob");
+        repaint();
+    }
+    void kReset (const Node& n, int w) { kSet (n, w, w == 1 ? 0.0f : n.kind == Fx || n.kind == LfoNode ? 1.0f : 0.8f, true); }
+    void knobMenu (const Node& n, int w)
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Reset");
+        m.addItem (2, "Min"); m.addItem (3, "Middle"); m.addItem (4, "Max");
+        if (n.kind != LfoNode) { m.addSeparator(); m.addItem (5, w == 0 ? (n.kind == Fx ? "Automate this FX..." : "Automate level") : "Automate pan"); }
+        const auto key = n.key;
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), key, w] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            auto* x = safe->byKey (key); if (x == nullptr) return;
+            const float lo = w == 1 ? -1.0f : 0.0f;
+            if (r == 1) safe->kReset (*x, w);
+            else if (r <= 4) safe->kSet (*x, w, r == 2 ? lo : r == 3 ? (lo + 1.0f) * 0.5f : 1.0f, true);
+            else safe->autoMenu (*x, w == 0 ? 1 : 2);
+        });
+    }
+    // automate a node's level / pan / pitch as a Playlist automation clip (FX nodes: any knob of that FX)
+    void autoMenu (const Node& n, int pick)
+    {
+        if (n.kind == LfoNode || n.kind == AutoNode) return;
+        if (n.kind == Fx && pick != 2) { fxMenu (n.a, n.b); return; }
+        const bool chan = n.kind == Sound || n.kind == Seq;
+        const int a = n.a;
+        auto make = [safe = juce::Component::SafePointer<Canvas> (this), a, chan] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            AutoTarget t; juce::String who;
+            const char* names[] { "", "Volume", "Pan", "Pitch" };
+            if (chan)
+            {
+                t.kind = r == 1 ? AutoChanVol : r == 2 ? AutoChanPan : AutoChanPitch; t.channel = a;
+                if (auto* c = safe->s.p().findChannel (a)) { t.track = juce::jmax (0, c->mixerTrack); who = c->name; }
+            }
+            else
+            {
+                t.kind = r == 1 ? AutoInsertVol : AutoInsertPan; t.track = a;
+                if (a >= 0 && a < (int) safe->s.p().mixer.size()) who = safe->s.p().mixer[(size_t) a].name;
+            }
+            t.name = who + " - " + names[r];
+            createAutomationClip (safe->s, t, (int) safe->s.p().lanes.size() - 1);
+            safe->rebuild();
+        };
+        if (pick > 0) { make (pick); return; }
+        juce::PopupMenu m;
+        m.addItem (1, "Automate volume"); m.addItem (2, "Automate pan");
+        if (chan) m.addItem (3, "Automate pitch");
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), make);
+    }
+    void drawKnobs (juce::Graphics& g, const Node& n)
+    {
+        for (int w = 0; w < 2; ++w)
+        {
+            if (! hasK (n, w)) continue;
+            const auto r = kRect (n, w).toFloat();
+            const float v = kGet (n, w), t = w == 1 ? (v + 1.0f) * 0.5f : juce::jlimit (0.0f, 1.0f, v);
+            const float a0 = juce::MathConstants<float>::pi * 1.25f, a1 = a0 + juce::MathConstants<float>::pi * 1.5f;
+            g.setColour (juce::Colour (0xff15171a)); g.fillEllipse (r);
+            juce::Path bg, arc;
+            bg.addCentredArc (r.getCentreX(), r.getCentreY(), 7.0f, 7.0f, 0.0f, a0, a1, true);
+            g.setColour (juce::Colours::white.withAlpha (0.15f)); g.strokePath (bg, juce::PathStrokeType (2.0f));
+            const float from = w == 1 ? (a0 + a1) * 0.5f : a0, to = a0 + (a1 - a0) * t;
+            arc.addCentredArc (r.getCentreX(), r.getCentreY(), 7.0f, 7.0f, 0.0f, juce::jmin (from, to), juce::jmax (from, to), true);
+            g.setColour (n.c.brighter (0.3f)); g.strokePath (arc, juce::PathStrokeType (2.0f));
+            const float ang = a0 + (a1 - a0) * t;
+            g.drawLine (r.getCentreX(), r.getCentreY(), r.getCentreX() + 6.0f * std::sin (ang), r.getCentreY() - 6.0f * std::cos (ang), 1.4f);
+        }
+        if (hasK (n, 2))
+        {
+            const auto r = kRect (n, 2).toFloat();
+            g.setColour (juce::Colour (0xff15171a)); g.fillRoundedRectangle (r, 3.0f);
+            g.setColour (juce::Colour (0xffd59cff)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+            g.drawText ("A", r, juce::Justification::centred);
+        }
     }
     void route (int ch, int track)
     {
@@ -603,6 +845,19 @@ private:
         if (n.kind == Seq || n.kind == Sound) { channelMenu (n.a); return; }
         if (n.kind == Fx) { fxMenu (n.a, n.b); return; }
         if (n.kind == Out) { canvasMenu(); return; }
+        if (n.kind == AutoNode)
+        {
+            juce::PopupMenu m;
+            m.addItem (1, "Drag its dot onto any node to move this automation", false);
+            m.addItem (2, "Delete automation");
+            const auto nm = n.key.substring (1);
+            m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), nm] (int r) {
+                if (safe == nullptr || r != 2) return;
+                safe->s.edit ("Patch Bay: delete automation", [&] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& x) { return x.isAuto() && x.autoTarget.name == nm; }), p.clips.end()); });
+                safe->rebuild();
+            });
+            return;
+        }
         if (n.kind != LfoNode || n.a >= (int) lfos().size()) return;
         juce::PopupMenu m, sh, rt, rg;
         const auto& cur = lfos()[(size_t) n.a];
@@ -941,6 +1196,7 @@ private:
     Studio& s;
     std::vector<Node> nodes;
     Node* moving = nullptr; Node* dragFrom = nullptr; int dragPort = 0; bool dragIsIn = false;
+    juce::String kKey; int kWhich = 0, kY = 0; float kStart = 0.0f;
     juce::Point<int> grab, dragTo;
 };
 
@@ -1042,6 +1298,13 @@ juce::PopupMenu patchBayRouteMenu (Studio& s, std::function<void (Project&, int)
     m.addSeparator();
     m.addItem ("New Patch Bay", [go] { bays().push_back ({ "Bay " + juce::String ((int) bays().size() + 1), { -1 }, 2, 0 }); go ((int) bays().size() - 1, 0); });
     return m;
+}
+std::vector<BayInfo> bayInfo (Studio& s)
+{
+    loadBays (s);
+    std::vector<BayInfo> v;
+    for (const auto& b : bays()) v.push_back ({ b.name, b.chans, b.insert, b.stacks });
+    return v;
 }
 std::unique_ptr<juce::Component> createPatchBayView (Studio& s) { return std::make_unique<PatchBayView> (s); }
 }
