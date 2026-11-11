@@ -404,10 +404,11 @@ public:
         addAndMakeVisible (learn);
         learn.setTooltip ("CDJ / controller in MIDI mode (enable it in Options > MIDI): pick a control, then move it on the hardware");
         learn.onClick = [this] {
+            DjView* self = this;   // MSVC can't name `this` in a nested lambda's init-capture
             juce::PopupMenu m;
             for (int i = 0; i < (int) std::size (kTargets); ++i) m.addItem (i + 1, kTargets[i]);
             m.addSeparator(); m.addItem (100, "Clear all mappings");
-            m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this)] (int r) {
+            m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (self)] (int r) {
                 if (safe == nullptr || r <= 0) return;
                 if (r == 100) { safe->maps.clear(); safe->saveMaps(); safe->learn.setButtonText ("LEARN"); return; }
                 safe->armed = r - 1; safe->learn.setButtonText ("MOVE IT...");
