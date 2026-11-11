@@ -32,6 +32,8 @@ public:
     void hostTransport (bool playing, double seconds);   // follow the host's play/stop + playhead
     double positionSeconds() const { return ticksToSec (player.isPlaying() ? player.position() : st.playhead); }
     juce::File songFile() const;
+    struct TrackRender { juce::String name; juce::File file; double seconds = 0; };
+    std::vector<TrackRender> renderTracks (const juce::File& dir);   // each audible track with sound -> its own stereo WAV
     ~MainComponent() override;
     void resized() override;
     void paint (juce::Graphics&) override;

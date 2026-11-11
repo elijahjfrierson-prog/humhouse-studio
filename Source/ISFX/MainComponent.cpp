@@ -431,6 +431,41 @@ void MainComponent::hostTransport (bool playing, double seconds)
     else if (! playing && std::abs (ticksToSec (st.playhead) - seconds) > 0.02) seek (t);
 }
 
+std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce::File& dir)
+{
+    std::vector<TrackRender> out;
+    const auto& p = st.project;
+    if (p.sequences.empty()) return out;
+    const auto& seq = p.sequences[(size_t) juce::jlimit (0, (int) p.sequences.size() - 1, p.active)];
+    const juce::int64 total = (juce::int64) std::llround ((double) seq.duration() * kMixRate / (double) kFlicks);
+    if (total <= 0 || ! dir.createDirectory()) return out;
+    constexpr int blk = 8192;
+    std::vector<float> L (blk), R (blk);
+    for (int t = 0; t < (int) seq.tracks.size(); ++t)
+    {
+        bool any = false;
+        for (auto& c : seq.clips) any = any || (c.track == t && c.enabled && st.audio.has (c.mediaId));
+        if (! any || seq.tracks[(size_t) t].mute) continue;
+        Sequence one = seq;
+        for (int k = 0; k < (int) one.tracks.size(); ++k) { one.tracks[(size_t) k].solo = false; one.tracks[(size_t) k].mute = k != t; }
+        const auto name = seq.tracks[(size_t) t].name.isNotEmpty() ? seq.tracks[(size_t) t].name : "Track " + juce::String (t + 1);
+        auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".wav").getNonexistentSibling();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), kMixRate, 2, 24, {}, 0));
+        if (w == nullptr) continue;
+        for (juce::int64 pos = 0; pos < total; pos += blk)
+        {
+            const int n = (int) std::min<juce::int64> (blk, total - pos);
+            mixSequence (one, st.audio, pos, n, L.data(), R.data(), nullptr);
+            const float* ch[2] { L.data(), R.data() };
+            w->writeFromFloatArrays (ch, 2, n);
+        }
+        w.reset();
+        out.push_back ({ name, f, (double) total / kMixRate });
+    }
+    return out;
+}
+
 juce::File MainComponent::songFile() const
 {
     if (auto* m = st.project.song_()) return juce::File (m->path);
