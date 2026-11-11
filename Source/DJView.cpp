@@ -13,7 +13,7 @@ struct Deck : public juce::Component, private juce::Timer
         : fm (f), io (t), title (std::move (nm)), mirror (right), thumb (256, f, tc)
     {
         for (auto* b : { &load, &play, &cue, &sync, &push }) addAndMakeVisible (b);
-        push.setTooltip ("Send this track to the Record timeline (audio clip), the Beat Channel Rack (long one-shot) or both");
+        push.setTooltip ("PUSH: drop this song on the Record page as an audio clip at the playhead (right-click: Beat Channel Rack / end of song)");
         push.onClick = [this] { if (onPush && file.existsAsFile()) onPush(); };
         for (int i = 0; i < 4; ++i)
         {
@@ -546,7 +546,7 @@ public:
             to.matchTo (from); to.repaint();
         };
         a.onBpm = [this, follow] { follow (a, b); }; b.onBpm = [this, follow] { follow (b, a); };
-        a.onPush = [this] { pushMenu (a.file); }; b.onPush = [this] { pushMenu (b.file); };
+        a.onPush = [this] { pushOrMenu (a.file); }; b.onPush = [this] { pushOrMenu (b.file); };
         xf.setSliderStyle (juce::Slider::LinearHorizontal); xf.setRange (0.0, 1.0); xf.setValue (0.5);
         xf.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); xf.setDoubleClickReturnValue (true, 0.5);
         xf.onValueChange = [this] { mix.fade = (float) xf.getValue(); };
@@ -857,6 +857,14 @@ private:
     }
     // PUSH: a deck's track goes to the Record timeline as a normal audio clip (stacked after the song with a
     // 16-beat crossfade), to the Beat Channel Rack as one long one-shot, or both
+    // PUSH: lands the song on the Record page as an audio clip at the playhead, like a recorded vocal take;
+    // right-click (double-tap on phone) for the Beat rack / end-of-song choices
+    void pushOrMenu (const juce::File& f)
+    {
+        if (juce::ModifierKeys::getCurrentModifiers().isPopupMenu()) { pushMenu (f); return; }
+        pushToRecord (f, true);
+        if (s.showView) s.showView (1);
+    }
     void pushMenu (const juce::File& f)
     {
         juce::PopupMenu m;
