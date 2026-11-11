@@ -1356,7 +1356,7 @@ public:
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
-        startTimerHz (60);
+        startTimerHz (phoneUI ? 30 : 60);   // phone: half the playhead ticks, leaves the frame budget for scrolling
     }
     ~Playlist() override { s.removeChangeListener (this); }
 

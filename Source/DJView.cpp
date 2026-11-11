@@ -40,7 +40,7 @@ struct Deck : public juce::Component, private juce::Timer
         pitch.setDoubleClickReturnValue (true, 0.0);
         pitch.onValueChange = [this] { rs.setResamplingRatio (1.0 + pitch.getValue() / 100.0); };
         addAndMakeVisible (pitch);
-        startTimerHz (60);
+        startTimerHz (phoneUI ? 30 : 60);
     }
     ~Deck() override { tp.setSource (nullptr); }
     static juce::Colour padColour (int i) { const juce::Colour c[] { juce::Colours::red, juce::Colours::orange, juce::Colours::yellow, juce::Colours::limegreen }; return c[i & 3]; }
@@ -222,12 +222,21 @@ struct Deck : public juce::Component, private juce::Timer
         loopStart = gridStart + std::floor ((pos - gridStart) / beat) * beat;
         loopLen = beats * beat;
     }
+    // live stutter: loops the last 1/4 or 1/8 beat while a hotkey is held
+    void stutter (double beats)
+    {
+        if (beats <= 0.0 || bpm <= 0.0) { if (stuttering) { loopLen = 0.0; stuttering = false; } return; }
+        if (stuttering) return;
+        loop4.setToggleState (false, juce::dontSendNotification); loop8.setToggleState (false, juce::dontSendNotification);
+        loopStart = tp.getCurrentPosition(); loopLen = beats * 60.0 / bpm; stuttering = true;
+    }
+    bool stuttering = false;
     void timerCallback() override
     {
         play.setButtonText (tp.isPlaying() ? "PAUSE" : "PLAY");
         if (loopLen > 0.0 && tp.getCurrentPosition() >= loopStart + loopLen)
             tp.setPosition (loopStart + std::fmod (tp.getCurrentPosition() - loopStart, loopLen));
-        repaint (platter());
+        if (isShowing()) repaint (platter());
     }
 
     juce::AudioFormatManager& fm; juce::TimeSliceThread& io;
@@ -253,7 +262,7 @@ struct Deck : public juce::Component, private juce::Timer
 // Serato-style centre: both tracks' zoomed waveforms stacked (playhead in the middle) + full-song overviews
 struct Waves : public juce::Component, private juce::Timer
 {
-    Waves (Deck& x, Deck& y) : a (x), b (y) { startTimerHz (60); }
+    Waves (Deck& x, Deck& y) : a (x), b (y) { startTimerHz (phoneUI ? 30 : 60); }
     void timerCallback() override { if (isShowing()) repaint(); }
     void paint (juce::Graphics& g) override
     {
@@ -624,6 +633,32 @@ private:
             if (d.tp.isPlaying()) d.tp.stop(); else d.tp.start();
             return true;
         }
+        // keyboard-as-controller: deck 1 = 1-4 cues, Q play, W cue, E sync, R/T loop 4/8; deck 2 = 7-0 cues, U play, I cue, O sync, P/[ loop 4/8
+        // hold A/S (deck 1) or J/K (deck 2) to stutter 1/4 / 1/8 beat; Z/X nudge the crossfader, C centers it
+        const auto ch = (juce::juce_wchar) juce::CharacterFunctions::toLowerCase (k.getTextCharacter());
+        const juce::String d1 ("1234"), d2 ("7890");
+        if (d1.containsChar (ch)) { a.hotCue (d1.indexOfChar (ch)); return true; }
+        if (d2.containsChar (ch)) { b.hotCue (d2.indexOfChar (ch)); return true; }
+        switch (ch)
+        {
+            case 'q': a.play.triggerClick(); return true;  case 'w': a.cue.triggerClick(); return true;  case 'e': a.sync.triggerClick(); return true;
+            case 'r': a.loop4.triggerClick(); return true; case 't': a.loop8.triggerClick(); return true;
+            case 'u': b.play.triggerClick(); return true;  case 'i': b.cue.triggerClick(); return true;  case 'o': b.sync.triggerClick(); return true;
+            case 'p': b.loop4.triggerClick(); return true; case '[': b.loop8.triggerClick(); return true;
+            case 'a': a.stutter (0.25); return true; case 's': a.stutter (0.125); return true;
+            case 'j': b.stutter (0.25); return true; case 'k': b.stutter (0.125); return true;
+            case 'z': fading = false; xf.setValue (juce::jmax (0.0, xf.getValue() - 0.1)); return true;
+            case 'x': fading = false; xf.setValue (juce::jmin (1.0, xf.getValue() + 0.1)); return true;
+            case 'c': fading = false; xf.setValue (0.5); return true;
+            default: break;
+        }
+        return false;
+    }
+    bool keyStateChanged (bool) override
+    {   // stutter keys released -> back to normal playback
+        auto down = [] (char c) { return juce::KeyPress::isKeyCurrentlyDown (c) || juce::KeyPress::isKeyCurrentlyDown (juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) c)); };
+        if (! down ('a') && ! down ('s')) a.stutter (0.0);
+        if (! down ('j') && ! down ('k')) b.stutter (0.0);
         return false;
     }
     void curveMenu()

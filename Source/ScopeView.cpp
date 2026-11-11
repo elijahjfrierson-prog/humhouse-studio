@@ -26,7 +26,7 @@ public:
         addAndMakeVisible (freezeBtn);
         setSize (760, 380);
         setOpaque (true);   // fills its own background: repaints never redraw what's underneath
-        startTimerHz (60);  // smooth motion; the FFT only runs on the Spectrum tab
+        startTimerHz (phoneUI ? 30 : 60);  // smooth motion; the FFT only runs on the Spectrum tab
     }
     void resized() override
     {
