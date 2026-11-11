@@ -97,6 +97,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         key.setFont (juce::Font (juce::FontOptions (18.0f)));
         key.onReturnKey = [this] { activate.triggerClick(); };
         activate.onClick = [this] {
+            if (const auto k = hhs::license::findKey (key.getText()); k.isNotEmpty()) key.setText (k, false);
             activate.setEnabled (false);
             setStatus (key.getText().trim().isEmpty() ? "Checking this computer's Machine ID..." : "Checking your key...");
             if (onActivate) onActivate (key.getText());
@@ -114,9 +115,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     }
     static juce::String keyIn (const juce::String& text)
     {
-        for (auto t : juce::StringArray::fromTokens (text, " \t\r\n\"'<>", ""))
-            if (t.startsWithIgnoreCase ("HHS") && t.length() >= 20) return t.trim();
-        return {};
+        return hhs::license::findKey (text);   // the exact HHS-XXXXX-XXXXX-XXXXX-XXXXX form the server checks
     }
     bool pasteFromClipboard()
     {
@@ -125,7 +124,8 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         lastClip = clip;
         const auto k = keyIn (clip);
         if (k.isEmpty()) return false;
-        if (k != key.getText()) { key.setText (k, false); setStatus ("Key pasted - press Activate."); }
+        if (k != key.getText()) key.setText (k, false);
+        if (activate.isEnabled()) { setStatus ("Key pasted - activating..."); activate.triggerClick(); }   // pasted = submitted
         return true;
     }
     void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
@@ -357,7 +357,7 @@ private:
         licenseWatch.fn = [this] {
             if (window == nullptr) return;
             const auto p = hhs::license::storedPass();
-            if (! p.ok && ! p.expired) lockApp (p.error);   // being offline never locks mid-session
+            if (! p.ok && ! p.expired && ! hhs::license::graceOk()) lockApp (p.error);   // being offline never locks mid-session
             else if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();
         };
         licenseWatch.startTimer (20 * 60 * 1000);

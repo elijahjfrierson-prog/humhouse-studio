@@ -32,9 +32,13 @@ juce::String homeServerUrl();   // the owner's own License Server, if it's onlin
 struct Online
 {
     bool ok = false, lockNow = false;   // lockNow: revoked / unknown key / no free computer slot
+    bool provisional = false;           // server down/busy but the key is one of ours: unlocked, confirmed online later
     juce::String error, pass;
 };
 Online activateOnline (const juce::String& key, const juce::String& machine);   // blocking: call off the message thread
-bool saveActivation (const juce::String& key, const juce::String& pass);
+bool saveActivation (const juce::String& key, const juce::String& pass);   // empty pass: keeps the key only (provisional)
+juce::String findKey (const juce::String& text);   // a key anywhere in pasted text -> exactly HHS-XXXXX-XXXXX-XXXXX-XXXXX, or empty
+bool knownKey (const juce::String& key);           // one of our sold keys (built-in fingerprints, no internet needed)
+bool graceOk();                                    // saved known key unlocked while the server was down, within 7 days
 void clearActivation();
 }
