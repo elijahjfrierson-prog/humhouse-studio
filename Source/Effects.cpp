@@ -1972,7 +1972,7 @@ const std::vector<EffectInfo>& builtinEffects()
     static const std::vector<EffectInfo> fx {
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
-        { "hhmaster", "Hum House Master", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
+        { "hhmaster", "Hum House Master", "Mastering" }, { "hhcurves", "HumHouse Curves Master (0 latency)", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" },
         { "vroom", "HumHouse Vocal Room", "Vocal" },
         { "deess", "De-Esser", "Vocal" },

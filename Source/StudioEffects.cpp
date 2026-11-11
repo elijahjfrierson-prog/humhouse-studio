@@ -727,11 +727,125 @@ private:
     int lastType = -1, lastTime = -1;
 };
 
+// HumHouse Curves Master: zero-latency 8-band curve EQ (each band Stereo / Mid / Side), width, mono-below,
+// soft ceiling, and an analyzer: ANALYZE averages the playing mix's band levels and RMS (audio thread, a few
+// filters, results in atomics); the editor turns them into band gains and output level toward a genre target.
+class CurvesMaster : public BuiltinEffect
+{
+public:
+    static constexpr int nb = 8, base = 6;
+    CurvesMaster() { initDefaults(); }
+    const char* typeId() const override { return "hhcurves"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps = [] {
+            std::vector<ParamDef> v {
+                { "out", "Output", -18, 18, 0 }, { "ceiling", "Ceiling", -6, 0, -1 }, { "width", "Width", 0, 200, 100 },
+                { "monoBelow", "Mono Below", 20, 300, 20 },
+                { "target", "Target", 0, 5, 0, { "Modern", "Punch", "Vintage", "Rap", "Rock", "Metal" } },
+                { "analyze", "Analyze", 0, 1, 0, { "Off", "On" } } };
+            static const char* id[nb][3] { { "g1","f1","m1" },{ "g2","f2","m2" },{ "g3","f3","m3" },{ "g4","f4","m4" },
+                                           { "g5","f5","m5" },{ "g6","f6","m6" },{ "g7","f7","m7" },{ "g8","f8","m8" } };
+            static const char* nm[nb][3] { { "Sub","Sub Freq","Sub Mode" },{ "Low","Low Freq","Low Mode" },{ "Low Mid","Low Mid Freq","Low Mid Mode" },
+                                           { "Mid","Mid Freq","Mid Mode" },{ "Presence","Presence Freq","Presence Mode" },{ "Bite","Bite Freq","Bite Mode" },
+                                           { "Air","Air Freq","Air Mode" },{ "Top","Top Freq","Top Mode" } };
+            for (int k = 0; k < nb; ++k)
+            {
+                v.push_back ({ id[k][0], nm[k][0], -12, 12, 0 });
+                v.push_back ({ id[k][1], nm[k][1], 20, 20000, (float) centre (k) });
+                v.push_back ({ id[k][2], nm[k][2], 0, 2, 0, { "Stereo", "Mid", "Side" } });
+            }
+            return v;
+        }();
+        return ps;
+    }
+    static double centre (int k) { static const double f[nb] { 40, 100, 250, 600, 1500, 3500, 7500, 14000 }; return f[k]; }
+    void prepare (double s, int) override { sr = s; dirty = true; reset(); for (int k = 0; k < nb; ++k) ana[k].set (Biquad::BandPass, sr, centre (k), 1.0, 0); }
+    void reset() override { for (auto& b : eq) b.clear(); for (auto& b : ana) b.clear(); monoHp.clear(); }
+    void paramChanged (int) override { dirty = true; }
+    void update()
+    {
+        if (! dirty.exchange (false)) return;
+        for (int k = 0; k < nb; ++k)
+        {
+            const auto t = k == 0 ? Biquad::LowShelf : k == nb - 1 ? Biquad::HighShelf : Biquad::Peak;
+            eq[k].set (t, sr, p (base + k * 3 + 1), k == 0 || k == nb - 1 ? 0.7 : 0.9, p (base + k * 3));
+        }
+        monoHp.set (Biquad::HighPass, sr, p (3), 0.707, 0);
+    }
+    void process (juce::AudioBuffer<float>& buf, int n, const PlayContext&) override
+    {
+        update();
+        if (buf.getNumChannels() < 2) return;
+        auto* L = buf.getWritePointer (0); auto* R = buf.getWritePointer (1);
+        const bool an = p (5) > 0.5f;
+        if (an && ! wasAnalyzing) { for (auto& e : acc) e = 0; accRms = 0; accN = 0; for (auto& b : ana) b.clear(); }
+        wasAnalyzing = an;
+        int mode[nb]; bool on[nb];
+        for (int k = 0; k < nb; ++k) { mode[k] = (int) p (base + k * 3 + 2); on[k] = std::abs (p (base + k * 3)) > 0.01f; }
+        const float width = p (2) * 0.01f, out = juce::Decibels::decibelsToGain (p (0)), ceil = juce::Decibels::decibelsToGain (p (1)), knee = ceil * 0.8f;
+        const bool mono = p (3) > 21.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            float l = L[i], r = R[i];
+            if (an)
+            {
+                const float m = 0.5f * (l + r);
+                for (int k = 0; k < nb; ++k) { const float y = ana[k].tick (m, 0); acc[k] += (double) y * y; }
+                accRms += 0.5 * ((double) l * l + (double) r * r); ++accN;
+            }
+            for (int k = 0; k < nb; ++k) if (on[k] && mode[k] == 0) { l = eq[k].tick (l, 0); r = eq[k].tick (r, 1); }
+            float m = 0.5f * (l + r), sd = 0.5f * (l - r);
+            for (int k = 0; k < nb; ++k) if (on[k] && mode[k] == 1) m = eq[k].tick (m, 0);
+            for (int k = 0; k < nb; ++k) if (on[k] && mode[k] == 2) sd = eq[k].tick (sd, 1);
+            sd *= width;
+            if (mono) sd = monoHp.tick (sd, 0);
+            l = (m + sd) * out; r = (m - sd) * out;
+            L[i] = soft (l, knee, ceil); R[i] = soft (r, knee, ceil);
+        }
+        if (an && accN > 0)
+        {
+            for (int k = 0; k < nb; ++k) bandDb[(size_t) k].store ((float) (10.0 * std::log10 (acc[k] / accN + 1e-12)), std::memory_order_relaxed);
+            bandDb[nb].store ((float) (10.0 * std::log10 (accRms / accN + 1e-12)), std::memory_order_relaxed);
+            bandDb[nb + 1].store ((float) accN / (float) sr, std::memory_order_relaxed);
+        }
+    }
+    static float soft (float x, float t, float c)
+    {
+        const float a = std::abs (x);
+        if (a <= t) return x;
+        return std::copysign (t + (c - t) * std::tanh ((a - t) / (c - t)), x);
+    }
+    // meter 0..7 = analysed band dB, 8 = RMS dB, 9 = seconds analysed
+    float meter (int i) const override { return i >= 0 && i < nb + 2 ? bandDb[(size_t) i].load (std::memory_order_relaxed) : 0.0f; }
+    bool hasResponse() const override { return true; }
+    float responseDb (double hz) override
+    {
+        update(); double db = 0;
+        for (int k = 0; k < nb; ++k) if (std::abs (p (base + k * 3)) > 0.01f) db += magDb (eq[k], hz);
+        return (float) db + p (0);
+    }
+    double magDb (const Biquad& b, double hz) const
+    {
+        const std::complex<double> z = std::polar (1.0, -2.0 * juce::MathConstants<double>::pi * hz / sr);
+        const auto num = (double) b.b0 + (double) b.b1 * z + (double) b.b2 * z * z, den = 1.0 + (double) b.a1 * z + (double) b.a2 * z * z;
+        return 20.0 * std::log10 (std::max (1e-9, std::abs (num / den)));
+    }
+private:
+    double sr = 48000;
+    std::atomic<bool> dirty { true };
+    Biquad eq[nb], ana[nb], monoHp;
+    double acc[nb] {}, accRms = 0; long long accN = 0;
+    bool wasAnalyzing = false;
+    std::array<std::atomic<float>, nb + 2> bandDb {};
+};
+
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id)
 {
     if (id == "vroom") return std::make_unique<VocalRoom>();
     if (id == "stvocal") return std::make_unique<StudioVocal>();
     if (id == "steq7") return std::make_unique<StudioEQ7>();
+    if (id == "hhcurves") return std::make_unique<CurvesMaster>();
     if (id == "stdyn") return std::make_unique<StudioDyn>();
     if (id == "fet76") return std::make_unique<Fet76>();
     if (id == "stgate") return std::make_unique<StudioGate>();
