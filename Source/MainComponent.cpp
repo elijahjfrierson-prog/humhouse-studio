@@ -430,7 +430,8 @@ static void autoPlacePatterns (Project& p)
         int lane = -1;
         for (int l = 0; l < (int) p.lanes.size() && lane < 0; ++l)
         {
-            bool used = p.lanes[(size_t) l].compLane >= 0 || p.lanes[(size_t) l].armed;
+            const auto& ln = p.lanes[(size_t) l];
+            bool used = ln.compLane >= 0 || ln.armed || ln.muted;
             for (auto& c : p.clips) used |= c.lane == l;
             if (! used) lane = l;
         }
