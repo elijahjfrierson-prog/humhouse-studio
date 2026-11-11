@@ -373,7 +373,9 @@ struct DjMix : public juce::AudioSource
         info.clearActiveBufferRegion();
         if (tmp.getNumSamples() < info.numSamples) return;   // never allocate here
         const float x = fade.load(), m = master.load();
-        const float ga = std::cos (x * juce::MathConstants<float>::halfPi) * m, gb = std::sin (x * juce::MathConstants<float>::halfPi) * m;
+        const int cv = curve.load();   // 0 smooth (constant power), 1 linear, 2 cut (scratch: both full until the edges)
+        const float ga = (cv == 1 ? 1.0f - x : cv == 2 ? juce::jlimit (0.0f, 1.0f, (1.0f - x) * 8.0f) : std::cos (x * juce::MathConstants<float>::halfPi)) * m;
+        const float gb = (cv == 1 ? x : cv == 2 ? juce::jlimit (0.0f, 1.0f, x * 8.0f) : std::sin (x * juce::MathConstants<float>::halfPi)) * m;
         for (auto [d, gain] : { std::pair<Deck*, float> { &a, ga }, { &b, gb } })
         {
             juce::AudioSourceChannelInfo t (&tmp, 0, info.numSamples);
@@ -381,7 +383,17 @@ struct DjMix : public juce::AudioSource
             for (int c = 0; c < info.buffer->getNumChannels(); ++c)
                 info.buffer->addFrom (c, info.startSample, tmp, juce::jmin (c, 1), 0, info.numSamples, gain);
         }
+        // REC: the mix goes to a background disk writer (lock-free FIFO); never waits if the UI is swapping writers
+        const juce::SpinLock::ScopedTryLockType lock (recLock);
+        if (lock.isLocked() && rec != nullptr && info.buffer->getNumChannels() > 0)
+        {
+            const float* ch[2] { info.buffer->getReadPointer (0, info.startSample), info.buffer->getReadPointer (juce::jmin (1, info.buffer->getNumChannels() - 1), info.startSample) };
+            rec->write (ch, info.numSamples);
+        }
     }
+    juce::SpinLock recLock;
+    juce::AudioFormatWriter::ThreadedWriter* rec = nullptr;
+    std::atomic<int> curve { 0 };
     Deck& a; Deck& b; juce::AudioBuffer<float> tmp;
     std::atomic<float> fade { 0.5f }, master { 0.8f };
 };
@@ -406,6 +418,13 @@ public:
         autoMix.setClickingTogglesState (true);
         autoMix.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2fb36b));
         fadeBtn.onClick = [this] { startFade(); };
+        for (auto* c : { &recBtn, &curveBtn }) addAndMakeVisible (c);
+        recBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd23c3c));
+        recBtn.setTooltip ("Record the Hum Verse mix; when you stop it's saved to Downloads and you can PUSH it to the Record timeline");
+        recBtn.onClick = [this] { toggleRec(); };
+        curveBtn.setTooltip ("Crossfade curve and FADE length (manual or automatic)");
+        curveBtn.onClick = [this] { curveMenu(); };
+        setWantsKeyboardFocus (true);
         addAndMakeVisible (learn);
         learn.setTooltip ("CDJ / controller in MIDI mode (enable it in Options > MIDI): pick a control, then move it on the hardware");
         learn.onClick = [this] {
@@ -428,6 +447,7 @@ public:
     }
     ~DjView() override
     {
+        stopRec (false);
         s.engine.deviceManager.removeMidiInputDeviceCallback ({}, this);
         s.engine.deviceManager.removeAudioCallback (&player);
         player.setSource (nullptr);
@@ -448,7 +468,8 @@ public:
             a.setBounds (r.removeFromTop (230)); waves.setBounds (r.removeFromTop (120).reduced (0, 4)); b.setBounds (r.removeFromTop (230));
             auto mix = r.removeFromTop (44); mix.removeFromTop (16);
             vol.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
-            autoMix.setBounds (mix.removeFromLeft (64)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48)); xf.setBounds (mix.reduced (6, 0));
+            autoMix.setBounds (mix.removeFromLeft (64)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48));
+            recBtn.setBounds (mix.removeFromLeft (44)); curveBtn.setBounds (mix.removeFromRight (56)); xf.setBounds (mix.reduced (6, 0));
             library.setBounds (r);
             return;
         }
@@ -460,6 +481,7 @@ public:
         vol.setBounds (mix.removeFromRight (180)); mix.removeFromRight (16);
         learn.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
         autoMix.setBounds (mix.removeFromLeft (90)); mix.removeFromLeft (6); fadeBtn.setBounds (mix.removeFromLeft (64));
+        mix.removeFromLeft (6); curveBtn.setBounds (mix.removeFromLeft (70)); mix.removeFromLeft (6); recBtn.setBounds (mix.removeFromLeft (64));
         xf.setBounds (mix.withSizeKeepingCentre (juce::jmin (420, mix.getWidth()), mix.getHeight()));
         library.setBounds (r.withTrimmedTop (4));
     }
@@ -478,7 +500,7 @@ private:
     {
         if (fading)
         {
-            const double k = juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - fadeT0) / 8000.0);
+            const double k = juce::jlimit (0.0, 1.0, (juce::Time::getMillisecondCounterHiRes() - fadeT0) / fadeMs);
             xf.setValue (fadeFrom + (fadeTo - fadeFrom) * k);
             if (k >= 1.0)
             {
@@ -494,6 +516,74 @@ private:
         const double lead = cur.liveBpm() > 0.0 ? 16.0 * 60.0 / cur.liveBpm() : 20.0;
         if (cur.tp.isPlaying() && len > lead && cur.tp.getCurrentPosition() >= len - lead) startFade();
     }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k == juce::KeyPress::spaceKey)   // space: play / stop the deck the crossfader is on (both stop if both play)
+        {
+            if (a.tp.isPlaying() && b.tp.isPlaying()) { a.tp.stop(); b.tp.stop(); return true; }
+            Deck& d = xf.getValue() < 0.5 ? a : b;
+            if (d.tp.isPlaying()) d.tp.stop(); else d.tp.start();
+            return true;
+        }
+        return false;
+    }
+    void curveMenu()
+    {
+        juce::PopupMenu m, len;
+        const char* names[] { "Smooth (constant power)", "Linear", "Cut (scratch)" };
+        for (int i = 0; i < 3; ++i) m.addItem (1 + i, names[i], true, mix.curve.load() == i);
+        for (double sec : { 1.0, 2.0, 4.0, 8.0, 16.0, 32.0 }) len.addItem (10 + (int) sec, juce::String ((int) sec) + " s", true, std::abs (fadeMs - sec * 1000.0) < 1.0);
+        m.addSubMenu ("FADE / AUTO MIX length", len);
+        m.addItem (5, "FADE now"); m.addItem (6, "Center crossfader");
+        m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this)] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r <= 3) safe->mix.curve = r - 1;
+            else if (r == 5) safe->startFade();
+            else if (r == 6) { safe->fading = false; safe->xf.setValue (0.5); }
+            else if (r >= 10) safe->fadeMs = (r - 10) * 1000.0;
+        });
+    }
+    void toggleRec() { if (recWriter != nullptr) stopRec (true); else startRec(); }
+    void startRec()
+    {
+        auto* dev = s.engine.deviceManager.getCurrentAudioDevice();
+        const double sr = dev != nullptr ? dev->getCurrentSampleRate() : 44100.0;
+        auto dl = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads");
+        if (! dl.isDirectory() && ! dl.createDirectory()) dl = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+        recFile = dl.getNonexistentChildFile ("Hum Verse Mix " + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M"), ".wav");
+        auto out = recFile.createOutputStream();
+        if (out == nullptr) return;
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::OutputStream> os (out.release());
+        auto* w = wav.createWriterFor (os.get(), sr, 2, 24, {}, 0);
+        if (w == nullptr) return;
+        os.release();
+        recWriter = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (w, io, 65536);
+        { const juce::SpinLock::ScopedLockType l (mix.recLock); mix.rec = recWriter.get(); }
+        recBtn.setToggleState (true, juce::dontSendNotification); recBtn.setButtonText ("STOP");
+    }
+    void stopRec (bool ask)
+    {
+        if (recWriter == nullptr) return;
+        { const juce::SpinLock::ScopedLockType l (mix.recLock); mix.rec = nullptr; }
+        recWriter = nullptr;   // flushes the FIFO and closes the WAV
+        recBtn.setToggleState (false, juce::dontSendNotification); recBtn.setButtonText ("REC");
+        if (! ask) return;
+        juce::PopupMenu m;
+        m.addSectionHeader ("Saved: Downloads/" + recFile.getFileName());
+        m.addItem (1, "PUSH to Record timeline (end of song)"); m.addItem (2, "PUSH to Record timeline at playhead");
+        m.addItem (3, "Add to Beat Channel Rack"); m.addItem (4, "Show in folder");
+        m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this), f = recFile] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r <= 2) safe->pushToRecord (f, r == 2);
+            else if (r == 3) addSampleChannels (safe->s, { f }, {});
+            else f.revealToUser();
+        });
+    }
+    std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> recWriter;
+    juce::File recFile;
+    juce::TextButton recBtn { "REC" }, curveBtn { "CURVE" };
+    double fadeMs = 8000.0;
     // MIDI LEARN: CDJ / controller messages (note or CC per channel; pitch bend for pitch) -> deck controls
     static constexpr const char* kTargets[] { "Deck 1 Play", "Deck 1 Cue", "Deck 1 Sync", "Deck 1 Pitch", "Deck 2 Play", "Deck 2 Cue", "Deck 2 Sync", "Deck 2 Pitch", "Crossfader", "DJ Out volume" };
     static int midiKey (const juce::MidiMessage& m)

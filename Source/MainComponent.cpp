@@ -675,6 +675,8 @@ public:
     MainComponent()
     {
         juce::Desktop::getInstance().addGlobalMouseListener (&previewStopper);
+        if (phoneUI) juce::Desktop::getInstance().addGlobalMouseListener (&doubleTapMenu);
+        openPianoMain = [this] (int ch) { studio.selectedChannel = ch; rackHidden = false; setView (0); studio.sendChangeMessage(); };
         juce::PropertiesFile::Options o;
         o.applicationName = "HumHouse Studio";
         o.filenameSuffix = ".settings";
@@ -754,10 +756,11 @@ public:
         titleLabel.setColour (juce::Label::textColourId, col::accent);
 
         int i = 0;
-        for (auto* t : { &beatTab, &recordTab, &mixTab })
+        for (auto* t : { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab })
         {
             static const char* tips[] { "Beat: Channel Rack + Piano Roll (F6 / F7)", "Record: Playlist - arm tracks, record vocals, arrange (F5)",
-                                        "Mix: Mixer - inserts, FX, click-to-route (F9)" };
+                                        "Mix: Mixer - inserts, FX, click-to-route (F9)", "Patch Bay: node bays, live while it plays (right-click / double-tap to add)",
+                                        "Video: score to picture, synced to the playhead" };
             t->setTooltip (tips[i]);
             t->setRadioGroupId (100);
             t->setClickingTogglesState (true);
@@ -990,6 +993,8 @@ public:
         kbState.removeListener (&kbListen);
         rackPopOut = nullptr;
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
+        juce::Desktop::getInstance().removeGlobalMouseListener (&doubleTapMenu);
+        openPianoMain = nullptr; patchView = nullptr; videoView = nullptr;
         stopTimer();
         engine.deviceManager.removeMidiInputDeviceCallback ({}, &liveMidi);
         popouts.clear();
@@ -1027,7 +1032,7 @@ if (phoneUI)
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
                 { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
-                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &videoTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
@@ -1062,7 +1067,7 @@ if (phoneUI)
         mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification);
         rackPopBtn.setToggleState (popouts.count (rack.get()) > 0, juce::dontSendNotification);
         const std::pair<const char*, std::pair<juce::Component*, int>> tbItems[] {   // Layout > BUILD decides which show, on which side, in what order
-            { "logo", { nullptr, 150 } }, { "beat", { &beatTab, 84 } }, { "record", { &recordTab, 84 } }, { "mix", { &mixTab, 84 } }, { "song", { &songBtn, 48 } },
+            { "logo", { nullptr, 150 } }, { "beat", { &beatTab, 84 } }, { "record", { &recordTab, 84 } }, { "mix", { &mixTab, 84 } }, { "patch", { &patchTab, 84 } }, { "video", { &videoTab, 84 } }, { "song", { &songBtn, 48 } },
             { "start", { &startBtn, 40 } }, { "play", { &playBtn, 40 } }, { "stop", { &stopBtn, 40 } }, { "rec", { &recBtn, 40 } }, { "bpm", { &bpm, 110 } },
             { "pos", { &posLabel, 110 } }, { "metro", { &metroBtn, 62 } }, { "count", { &countBtn, 80 } }, { "retro", { &retroBtn, 62 } }, { "piano", { &pianoBtn, 62 } },
             { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "scope", { &scopeBtn, 64 } },
@@ -1163,6 +1168,9 @@ if (phoneUI)
             else if (rackHere) rack->setBounds (r);
             else if (pianoHere) piano->setBounds (r);
         }
+        if (patchView != nullptr) patchView->setVisible (view == 3);
+        if (videoView != nullptr) videoView->setVisible (view == 4);
+        if (view >= 3) { if (here (mixer) && ! dockMix) mixer->setVisible (false); if (auto* pv = view == 3 ? patchView.get() : videoView.get()) pv->setBounds (r); }
         else if (view == 1) { if (here (playlist)) playlist->setBounds (r); }
         else if (here (mixer)) mixer->setBounds (r);
     }
@@ -1532,7 +1540,7 @@ if (phoneUI)
             case mDetachMixer: toggleDetach (mixer.get(), "Mixer"); break;
             case mDetachBrowser: toggleDetach (browser.get(), "Plugin House"); break;
             case mDJ: showDjDecks (studio); break;
-            case mPatchBay: showPatchBay (studio); break;
+            case mPatchBay: setView (3); break;
             case mBeat: setView (0); break;
             case mRecord: setView (1); break;
             case mMix: setView (2); break;
@@ -1607,7 +1615,30 @@ private:
     } pianoSplit;
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
-    juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" };
+    juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
+    std::unique_ptr<juce::Component> patchView, videoView;
+    // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
+    struct DoubleTapMenu : juce::MouseListener
+    {
+        bool busy = false;
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            if (! phoneUI || busy || e.eventComponent == nullptr || e.mods.isPopupMenu()) return;
+            juce::Component::SafePointer<juce::Component> t (e.eventComponent);
+            const auto mods = e.mods.withoutMouseButtons().withFlags (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::popupMenuClickModifier);
+            const auto pos = e.position;
+            auto src = e.source;
+            juce::MessageManager::callAsync ([this, t, mods, pos, src] {
+                if (t == nullptr) return;
+                busy = true;
+                const auto now = juce::Time::getCurrentTime();
+                juce::MouseEvent down (src, pos, mods, 1.0f, 0, 0, 0, 0, t.getComponent(), t.getComponent(), now, pos, now, 1, false);
+                t->mouseDown (down);
+                if (t != nullptr) t->mouseUp (down.withNewPosition (pos));
+                busy = false;
+            });
+        }
+    } doubleTapMenu;
     TransportButton startBtn, playBtn, stopBtn, recBtn, mixPopBtn;
     juce::TextButton rackPopBtn;
     juce::TextButton retroBtn, pianoBtn;
@@ -1895,8 +1926,10 @@ private:
     {
         if (view != 2) lastView = view;
         view = v;
-        juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab };
-        for (int i = 0; i < 3; ++i) tabs[i]->setToggleState (i == v, juce::dontSendNotification);
+        juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab };
+        if (v == 3 && patchView == nullptr) { patchView = createPatchBayView (studio); addChildComponent (*patchView); }
+        if (v == 4 && videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
+        for (int i = 0; i < 5; ++i) tabs[i]->setToggleState (i == v, juce::dontSendNotification);
         if (phoneUI)   // phone: never leave a floating Rack / Mixer window over the page after switching
         {
             std::vector<juce::Component*> pops;
