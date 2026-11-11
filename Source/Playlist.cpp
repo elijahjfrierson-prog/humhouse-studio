@@ -1376,11 +1376,13 @@ public:
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
         setupButton (rts, "RETURN", "On stop, jump back to where playback started", true);
         rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
+        setupButton (qpunch, "QUICK PUNCH", "On stop after a take, the playhead jumps to the start of that take, ready for the next punch", true);
+        qpunch.onClick = [this] { const bool on = qpunch.getToggleState(); s.edit ("Quick punch", [on] (Project& p) { p.quickPunch = on; }); };
         setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
         preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };
         setupButton (clearPunch, "CLEAR PUNCH", "Remove the punch-in / out range (or double-click the ruler)");
         clearPunch.onClick = [this] { s.edit ("Clear punch", [] (Project& p) { p.punchIn = p.punchOut = -1.0; }); };
-        for (auto* b : { &addTrack, &loopRec, &rts, &preroll, &clearPunch }) addAndMakeVisible (b);
+        for (auto* b : { &addTrack, &loopRec, &rts, &qpunch, &preroll, &clearPunch }) addAndMakeVisible (b);
         thumbCache = std::make_unique<juce::AudioThumbnailCache> (256);
         setWantsKeyboardFocus (true);
         refresh();
@@ -1405,7 +1407,7 @@ public:
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
-        for (auto* b : { &loopRec, &rts, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch ? 100 : 78)); t.removeFromLeft (4); }
+        for (auto* b : { &loopRec, &rts, &qpunch, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch || b == &qpunch ? 100 : 78)); t.removeFromLeft (4); }
         t.removeFromLeft (10);
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (32)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
@@ -2173,7 +2175,7 @@ private:
     }
     Studio& s;
     std::vector<std::unique_ptr<LaneHeader>> headers;
-    juce::TextButton addTrack, addDrummer, loopRec, rts, preroll, clearPunch;
+    juce::TextButton addTrack, addDrummer, loopRec, rts, qpunch, preroll, clearPunch;
     IconTextButton rackPop;
     juce::ComboBox snapBox;
     double plSnap = 1.0;
@@ -3305,6 +3307,7 @@ private:
         for (auto& h : headers) h->refresh();
         loopRec.setToggleState (p.loopRecord, juce::dontSendNotification);
         rts.setToggleState (p.returnToStart, juce::dontSendNotification);
+        qpunch.setToggleState (p.quickPunch, juce::dontSendNotification);
         preroll.setToggleState (p.preRollBars > 0, juce::dontSendNotification);
         repaint();
     }

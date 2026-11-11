@@ -268,6 +268,7 @@ private:
         std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform
     };
     std::vector<std::unique_ptr<Take>> takes;
+    double lastTakeStart = -1.0;
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;

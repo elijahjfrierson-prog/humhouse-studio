@@ -338,6 +338,7 @@ struct Project
     double punchIn = -1.0, punchOut = -1.0; // beats, punchOut > punchIn = active time selection
     bool   loopRecord = true;
     bool   returnToStart = true;
+    bool   quickPunch = false;     // on stop after a take, the playhead goes back to where that take began for the next punch
     double preRollBars = 1.0;
     bool hasPunch() const { return punchOut > punchIn && punchIn >= 0.0; }
     int  clipInsert (const Clip& c) const;
