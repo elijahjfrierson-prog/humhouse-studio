@@ -1,4 +1,5 @@
 #include <set>
+#include <tuple>
 #include "UI.h"
 #include <juce_dsp/juce_dsp.h>
 
@@ -6,6 +7,39 @@ namespace hhs
 {
 namespace
 {
+// STRETCH (key lock): two Hann-windowed read heads on a short delay line undo the resampler's pitch change,
+// so tempo moves and the key stays. Real time, fixed memory, no allocation on the audio thread.
+struct KeyLock
+{
+    static constexpr int kSize = 16384;
+    float buf[2][kSize] {};
+    int w = 0; double ph = 0.0;
+    void reset() { std::memset (buf, 0, sizeof (buf)); w = 0; ph = 0.0; }
+    // pitch = factor to apply (1 / tempo ratio); grain ~ 46 ms at 44.1 kHz
+    void process (float* l, float* r, int n, double pitch, double sr)
+    {
+        if (std::abs (pitch - 1.0) < 1.0e-4) { for (int i = 0; i < n; ++i) { buf[0][w] = l[i]; buf[1][w] = r[i]; w = (w + 1) & (kSize - 1); } return; }
+        const double grain = juce::jlimit (512.0, 6000.0, sr * 0.046), inc = (1.0 - pitch) / grain;
+        float* io[2] { l, r };
+        for (int i = 0; i < n; ++i)
+        {
+            buf[0][w] = l[i]; buf[1][w] = r[i];
+            const double p2 = ph + 0.5 >= 1.0 ? ph - 0.5 : ph + 0.5;
+            const float w1 = (float) std::pow (std::sin (juce::MathConstants<double>::pi * ph), 2.0), w2 = 1.0f - w1;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto tap = [&] (double d) {
+                    const double pos = (double) w - 2.0 - d * grain; const double fl = std::floor (pos);
+                    const int i0 = ((int) fl) & (kSize - 1), i1 = (i0 + 1) & (kSize - 1); const float fr = (float) (pos - fl);
+                    return buf[ch][i0] + (buf[ch][i1] - buf[ch][i0]) * fr; };
+                io[ch][i] = tap (ph) * w1 + tap (p2) * w2;
+            }
+            w = (w + 1) & (kSize - 1);
+            ph += inc; if (ph >= 1.0) ph -= 1.0; else if (ph < 0.0) ph += 1.0;
+        }
+    }
+};
+
 // Hum Verse (HumHouse DJ): two decks + crossfader on their own audio callback beside the engine (never inside the engine's block)
 struct Deck : public juce::Component, private juce::Timer
 {
@@ -34,11 +68,16 @@ struct Deck : public juce::Component, private juce::Timer
             addAndMakeVisible (lb);
         }
         loop4.onClick = [this] { setLoop (loop4, loop8, 4); };
+        addAndMakeVisible (stretchBtn);
+        stretchBtn.setTooltip ("RESAMPLE: tempo and pitch move together (vinyl).  STRETCH: tempo moves, the key stays (key lock)");
+        stretchBtn.onClick = [this] { keyLock = ! keyLock.load(); stretchBtn.setButtonText (keyLock ? "STRETCH" : "RESAMPLE");
+                                      stretchBtn.setToggleState (keyLock, juce::dontSendNotification); };
+        stretchBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff7a3cd2));
         loop8.onClick = [this] { setLoop (loop8, loop4, 8); };
         pitch.setSliderStyle (juce::Slider::LinearVertical); pitch.setRange (-16.0, 16.0, 0.01); pitch.setValue (0.0);
         pitch.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         pitch.setDoubleClickReturnValue (true, 0.0);
-        pitch.onValueChange = [this] { rs.setResamplingRatio (1.0 + pitch.getValue() / 100.0); if (onBpm) onBpm(); };
+        pitch.onValueChange = [this] { rate = 1.0 + pitch.getValue() / 100.0; rs.setResamplingRatio (rate); if (onBpm) onBpm(); };
         addAndMakeVisible (pitch);
         startTimerHz (phoneUI ? 30 : 60);
     }
@@ -229,8 +268,9 @@ struct Deck : public juce::Component, private juce::Timer
         const int pw = padRow.getWidth() / 4;
         for (auto* p : pads) p->setBounds (padRow.removeFromLeft (pw).reduced (2));
         auto row1 = bottom.removeFromTop (34), row2 = bottom;   // two rows: every label shows in full
-        const int w1 = row1.getWidth() / 4, w2 = row2.getWidth() / 3;
+        const int w1 = row1.getWidth() / 4, w2 = row2.getWidth() / 4;
         for (auto* b : { &load, &cue, &play, &sync }) b->setBounds (row1.removeFromLeft (w1).reduced (2));
+        stretchBtn.setBounds (row2.removeFromLeft (w2).reduced (2));
         loop4.setBounds (row2.removeFromLeft (w2).reduced (2)); loop8.setBounds (row2.removeFromLeft (w2).reduced (2)); push.setBounds (row2.reduced (2));
         r.removeFromTop (40);
         pitch.setBounds (mirror ? r.removeFromRight (28) : r.removeFromLeft (28));
@@ -274,7 +314,10 @@ struct Deck : public juce::Component, private juce::Timer
     std::array<double, 4> cues { -1.0, -1.0, -1.0, -1.0 };
     std::function<void()> onSync, onPush, onBpm;
     juce::File file;
-    juce::TextButton push { "PUSH" };
+    juce::TextButton push { "PUSH" }, stretchBtn { "RESAMPLE" };
+    std::atomic<bool> keyLock { false };
+    std::atomic<double> rate { 1.0 };   // tempo ratio for the audio thread (never reads the Slider there)
+    KeyLock lock;
     juce::TextButton load { "LOAD" }, play { "PLAY" }, cue { "CUE" }, sync { "SYNC" }, loop4 { "LOOP 4" }, loop8 { "LOOP 8" };
     double loopStart = 0.0, loopLen = 0.0;
     juce::OwnedArray<juce::TextButton> pads;
@@ -398,7 +441,8 @@ struct Library : public juce::Component, private juce::ListBoxModel
 struct DjMix : public juce::AudioSource
 {
     DjMix (Deck& x, Deck& y) : a (x), b (y) {}
-    void prepareToPlay (int n, double sr) override { a.rs.prepareToPlay (n, sr); b.rs.prepareToPlay (n, sr); tmp.setSize (2, n); }
+    void prepareToPlay (int n, double rate) override { sr = rate; a.rs.prepareToPlay (n, rate); b.rs.prepareToPlay (n, rate); tmp.setSize (2, n); }
+    double sr = 44100.0;
     void releaseResources() override { a.rs.releaseResources(); b.rs.releaseResources(); }
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override
     {
@@ -412,6 +456,8 @@ struct DjMix : public juce::AudioSource
         {
             juce::AudioSourceChannelInfo t (&tmp, 0, info.numSamples);
             d->rs.getNextAudioBlock (t);
+            if (d->keyLock.load()) d->lock.process (tmp.getWritePointer (0), tmp.getWritePointer (1), info.numSamples, 1.0 / d->rate.load(), sr);
+            else d->lock.process (tmp.getWritePointer (0), tmp.getWritePointer (1), info.numSamples, 1.0, sr);   // keeps its line warm: no click when toggled
             for (int c = 0; c < info.buffer->getNumChannels(); ++c)
                 info.buffer->addFrom (c, info.startSample, tmp, juce::jmin (c, 1), 0, info.numSamples, gain);
         }
@@ -435,7 +481,7 @@ struct TransitionPreset { const char* name; double bars; int kind; };   // kind:
 static constexpr TransitionPreset kTransitions[] {
     { "Blend 8 bars", 8, 0 }, { "Blend 16 bars", 16, 0 }, { "Bass Swap 8 bars", 8, 2 },
     { "Filter Sweep 8 bars", 8, 3 }, { "Echo Out 4 bars", 4, 4 }, { "Cut on the 1", 2, 1 } };
-struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120, seconds = 0; int preset = 0; };   // seconds > 0: custom length (FADE)
+struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120, seconds = 0; int preset = 0; bool aKeep = false, bKeep = false; };   // seconds > 0: custom length (FADE)
 
 static bool readStretched (juce::AudioFormatReader& r, double startSec, double rate, double outSr, juce::AudioBuffer<float>& dst)
 {
@@ -465,6 +511,8 @@ static bool renderTransition (const TransitionJob& j)
     juce::AudioBuffer<float> A (2, nPre + nLen), B (2, nTot - nPre), out (2, nTot);
     readStretched (*ra, j.aPos, j.aRate, sr, A);
     readStretched (*rb, j.bPos, j.bRate, sr, B);
+    for (auto [buf, keep, rate] : { std::tuple<juce::AudioBuffer<float>*, bool, double> { &A, j.aKeep, j.aRate }, { &B, j.bKeep, j.bRate } })
+        if (keep) { auto kl = std::make_unique<KeyLock>(); kl->process (buf->getWritePointer (0), buf->getWritePointer (1), buf->getNumSamples(), 1.0 / rate, sr); }
     out.clear();
     juce::IIRFilter hpA[2], hpB[2];
     juce::AudioBuffer<float> echo (2, (int) (beat * sr * 0.75) + 1); echo.clear(); int ep = 0;
@@ -832,10 +880,12 @@ private:
         j.bpm = a.liveBpm() > 0 ? a.liveBpm() : 120.0;
         j.aRate = a.bpm > 0 ? j.bpm / a.bpm : 1.0;
         j.bRate = b.bpm > 0 ? j.bpm / b.bpm : 1.0;
+        j.aKeep = a.keyLock; j.bKeep = b.keyLock;
         if (i == kFadeIdx)   // the live FADE: from the playing deck at its position into the other from where it started
         {
             const Deck& from = fadeToB ? a : b; const Deck& to = fadeToB ? b : a;
             j.a = from.file; j.b = to.file; j.aPos = fadeStartFrom; j.bPos = fadeStartTo; j.preset = 0;
+            j.aKeep = from.keyLock; j.bKeep = to.keyLock;
             j.bpm = from.liveBpm() > 0 ? from.liveBpm() : 120.0;
             j.aRate = from.bpm > 0 ? j.bpm / from.bpm : 1.0; j.bRate = to.bpm > 0 ? j.bpm / to.bpm : 1.0;
             j.seconds = fadeMs / 1000.0;
