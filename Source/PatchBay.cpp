@@ -50,6 +50,40 @@ void loadLfos (Studio& s)
     }
     if (! v.empty()) lfos() = v;
 }
+// Bays: several Patch Bays (intro, chorus...), each a set of channels (empty = all) routed to a Playlist track, a mixer insert or both
+struct Bay { juce::String name; std::vector<int> chans; int route = 2; int insert = 0; };
+std::vector<Bay>& bays() { static std::vector<Bay> v { { "Bay 1", {}, 2, 0 } }; return v; }
+int& curBay() { static int i = 0; return i; }
+Bay& bay() { curBay() = juce::jlimit (0, (int) bays().size() - 1, curBay()); return bays()[(size_t) curBay()]; }
+void saveBays (Studio& s)
+{
+    if (s.settings == nullptr) return;
+    juce::StringArray rows;
+    for (const auto& b : bays())
+    {
+        juce::StringArray ch; for (int id : b.chans) ch.add (juce::String (id));
+        rows.add (b.name.removeCharacters ("|;") + "|" + juce::String (b.route) + "|" + juce::String (b.insert) + "|" + ch.joinIntoString (","));
+    }
+    s.settings->setValue ("patchBays", rows.joinIntoString (";")); s.settings->saveIfNeeded();
+}
+void loadBays (Studio& s)
+{
+    static bool done = false;
+    if (done || s.settings == nullptr) return;
+    done = true;
+    std::vector<Bay> v;
+    for (const auto& row : juce::StringArray::fromTokens (s.settings->getValue ("patchBays"), ";", ""))
+    {
+        const auto f = juce::StringArray::fromTokens (row, "|", "");
+        if (f.size() < 3) continue;
+        Bay b { f[0], {}, juce::jlimit (0, 2, f[1].getIntValue()), juce::jmax (0, f[2].getIntValue()) };
+        for (const auto& id : juce::StringArray::fromTokens (f[3], ",", "")) b.chans.push_back (id.getIntValue());
+        v.push_back (b);
+    }
+    if (! v.empty()) bays() = v;
+}
+bool inBay (int ch) { const auto& b = bay(); return b.chans.empty() || std::find (b.chans.begin(), b.chans.end(), ch) != b.chans.end(); }
+
 std::map<juce::String, juce::Point<int>>& positions() { static std::map<juce::String, juce::Point<int>> m; return m; }
 
 enum Kind { Seq, Sound, LfoNode, Fx, Out };
@@ -58,7 +92,7 @@ struct Node { Kind kind; int a = 0, b = 0; juce::String key, title; juce::Rectan
 class Canvas : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    explicit Canvas (Studio& st) : s (st) { loadLfos (s); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
+    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); setWantsKeyboardFocus (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
     ~Canvas() override { s.removeChangeListener (this); }
 
     void rebuild()
@@ -77,6 +111,7 @@ public:
         std::map<int, int> trackY;
         for (auto& c : p.channels)
         {
+            if (! inBay (c.id)) continue;
             place ({ Seq, c.id, 0, "S" + juce::String (c.id), c.name + "  MIDI Rhythm", {}, c.colour }, 240, y, 300, 70);
             place ({ Sound, c.id, c.mixerTrack, "C" + juce::String (c.id), c.name, {}, c.colour }, 570, y, 170, 70);
             if (! trackY.count (c.mixerTrack)) trackY[c.mixerTrack] = y;
@@ -131,9 +166,17 @@ public:
     {
         moving = nullptr; dragFrom = nullptr;
         auto* n = at (e.getPosition());
-        if (n == nullptr) return;
+        if (n == nullptr) { if (e.mods.isPopupMenu()) canvasMenu(); return; }
+        grabKeyboardFocus();
+        if (n->kind == Seq || n->kind == Sound) lastChan = n->a;
         if (port (*n).getDistanceFrom (e.position) < 12.0f && n->kind != Out) { dragFrom = n; dragTo = e.getPosition(); return; }
         if (e.mods.isPopupMenu()) { nodeMenu (*n); return; }
+        if (n->kind == Seq && e.mods.isAltDown() && e.y > n->r.getY() + 30)
+        {
+            const int step = (e.x - n->r.getX() - 8) * 16 / juce::jmax (1, n->r.getWidth() - 16);
+            if (step >= 0 && step < 16) hatRoll (n->a, step, 8);
+            return;
+        }
         if (n->kind == Seq && e.y > n->r.getY() + 30)
         {
             const int step = (e.x - n->r.getX() - 8) * 16 / juce::jmax (1, n->r.getWidth() - 16);
@@ -161,8 +204,14 @@ public:
         else if (from->kind == Sound && to->kind == Fx) route (from->a, to->a);
         else if (from->kind == LfoNode && to->kind == Fx) lfoToParam (from->a, to->a, to->b);
     }
+    bool keyPressed (const juce::KeyPress& k) override
+    {
+        if (k.getModifiers().isAltDown() && (k.getKeyCode() == 'S' || k.getKeyCode() == 's') && lastChan >= 0) { hatMenu (lastChan, -1); return true; }
+        return false;
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
+        if (phoneUI) return;   // phone: double-tap is right-click
         if (at (e.getPosition()) == nullptr) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); saveLfos (s); rebuild(); }
     }
 
@@ -221,7 +270,7 @@ private:
                 g.fillRoundedRectangle (cell, 3.0f);
                 if (k == play) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (cell, 3.0f, 1.5f); }
             }
-            g.setColour (col::dim); g.drawText ("click steps / drag out to another sound", n.r.getX() + 10, n.r.getY() + 20, 260, 12, juce::Justification::centredLeft);
+            g.setColour (col::dim); g.drawText ("click steps, Alt-click: hat roll, right-click: Piano Roll", n.r.getX() + 10, n.r.getY() + 20, 260, 12, juce::Justification::centredLeft);
         }
         else if (n.kind == LfoNode && n.a < (int) lfos().size())
         {
@@ -238,7 +287,7 @@ private:
             g.setColour (col::dim); g.drawText ("right-click: shape / rate / range", n.r.getX() + 10, n.r.getBottom() - 14, 170, 12, juce::Justification::centredLeft);
         }
         else if (n.kind == Sound) g.drawText ("SIG OUT  >  insert " + juce::String (n.b), n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
-        else if (n.kind == Fx) g.drawText ("drop an LFO here to modulate", n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
+        else if (n.kind == Fx) g.drawText ("right-click: automate / gate / LFO", n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
         else if (n.kind == Out) g.drawText ("drop a sound here to route it", n.r.getX() + 10, n.r.getY() + 30, 140, 14, juce::Justification::centredLeft);
     }
 
@@ -303,6 +352,9 @@ private:
     }
     void nodeMenu (Node& n)
     {
+        if (n.kind == Seq || n.kind == Sound) { channelMenu (n.a); return; }
+        if (n.kind == Fx) { fxMenu (n.a, n.b); return; }
+        if (n.kind == Out) { canvasMenu(); return; }
         if (n.kind != LfoNode || n.a >= (int) lfos().size()) return;
         juce::PopupMenu m, sh, rt, rg;
         const auto& cur = lfos()[(size_t) n.a];
@@ -324,6 +376,257 @@ private:
             safe->rebuild();
         });
     }
+
+public:
+    // ---- right-click (phone: double-tap) menus
+    void canvasMenu()
+    {
+        juce::PopupMenu m, inst, fx, vst, inv, rt, ins, bm;
+        inst.addItem (1, "Synth"); inst.addItem (2, "808"); inst.addItem (3, "Sampler (load a sound)");
+        int k = 0;
+        for (auto& d : s.engine.knownPlugins.getTypes()) { if (d.isInstrument) inv.addItem (1000 + k, d.name); else vst.addItem (3000 + k, d.name); ++k; }
+        inst.addSubMenu ("VST instrument", inv);
+        int fi = 0; for (auto& e : builtinEffects()) fx.addItem (2000 + fi++, e.name);
+        m.addSubMenu ("Add instrument", inst);
+        m.addSubMenu ("Add FX (built-in)", fx); m.addSubMenu ("Add VST effect", vst);
+        m.addItem (4, "Add LFO");
+        m.addSeparator();
+        auto& b = bay();
+        rt.addItem (10, "Track (Playlist)", true, b.route == 0); rt.addItem (11, "Mixer insert", true, b.route == 1); rt.addItem (12, "Both", true, b.route == 2);
+        auto& p = s.p();
+        for (int i = 1; i < (int) p.mixer.size(); ++i) ins.addItem (100 + i, p.mixer[(size_t) i].name.isNotEmpty() ? p.mixer[(size_t) i].name : "Insert " + juce::String (i), true, b.insert == i);
+        ins.addItem (99, "New insert");
+        rt.addSubMenu ("Mixer insert", ins);
+        m.addSubMenu ("Route " + b.name + " to", rt);
+        m.addItem (13, "Send " + b.name + " now (" + juce::String (b.route == 0 ? "track" : b.route == 1 ? "mixer" : "track + mixer") + ")");
+        m.addItem (14, p.songMode ? "Sync: SONG (switch to pattern)" : "Sync: PATTERN (switch to song)");
+        m.addItem (15, s.engine.isPlaying() ? "Stop" : "Play");
+        m.addSeparator();
+        for (int i = 0; i < (int) bays().size(); ++i) bm.addItem (200 + i, bays()[(size_t) i].name, true, i == curBay());
+        m.addSubMenu ("Go to bay", bm);
+        m.addItem (5, "New Patch Bay"); m.addItem (6, "Rename " + b.name); m.addItem (7, "Duplicate " + b.name); m.addItem (8, "Delete " + b.name, bays().size() > 1);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this)] (int r) { if (safe != nullptr) safe->canvasResult (r); });
+    }
+    void canvasResult (int r)
+    {
+        if (r <= 0) return;
+        auto& b = bay();
+        auto addCh = [&] (Channel c) {
+            int id = -1;
+            s.edit ("Patch Bay: add instrument", [&] (Project& p) { if (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) c.mixerTrack = b.insert; else c.mixerTrack = -1; id = p.addChannel (c); });
+            if (! b.chans.empty() && id >= 0) b.chans.push_back (id);
+            s.selectedChannel = id; saveBays (s); rebuild();
+        };
+        if (r == 1) { Channel c; c.type = ChannelType::Synth; c.name = "Synth"; c.keyTrack = true; addCh (c); }
+        else if (r == 2) { Channel c; c.type = ChannelType::Synth; c.name = "808"; c.synth.wave = 4; c.glide = 0.08f; c.mono = true; c.rootKey = 36; c.colour = juce::Colour (0xffff5d8a); addCh (c); }
+        else if (r == 3)
+        {
+            chooser = std::make_unique<juce::FileChooser> ("Load a sound", juce::File(), "*.wav;*.aif;*.aiff;*.flac;*.mp3;*.ogg");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [safe = juce::Component::SafePointer<Canvas> (this)] (const juce::FileChooser& fc) {
+                if (safe == nullptr || ! fc.getResult().existsAsFile()) return;
+                Channel c; c.type = ChannelType::Sampler; c.sampleFile = fc.getResult(); c.name = fc.getResult().getFileNameWithoutExtension(); safe->canvasResult (0); safe->addChannelPublic (c);
+            });
+        }
+        else if (r == 4) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); saveLfos (s); rebuild(); }
+        else if (r == 5) { bays().push_back ({ "Bay " + juce::String ((int) bays().size() + 1), { -1 }, 2, 0 }); curBay() = (int) bays().size() - 1; saveBays (s); rebuild(); if (onBays) onBays(); }
+        else if (r == 6) rename();
+        else if (r == 7) { auto c = b; c.name << " copy"; bays().push_back (c); curBay() = (int) bays().size() - 1; saveBays (s); rebuild(); if (onBays) onBays(); }
+        else if (r == 8 && bays().size() > 1) { bays().erase (bays().begin() + curBay()); curBay() = 0; saveBays (s); rebuild(); if (onBays) onBays(); }
+        else if (r >= 10 && r <= 12) { b.route = r - 10; saveBays (s); }
+        else if (r == 13) sendBay();
+        else if (r == 14) s.edit ("Pattern/Song", [] (Project& p) { p.songMode = ! p.songMode; });
+        else if (r == 15) s.engine.togglePlay();
+        else if (r == 99) { s.edit ("Patch Bay: new insert", [&] (Project& p) { b.insert = p.addMixerTrack (b.name); }); saveBays (s); }
+        else if (r >= 100 && r < 200) { b.insert = r - 100; saveBays (s); }
+        else if (r >= 200 && r < 300) { curBay() = r - 200; rebuild(); if (onBays) onBays(); }
+        else if (r >= 1000 && r < 4000)
+        {
+            const auto& types = s.engine.knownPlugins.getTypes();
+            const int i = r >= 3000 ? r - 3000 : r - 1000;
+            if (i >= types.size()) return;
+            const auto d = types[i];
+            if (r < 3000) { Channel c; c.type = ChannelType::Plugin; c.pluginId = d.createIdentifierString(); c.name = d.name; addCh (c); }
+            else addFxTo (fxTrack(), "plugin", d.createIdentifierString());
+        }
+        else if (r >= 2000 && r < 3000)
+        {
+            const auto& fx = builtinEffects();
+            if (r - 2000 < (int) fx.size()) addFxTo (fxTrack(), fx[(size_t) (r - 2000)].id, {});
+        }
+    }
+    void addChannelPublic (Channel c)
+    {
+        auto& b = bay(); int id = -1;
+        s.edit ("Patch Bay: add sound", [&] (Project& p) { c.mixerTrack = (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) ? b.insert : -1; id = p.addChannel (c); });
+        if (! b.chans.empty() && id >= 0) b.chans.push_back (id);
+        s.selectedChannel = id; saveBays (s); rebuild();
+    }
+    std::function<void()> onBays;
+    void rename()
+    {
+        auto* w = new juce::AlertWindow ("Rename bay", {}, juce::MessageBoxIconType::NoIcon);
+        w->addTextEditor ("n", bay().name); w->addButton ("OK", 1, juce::KeyPress (juce::KeyPress::returnKey)); w->addButton ("Cancel", 0);
+        w->enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer<Canvas> (this), w] (int r) {
+            if (safe != nullptr && r == 1 && w->getTextEditorContents ("n").trim().isNotEmpty()) { bay().name = w->getTextEditorContents ("n").trim(); saveBays (safe->s); if (safe->onBays) safe->onBays(); }
+        }), true);
+    }
+private:
+    int fxTrack()
+    {
+        auto& p = s.p(); auto& b = bay();
+        if (b.insert > 0 && b.insert < (int) p.mixer.size()) return b.insert;
+        if (auto* c = p.findChannel (lastChan)) if (c->mixerTrack > 0) return c->mixerTrack;
+        for (auto& c : p.channels) if (inBay (c.id) && c.mixerTrack > 0) return c.mixerTrack;
+        return 0;
+    }
+    void addFxTo (int track, const juce::String& type, const juce::String& pluginId)
+    {
+        s.edit ("Patch Bay: add FX", [&] (Project& p) { if (track >= 0 && track < (int) p.mixer.size()) { auto& f = p.addFx (track, type); f.pluginId = pluginId; } });
+    }
+    // send the bay: mixer = its channels go to the bay's insert; track = its pattern lands on a new Playlist track at the playhead
+    void sendBay()
+    {
+        auto& b = bay();
+        const double play = s.engine.positionBeats();
+        s.edit ("Patch Bay: send " + b.name, [&] (Project& p) {
+            if (b.route != 0)
+            {
+                if (b.insert <= 0 || b.insert >= (int) p.mixer.size()) b.insert = p.addMixerTrack (b.name);
+                for (auto& c : p.channels) if (inBay (c.id)) c.mixerTrack = b.insert;
+            }
+            if (b.route != 1 && ! p.patterns.empty())
+            {
+                const int pi = juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern);
+                Lane l; l.name = b.name; l.mixerTrack = b.route == 2 && b.insert > 0 ? b.insert : 0; p.lanes.push_back (l);
+                Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.patternIndex = pi;
+                c.start = std::floor (play / p.beatsPerBar) * p.beatsPerBar; c.length = p.patterns[(size_t) pi].lengthBeats();
+                p.clips.push_back (c);
+            }
+        });
+        saveBays (s);
+    }
+    void channelMenu (int ch)
+    {
+        auto* c = s.p().findChannel (ch);
+        if (c == nullptr) return;
+        lastChan = ch;
+        juce::PopupMenu m, vm, un, mv;
+        m.addItem (1, "Open in Piano Roll");
+        m.addItem (2, "Hi-hat roll / stutter (Alt+S)...");
+        vm.addItem (10, "Poly", true, ! c->mono); vm.addItem (11, "Mono", true, c->mono && c->glide <= 0.0f); vm.addItem (12, "Legato (glide)", true, c->mono && c->glide > 0.0f);
+        m.addSubMenu ("Voice mode", vm);
+        if (c->type == ChannelType::Synth) { for (int u : { 1, 2, 3, 4, 5, 7 }) un.addItem (20 + u, u == 1 ? "Off" : juce::String (u) + " voices", true, c->synth.unison == u); m.addSubMenu ("Unison", un); }
+        for (int i = 0; i < (int) bays().size(); ++i) mv.addItem (100 + i, bays()[(size_t) i].name, i != curBay());
+        m.addSubMenu ("Move to bay", mv);
+        m.addItem (3, "Remove from this bay", ! bay().chans.empty());
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), ch] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            auto& s = safe->s;
+            if (r == 1) { s.selectedChannel = ch; if (openPianoMain) openPianoMain (ch); }
+            else if (r == 2) safe->hatMenu (ch, -1);
+            else if (r >= 10 && r <= 12) s.edit ("Voice mode", [&] (Project& p) { if (auto* c = p.findChannel (ch)) { c->mono = r != 10; c->glide = r == 12 ? juce::jmax (0.06f, c->glide) : r == 11 ? 0.0f : c->glide; } });
+            else if (r > 20 && r < 30) s.edit ("Unison", [&] (Project& p) { if (auto* c = p.findChannel (ch)) c->synth.unison = r - 20; });
+            else if (r >= 100)
+            {
+                auto& from = bay().chans; from.erase (std::remove (from.begin(), from.end(), ch), from.end());
+                auto& to = bays()[(size_t) (r - 100)].chans; to.erase (std::remove (to.begin(), to.end(), -1), to.end()); to.push_back (ch);
+                saveBays (s); safe->rebuild();
+            }
+            else if (r == 3) { auto& v = bay().chans; v.erase (std::remove (v.begin(), v.end(), ch), v.end()); if (v.empty()) v.push_back (-1); saveBays (s); safe->rebuild(); }
+        });
+    }
+    // Alt+S: hi-hat roll / stutter on a step (or the whole last beat): rate 1/16 .. 1/64 or triplets, with a velocity ramp
+    void hatMenu (int ch, int step)
+    {
+        juce::PopupMenu m;
+        const char* names[] { "Roll 1/32 (x2)", "Roll 1/48 triplet (x3)", "Roll 1/64 (x4)", "Stutter 1/32 last beat", "Stutter 1/64 last beat", "Clear rolls" };
+        for (int i = 0; i < 6; ++i) m.addItem (i + 1, names[i]);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), ch, step] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r <= 3) { if (step >= 0) safe->hatRoll (ch, step, r + 1); else for (int k = 12; k < 16; ++k) safe->hatRoll (ch, k, r + 1); }
+            else if (r <= 5) for (int k = 12; k < 16; ++k) safe->hatRoll (ch, k, r == 4 ? 2 : 4);
+            else safe->s.edit ("Clear rolls", [&] (Project& p) {
+                if (p.patterns.empty()) return;
+                auto& n = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)].notes[ch];
+                n.erase (std::remove_if (n.begin(), n.end(), [] (const Note& x) { return x.length < 0.2 && std::fmod (x.start, 0.25) > 1.0e-6; }), n.end());
+            });
+        });
+    }
+    void hatRoll (int ch, int step, int div)
+    {
+        s.edit ("Hi-hat roll", [&] (Project& p) {
+            if (p.patterns.empty()) return;
+            auto& n = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)].notes[ch];
+            const double t0 = step * 0.25, d = 0.25 / div;
+            int key = 60; float vel = 0.8f;
+            for (auto& x : n) if (x.start >= t0 - 1.0e-6 && x.start < t0 + 0.25 - 1.0e-6) { key = x.key; vel = x.velocity; }
+            if (auto* c = p.findChannel (ch); c != nullptr && n.empty()) key = c->rootKey;
+            n.erase (std::remove_if (n.begin(), n.end(), [&] (const Note& x) { return x.start >= t0 - 1.0e-6 && x.start < t0 + 0.25 - 1.0e-6; }), n.end());
+            for (int i = 0; i < div; ++i) { Note x; x.key = key; x.start = t0 + i * d; x.length = d * 0.9; x.velocity = juce::jlimit (0.2f, 1.0f, vel * (0.7f + 0.3f * (float) (i + 1) / div)); n.push_back (x); }
+            std::sort (n.begin(), n.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+        });
+    }
+    std::vector<std::pair<juce::String, juce::String>> fxParams (int track, int uid)
+    {
+        std::vector<std::pair<juce::String, juce::String>> ps;
+        if (auto* b = s.engine.builtinFx (track, uid)) for (auto& d : b->params()) ps.push_back ({ d.id, d.name });
+        else if (auto* pl = s.engine.fxPlugin (track, uid))
+            for (int k = 0; k < juce::jmin (128, pl->getParameters().size()); ++k) ps.push_back ({ "#" + juce::String (k), pl->getParameters()[k]->getName (32) });
+        return ps;
+    }
+    // FX right-click: automate a knob (starts at 1, pull it down), glitch-gate presets, LFO, remove
+    void fxMenu (int track, int uid)
+    {
+        const auto ps = fxParams (track, uid);
+        juce::PopupMenu m, au, gate[4], lf;
+        const char* gates[] { "Glitch gate 1/4", "Glitch gate 1/8", "Stutter gate 1/16", "Weird gate (1/8 + triplet)" };
+        for (int i = 0; i < (int) ps.size(); ++i)
+        {
+            au.addItem (1000 + i, ps[(size_t) i].second);
+            for (int g = 0; g < 4; ++g) gate[g].addItem (2000 + g * 200 + i, ps[(size_t) i].second);
+        }
+        m.addSubMenu ("Automate", au);
+        for (int g = 0; g < 4; ++g) m.addSubMenu (gates[g], gate[g]);
+        for (int i = 0; i < (int) lfos().size(); ++i) lf.addItem (100 + i, lfos()[(size_t) i].name);
+        m.addSubMenu ("Modulate with LFO", lf);
+        m.addSeparator(); m.addItem (2, "Remove FX");
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), ps, track, uid] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            auto& s = safe->s;
+            if (r == 2) { s.edit ("Remove FX", [&] (Project& p) { if (track >= 0 && track < (int) p.mixer.size()) { auto& fx = p.mixer[(size_t) track].fx; fx.erase (std::remove_if (fx.begin(), fx.end(), [&] (const FxSlot& f) { return f.uid == uid; }), fx.end()); } }); return; }
+            if (r >= 100 && r < 200) { safe->lfoToParam (r - 100, track, uid); return; }
+            if (r >= 1000 && r < 1000 + (int) ps.size())
+            {
+                AutoTarget t; t.kind = AutoFxParam; t.track = track; t.fxUid = uid; t.param = ps[(size_t) r - 1000].first; t.name = ps[(size_t) r - 1000].second;
+                createAutomationClip (s, t, (int) s.p().lanes.size() - 1);
+                return;
+            }
+            if (r >= 2000 && r < 2800)
+            {
+                const int g = (r - 2000) / 200, i = (r - 2000) % 200;
+                if (i >= (int) ps.size()) return;
+                AutoTarget t; t.kind = AutoFxParam; t.track = track; t.fxUid = uid; t.param = ps[(size_t) i].first;
+                t.name = juce::String (g == 0 ? "Gate 1/4" : g == 1 ? "Gate 1/8" : g == 2 ? "Gate 1/16" : "Weird gate") + " > " + ps[(size_t) i].second;
+                createAutomationClip (s, t, (int) s.p().lanes.size() - 1);
+                s.edit ("Glitch gate", [&] (Project& p) {
+                    Clip* c = nullptr;
+                    for (auto& cl : p.clips) if (cl.isAuto() && cl.autoTarget.name == t.name && (c == nullptr || cl.uid > c->uid)) c = &cl;
+                    if (c == nullptr) return;
+                    c->autoPts.clear();
+                    const double steps[] { 1.0, 0.5, 0.25, 0.5 };
+                    const double st = steps[g];
+                    int k = 0;
+                    for (double b = 0.0; b < c->length - 1.0e-9; b += (g == 3 && (k % 4 == 3)) ? st * 2.0 / 3.0 : st, ++k)
+                    {
+                        const float v = (k % 2 == 0) ? 1.0f : (g == 3 && k % 3 == 1 ? 0.35f : 0.0f);
+                        c->autoPts.push_back ({ b, v }); c->autoPts.push_back ({ b + st * 0.92, v });
+                    }
+                });
+            }
+        });
+    }
+    int lastChan = -1;
+    std::unique_ptr<juce::FileChooser> chooser;
     void changeListenerCallback (juce::ChangeBroadcaster*) override { moving = nullptr; dragFrom = nullptr; rebuild(); }
     void timerCallback() override { if (isShowing() && s.engine.isPlaying()) repaint(); }
 
@@ -348,6 +651,48 @@ struct PatchBayWindow : public juce::DocumentWindow
     }
     void closeButtonPressed() override { setVisible (false); }
 };
+// PATCH tab: bay picker + canvas; edits apply live while the pattern / song plays
+struct PatchBayView : public juce::Component
+{
+    explicit PatchBayView (Studio& st) : s (st)
+    {
+        canvas = new Canvas (s);
+        vp.setViewedComponent (canvas, true);
+        addAndMakeVisible (vp);
+        for (auto* b : { &addBay, &menu, &send, &play }) addAndMakeVisible (b);
+        addAndMakeVisible (pick);
+        pick.onChange = [this] { if (pick.getSelectedItemIndex() >= 0) { curBay() = pick.getSelectedItemIndex(); canvas->rebuild(); } };
+        addBay.onClick = [this] { canvas->canvasResult (5); };
+        menu.onClick = [this] { canvas->canvasMenu(); };
+        send.onClick = [this] { canvas->canvasResult (13); };
+        play.onClick = [this] { s.engine.togglePlay(); };
+        canvas->onBays = [this] { refresh(); };
+        addBay.setTooltip ("New Patch Bay (intro, chorus...): right-click / double-tap the canvas for everything");
+        send.setTooltip ("Send this bay to its Playlist track, mixer insert or both (right-click > Route)");
+        refresh();
+    }
+    void refresh()
+    {
+        pick.clear (juce::dontSendNotification);
+        for (int i = 0; i < (int) bays().size(); ++i) pick.addItem (bays()[(size_t) i].name, i + 1);
+        pick.setSelectedItemIndex (juce::jlimit (0, (int) bays().size() - 1, curBay()), juce::dontSendNotification);
+    }
+    void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void resized() override
+    {
+        auto r = getLocalBounds();
+        auto bar = r.removeFromTop (phoneUI ? 44 : 32).reduced (4);
+        pick.setBounds (bar.removeFromLeft (160)); bar.removeFromLeft (4);
+        for (auto* b : { &addBay, &send, &play, &menu }) { b->setBounds (bar.removeFromLeft (phoneUI ? 70 : 84)); bar.removeFromLeft (4); }
+        vp.setBounds (r);
+    }
+    Studio& s;
+    Canvas* canvas = nullptr;
+    juce::Viewport vp;
+    juce::ComboBox pick;
+    juce::TextButton addBay { "+ BAY" }, menu { "ADD..." }, send { "SEND" }, play { "PLAY" };
+};
+
 std::unique_ptr<PatchBayWindow>& patchWindow() { static std::unique_ptr<PatchBayWindow> w; return w; }
 }
 
@@ -358,4 +703,5 @@ void showPatchBay (Studio& s)
     w->setVisible (true); w->toFront (true);
 }
 void closePatchBay() { patchWindow().reset(); }
+std::unique_ptr<juce::Component> createPatchBayView (Studio& s) { return std::make_unique<PatchBayView> (s); }
 }

@@ -1356,7 +1356,7 @@ public:
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
-        startTimerHz (60);
+        startTimerHz (phoneUI ? 30 : 60);   // phone: half the playhead ticks, leaves the frame budget for scrolling
     }
     ~Playlist() override { s.removeChangeListener (this); }
 
@@ -3383,6 +3383,7 @@ void createAutomationClip (Studio& s, const AutoTarget& t, int belowLane)
     }
     else if (auto* ch = p.findChannel (t.channel))
         v = autoFromValue (t.kind, t.kind == AutoChanVol ? ch->volume : t.kind == AutoChanPan ? ch->pan : ch->pitch);
+    if (t.kind == AutoFxParam) v = 1.0f;   // VST3 / FX / instrument knobs start at the top; pull them down from there
     v = juce::jlimit (0.0f, 1.0f, v);
     s.edit ("Automate " + t.name, [&] (Project& pr) {
         const int at = juce::jlimit (0, (int) pr.lanes.size(), belowLane + 1);

@@ -66,7 +66,7 @@ public:
         {
             g.setColour (col::dim); g.setFont (juce::FontOptions (13.0f));
             g.drawText (fxMode() ? "No effects on this track yet: add one in the Mixer or Plugin House"
-                                 : "No automation on this track yet: + LANE automates volume, pan, a send or any effect knob",
+                                 : "No automation on this track yet: right-click here or + LANE to automate volume, pan, a send or any effect knob",
                         getLocalBounds().withTrimmedTop (barH), juce::Justification::centred, true);
             return;
         }
@@ -81,6 +81,8 @@ public:
     {
         drag = {};
         const auto rs = rows(); const int tr = track();
+        if (e.mods.isPopupMenu() && e.y > barH && (rs.empty() || fxMode() || e.x < headW || e.y >= laneRect ((int) rs.size() - 1, (int) rs.size()).getBottom()))
+        { addMenu (true); return; }
         for (int i = 0; i < (int) rs.size(); ++i)
         {
             const auto r = laneRect (i, (int) rs.size());
@@ -356,15 +358,78 @@ private:
         }
         const float ph = beatX (s.engine.positionBeats(), b);
         g.setColour (col::text.withAlpha (0.7f)); g.drawVerticalLine ((int) ph, (float) b.getY(), (float) b.getBottom());
+        paintMiniPlugin (g, row, b);
     }
 
-    void addMenu()
+    // automation as a mini plug-in: the effect's own look (EQ curve / knob) moving with the automated value at the playhead
+    void paintMiniPlugin (juce::Graphics& g, const Row& row, juce::Rectangle<int> b)
+    {
+        if (row.t.kind != AutoFxParam || b.getWidth() < 260 || b.getHeight() < 30) return;
+        auto& p = s.p(); const int tr = track();
+        const FxSlot* f = nullptr;
+        for (auto& x : p.mixer[(size_t) tr].fx) if (x.uid == row.t.fxUid) f = &x;
+        if (f == nullptr) return;
+        const double pos = s.engine.positionBeats();
+        float v = -1.0f;
+        for (int ci : row.clips)
+        {
+            const auto& cl = p.clips[(size_t) ci];
+            if (! cl.muted && pos >= cl.start && pos < cl.start + cl.length) v = autoValueAt (cl.autoPts, cl.patOffset + pos - cl.start);
+        }
+        auto card = b.withWidth (juce::jmin (220, b.getWidth() / 3)).withX (b.getRight() - juce::jmin (220, b.getWidth() / 3)).reduced (2).toFloat();
+        g.setColour (col::panel.withAlpha (0.94f)); g.fillRoundedRectangle (card, 5.0f);
+        g.setColour (col::accent2.withAlpha (0.8f)); g.drawRoundedRectangle (card, 5.0f, 1.2f);
+        auto in = card.reduced (6.0f, 3.0f);
+        g.setColour (col::text); g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+        g.drawText (slotLabel (s, *f) + "  " + row.t.param, in.removeFromTop (12.0f), juce::Justification::centredLeft, true);
+        auto* m = modelFor (*f);
+        const ParamDef* d = nullptr;
+        if (m != nullptr) for (auto& q : m->params()) if (row.t.param == q.id) d = &q;
+        const float t = v >= 0.0f ? v : (d != nullptr ? juce::jlimit (0.0f, 1.0f, ((f->params.count (d->id) ? f->params.at (d->id) : d->def) - d->min) / juce::jmax (1.0e-6f, d->max - d->min)) : 0.5f);
+        auto knob = in.removeFromLeft (juce::jmin (in.getHeight(), 40.0f)).reduced (2.0f);
+        const float a0 = juce::MathConstants<float>::pi * 1.25f, a1 = a0 + juce::MathConstants<float>::pi * 1.5f, ang = a0 + (a1 - a0) * t;
+        const auto cx = knob.getCentreX(), cy = knob.getCentreY(), rad = juce::jmin (knob.getWidth(), knob.getHeight()) * 0.5f - 1.0f;
+        juce::Path arc; arc.addCentredArc (cx, cy, rad, rad, 0.0f, a0, a1, true);
+        g.setColour (col::grid); g.strokePath (arc, juce::PathStrokeType (3.0f));
+        juce::Path on; on.addCentredArc (cx, cy, rad, rad, 0.0f, a0, ang, true);
+        g.setColour (v >= 0.0f ? autoRed : col::accent); g.strokePath (on, juce::PathStrokeType (3.0f));
+        g.drawLine (cx, cy, cx + std::sin (ang) * rad * 0.8f, cy - std::cos (ang) * rad * 0.8f, 2.0f);
+        in.removeFromLeft (4.0f);
+        if (m != nullptr && d != nullptr && f->type.containsIgnoreCase ("eq") && in.getWidth() > 30.0f)
+        {   // the EQ curve with this knob at its automated value: the band visibly moves while it plays
+            m->setParam (d->id, d->min + t * (d->max - d->min));
+            juce::Path cv;
+            const auto r = in.toNearestInt();
+            for (int x = r.getX(); x <= r.getRight(); x += 3)
+            {
+                const double hz = 20.0 * std::pow (1000.0, (x - r.getX()) / (double) juce::jmax (1, r.getWidth()));
+                const float y = (float) r.getCentreY() - juce::jlimit (-24.0f, 24.0f, m->responseDb (hz)) / 24.0f * (float) r.getHeight() * 0.5f;
+                if (x == r.getX()) cv.startNewSubPath ((float) x, y); else cv.lineTo ((float) x, y);
+            }
+            g.setColour (col::accent2); g.strokePath (cv, juce::PathStrokeType (1.4f));
+        }
+        else
+        {   // value meter + readout
+            auto meter = in.removeFromTop (juce::jmin (10.0f, in.getHeight() * 0.4f));
+            g.setColour (col::bg); g.fillRoundedRectangle (meter, 2.0f);
+            g.setColour (v >= 0.0f ? autoRed : col::accent); g.fillRoundedRectangle (meter.withWidth (juce::jmax (2.0f, meter.getWidth() * t)), 2.0f);
+            g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
+            const juce::String val = d != nullptr ? juce::String (d->min + t * (d->max - d->min), 2) : juce::String (juce::roundToInt (t * 100.0f)) + "%";
+            g.drawText ((d != nullptr ? juce::String (d->name) + "  " : juce::String()) + val + (v >= 0.0f ? "  (automated)" : ""), in, juce::Justification::centredLeft, true);
+        }
+    }
+
+    void addMenu (bool atMouse = false)
     {
         auto& p = s.p(); const int tr = track();
         if (tr >= (int) p.mixer.size()) return;
         const auto& mt = p.mixer[(size_t) tr];
         std::vector<AutoTarget> ts;
-        juce::PopupMenu m;
+        juce::PopupMenu m, routed;
+        for (int i = 0; i < (int) p.mixer.size(); ++i)   // routed track: any mixer track / bus; the lanes dock to it
+            routed.addItem (100000 + i, p.mixer[(size_t) i].name.isNotEmpty() ? p.mixer[(size_t) i].name : (i == 0 ? juce::String ("Master") : "Insert " + juce::String (i)), true, i == tr);
+        m.addSubMenu ("Routed track: " + mt.name, routed);
+        m.addSeparator();
         auto add = [&] (juce::PopupMenu& menu, AutoTarget t, const juce::String& label) { ts.push_back (t); menu.addItem ((int) ts.size(), label); };
         AutoTarget t; t.track = tr;
         t.kind = AutoInsertVol; t.name = mt.name + " - Volume"; add (m, t, "Volume");
@@ -390,9 +455,10 @@ private:
             }
         int below = (int) p.lanes.size() - 1;
         for (int i = 0; i < (int) p.lanes.size(); ++i) if (p.lanes[(size_t) i].mixerTrack == tr) { below = i; break; }
-        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&addBtn),
-                         [safe = juce::Component::SafePointer<LanesView> (this), ts, below] (int r)
+        m.showMenuAsync (atMouse ? juce::PopupMenu::Options().withMousePosition() : juce::PopupMenu::Options().withTargetComponent (&addBtn),
+                         [safe = juce::Component::SafePointer<LanesView> (this), ts, below, atMouse] (int r)
                          {
+                             if (safe != nullptr && r >= 100000) { safe->s.selectedTrack = r - 100000; safe->s.sendChangeMessage(); safe->repaint(); safe->addMenu (atMouse); return; }
                              if (safe == nullptr || r <= 0 || r > (int) ts.size()) return;
                              createAutomationClip (safe->s, ts[(size_t) r - 1], below);
                              safe->autoBtn.setToggleState (true, juce::sendNotification);

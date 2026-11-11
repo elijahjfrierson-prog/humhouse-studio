@@ -97,6 +97,9 @@ set(HHS_LIBS
 # Session Drummer groove corpus (Groove MIDI Dataset, CC-BY 4.0), from HumHouse Drums X
 juce_add_binary_data(HHSDrummerData HEADER_NAME DrummerData.h NAMESPACE DrummerData SOURCES Resources/Drummer/rock_corpus.hhc)
 list(APPEND HHS_LIBS HHSDrummerData)
+if(APPLE OR WIN32)
+    list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
+endif()
 if(APPLE)
     list(APPEND HHS_LIBS "-framework AudioToolbox" "-framework CoreFoundation")
 endif()
@@ -145,6 +148,7 @@ function(hhs_add_app target product bundle licensed)
         Source/LanesView.cpp
         Source/DJView.cpp
     Source/PatchBay.cpp
+    Source/VideoView.cpp
     Source/Lang.cpp
         Source/Browser.cpp
         Source/ToolDialogs.cpp

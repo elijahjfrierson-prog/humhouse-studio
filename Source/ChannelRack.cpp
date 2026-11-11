@@ -1171,7 +1171,7 @@ private:
         }
     }
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
-    void timerCallback() override { if (s.engine.isPlaying()) repaint (ctlW, headerH, getWidth() - ctlW, getHeight() - headerH); }
+    void timerCallback() override { if (isShowing() && s.engine.isPlaying()) repaint (ctlW, headerH, getWidth() - ctlW, getHeight() - headerH); }
 };
 }
 

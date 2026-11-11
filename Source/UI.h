@@ -419,6 +419,9 @@ void showDjDecks (Studio&);   // HumHouse DJ: two decks + crossfader
 void closeDjDecks();
 void showPatchBay (Studio&);   // node patch bay: sequencers > sounds > FX > out, LFO > FX params
 void closePatchBay();
+std::unique_ptr<juce::Component> createPatchBayView (Studio&);   // PATCH tab
+std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
+inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll
 const juce::StringArray& languageNames();   // Options > Layout > Language
 void applyLanguage (int index);           // 0 = English   // Ableton-style FX + automation lanes of the selected mixer track
 
@@ -474,7 +477,7 @@ void applySavedLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
 {
-    inline const char* const defaultToolbar = "logo,beat,record,mix,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,scope,theme,browser,save";
+    inline const char* const defaultToolbar = "logo,beat,record,mix,patch,video,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,scope,theme,browser,save";
     inline const std::pair<const char*, const char*> toolbarItems[] {
         { "logo", "HumHouse logo" }, { "beat", "BEAT page" }, { "record", "RECORD page" }, { "mix", "MIX page" }, { "song", "PAT / SONG" },
         { "start", "Go to start" }, { "play", "Play" }, { "stop", "Stop" }, { "rec", "Record" }, { "bpm", "BPM" }, { "pos", "Position" },
