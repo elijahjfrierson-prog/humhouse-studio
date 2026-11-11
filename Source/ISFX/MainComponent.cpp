@@ -482,6 +482,42 @@ std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce:
     return out;
 }
 
+std::vector<MainComponent::ClipRender> MainComponent::renderClips (const juce::File& dir, bool selectedOnly)
+{
+    std::vector<ClipRender> out;
+    const auto& p = st.project;
+    if (p.sequences.empty() || ! dir.createDirectory()) return out;
+    const auto& seq = p.sequences[(size_t) juce::jlimit (0, (int) p.sequences.size() - 1, p.active)];
+    constexpr int blk = 8192;
+    std::vector<float> L (blk), R (blk);
+    for (auto& c : seq.clips)
+    {
+        if (! c.enabled || c.length <= 0 || ! st.audio.has (c.mediaId) || (selectedOnly && ! st.selected.contains (c.id))) continue;
+        if (c.track < 0 || c.track >= (int) seq.tracks.size() || seq.tracks[(size_t) c.track].mute) continue;
+        Sequence one = seq;
+        one.clips = { c };
+        for (auto& t : one.tracks) { t.solo = false; t.mute = false; }
+        const auto s0 = (juce::int64) std::llround (ticksToSec (c.start) * kMixRate);
+        const auto s1 = (juce::int64) std::llround (ticksToSec (c.end()) * kMixRate);
+        const auto* m = p.findMedia (c.mediaId);
+        const auto name = c.name.isNotEmpty() ? c.name : m != nullptr && m->name.isNotEmpty() ? m->name : juce::String ("Clip");
+        auto f = dir.getChildFile (juce::File::createLegalFileName (name) + ".wav").getNonexistentSibling();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), kMixRate, 2, 24, {}, 0));
+        if (w == nullptr || s1 <= s0) continue;
+        for (auto pos = s0; pos < s1; pos += blk)
+        {
+            const int n = (int) std::min<juce::int64> (blk, s1 - pos);
+            mixSequence (one, st.audio, pos, n, L.data(), R.data(), nullptr);
+            const float* ch[2] { L.data(), R.data() };
+            w->writeFromFloatArrays (ch, 2, n);
+        }
+        w.reset();
+        out.push_back ({ name, f, ticksToSec (c.start), (double) (s1 - s0) / kMixRate, c.track });
+    }
+    return out;
+}
+
 juce::File MainComponent::songFile() const
 {
     if (auto* m = st.project.song_()) return juce::File (m->path);
