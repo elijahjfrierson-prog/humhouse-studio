@@ -113,7 +113,8 @@ jobs:
           }
           $keys = Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -like 'HumHouse Studio*' }
           if (@($keys).Count -ne 1) { throw "expected one HumHouse Studio install, found $(@($keys).Count)" }
-          if ($keys.DisplayName -notlike '*1.5.2*') { throw "old version still registered: $($keys.DisplayName)" }
+          $ver = [regex]::Match((Get-Content CMakeLists.txt -Raw), 'project\(HumHouseStudio VERSION ([0-9.]+)').Groups[1].Value
+          if ($keys.DisplayName -notlike "*$ver*") { throw "old version still registered: $($keys.DisplayName)" }
 
       - name: Stage artifacts (Linux)
         if: runner.os == 'Linux'
