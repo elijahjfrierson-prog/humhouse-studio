@@ -24,3 +24,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS events_id ON events(id);
 CREATE TABLE IF NOT EXISTS home (k INTEGER PRIMARY KEY, url TEXT NOT NULL, seen INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS events_key ON events(key_hash);
 CREATE INDEX IF NOT EXISTS events_at ON events(at);
+-- restore by Machine ID, monitor sales/flags: read a few index rows instead of whole tables
+CREATE INDEX IF NOT EXISTS activations_mid ON activations(mid);
+CREATE INDEX IF NOT EXISTS events_result ON events(result, key_hash, at);
+CREATE INDEX IF NOT EXISTS keys_status ON keys(status);

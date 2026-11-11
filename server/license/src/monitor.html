@@ -49,5 +49,5 @@ d3.select("#sales").selectAll("circle").data(s.filter(x=>x.lat!=null),x=>x.count
 const byC={};s.forEach(x=>{const c=x.country||"?";byC[c]=(byC[c]||0)+x.n});
 salesList.innerHTML=Object.entries(byC).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<div><b>${c}</b> · ${n} sales · ${money(n*v)}</div>`).join("")+
 s.slice(0,40).map(x=>`<div style="opacity:.75">&nbsp; ${x.city||"?"}, ${x.country||"?"} · ${x.n} · ${money(x.n*v)}</div>`).join("")||"No sales yet."}
-function start(){if(!tok)return;val.value=localStorage.getItem("hhsValue")||"";login.style.display="none";tick();setInterval(tick,5000)}start();
+function start(){if(!tok)return;val.value=localStorage.getItem("hhsValue")||"";login.style.display="none";tick();setInterval(()=>{if(!document.hidden)tick()},60000);document.addEventListener("visibilitychange",()=>{if(!document.hidden)tick()})}start();
 </script></body></html>
