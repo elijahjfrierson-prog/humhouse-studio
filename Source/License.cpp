@@ -5,6 +5,12 @@ namespace hhs::license
 {
 static const char* const publicModulus = "b44ff9a72f112b528144e5581831ad83333fb460deccb5f964a27a6f677c0f9c4e6f896d5c6650e5d125ddd6d44981d1c177a778a1460a3863bcca21f1008dd619277a4e60e8088f12a1ffa65a8577b81d5c0a6c61ab4c943c33393a6970ce505e15c6d59101bbf5a8502a58c48ec4a988e8bfeb7a6ce9ed23d63cce4ea15ebea20c2e0e0dddaec46a8c9f169a8f3d9a0655aad61bf0a27cf87a19d559a35a44a54947401153c8b2cb5c9160fc53dd2a466e98a1727fae47e2ba78b25be732f4ccd0dfae7eba301d4c5efe0c9e2ae92b2844fde4338f10c350c0cdf9138ec9f1c08424308fad8fe71ab9a7e5046589151d7ae1aa156951dbfad6015a8a65021d";
 
+static const char* const passModulus = "ba6a39405f87063595735269dc95cd1dd84bebce9561d07260b5b1e912c47d64c52f2b7e6a38e3f230b78faa0daf0985c9a1686181a990933143f2280d402c0445d518a3118983b7b571b4b895ddd849ed82adf1b2cc7953b5ebd9c6ee29566a15bd9dfbac4528174f0ad45d443e1848ee265b64bda4fb55a763db9714e4a4f227cc6e7029ef26362ad9966fbed9addf615fa42785086345948023c2adf53a6cefc1adf64749adf6eea606ce772f22fec8e50e5dd8c40412a4f2e7f217a279906f45067870ff9e5bff3a483d9cd3d204e70e0da794abe00aeeef9eb76bf477cdd95b6dff60e1d0ecbc7a483e901ae10f7228a308292f1baeeb8009996d37cc49";
+
+#ifndef HHS_LICENSE_URL
+ #define HHS_LICENSE_URL "https://humhouse-license.workers.dev"
+#endif
+
 juce::String machineId()
 {
     auto raw = juce::SystemStats::getUniqueDeviceID();
@@ -20,6 +26,27 @@ static juce::BigInteger fromBytes (const void* data, size_t size)
     return b;
 }
 
+// RSA PKCS#1 v1.5 / SHA-256 signature check against a public modulus (e = 65537)
+static bool rsaVerify (const juce::MemoryBlock& payload, const juce::String& sigHex, const char* modulus)
+{
+    if (sigHex.length() < 64 || ! sigHex.containsOnly ("0123456789abcdefABCDEF")) return false;
+    juce::BigInteger n, s;
+    n.parseString (modulus, 16);
+    s.parseString (sigHex, 16);
+    if (s.compareAbsolute (n) >= 0) return false;
+    s.exponentModulo (juce::BigInteger (65537), n);
+    static const unsigned char prefix[] = { 0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20 };
+    const int k = (n.getHighestBit() + 8) / 8, tLen = (int) sizeof (prefix) + 32;
+    if (k < tLen + 11) return false;
+    juce::HeapBlock<unsigned char> em ((size_t) k, true);
+    em[1] = 1;
+    for (int i = 2; i < k - tLen - 1; ++i) em[i] = 0xff;
+    std::memcpy (em + (k - tLen), prefix, sizeof (prefix));
+    const auto digest = juce::SHA256 (payload.getData(), payload.getSize()).getRawData();
+    std::memcpy (em + (k - 32), digest.getData(), 32);
+    return s == fromBytes (em, (size_t) k);
+}
+
 Info verifyFor (const juce::String& keyIn, const juce::String& machine)
 {
     Info info;
@@ -30,26 +57,7 @@ Info verifyFor (const juce::String& keyIn, const juce::String& machine)
     if (dot <= 0) return info;
     juce::MemoryOutputStream payload;
     if (! juce::Base64::convertFromBase64 (payload, key.substring (0, dot)) || payload.getDataSize() == 0) return info;
-    const auto sigHex = key.substring (dot + 1);
-    if (sigHex.length() < 64 || ! sigHex.containsOnly ("0123456789abcdefABCDEF")) return info;
-
-    juce::BigInteger n, s;
-    n.parseString (publicModulus, 16);
-    s.parseString (sigHex, 16);
-    if (s.compareAbsolute (n) >= 0) return info;
-    s.exponentModulo (juce::BigInteger (65537), n);
-
-    // expected PKCS#1 v1.5 block: 00 01 FF..FF 00 DigestInfo(SHA-256) hash
-    static const unsigned char prefix[] = { 0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20 };
-    const int k = (n.getHighestBit() + 8) / 8, tLen = (int) sizeof (prefix) + 32;
-    if (k < tLen + 11) return info;
-    juce::HeapBlock<unsigned char> em ((size_t) k, true);
-    em[1] = 1;
-    for (int i = 2; i < k - tLen - 1; ++i) em[i] = 0xff;
-    std::memcpy (em + (k - tLen), prefix, sizeof (prefix));
-    const auto digest = juce::SHA256 (payload.getData(), payload.getDataSize()).getRawData();
-    std::memcpy (em + (k - 32), digest.getData(), 32);
-    if (s != fromBytes (em, (size_t) k)) return info;
+    if (! rsaVerify (payload.getMemoryBlock(), key.substring (dot + 1), publicModulus)) return info;
 
     const auto v = juce::JSON::parse (payload.toString());
     if (v["product_sku"].toString() != "humhouse_studio") return info;
@@ -75,4 +83,77 @@ bool storedValid()
     const auto f = keyFile();
     return f.existsAsFile() && verify (f.loadFileAsString()).ok;
 }
+}
+
+namespace hhs::license
+{
+Pass verifyPass (const juce::String& passIn, const juce::String& machine, juce::int64 now)
+{
+    Pass p;
+    p.error = "Not activated.";
+    auto s = passIn.removeCharacters (" \t\r\n");
+    if (! s.startsWith ("HHP1.")) return p;
+    s = s.substring (5);
+    const int dot = s.indexOfChar ('.');
+    if (dot <= 0) return p;
+    juce::MemoryOutputStream payload;
+    if (! juce::Base64::convertFromBase64 (payload, s.substring (0, dot)) || payload.getDataSize() == 0) return p;
+    if (! rsaVerify (payload.getMemoryBlock(), s.substring (dot + 1), passModulus)) { p.error = "Activation is invalid."; return p; }
+    const auto v = juce::JSON::parse (payload.toString());
+    if (v["sku"].toString() != "humhouse_studio") return p;
+    if (! v["mid"].toString().equalsIgnoreCase (machine.trim())) { p.error = "This activation belongs to another computer."; return p; }
+    p.issued = (juce::int64) v["iat"]; p.expires = (juce::int64) v["exp"];
+    if (p.issued > now + 86400) { p.error = "Your computer's clock is wrong."; return p; }
+    if (now >= p.expires) { p.error = "Activation expired: connect to the internet so HumHouse can check your key."; return p; }
+    p.ok = true; p.error = {};
+    return p;
+}
+
+juce::File passFile() { return keyFile().getSiblingFile ("license.pass"); }
+
+Pass storedPass()
+{
+    const auto f = passFile();
+    if (! f.existsAsFile()) return {};
+    return verifyPass (f.loadFileAsString(), machineId(), juce::Time::currentTimeMillis() / 1000);
+}
+
+juce::String serverUrl() { return HHS_LICENSE_URL; }
+
+Online activateOnline (const juce::String& key, const juce::String& machine)
+{
+    Online r;
+    auto* o = new juce::DynamicObject();
+    o->setProperty ("key", key.trim());
+    o->setProperty ("mid", machine);
+    o->setProperty ("ver", JUCE_APPLICATION_VERSION_STRING);
+    const juce::var body (o);
+    int status = 0;
+    const auto url = juce::URL (serverUrl() + "/v1/activate").withPOSTData (juce::JSON::toString (body, true));
+    auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
+                                         .withExtraHeaders ("Content-Type: application/json")
+                                         .withConnectionTimeoutMs (12000)
+                                         .withStatusCode (&status));
+    if (in == nullptr) { r.error = "Can't reach the HumHouse license server. Check your internet and try again."; return r; }
+    const auto v = juce::JSON::parse (in->readEntireStreamAsString());
+    if (! v.isObject()) { r.error = "The license server didn't answer properly. Try again in a minute."; return r; }
+    if ((bool) v["ok"])
+    {
+        r.pass = v["pass"].toString();
+        r.ok = verifyPass (r.pass, machine, juce::Time::currentTimeMillis() / 1000).ok;
+        if (! r.ok) r.error = "The license server's answer couldn't be verified.";
+        return r;
+    }
+    r.error = v["error"].toString().isNotEmpty() ? v["error"].toString() : juce::String ("Activation failed.");
+    r.lockNow = status == 403 || status == 404 || (bool) v["revoked"] || (bool) v["full"];
+    return r;
+}
+
+bool saveActivation (const juce::String& key, const juce::String& pass)
+{
+    keyFile().getParentDirectory().createDirectory();
+    return keyFile().replaceWithText (key.trim()) && passFile().replaceWithText (pass);
+}
+
+void clearActivation() { passFile().deleteFile(); }
 }

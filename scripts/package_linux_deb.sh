@@ -29,7 +29,7 @@ Version: $VERSION
 Section: sound
 Priority: optional
 Architecture: amd64
-Depends: libasound2, libfreetype6, libfontconfig1, libx11-6, libxext6, libxinerama1, libxrandr2, libxcursor1, libgl1
+Depends: libasound2, libfreetype6, libfontconfig1, libx11-6, libxext6, libxinerama1, libxrandr2, libxcursor1, libgl1, libcurl4 | libcurl4t64
 Maintainer: Hum House <support@humhouse.studio>
 Description: $app - beat making and vocal recording DAW
 EOF2

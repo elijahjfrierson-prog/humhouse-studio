@@ -1,5 +1,6 @@
 #include "PluginSandbox.h"
 #include "UI.h"
+#include "License.h"
 
 #if HHS_LICENSED
 // the stable app opens with a short Welcome listing what's in it (no key, no activation)
@@ -72,6 +73,68 @@ struct WelcomeWindow : public juce::DocumentWindow
 };
 #endif
 
+
+#if HHS_KEY_GATE
+// regular build: no key, no app. The key is checked by our license server (3 computers per key).
+struct ActivationPanel : public juce::Component
+{
+    juce::Label title, info, status, mid;
+    juce::TextEditor key;
+    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" };
+    std::function<void (juce::String)> onActivate;
+    explicit ActivationPanel (const juce::String& message)
+    {
+        title.setText ("Activate HumHouse Studio", juce::dontSendNotification);
+        title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
+        info.setText ("Enter your license key (HHS-XXXXX-XXXXX-XXXXX-XXXXX). Each key works on up to 3 computers. "
+                      "An internet connection is needed to activate and every 14 days after.", juce::dontSendNotification);
+        info.setColour (juce::Label::textColourId, hhs::col::dim);
+        info.setJustificationType (juce::Justification::topLeft);
+        mid.setText ("Machine ID: " + hhs::license::machineId(), juce::dontSendNotification);
+        mid.setColour (juce::Label::textColourId, hhs::col::dim);
+        status.setText (message, juce::dontSendNotification);
+        key.setTextToShowWhenEmpty ("HHS-XXXXX-XXXXX-XXXXX-XXXXX", hhs::col::dim);
+        key.setFont (juce::Font (juce::FontOptions (18.0f)));
+        key.onReturnKey = [this] { activate.triggerClick(); };
+        activate.onClick = [this] {
+            if (key.getText().trim().isEmpty()) { setStatus ("Type your license key first."); return; }
+            activate.setEnabled (false); setStatus ("Checking your key...");
+            if (onActivate) onActivate (key.getText());
+        };
+        quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
+        copyId.onClick = [] { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); };
+        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &copyId }) addAndMakeVisible (c);
+        setSize (560, 300);
+    }
+    void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
+    void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
+    void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (22);
+        title.setBounds (r.removeFromTop (34)); info.setBounds (r.removeFromTop (54)); r.removeFromTop (8);
+        key.setBounds (r.removeFromTop (34)); r.removeFromTop (8);
+        status.setBounds (r.removeFromTop (40));
+        auto b = r.removeFromBottom (32);
+        quitBtn.setBounds (b.removeFromRight (90)); b.removeFromRight (8); activate.setBounds (b.removeFromRight (130));
+        copyId.setBounds (b.removeFromLeft (150));
+        mid.setBounds (r.removeFromBottom (24));
+    }
+};
+
+struct ActivationWindow : public juce::DocumentWindow
+{
+    explicit ActivationWindow (ActivationPanel* p) : juce::DocumentWindow ("Activate HumHouse Studio", hhs::col::bg, juce::DocumentWindow::closeButton)
+    {
+        setUsingNativeTitleBar (true);
+        setContentOwned (p, true);
+        centreWithSize (getWidth(), getHeight());
+        setVisible (true);
+    }
+    void closeButtonPressed() override { juce::JUCEApplication::getInstance()->quit(); }
+};
+#endif
+
 class HumHouseApp : public juce::JUCEApplication
 {
     juce::ScopedLowPowerModeDisabler noAppNap;   // macOS: stay full speed while OBS is in front
@@ -112,6 +175,15 @@ public:
         }
         juce::Desktop::getInstance().setOrientationsEnabled (juce::Desktop::allOrientations);
        #endif
+       #if HHS_KEY_GATE
+        launchLine = commandLine;
+        if (! hhs::license::storedPass().ok) { showActivation ({}); return; }
+        renewInBackground();
+       #endif
+        startMain (commandLine);
+    }
+    void startMain (const juce::String& commandLine)
+    {
         window = std::make_unique<MainWindow>();
         openFromCommandLine (commandLine);
         for (auto& f : pendingOpen) openFromCommandLine (f);
@@ -145,6 +217,12 @@ public:
     }
     void shutdown() override
     {
+       #if HHS_KEY_GATE
+        *alive = false;
+        licenseWatch.stopTimer();
+        licensePool.removeAllJobs (true, 15000);
+        activationWindow = nullptr;
+       #endif
         welcomeWindow = nullptr;
         window = nullptr;
         juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -180,6 +258,68 @@ public:
     };
 
 private:
+   #if HHS_KEY_GATE
+    struct Watch : public juce::Timer { std::function<void()> fn; void timerCallback() override { if (fn) fn(); } };
+    juce::String launchLine;
+    juce::ThreadPool licensePool { 1 };
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
+    std::unique_ptr<juce::DocumentWindow> activationWindow;
+    Watch licenseWatch;
+
+    void showActivation (const juce::String& message)
+    {
+        auto* p = new ActivationPanel (message);
+        juce::Component::SafePointer<ActivationPanel> sp (p);
+        p->onActivate = [this, sp] (juce::String key) {
+            licensePool.addJob ([this, sp, key, alive = alive] {
+                const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
+                juce::MessageManager::callAsync ([this, sp, key, r, alive] {
+                    if (! *alive || sp == nullptr) return;
+                    if (! r.ok) { sp->failed (r.error); return; }
+                    if (! hhs::license::saveActivation (key, r.pass)) { sp->failed ("Couldn't save the activation on this computer."); return; }
+                    activationWindow = nullptr;
+                    startMain (launchLine);
+                    watchLicense();
+                });
+            });
+        };
+        activationWindow = std::make_unique<ActivationWindow> (p);
+    }
+    void lockApp (const juce::String& why)
+    {
+        hhs::license::clearActivation();
+        if (window != nullptr && hhs::saveBackupMain) hhs::saveBackupMain();
+        welcomeWindow = nullptr;
+        window = nullptr;
+        showActivation (why);
+    }
+    // renew the 14-day pass when it's 3+ days old; a revoked key or a 4th computer locks right away
+    void renewInBackground()
+    {
+        watchLicense();
+        const auto p = hhs::license::storedPass();
+        if (juce::Time::currentTimeMillis() / 1000 - p.issued < 3 * 86400) return;
+        const auto key = hhs::license::keyFile().loadFileAsString().trim();
+        licensePool.addJob ([this, key, alive = alive] {
+            const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
+            juce::MessageManager::callAsync ([this, key, r, alive] {
+                if (! *alive) return;
+                if (r.ok) hhs::license::saveActivation (key, r.pass);
+                else if (r.lockNow) lockApp (r.error);
+            });
+        });
+    }
+    void watchLicense()
+    {
+        licenseWatch.fn = [this] {
+            if (window == nullptr) return;
+            const auto p = hhs::license::storedPass();
+            if (! p.ok) lockApp (p.error);
+            else if (juce::Time::currentTimeMillis() / 1000 - p.issued >= 3 * 86400) renewInBackground();
+        };
+        licenseWatch.startTimer (20 * 60 * 1000);
+    }
+   #endif
     hhs::HHLookAndFeel laf;
     std::unique_ptr<MainWindow> window;
     juce::StringArray pendingOpen;
