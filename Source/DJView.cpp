@@ -481,7 +481,7 @@ struct TransitionPreset { const char* name; double bars; int kind; };   // kind:
 static constexpr TransitionPreset kTransitions[] {
     { "Blend 8 bars", 8, 0 }, { "Blend 16 bars", 16, 0 }, { "Bass Swap 8 bars", 8, 2 },
     { "Filter Sweep 8 bars", 8, 3 }, { "Echo Out 4 bars", 4, 4 }, { "Cut on the 1", 2, 1 } };
-struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120, seconds = 0; int preset = 0; bool aKeep = false, bKeep = false; };   // seconds > 0: custom length (FADE)
+struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120, seconds = 0; int preset = 0; bool aKeep = false, bKeep = false, full = false; };   // seconds > 0: custom length (FADE); full: whole A + transition + whole B
 
 static bool readStretched (juce::AudioFormatReader& r, double startSec, double rate, double outSr, juce::AudioBuffer<float>& dst)
 {
@@ -506,10 +506,16 @@ static bool renderTransition (const TransitionJob& j)
     if (ra == nullptr || rb == nullptr || ra->sampleRate <= 0 || rb->sampleRate <= 0) return false;
     const auto& pr = kTransitions[j.preset];
     const double sr = ra->sampleRate, beat = 60.0 / juce::jmax (40.0, j.bpm);
-    const double pre = 8 * beat, len = j.seconds > 0 ? j.seconds : pr.bars * 4 * beat, post = 8 * beat;
+    const double len = j.seconds > 0 ? j.seconds : pr.bars * 4 * beat;
+    double pre = 8 * beat, post = 8 * beat, aStart = j.aPos;
+    if (j.full)   // FULL MIX: song A from its first sample, the same transition, then song B to its last sample
+    {
+        pre += j.aPos / juce::jmax (0.01, j.aRate); aStart = 0.0;
+        post = juce::jmax (post, ((double) rb->lengthInSamples / rb->sampleRate - j.bPos) / juce::jmax (0.01, j.bRate) - len);
+    }
     const int nPre = (int) (pre * sr), nLen = (int) (len * sr), nTot = (int) ((pre + len + post) * sr);
     juce::AudioBuffer<float> A (2, nPre + nLen), B (2, nTot - nPre), out (2, nTot);
-    readStretched (*ra, j.aPos, j.aRate, sr, A);
+    readStretched (*ra, aStart, j.aRate, sr, A);
     readStretched (*rb, j.bPos, j.bRate, sr, B);
     for (auto [buf, keep, rate] : { std::tuple<juce::AudioBuffer<float>*, bool, double> { &A, j.aKeep, j.aRate }, { &B, j.bKeep, j.bRate } })
         if (keep) { auto kl = std::make_unique<KeyLock>(); kl->process (buf->getWritePointer (0), buf->getWritePointer (1), buf->getNumSamples(), 1.0 / rate, sr); }
@@ -610,7 +616,7 @@ public:
         transBtn.onClick = [this] { transMenu(); };
         addAndMakeVisible (sendBtn);
         sendBtn.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff7a3cd2));
-        sendBtn.setTooltip ("SEND TO REC: like RETRO - the last FADE or transition you played, both songs fully mixed and pre-rendered, lands on the Record page as an audio clip at the playhead");
+        sendBtn.setTooltip ("SEND TO REC: both FULL songs merged into one clip, faded together by the last FADE or transition you played, pre-rendered onto the Record page at the playhead");
         sendBtn.onClick = [this] { sendToRec(); };
         recBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd23c3c));
         recBtn.setTooltip ("Record the Hum Verse mix; when you stop it's saved to Downloads and you can PUSH it to the Record timeline");
@@ -697,17 +703,23 @@ private:
         if (! to.tp.isPlaying()) to.tp.start();
         fadeFrom = xf.getValue(); fadeTo = toB ? 1.0 : 0.0; fadeT0 = juce::Time::getMillisecondCounterHiRes(); fading = true;
         fadeToB = toB; lastTrans = kFadeIdx;
-        renderTrans (kFadeIdx, false);   // pre-render this exact fade in the background, ready for SEND TO REC
+        renderTrans (kFadeIdx, false, true);   // pre-render both full songs merged through this exact fade, ready for SEND TO REC
     }
     // SEND TO REC: the last FADE / transition, pre-rendered, as an audio clip on the Record page (renders first if needed)
     void sendToRec()
     {
         if (! a.file.existsAsFile() || ! b.file.existsAsFile()) { if (s.readout()) s.readout() ("SEND TO REC: load a song on both decks first"); return; }
         if (lastTrans < 0) lastTrans = 0;
-        const auto f = transFile (lastTrans);
-        if (f.existsAsFile() && rendering.count (lastTrans) == 0) { pushToRecord (f, true); if (s.showView) s.showView (1); return; }
-        sendWhenReady = lastTrans;
-        renderTrans (lastTrans, false);
+        pushFull (lastTrans);
+    }
+    // both full songs merged into one clip, faded together by transition i, on the Record timeline at the playhead
+    void pushFull (int i)
+    {
+        const auto f = transFile (i, true);
+        if (f.existsAsFile() && rendering.count (i + kFull) == 0) { pushToRecord (f, true); if (s.showView) s.showView (1); return; }
+        sendWhenReady = i + kFull;
+        if (s.readout()) s.readout() ("PUSH FULL MIX: rendering both songs merged - lands on Record when done");
+        renderTrans (i, false, true);
     }
     void timerCallback() override
     {
@@ -834,6 +846,7 @@ private:
             sub.addItem (i * 10 + 1, ready ? "Audition" : "Render + audition");
             sub.addItem (i * 10 + 2, "PUSH to Record timeline at playhead", ready);
             sub.addItem (i * 10 + 3, "PUSH to Record timeline (end of song)", ready);
+            sub.addItem (i * 10 + 6, "PUSH FULL MIX to Record (both full songs merged + faded)");
             sub.addItem (i * 10 + 4, "Add to Beat Channel Rack", ready);
             sub.addItem (i * 10 + 5, "Show in folder", ready);
             m.addSubMenu (juce::String (kTransitions[i].name) + (rendering.count (i) ? "  (rendering...)" : ready ? "  (ready)" : ""), sub);
@@ -848,12 +861,14 @@ private:
             safe->lastTrans = i;
             if (act == 1) { if (f.existsAsFile() && safe->rendering.count (i) == 0) safe->s.engine.previewFile (f); else safe->renderTrans (i, true); }
             else if (act == 2 || act == 3) safe->pushToRecord (f, act == 2);
+            else if (act == 6) safe->pushFull (i);
             else if (act == 4) addSampleChannels (safe->s, { f }, {});
             else if (act == 5) f.revealToUser();
         });
     }
-    juce::File transFile (int i) const
+    juce::File transFile (int i, bool full = false) const
     {
+        if (full) { auto f = transFile (i); return f.getSiblingFile (f.getFileNameWithoutExtension() + " FULL MIX.wav"); }
         if (i == kFadeIdx)
         {
             const Deck& from = fadeToB ? a : b; const Deck& to = fadeToB ? b : a;
@@ -869,10 +884,11 @@ private:
         return dir.getChildFile (a.file.getFileNameWithoutExtension().substring (0, 24) + " to " + b.file.getFileNameWithoutExtension().substring (0, 24)
                                  + " - " + kTransitions[i].name + " " + key.substring (0, 6) + ".wav");
     }
-    void renderTrans (int i, bool audition)
+    void renderTrans (int i, bool audition, bool full = false)
     {
-        const auto f = transFile (i);
-        if (rendering.count (i) || (f.existsAsFile() && ! audition)) return;
+        const auto f = transFile (i, full);
+        const int rk = i + (full ? kFull : 0);
+        if (rendering.count (rk) || (f.existsAsFile() && ! audition)) return;
         if (f.existsAsFile()) { s.engine.previewFile (f); return; }
         f.getParentDirectory().createDirectory();
         TransitionJob j; j.a = a.file; j.b = b.file; j.out = f; j.preset = juce::jmin (i, kFadeIdx - 1);
@@ -890,21 +906,23 @@ private:
             j.aRate = from.bpm > 0 ? j.bpm / from.bpm : 1.0; j.bRate = to.bpm > 0 ? j.bpm / to.bpm : 1.0;
             j.seconds = fadeMs / 1000.0;
         }
-        rendering.insert (i);
+        j.full = full;
+        rendering.insert (rk);
         transBtn.setButtonText ("TRANS...");
-        juce::Thread::launch ([j, i, audition, safe = juce::Component::SafePointer<DjView> (this)] {
+        juce::Thread::launch ([j, rk, audition, safe = juce::Component::SafePointer<DjView> (this)] {
             const bool ok = renderTransition (j);
-            juce::MessageManager::callAsync ([safe, i, ok, audition, f = j.out] {
+            juce::MessageManager::callAsync ([safe, rk, ok, audition, f = j.out] {
                 if (safe == nullptr) return;
-                safe->rendering.erase (i);
+                safe->rendering.erase (rk);
                 if (safe->rendering.empty()) safe->transBtn.setButtonText ("TRANS");
                 if (ok && audition) safe->s.engine.previewFile (f);
-                if (ok && safe->sendWhenReady == i) { safe->sendWhenReady = -1; safe->pushToRecord (f, true); if (safe->s.showView) safe->s.showView (1); }
+                if (ok && safe->sendWhenReady == rk) { safe->sendWhenReady = -1; safe->pushToRecord (f, true); if (safe->s.showView) safe->s.showView (1); }
             });
         });
     }
     std::set<int> rendering;
     static constexpr int kFadeIdx = (int) std::size (kTransitions);   // the live FADE (its own length / direction)
+    static constexpr int kFull = 1000;   // rendering / sendWhenReady key offset for FULL MIX renders
     int lastTrans = -1, sendWhenReady = -1;
     bool fadeToB = true;
     juce::TextButton transBtn { "TRANS" }, sendBtn { "SEND TO REC" };
