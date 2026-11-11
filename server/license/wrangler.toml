@@ -10,6 +10,6 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "humhouse-license"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "022c35a9-2b81-4305-a08e-cdaff1762ac9"
 
 # secrets (wrangler secret put ...): PASS_PRIVATE_KEY (PKCS#8 PEM), ADMIN_TOKEN
