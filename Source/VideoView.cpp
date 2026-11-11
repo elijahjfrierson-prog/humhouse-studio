@@ -22,7 +22,7 @@ public:
     {
         ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
         addAndMakeVisible (*ed);
-        for (auto* b : { &pop, &follow, &toRecord }) addAndMakeVisible (b);
+        for (auto* b : { &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
         addAndMakeVisible (info);
         follow.setClickingTogglesState (true); follow.setToggleState (true, juce::dontSendNotification);
         follow.setTooltip ("The video plays and scrubs with HumHouse's playhead (Beat / Record / Mix)");
@@ -33,6 +33,8 @@ public:
         info.setText ("Import a song and takes, AUTO SYNC, GENERATE 3 EDITS - FOLLOW keeps it locked to the playhead", juce::dontSendNotification);
         pop.onClick = [this] { popped() ? dock() : popOut(); };
         toRecord.onClick = [this] { songToRecord(); };
+        toMixer.setTooltip ("Every VIDEO track with sound becomes its own Record clip, routed to a new mixer insert or the insert number you pick");
+        toMixer.onClick = [this] { tracksMenu(); };
         startTimerHz (30);
     }
     ~EditorView() override { stopTimer(); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
@@ -46,7 +48,8 @@ public:
         auto r = getLocalBounds(); auto b = r.removeFromTop (bar).reduced (4);
         pop.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
         follow.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
-        toRecord.setBounds (b.removeFromLeft (140)); b.removeFromLeft (8);
+        toRecord.setBounds (b.removeFromLeft (140)); b.removeFromLeft (4);
+        toMixer.setBounds (b.removeFromLeft (150)); b.removeFromLeft (8);
         info.setBounds (b);
         if (! popped()) ed->setBounds (r);
     }
@@ -91,6 +94,34 @@ private:
         });
         info.setText ("Song is on the Record timeline - edit it there, the video follows the playhead", juce::dontSendNotification);
     }
+    void tracksMenu()
+    {
+        juce::PopupMenu m, to;
+        m.addItem (1, "Each track -> its own new mixer insert");
+        const auto& mx = s.p().mixer;
+        for (int i = 1; i < (int) mx.size(); ++i) to.addItem (100 + i, "Insert " + juce::String (i) + "  " + mx[(size_t) i].name);
+        m.addSubMenu ("All tracks -> insert #", to, mx.size() > 1);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&toMixer),
+            [safe = juce::Component::SafePointer<EditorView> (this)] (int r) { if (safe && r > 0) safe->tracksToMixer (r == 1 ? -1 : r - 100); });
+    }
+    void tracksToMixer (int insert)
+    {
+        const auto dir = hhsHome().getChildFile ("Video Tracks").getChildFile (juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S"));
+        const auto tr = ed->renderTracks (dir);
+        if (tr.empty()) { info.setText ("No VIDEO track has sound yet - import audio or video with sound first", juce::dontSendNotification); return; }
+        s.edit ("Video tracks to mixer", [&] (Project& p) {
+            for (auto& t : tr)
+            {
+                Lane l; l.name = t.name + " (video)";
+                l.mixerTrack = insert > 0 && insert < (int) p.mixer.size() ? insert : p.addMixerTrack (l.name);
+                p.lanes.push_back (l);
+                Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = t.file; c.patternIndex = -1;
+                c.start = 0.0; c.length = secondsToBeats (t.seconds, p.bpm);
+                p.clips.push_back (c);
+            }
+        });
+        info.setText (juce::String ((int) tr.size()) + " VIDEO track(s) on Record, each routed to " + (insert > 0 ? "insert " + juce::String (insert) : juce::String ("its own insert")), juce::dontSendNotification);
+    }
     void timerCallback() override
     {
         if (! follow.getToggleState() || (! isShowing() && ! popped())) { hostWasPlaying = s.engine.isPlaying(); return; }
@@ -102,7 +133,7 @@ private:
     Studio& s;
     std::unique_ptr<isfx::MainComponent> ed;
     std::unique_ptr<Win> win;
-    juce::TextButton pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" };
+    juce::TextButton pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" }, toMixer { "TRACKS TO MIXER" };
     juce::Label info;
     bool hostWasPlaying = false; double lastT = -1.0;
     static constexpr int bar = 34;
