@@ -1,3 +1,4 @@
+#include <set>
 #include "UI.h"
 #include <juce_dsp/juce_dsp.h>
 
@@ -398,6 +399,101 @@ struct DjMix : public juce::AudioSource
     std::atomic<float> fade { 0.5f }, master { 0.8f };
 };
 
+// TRANSITIONS: pre-rendered A->B presets on a worker thread (own readers, own buffers; never touches the audio or UI thread)
+struct TransitionPreset { const char* name; double bars; int kind; };   // kind: 0 blend, 1 cut, 2 bass swap, 3 filter sweep, 4 echo out
+static constexpr TransitionPreset kTransitions[] {
+    { "Blend 8 bars", 8, 0 }, { "Blend 16 bars", 16, 0 }, { "Bass Swap 8 bars", 8, 2 },
+    { "Filter Sweep 8 bars", 8, 3 }, { "Echo Out 4 bars", 4, 4 }, { "Cut on the 1", 2, 1 } };
+struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120; int preset = 0; };
+
+static bool readStretched (juce::AudioFormatReader& r, double startSec, double rate, double outSr, juce::AudioBuffer<float>& dst)
+{
+    const int n = dst.getNumSamples();
+    const double step = rate * r.sampleRate / outSr;   // input samples per output sample
+    const int need = (int) std::ceil (n * step) + 16;
+    juce::AudioBuffer<float> in (2, need);
+    in.clear();
+    r.read (&in, 0, need, (juce::int64) (juce::jmax (0.0, startSec) * r.sampleRate), true, true);
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        juce::LagrangeInterpolator li;
+        li.process (step, in.getReadPointer (juce::jmin (ch, (int) r.numChannels - 1)), dst.getWritePointer (ch), n, need, 0);
+    }
+    return true;
+}
+
+static bool renderTransition (const TransitionJob& j)
+{
+    juce::AudioFormatManager fm; fm.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> ra (fm.createReaderFor (j.a)), rb (fm.createReaderFor (j.b));
+    if (ra == nullptr || rb == nullptr || ra->sampleRate <= 0 || rb->sampleRate <= 0) return false;
+    const auto& pr = kTransitions[j.preset];
+    const double sr = ra->sampleRate, beat = 60.0 / juce::jmax (40.0, j.bpm);
+    const double pre = 8 * beat, len = pr.bars * 4 * beat, post = 8 * beat;
+    const int nPre = (int) (pre * sr), nLen = (int) (len * sr), nTot = (int) ((pre + len + post) * sr);
+    juce::AudioBuffer<float> A (2, nPre + nLen), B (2, nTot - nPre), out (2, nTot);
+    readStretched (*ra, j.aPos, j.aRate, sr, A);
+    readStretched (*rb, j.bPos, j.bRate, sr, B);
+    out.clear();
+    juce::IIRFilter hpA[2], hpB[2];
+    juce::AudioBuffer<float> echo (2, (int) (beat * sr * 0.75) + 1); echo.clear(); int ep = 0;
+    const int blk = 256;
+    for (int s0 = 0; s0 < nTot; s0 += blk)
+    {
+        const int n = juce::jmin (blk, nTot - s0);
+        const float t = (float) juce::jlimit (0.0, 1.0, (s0 - nPre) / (double) juce::jmax (1, nLen));   // 0..1 across the transition
+        float ga = 1, gb = 0, hpa = 0, hpb = 0; bool echoOnly = false;
+        switch (pr.kind)
+        {
+            case 0: ga = std::cos (t * juce::MathConstants<float>::halfPi); gb = std::sin (t * juce::MathConstants<float>::halfPi); break;
+            case 1: ga = t < 0.5f ? 1.0f : 0.0f; gb = 1.0f - ga; break;
+            case 2: gb = juce::jmin (1.0f, t * 2.0f); ga = t < 0.5f ? 1.0f : 1.0f - (t - 0.5f) * 2.0f; hpa = t >= 0.5f ? 220.0f : 0.0f; hpb = t < 0.5f ? 220.0f : 0.0f; break;
+            case 3: hpa = 20.0f * std::pow (150.0f, t); ga = t < 0.75f ? 1.0f : 1.0f - (t - 0.75f) * 4.0f; gb = juce::jlimit (0.0f, 1.0f, (t - 0.5f) * 2.0f); break;
+            case 4: echoOnly = t >= 0.25f; ga = echoOnly ? 0.0f : 1.0f; gb = t >= 0.5f ? 1.0f : 0.0f; break;
+        }
+        if (s0 >= nPre + nLen) { ga = 0; gb = 1; hpb = 0; }
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (hpa > 0) hpA[ch].setCoefficients (juce::IIRCoefficients::makeHighPass (sr, hpa)); else hpA[ch].reset();
+            if (hpb > 0) hpB[ch].setCoefficients (juce::IIRCoefficients::makeHighPass (sr, hpb)); else hpB[ch].reset();
+        }
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            float* o = out.getWritePointer (ch, s0);
+            if (s0 < A.getNumSamples())
+            {
+                const int na = juce::jmin (n, A.getNumSamples() - s0);
+                juce::HeapBlock<float> tmp (na); std::memcpy (tmp, A.getReadPointer (ch, s0), sizeof (float) * (size_t) na);
+                if (hpa > 0) hpA[ch].processSamples (tmp, na);
+                for (int i = 0; i < na; ++i) o[i] += tmp[i] * ga;
+                if (pr.kind == 4)   // echo send taken from A while it still plays, then left to ring out
+                    for (int i = 0; i < na; ++i) { auto* e = echo.getWritePointer (ch); const int k = (ep + i) % echo.getNumSamples(); const float d = e[k]; e[k] = tmp[i] * (echoOnly ? 0.0f : 0.5f) + d * 0.55f; o[i] += d * 0.8f; }
+            }
+            else if (pr.kind == 4)
+                for (int i = 0; i < n; ++i) { auto* e = echo.getWritePointer (ch); const int k = (ep + i) % echo.getNumSamples(); const float d = e[k]; e[k] = d * 0.55f; o[i] += d * 0.8f; }
+            if (s0 >= nPre)
+            {
+                const int bo = s0 - nPre, nb = juce::jmin (n, B.getNumSamples() - bo);
+                juce::HeapBlock<float> tmp (juce::jmax (1, nb)); std::memcpy (tmp, B.getReadPointer (ch, bo), sizeof (float) * (size_t) juce::jmax (0, nb));
+                if (hpb > 0) hpB[ch].processSamples (tmp, nb);
+                for (int i = 0; i < nb; ++i) o[i] += tmp[i] * gb;
+            }
+        }
+        ep = (ep + n) % echo.getNumSamples();
+    }
+    out.applyGainRamp (0, juce::jmin (256, nTot), 0.0f, 1.0f);
+    out.applyGainRamp (nTot - juce::jmin (2048, nTot), juce::jmin (2048, nTot), 1.0f, 0.0f);
+    for (int ch = 0; ch < 2; ++ch) juce::FloatVectorOperations::clip (out.getWritePointer (ch), out.getReadPointer (ch), -1.0f, 1.0f, nTot);
+    j.out.deleteFile();
+    std::unique_ptr<juce::OutputStream> os (j.out.createOutputStream());
+    if (os == nullptr) return false;
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), sr, 2, 24, {}, 0));
+    if (w == nullptr) return false;
+    os.release();
+    return w->writeFromAudioSampleBuffer (out, 0, nTot);
+}
+
 class DjView : public juce::Component, private juce::Timer, private juce::MidiInputCallback
 {
 public:
@@ -418,7 +514,9 @@ public:
         autoMix.setClickingTogglesState (true);
         autoMix.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff2fb36b));
         fadeBtn.onClick = [this] { startFade(); };
-        for (auto* c : { &recBtn, &curveBtn }) addAndMakeVisible (c);
+        for (auto* c : { &recBtn, &curveBtn, &transBtn }) addAndMakeVisible (c);
+        transBtn.setTooltip ("Transition presets between deck 1 and deck 2: rendered in the background, then audition, PUSH or add to the rack");
+        transBtn.onClick = [this] { transMenu(); };
         recBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd23c3c));
         recBtn.setTooltip ("Record the Hum Verse mix; when you stop it's saved to Downloads and you can PUSH it to the Record timeline");
         recBtn.onClick = [this] { toggleRec(); };
@@ -467,8 +565,8 @@ public:
         {
             a.setBounds (r.removeFromTop (230)); waves.setBounds (r.removeFromTop (120).reduced (0, 4)); b.setBounds (r.removeFromTop (230));
             auto mix = r.removeFromTop (44); mix.removeFromTop (16);
-            vol.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
-            autoMix.setBounds (mix.removeFromLeft (64)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48));
+            vol.setBounds (mix.removeFromRight (64)); mix.removeFromRight (4);
+            autoMix.setBounds (mix.removeFromLeft (56)); transBtn.setBounds (mix.removeFromLeft (48)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48));
             recBtn.setBounds (mix.removeFromLeft (44)); curveBtn.setBounds (mix.removeFromRight (56)); xf.setBounds (mix.reduced (6, 0));
             library.setBounds (r);
             return;
@@ -482,6 +580,7 @@ public:
         learn.setBounds (mix.removeFromRight (100)); mix.removeFromRight (6);
         autoMix.setBounds (mix.removeFromLeft (90)); mix.removeFromLeft (6); fadeBtn.setBounds (mix.removeFromLeft (64));
         mix.removeFromLeft (6); curveBtn.setBounds (mix.removeFromLeft (70)); mix.removeFromLeft (6); recBtn.setBounds (mix.removeFromLeft (64));
+        mix.removeFromLeft (6); transBtn.setBounds (mix.removeFromLeft (64));
         xf.setBounds (mix.withSizeKeepingCentre (juce::jmin (420, mix.getWidth()), mix.getHeight()));
         library.setBounds (r.withTrimmedTop (4));
     }
@@ -580,6 +679,71 @@ private:
             else f.revealToUser();
         });
     }
+    // TRANS: A (from its playhead) into B (from its cue), at deck 1's tempo; each preset renders once per pair
+    void transMenu()
+    {
+        juce::PopupMenu m;
+        if (! a.file.existsAsFile() || ! b.file.existsAsFile()) { m.addItem (-1, "Load a song on both decks first", false); m.showMenuAsync ({}); return; }
+        m.addItem (1000, "Render all presets (background)");
+        m.addSeparator();
+        for (int i = 0; i < (int) std::size (kTransitions); ++i)
+        {
+            const auto f = transFile (i);
+            juce::PopupMenu sub;
+            const bool ready = f.existsAsFile() && rendering.count (i) == 0;
+            sub.addItem (i * 10 + 1, ready ? "Audition" : "Render + audition");
+            sub.addItem (i * 10 + 2, "PUSH to Record timeline at playhead", ready);
+            sub.addItem (i * 10 + 3, "PUSH to Record timeline (end of song)", ready);
+            sub.addItem (i * 10 + 4, "Add to Beat Channel Rack", ready);
+            sub.addItem (i * 10 + 5, "Show in folder", ready);
+            m.addSubMenu (juce::String (kTransitions[i].name) + (rendering.count (i) ? "  (rendering...)" : ready ? "  (ready)" : ""), sub);
+        }
+        m.addSeparator(); m.addItem (2000, "Stop audition");
+        m.showMenuAsync ({}, [safe = juce::Component::SafePointer<DjView> (this)] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            if (r == 2000) { safe->s.engine.stopPreview(); return; }
+            if (r == 1000) { for (int i = 0; i < (int) std::size (kTransitions); ++i) safe->renderTrans (i, false); return; }
+            const int i = r / 10, act = r % 10;
+            const auto f = safe->transFile (i);
+            if (act == 1) { if (f.existsAsFile() && safe->rendering.count (i) == 0) safe->s.engine.previewFile (f); else safe->renderTrans (i, true); }
+            else if (act == 2 || act == 3) safe->pushToRecord (f, act == 2);
+            else if (act == 4) addSampleChannels (safe->s, { f }, {});
+            else if (act == 5) f.revealToUser();
+        });
+    }
+    juce::File transFile (int i) const
+    {
+        auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads").getChildFile ("Hum Verse Transitions");
+        const auto key = juce::String::toHexString ((a.file.getFullPathName() + b.file.getFullPathName() + juce::String (a.tp.getCurrentPosition(), 0)
+                                                     + juce::String (b.cuePos, 1) + juce::String (a.liveBpm(), 1)).hashCode64());
+        return dir.getChildFile (a.file.getFileNameWithoutExtension().substring (0, 24) + " to " + b.file.getFileNameWithoutExtension().substring (0, 24)
+                                 + " - " + kTransitions[i].name + " " + key.substring (0, 6) + ".wav");
+    }
+    void renderTrans (int i, bool audition)
+    {
+        const auto f = transFile (i);
+        if (rendering.count (i) || (f.existsAsFile() && ! audition)) return;
+        if (f.existsAsFile()) { s.engine.previewFile (f); return; }
+        f.getParentDirectory().createDirectory();
+        TransitionJob j; j.a = a.file; j.b = b.file; j.out = f; j.preset = i;
+        j.aPos = a.tp.getCurrentPosition(); j.bPos = b.cuePos;
+        j.bpm = a.liveBpm() > 0 ? a.liveBpm() : 120.0;
+        j.aRate = a.bpm > 0 ? j.bpm / a.bpm : 1.0;
+        j.bRate = b.bpm > 0 ? j.bpm / b.bpm : 1.0;
+        rendering.insert (i);
+        transBtn.setButtonText ("TRANS...");
+        juce::Thread::launch ([j, i, audition, safe = juce::Component::SafePointer<DjView> (this)] {
+            const bool ok = renderTransition (j);
+            juce::MessageManager::callAsync ([safe, i, ok, audition, f = j.out] {
+                if (safe == nullptr) return;
+                safe->rendering.erase (i);
+                if (safe->rendering.empty()) safe->transBtn.setButtonText ("TRANS");
+                if (ok && audition) safe->s.engine.previewFile (f);
+            });
+        });
+    }
+    std::set<int> rendering;
+    juce::TextButton transBtn { "TRANS" };
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> recWriter;
     juce::File recFile;
     juce::TextButton recBtn { "REC" }, curveBtn { "CURVE" };
