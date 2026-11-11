@@ -16,6 +16,8 @@ ROOT="$STAGE/root/Applications"
 mkdir -p "$ROOT" "$STAGE/pkgs" "$STAGE/scripts" "$STAGE/resources"
 cp -R "$APP_SRC" "$ROOT/"
 mkdir -p "$ROOT/$NAME.app/Contents/Resources" && cp -R "$REPO/Sounds" "$ROOT/$NAME.app/Contents/Resources/Sounds"
+# VIDEO tab: bundle the LGPL FFmpeg dylibs (the app looks in Contents/Frameworks via @rpath)
+if [[ -d "${FFMPEG_DIR:-$HOME/ffmpeg-lgpl}/lib" ]]; then mkdir -p "$ROOT/$NAME.app/Contents/Frameworks" && cp -P "${FFMPEG_DIR:-$HOME/ffmpeg-lgpl}"/lib/*.dylib "$ROOT/$NAME.app/Contents/Frameworks/"; fi
 codesign --force --deep --sign "${APPLE_DEVELOPER_ID:--}" "$ROOT/$NAME.app" || true
 
 cat > "$STAGE/scripts/preinstall" <<PRE

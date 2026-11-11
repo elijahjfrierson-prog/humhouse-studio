@@ -6,6 +6,111 @@
  #define HHS_HAS_VIDEO 0
 #endif
 
+#if HHS_WITH_ISFX
+#include "ISFX/MainComponent.h"
+namespace hhs
+{
+namespace
+{
+// VIDEO tab = the full InSequence FX editor (looks, FX, transitions, AUTO SYNC, GENERATE, export) in HumHouse colors.
+// It plays through HumHouse's own audio device as one more callback; decoding/pre-roll run on its prefetch threads,
+// so nothing waits on the audio thread or blocks the UI. POP OUT detaches it into its own window.
+class EditorView : public juce::Component, private juce::Timer
+{
+public:
+    explicit EditorView (Studio& st) : s (st)
+    {
+        ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
+        addAndMakeVisible (*ed);
+        for (auto* b : { &pop, &follow, &toRecord }) addAndMakeVisible (b);
+        addAndMakeVisible (info);
+        follow.setClickingTogglesState (true); follow.setToggleState (true, juce::dontSendNotification);
+        follow.setTooltip ("The video plays and scrubs with HumHouse's playhead (Beat / Record / Mix)");
+        pop.setTooltip ("Detach the video editor into its own window (click again to dock it)");
+        toRecord.setTooltip ("Put the video's song on a new Record track as a normal clip you can move and edit");
+        info.setColour (juce::Label::textColourId, col::dim);
+        info.setMinimumHorizontalScale (0.5f);
+        info.setText ("Import a song and takes, AUTO SYNC, GENERATE 3 EDITS - FOLLOW keeps it locked to the playhead", juce::dontSendNotification);
+        pop.onClick = [this] { popped() ? dock() : popOut(); };
+        toRecord.onClick = [this] { songToRecord(); };
+        startTimerHz (30);
+    }
+    ~EditorView() override { stopTimer(); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::bg);
+        if (popped()) { g.setColour (col::dim); g.setFont (juce::FontOptions (15.0f)); g.drawText ("Video editor is popped out - click DOCK to bring it back", getLocalBounds().withTrimmedTop (bar), juce::Justification::centred); }
+    }
+    void resized() override
+    {
+        auto r = getLocalBounds(); auto b = r.removeFromTop (bar).reduced (4);
+        pop.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
+        follow.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
+        toRecord.setBounds (b.removeFromLeft (140)); b.removeFromLeft (8);
+        info.setBounds (b);
+        if (! popped()) ed->setBounds (r);
+    }
+private:
+    struct Win : juce::DocumentWindow
+    {
+        std::function<void()> onClose;
+        Win() : juce::DocumentWindow ("HumHouse VIDEO", col::bg, juce::DocumentWindow::allButtons) {}
+        void closeButtonPressed() override { if (onClose) onClose(); }
+    };
+    bool popped() const { return win != nullptr; }
+    void popOut()
+    {
+        removeChildComponent (ed.get());
+        win = std::make_unique<Win>();
+        win->setUsingNativeTitleBar (true);
+        win->setContentNonOwned (ed.get(), false);
+        win->setResizable (true, true);
+        win->centreWithSize (juce::jmax (1180, getWidth()), juce::jmax (720, getHeight()));
+        win->onClose = [this] { juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<EditorView> (this)] { if (safe) safe->dock(); }); };
+        win->setVisible (true);
+        pop.setButtonText ("DOCK"); repaint();
+    }
+    void dock()
+    {
+        if (win) { win->clearContentComponent(); win.reset(); }
+        addAndMakeVisible (*ed); pop.setButtonText ("POP OUT"); resized(); repaint();
+    }
+    void songToRecord()
+    {
+        const auto f = ed->songFile();
+        if (! f.existsAsFile()) { info.setText ("Import a song in the editor first", juce::dontSendNotification); return; }
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (f));
+        if (rd == nullptr || rd->sampleRate <= 0) { info.setText ("Can't read that song's audio here; drag the WAV onto the Record timeline", juce::dontSendNotification); return; }
+        const double secs = (double) rd->lengthInSamples / rd->sampleRate;
+        s.edit ("Video song to Record", [&] (Project& p) {
+            Lane l; l.name = f.getFileNameWithoutExtension() + " (video)"; l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
+            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1;
+            c.start = 0.0; c.length = secondsToBeats (secs, p.bpm);
+            p.clips.push_back (c);
+        });
+        info.setText ("Song is on the Record timeline - edit it there, the video follows the playhead", juce::dontSendNotification);
+    }
+    void timerCallback() override
+    {
+        if (! follow.getToggleState() || (! isShowing() && ! popped())) { hostWasPlaying = s.engine.isPlaying(); return; }
+        const bool playing = s.engine.isPlaying();
+        const double t = beatsToSeconds (s.engine.positionBeats(), s.p().bpm);
+        if (playing != hostWasPlaying || (! playing && std::abs (t - lastT) > 0.02)) ed->hostTransport (playing, t);
+        hostWasPlaying = playing; lastT = t;
+    }
+    Studio& s;
+    std::unique_ptr<isfx::MainComponent> ed;
+    std::unique_ptr<Win> win;
+    juce::TextButton pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" };
+    juce::Label info;
+    bool hostWasPlaying = false; double lastT = -1.0;
+    static constexpr int bar = 34;
+};
+}
+std::unique_ptr<juce::Component> createVideoView (Studio& s) { return std::make_unique<EditorView> (s); }
+}
+#else
 // VIDEO tab: score to picture. The video follows the song playhead; decoding runs on the OS player's own threads
 // and the sync check is a 30 Hz message-thread timer, so nothing touches the audio thread or blocks the UI.
 namespace hhs
@@ -130,3 +235,4 @@ private:
 }
 std::unique_ptr<juce::Component> createVideoView (Studio& s) { return std::make_unique<VideoView> (s); }
 }
+#endif
