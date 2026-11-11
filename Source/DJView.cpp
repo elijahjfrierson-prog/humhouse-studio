@@ -224,14 +224,14 @@ struct Deck : public juce::Component, private juce::Timer
     void resized() override
     {
         auto r = getLocalBounds().reduced (8);
-        auto bottom = r.removeFromBottom (74);
+        auto bottom = r.removeFromBottom (102);
         auto padRow = bottom.removeFromTop (34);
         const int pw = padRow.getWidth() / 4;
         for (auto* p : pads) p->setBounds (padRow.removeFromLeft (pw).reduced (2));
-        const int w = bottom.getWidth() / 7;
-        load.setBounds (bottom.removeFromLeft (w).reduced (2)); cue.setBounds (bottom.removeFromLeft (w).reduced (2));
-        play.setBounds (bottom.removeFromLeft (w).reduced (2)); sync.setBounds (bottom.removeFromLeft (w).reduced (2));
-        loop4.setBounds (bottom.removeFromLeft (w).reduced (2)); loop8.setBounds (bottom.removeFromLeft (w).reduced (2)); push.setBounds (bottom.reduced (2));
+        auto row1 = bottom.removeFromTop (34), row2 = bottom;   // two rows: every label shows in full
+        const int w1 = row1.getWidth() / 4, w2 = row2.getWidth() / 3;
+        for (auto* b : { &load, &cue, &play, &sync }) b->setBounds (row1.removeFromLeft (w1).reduced (2));
+        loop4.setBounds (row2.removeFromLeft (w2).reduced (2)); loop8.setBounds (row2.removeFromLeft (w2).reduced (2)); push.setBounds (row2.reduced (2));
         r.removeFromTop (40);
         pitch.setBounds (mirror ? r.removeFromRight (28) : r.removeFromLeft (28));
     }
@@ -435,7 +435,7 @@ struct TransitionPreset { const char* name; double bars; int kind; };   // kind:
 static constexpr TransitionPreset kTransitions[] {
     { "Blend 8 bars", 8, 0 }, { "Blend 16 bars", 16, 0 }, { "Bass Swap 8 bars", 8, 2 },
     { "Filter Sweep 8 bars", 8, 3 }, { "Echo Out 4 bars", 4, 4 }, { "Cut on the 1", 2, 1 } };
-struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120; int preset = 0; };
+struct TransitionJob { juce::File a, b, out; double aPos = 0, aRate = 1, bPos = 0, bRate = 1, bpm = 120, seconds = 0; int preset = 0; };   // seconds > 0: custom length (FADE)
 
 static bool readStretched (juce::AudioFormatReader& r, double startSec, double rate, double outSr, juce::AudioBuffer<float>& dst)
 {
@@ -460,7 +460,7 @@ static bool renderTransition (const TransitionJob& j)
     if (ra == nullptr || rb == nullptr || ra->sampleRate <= 0 || rb->sampleRate <= 0) return false;
     const auto& pr = kTransitions[j.preset];
     const double sr = ra->sampleRate, beat = 60.0 / juce::jmax (40.0, j.bpm);
-    const double pre = 8 * beat, len = pr.bars * 4 * beat, post = 8 * beat;
+    const double pre = 8 * beat, len = j.seconds > 0 ? j.seconds : pr.bars * 4 * beat, post = 8 * beat;
     const int nPre = (int) (pre * sr), nLen = (int) (len * sr), nTot = (int) ((pre + len + post) * sr);
     juce::AudioBuffer<float> A (2, nPre + nLen), B (2, nTot - nPre), out (2, nTot);
     readStretched (*ra, j.aPos, j.aRate, sr, A);
@@ -560,6 +560,10 @@ public:
         for (auto* c : { &recBtn, &curveBtn, &transBtn }) addAndMakeVisible (c);
         transBtn.setTooltip ("Transition presets between deck 1 and deck 2: rendered in the background, then audition, PUSH or add to the rack");
         transBtn.onClick = [this] { transMenu(); };
+        addAndMakeVisible (sendBtn);
+        sendBtn.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff7a3cd2));
+        sendBtn.setTooltip ("SEND TO REC: like RETRO - the last FADE or transition you played, both songs fully mixed and pre-rendered, lands on the Record page as an audio clip at the playhead");
+        sendBtn.onClick = [this] { sendToRec(); };
         recBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xffd23c3c));
         recBtn.setTooltip ("Record the Hum Verse mix; when you stop it's saved to Downloads and you can PUSH it to the Record timeline");
         recBtn.onClick = [this] { toggleRec(); };
@@ -606,11 +610,15 @@ public:
         auto r = getLocalBounds().reduced (6);
         if (phoneUI)
         {
-            a.setBounds (r.removeFromTop (230)); waves.setBounds (r.removeFromTop (120).reduced (0, 4)); b.setBounds (r.removeFromTop (230));
+            a.setBounds (r.removeFromTop (250)); waves.setBounds (r.removeFromTop (96).reduced (0, 4)); b.setBounds (r.removeFromTop (250));
             auto mix = r.removeFromTop (44); mix.removeFromTop (16);
-            vol.setBounds (mix.removeFromRight (64)); mix.removeFromRight (4);
-            autoMix.setBounds (mix.removeFromLeft (56)); transBtn.setBounds (mix.removeFromLeft (48)); learn.setBounds (mix.removeFromRight (56)); fadeBtn.setBounds (mix.removeFromRight (48));
-            recBtn.setBounds (mix.removeFromLeft (44)); curveBtn.setBounds (mix.removeFromRight (56)); linkBtn.setBounds (mix.removeFromLeft (44)); xf.setBounds (mix.reduced (6, 0));
+            vol.setBounds (mix.removeFromRight (90)); mix.removeFromRight (8); xf.setBounds (mix.reduced (6, 0));
+            // buttons on two full-width rows (one row squashed the words)
+            for (auto row : { std::vector<juce::Component*> { &autoMix, &fadeBtn, &curveBtn, &linkBtn }, std::vector<juce::Component*> { &recBtn, &transBtn, &sendBtn, &learn } })
+            {
+                auto br = r.removeFromTop (38); const int bw = br.getWidth() / (int) row.size();
+                for (auto* c : row) c->setBounds (br.removeFromLeft (bw).reduced (2));
+            }
             library.setBounds (r);
             return;
         }
@@ -625,6 +633,7 @@ public:
         mix.removeFromLeft (6); curveBtn.setBounds (mix.removeFromLeft (70)); mix.removeFromLeft (6); recBtn.setBounds (mix.removeFromLeft (64));
         mix.removeFromLeft (6); transBtn.setBounds (mix.removeFromLeft (64));
         mix.removeFromLeft (6); linkBtn.setBounds (mix.removeFromLeft (60));
+        mix.removeFromLeft (6); sendBtn.setBounds (mix.removeFromLeft (110));
         xf.setBounds (mix.withSizeKeepingCentre (juce::jmin (420, mix.getWidth()), mix.getHeight()));
         library.setBounds (r.withTrimmedTop (4));
     }
@@ -636,8 +645,21 @@ private:
         Deck& from = toB ? a : b; Deck& to = toB ? b : a;
         if (to.tp.getLengthInSeconds() <= 0.0) return;
         to.matchTo (from);
+        fadeStartFrom = from.tp.getCurrentPosition(); fadeStartTo = to.tp.getCurrentPosition();
         if (! to.tp.isPlaying()) to.tp.start();
         fadeFrom = xf.getValue(); fadeTo = toB ? 1.0 : 0.0; fadeT0 = juce::Time::getMillisecondCounterHiRes(); fading = true;
+        fadeToB = toB; lastTrans = kFadeIdx;
+        renderTrans (kFadeIdx, false);   // pre-render this exact fade in the background, ready for SEND TO REC
+    }
+    // SEND TO REC: the last FADE / transition, pre-rendered, as an audio clip on the Record page (renders first if needed)
+    void sendToRec()
+    {
+        if (! a.file.existsAsFile() || ! b.file.existsAsFile()) { if (s.readout()) s.readout() ("SEND TO REC: load a song on both decks first"); return; }
+        if (lastTrans < 0) lastTrans = 0;
+        const auto f = transFile (lastTrans);
+        if (f.existsAsFile() && rendering.count (lastTrans) == 0) { pushToRecord (f, true); if (s.showView) s.showView (1); return; }
+        sendWhenReady = lastTrans;
+        renderTrans (lastTrans, false);
     }
     void timerCallback() override
     {
@@ -775,6 +797,7 @@ private:
             if (r == 1000) { for (int i = 0; i < (int) std::size (kTransitions); ++i) safe->renderTrans (i, false); return; }
             const int i = r / 10, act = r % 10;
             const auto f = safe->transFile (i);
+            safe->lastTrans = i;
             if (act == 1) { if (f.existsAsFile() && safe->rendering.count (i) == 0) safe->s.engine.previewFile (f); else safe->renderTrans (i, true); }
             else if (act == 2 || act == 3) safe->pushToRecord (f, act == 2);
             else if (act == 4) addSampleChannels (safe->s, { f }, {});
@@ -783,6 +806,15 @@ private:
     }
     juce::File transFile (int i) const
     {
+        if (i == kFadeIdx)
+        {
+            const Deck& from = fadeToB ? a : b; const Deck& to = fadeToB ? b : a;
+            auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads").getChildFile ("Hum Verse Transitions");
+            const auto key = juce::String::toHexString ((from.file.getFullPathName() + to.file.getFullPathName() + juce::String (fadeMs, 0)
+                                                         + juce::String (fadeStartFrom, 1) + juce::String (fadeStartTo, 1) + juce::String (from.liveBpm(), 1)).hashCode64());
+            return dir.getChildFile (from.file.getFileNameWithoutExtension().substring (0, 24) + " to " + to.file.getFileNameWithoutExtension().substring (0, 24)
+                                     + " - FADE " + juce::String (fadeMs / 1000.0, 1) + "s " + key.substring (0, 6) + ".wav");
+        }
         auto dir = juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads").getChildFile ("Hum Verse Transitions");
         const auto key = juce::String::toHexString ((a.file.getFullPathName() + b.file.getFullPathName() + juce::String (a.tp.getCurrentPosition(), 0)
                                                      + juce::String (b.cuePos, 1) + juce::String (a.liveBpm(), 1)).hashCode64());
@@ -795,11 +827,19 @@ private:
         if (rendering.count (i) || (f.existsAsFile() && ! audition)) return;
         if (f.existsAsFile()) { s.engine.previewFile (f); return; }
         f.getParentDirectory().createDirectory();
-        TransitionJob j; j.a = a.file; j.b = b.file; j.out = f; j.preset = i;
+        TransitionJob j; j.a = a.file; j.b = b.file; j.out = f; j.preset = juce::jmin (i, kFadeIdx - 1);
         j.aPos = a.tp.getCurrentPosition(); j.bPos = b.cuePos;
         j.bpm = a.liveBpm() > 0 ? a.liveBpm() : 120.0;
         j.aRate = a.bpm > 0 ? j.bpm / a.bpm : 1.0;
         j.bRate = b.bpm > 0 ? j.bpm / b.bpm : 1.0;
+        if (i == kFadeIdx)   // the live FADE: from the playing deck at its position into the other from where it started
+        {
+            const Deck& from = fadeToB ? a : b; const Deck& to = fadeToB ? b : a;
+            j.a = from.file; j.b = to.file; j.aPos = fadeStartFrom; j.bPos = fadeStartTo; j.preset = 0;
+            j.bpm = from.liveBpm() > 0 ? from.liveBpm() : 120.0;
+            j.aRate = from.bpm > 0 ? j.bpm / from.bpm : 1.0; j.bRate = to.bpm > 0 ? j.bpm / to.bpm : 1.0;
+            j.seconds = fadeMs / 1000.0;
+        }
         rendering.insert (i);
         transBtn.setButtonText ("TRANS...");
         juce::Thread::launch ([j, i, audition, safe = juce::Component::SafePointer<DjView> (this)] {
@@ -809,15 +849,19 @@ private:
                 safe->rendering.erase (i);
                 if (safe->rendering.empty()) safe->transBtn.setButtonText ("TRANS");
                 if (ok && audition) safe->s.engine.previewFile (f);
+                if (ok && safe->sendWhenReady == i) { safe->sendWhenReady = -1; safe->pushToRecord (f, true); if (safe->s.showView) safe->s.showView (1); }
             });
         });
     }
     std::set<int> rendering;
-    juce::TextButton transBtn { "TRANS" };
+    static constexpr int kFadeIdx = (int) std::size (kTransitions);   // the live FADE (its own length / direction)
+    int lastTrans = -1, sendWhenReady = -1;
+    bool fadeToB = true;
+    juce::TextButton transBtn { "TRANS" }, sendBtn { "SEND TO REC" };
     std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> recWriter;
     juce::File recFile;
     juce::TextButton recBtn { "REC" }, curveBtn { "CURVE" };
-    double fadeMs = 8000.0;
+    double fadeMs = 8000.0, fadeStartFrom = 0.0, fadeStartTo = 0.0;
     // MIDI LEARN: CDJ / controller messages (note or CC per channel; pitch bend for pitch) -> deck controls
     static constexpr const char* kTargets[] { "Deck 1 Play", "Deck 1 Cue", "Deck 1 Sync", "Deck 1 Pitch", "Deck 2 Play", "Deck 2 Cue", "Deck 2 Sync", "Deck 2 Pitch", "Crossfader", "DJ Out volume" };
     static int midiKey (const juce::MidiMessage& m)
