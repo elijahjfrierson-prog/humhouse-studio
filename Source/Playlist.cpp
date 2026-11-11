@@ -1219,6 +1219,10 @@ struct LaneHeader : public juce::Component
             }
             return;
         }
+        showMenu();
+    }
+    void showMenu()
+    {
         juce::PopupMenu m;
         const int n = targets().size();
         m.addItem (1, "Rename..."); m.addItem (2, "New mixer insert for this track"); m.addItem (3, "Open insert in Mixer");
@@ -1582,7 +1586,19 @@ public:
                 return;
             }
         }
-        if (e.mods.isPopupMenu()) { if (i >= 0) clipMenu (i); return; }
+        if (e.mods.isPopupMenu())
+        {
+            if (i >= 0) { clipMenu (i); return; }
+            const int lane = laneAt (e.position.y);   // empty space on a track: the same track menu as its header
+            if (lane >= 0 && lane < (int) headers.size() && lane < (int) p.lanes.size())
+            {
+                auto& sel = s.selectedLanes;
+                if (! sel.contains (lane)) { sel.clear(); sel.add (lane); s.laneAnchor = lane; }
+                s.selectedTrack = p.lanes[(size_t) lane].mixerTrack;
+                repaint(); headers[(size_t) lane]->showMenu();
+            }
+            return;
+        }
         if (phoneUI && ! tapReplay && (phoneClipTarget == this || i < 0 || ! p.clips[(size_t) i].selected))
         {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
