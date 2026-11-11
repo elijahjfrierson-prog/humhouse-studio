@@ -178,6 +178,14 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
         qualityBox.onChange = [this] { preview.setQuality (qualityBox.getSelectedId()); };
         qualityBox.setTooltip ("Playback resolution (like Premiere): lower = less CPU and smoother playback. Paused frames and export are always full quality.");
         addAndMakeVisible (startBtn); addAndMakeVisible (qualityBox);
+        renderBtn.setTooltip ("Render the whole timeline ahead at the playback ratio (Full, 1/2, 1/4, 1/8) so playback never skips. Any edit drops the render; click again to cancel.");
+        renderBtn.onClick = [this]
+        {
+            if (preview.renderAllProgress() >= 0) { preview.cancelRenderAll(); renderBtn.setButtonText ("RENDER"); return; }
+            preview.setProject (this->st.project);
+            preview.startRenderAll (qualityBox.getSelectedId());
+        };
+        addAndMakeVisible (renderBtn);
     }
     exportBtn.onClick = [this] { exportDialog(); };
     genBtn.onClick = [this] { generate(); };
@@ -348,7 +356,8 @@ void MainComponent::resized()
     exportBtn.setBounds (top.removeFromRight (110)); top.removeFromRight (6);
     playBtn.setBounds (top.removeFromRight (70)); top.removeFromRight (4);
     startBtn.setBounds (top.removeFromRight (26).reduced (3, 6)); top.removeFromRight (6);
-    qualityBox.setBounds (top.removeFromRight (70)); top.removeFromRight (10);
+    qualityBox.setBounds (top.removeFromRight (70)); top.removeFromRight (6);
+    renderBtn.setBounds (top.removeFromRight (104)); top.removeFromRight (10);
     aspectBox.setBounds (top.removeFromRight (230)); top.removeFromRight (6);
     seqBox.setBounds (top.removeFromRight (240)); top.removeFromRight (6);
     status.setBounds (top);
@@ -393,6 +402,7 @@ void MainComponent::refresh (bool inspectorToo)
 {
     player.setSequence (st.project.seq());
     preview.setProject (st.project);
+    preview.projectEdited (st.project);
     preview.requestFrame (st.playhead);
     preview.repaint();
     timeline.repaint();
@@ -483,6 +493,11 @@ void MainComponent::togglePlay()
 
 void MainComponent::timerCallback()
 {
+    {
+        const float pr = preview.renderAllProgress();
+        juce::String txt = pr < 0 ? "RENDER" : pr >= 1.0f ? "RENDERED" : "RENDER " + juce::String ((int) (pr * 100)) + "%";
+        if (renderBtn.getButtonText() != txt) renderBtn.setButtonText (txt);
+    }
     if (! player.isPlaying()) { preview.setLive (false); return; }
     auto t = player.position();
     auto dur = st.project.seq().duration();

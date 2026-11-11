@@ -10,6 +10,93 @@ Preview::Preview (AppState& s) : juce::Thread ("ISFX preview"), st (s)
     startThread();
 }
 
+static juce::Image rgbaToImage (const std::vector<juce::uint8>& px, int W, int H)
+{
+    juce::Image im (juce::Image::ARGB, W, H, false);
+    juce::Image::BitmapData bd (im, juce::Image::BitmapData::writeOnly);
+    for (int y = 0; y < H; ++y)
+    {
+        auto* src = px.data() + (size_t) y * W * 4;
+        auto* dst = reinterpret_cast<juce::PixelARGB*> (bd.getLinePointer (y));
+        for (int x = 0; x < W; ++x, src += 4)
+            dst[x].setARGB (255, src[0], src[1], src[2]);
+    }
+    return im;
+}
+
+static juce::int64 projectHash (const Project& p) { return juce::JSON::toString (toVar (p), true).hashCode64(); }
+
+// whole-timeline render on its own low-priority thread with its own decoders; frames kept as JPEG in memory
+struct Preview::RenderAll : juce::Thread
+{
+    RenderAll (std::shared_ptr<const Project> p, int div) : juce::Thread ("ISFX render all"), proj (std::move (p))
+    {
+        hash = projectHash (*proj);
+        outputSize (*proj, std::max (90, 1080 / std::max (1, div)), W, H);
+        fps = proj->fps > 0 ? proj->fps : 30.0;
+        total = (int) std::max<juce::int64> (1, ticksToFrame (proj->seq().duration(), fps) + 1);
+        frames.resize ((size_t) total);
+        startThread (juce::Thread::Priority::low);
+    }
+    ~RenderAll() override { stopThread (10000); }
+    void run() override
+    {
+        Renderer r; std::vector<juce::uint8> px; juce::JPEGImageFormat jpg; jpg.setQuality (0.9f);
+        for (int f = 0; f < total && ! threadShouldExit(); ++f)
+        {
+            px.clear();
+            if (r.render (*proj, proj->seq(), frameToTicks (f, fps), W, H, px, H) && px.size() >= (size_t) W * H * 4)
+            {
+                juce::MemoryOutputStream mo;
+                jpg.writeImageToStream (rgbaToImage (px, W, H), mo);
+                frames[(size_t) f] = mo.getMemoryBlock();
+            }
+            done = f + 1;
+        }
+    }
+    juce::Image frameAt (Ticks t) const
+    {
+        const auto f = ticksToFrame (t, fps);
+        if (f < 0 || f >= done.load()) return {};
+        auto& mb = frames[(size_t) f];
+        return mb.getSize() > 0 ? juce::ImageFileFormat::loadFrom (mb.getData(), mb.getSize()) : juce::Image();
+    }
+    std::shared_ptr<const Project> proj;
+    juce::int64 hash = 0;
+    int W = 0, H = 0, total = 1;
+    double fps = 30;
+    std::vector<juce::MemoryBlock> frames;
+    std::atomic<int> done { 0 };
+};
+
+void Preview::startRenderAll (int div)
+{
+    std::shared_ptr<const Project> p; { const juce::ScopedLock sl (lock); p = snap; }
+    if (p == nullptr) return;
+    auto n = std::make_shared<RenderAll> (p, div);
+    std::shared_ptr<RenderAll> old;
+    { const juce::ScopedLock sl (lock); old = std::move (rall); rall = n; }
+}
+
+void Preview::cancelRenderAll()
+{
+    std::shared_ptr<RenderAll> old;
+    { const juce::ScopedLock sl (lock); old = std::move (rall); }
+    if (old) old->signalThreadShouldExit();
+}
+
+float Preview::renderAllProgress() const
+{
+    std::shared_ptr<RenderAll> r; { const juce::ScopedLock sl (lock); r = rall; }
+    return r ? (float) r->done.load() / (float) r->total : -1.0f;
+}
+
+void Preview::projectEdited (const Project& p)
+{
+    std::shared_ptr<RenderAll> r; { const juce::ScopedLock sl (lock); r = rall; }
+    if (r && projectHash (p) != r->hash) cancelRenderAll();
+}
+
 Preview::~Preview() { signalThreadShouldExit(); wake.signal(); stopThread (4000); }
 
 void Preview::setProject (const Project& p)
@@ -58,6 +145,17 @@ void Preview::run()
             t = want; want = -1; W = wantW; H = wantH; p = snap; decH = wantDecodeH;
         }
         if (W <= 0 || H <= 0 || p == nullptr) continue;
+        if (live.load())
+        {
+            std::shared_ptr<RenderAll> ra; { const juce::ScopedLock sl (lock); ra = rall; }
+            if (ra)
+                if (auto im = ra->frameAt (t); im.isValid())
+                {
+                    { const juce::ScopedLock sl (lock); shown = im; }
+                    triggerAsyncUpdate();
+                    continue;
+                }
+        }
         if (clearReq.exchange (false)) renderer.clearSources();
         auto t0 = juce::Time::getMillisecondCounterHiRes();
         renderer.setLive (live.load());
@@ -65,17 +163,7 @@ void Preview::run()
         const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
         lastMs = ms;
         avgMs = avgMs.load() <= 0 ? ms : avgMs.load() * 0.85 + ms * 0.15;   // steady readout, no flicker
-        juce::Image im (juce::Image::ARGB, W, H, false);
-        {
-            juce::Image::BitmapData bd (im, juce::Image::BitmapData::writeOnly);
-            for (int y = 0; y < H; ++y)
-            {
-                auto* src = px.data() + (size_t) y * W * 4;
-                auto* dst = reinterpret_cast<juce::PixelARGB*> (bd.getLinePointer (y));
-                for (int x = 0; x < W; ++x, src += 4)
-                    dst[x].setARGB (255, src[0], src[1], src[2]);
-            }
-        }
+        auto im = rgbaToImage (px, W, H);
         { const juce::ScopedLock sl (lock); shown = im; }
         triggerAsyncUpdate();
     }
