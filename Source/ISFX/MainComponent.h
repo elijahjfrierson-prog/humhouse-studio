@@ -34,6 +34,9 @@ public:
     juce::File songFile() const;
     struct TrackRender { juce::String name; juce::File file; double seconds = 0; };
     std::vector<TrackRender> renderTracks (const juce::File& dir);   // each audible track with sound -> its own stereo WAV
+    struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };
+    std::vector<ClipRender> renderClips (const juce::File& dir, bool selectedOnly);   // PUSH: each clip with sound -> WAV at its timeline spot
+    bool hasSelection() const { return ! st.selected.isEmpty(); }
     ~MainComponent() override;
     void resized() override;
     void paint (juce::Graphics&) override;

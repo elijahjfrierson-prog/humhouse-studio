@@ -17,9 +17,9 @@ namespace isfx
 // ---- theme
 namespace theme
 {
-    // HumHouse palette (VIDEO tab)
-    const juce::Colour bg { 0xff0e1013 }, panel { 0xff16191e }, panel2 { 0xff1d2127 }, line { 0xff2c3139 },
-                       text { 0xffdfe4ec }, dim { 0xff7f8896 }, accent { 0xff9b5cff }, accent2 { 0xff38d1ff },
+    // chrome + electric blue, matching the InSequence FX logo (VIDEO tab looks exactly like the FX app)
+    const juce::Colour bg { 0xff060709 }, panel { 0xff0d0f14 }, panel2 { 0xff141821 }, line { 0xff232a38 },
+                       text { 0xffe4e9f2 }, dim { 0xff8890a2 }, accent { 0xff3d7bff }, accent2 { 0xff9cc0ff },
                        good { 0xff3ddc84 }, warn { 0xffffb020 }, bad { 0xffff4d4d };
 }
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area);  // chrome InSequence FX mark + wordmark
