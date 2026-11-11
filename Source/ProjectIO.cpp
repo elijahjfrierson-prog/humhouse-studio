@@ -137,7 +137,7 @@ juce::ValueTree projectToTree (const Project& p)
     root.setProperty ("song", p.songMode, nullptr); root.setProperty ("pattern", p.currentPattern, nullptr);
     root.setProperty ("snap", p.snap, nullptr); root.setProperty ("swing", p.swing, nullptr);
     root.setProperty ("punchIn", p.punchIn, nullptr); root.setProperty ("punchOut", p.punchOut, nullptr);
-    root.setProperty ("loopRec", p.loopRecord, nullptr); root.setProperty ("rts", p.returnToStart, nullptr);
+    root.setProperty ("loopRec", p.loopRecord, nullptr); root.setProperty ("rts", p.returnToStart, nullptr); root.setProperty ("qpunch", p.quickPunch, nullptr);
     root.setProperty ("nextCh", p.nextChannelId, nullptr); root.setProperty ("nextUid", p.nextUid, nullptr);
 
     juce::ValueTree chs ("CHANNELS");
@@ -312,7 +312,7 @@ Project projectFromTree (const juce::ValueTree& root)
     p.keyRoot = root["key"]; p.scaleIndex = root.getProperty ("scale", 1); p.highlightScale = root.getProperty ("highlight", true);
     p.songMode = root["song"]; p.currentPattern = root["pattern"]; p.snap = root.getProperty ("snap", 0.25); p.swing = root["swing"];
     p.punchIn = root.getProperty ("punchIn", -1.0); p.punchOut = root.getProperty ("punchOut", -1.0);
-    p.loopRecord = root.getProperty ("loopRec", true); p.returnToStart = root.getProperty ("rts", true);
+    p.loopRecord = root.getProperty ("loopRec", true); p.returnToStart = root.getProperty ("rts", true); p.quickPunch = root.getProperty ("qpunch", false);
     p.nextChannelId = root.getProperty ("nextCh", 1); p.nextUid = root.getProperty ("nextUid", 1);
 
     for (auto t : root.getChildWithName ("CHANNELS"))

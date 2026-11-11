@@ -1253,8 +1253,10 @@ void Engine::stop()
         playing = false; countingIn = false;
         panicPending = true;   // the audio thread silences every voice at its next block
     }
+    lastTakeStart = -1.0;
     finishRecordingWriters();
-    if (proj.returnToStart) position = startBeat;
+    if (proj.quickPunch && lastTakeStart >= 0.0) position = startBeat = lastTakeStart;
+    else if (proj.returnToStart) position = startBeat;
 }
 
 void Engine::setPositionBeats (double b)
@@ -1423,6 +1425,7 @@ void Engine::finishRecordingWriters()
             added = true;
             continue;
         }
+        if (! newClips.empty()) lastTakeStart = lastTakeStart < 0.0 ? newClips.front().start : std::min (lastTakeStart, newClips.front().start);
         if (! proj.hasPunch())
         {
             // a new take never records over an earlier one: if the track is busy there it drops to the next free track
