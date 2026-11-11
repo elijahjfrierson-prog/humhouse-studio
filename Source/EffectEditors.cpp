@@ -246,7 +246,8 @@ public:
         {
             float v = 0.0f;
             const int st = autoValue (params[i].id, v);
-            labels[(int) i]->setColour (juce::Label::textColourId, st > 0 ? juce::Colour (0xffff5a5a) : col::dim);
+            const auto lc = st > 0 ? juce::Colour (0xffff5a5a) : col::dim;
+            if (labels[(int) i]->findColour (juce::Label::textColourId) != lc) labels[(int) i]->setColour (juce::Label::textColourId, lc);
             if (st == 2)
                 if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i]); k != nullptr && ! k->isMouseButtonDown())
                     k->setValue (params[i].mn + juce::jlimit (0.0f, 1.0f, v) * (params[i].mx - params[i].mn), juce::dontSendNotification);
@@ -773,7 +774,11 @@ private:
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
-            t->read (snap.data(), fftN, t->heard());
+            const int w = t->heard();   // no new audio (stopped): stop redrawing a still curve
+            if (w == lastHeard && drag < 0 && ++idleTicks > 30) return;
+            if (w != lastHeard) idleTicks = 0;
+            lastHeard = w;
+            t->read (snap.data(), fftN, w);
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
             for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
             fft.performFrequencyOnlyForwardTransform (fftBuf.data());
@@ -793,6 +798,7 @@ private:
     std::unique_ptr<BuiltinEffect> model;
     juce::dsp::FFT fft { fftOrder };
     std::vector<float> snap, fftBuf, spec;
+    int lastHeard = -1, idleTicks = 0;
     double rate = 0;
     int hot = -1, drag = -1, sel = -1;
     static constexpr int barH = 30;
@@ -937,7 +943,11 @@ public:
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
-            t->read (snap.data(), fftN, t->heard());
+            const int w = t->heard();   // no new audio (stopped): stop redrawing a still curve
+            if (w == lastHeard && drag < 0 && ++idleTicks > 30) return;
+            if (w != lastHeard) idleTicks = 0;
+            lastHeard = w;
+            t->read (snap.data(), fftN, w);
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
             for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
             fft.performFrequencyOnlyForwardTransform (fftBuf.data());
@@ -957,6 +967,7 @@ public:
     std::unique_ptr<BuiltinEffect> model;
     juce::dsp::FFT fft { fftOrder };
     std::vector<float> snap, fftBuf, spec;
+    int lastHeard = -1, idleTicks = 0;
     double rate = 48000;
     int drag = -1;
     juce::TextButton analyze { "ANALYZE" };
@@ -1003,7 +1014,14 @@ public:
         fitText (g, "-" + juce::String (shown, 1), meter.toNearestInt().removeFromBottom (14), juce::Justification::centred);
     }
 private:
-    void timerCallback() override { if (isShowing()) repaint(); }
+    int still = 0;
+    void timerCallback() override   // the GR meter redraws only while it moves
+    {
+        if (! isShowing()) return;
+        const float gr = std::abs (live && live() ? live()->meter (0) : 0.0f);
+        if (gr > 0.01f || shown > 0.01f) still = 0;
+        if (still++ < 3) repaint();
+    }
     ParamGrid& grid;
     std::function<BuiltinEffect*()> live;
     juce::String thId, ratioId, kneeId;

@@ -28,7 +28,7 @@ class MainComponent : public juce::Component, public juce::FileDragAndDropTarget
 {
 public:
     // VIDEO page hidden / docked away: no timer, no playback, so it costs the DAW nothing
-    void setActive (bool on) { if (on == active) return; active = on; if (on) startTimerHz (30); else { stopTimer(); if (player.isPlaying()) player.stop(); } }
+    void setActive (bool on) { if (on == active) return; active = on; if (on) { devices.addAudioCallback (&player); startTimerHz (30); } else { stopTimer(); if (player.isPlaying()) player.stop(); devices.removeAudioCallback (&player); } }
     bool active = true;
     // external: the host app's device (HumHouse VIDEO tab) - adds our player as one more callback, never reopens the device
     explicit MainComponent (juce::AudioDeviceManager* external = nullptr);

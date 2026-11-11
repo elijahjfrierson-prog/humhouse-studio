@@ -72,7 +72,7 @@ private:
     {
         if (freezeBtn.getToggleState() || ! isShowing()) return;
         auto* tap = source ? source() : nullptr;
-        if (tap == nullptr) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); return; }
+        if (tap == nullptr) { if (idleTicks++ == 0) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); } return; }
         rate = tap->rate.load();
         const int w = tap->heard();
         if (w == lastPos && ++idleTicks > 30) return;   // no new audio (stopped): stop redrawing a still picture
