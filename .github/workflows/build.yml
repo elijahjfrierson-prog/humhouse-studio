@@ -84,7 +84,7 @@ jobs:
             echo "app not in /Applications"; pkgutil --pkg-info com.humhouse.studio.installer.app || true
             pkgutil --files com.humhouse.studio.installer.app | head || true; exit 1; }
           v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/HumHouse Studio.app/Contents/Info.plist")
-          echo "installed version: $v"; test "$v" = "1.5.2" || { echo "old version still installed"; exit 1; }
+          echo "installed version: $v"; test "$v" = "$(sed -n "s/^project(HumHouseStudio VERSION \([0-9.]*\).*/\1/p" CMakeLists.txt)" || { echo "old version still installed"; exit 1; }
           n=$(find /Applications -maxdepth 2 -name "HumHouse Studio*.app" | wc -l | tr -d ' ')
           test "$n" = "1" || { echo "expected exactly one HumHouse Studio.app, found $n"; exit 1; }
 
