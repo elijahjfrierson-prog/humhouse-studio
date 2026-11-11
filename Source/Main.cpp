@@ -76,11 +76,11 @@ struct WelcomeWindow : public juce::DocumentWindow
 
 #if HHS_KEY_GATE
 // regular build: no key, no app. The key is checked by our license server (3 computers per key).
-struct ActivationPanel : public juce::Component
+struct ActivationPanel : public juce::Component, private juce::Timer
 {
     juce::Label title, info, status, mid;
     juce::TextEditor key;
-    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" };
+    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" }, pasteBtn { "PASTE" };
     std::function<void (juce::String)> onActivate;
     explicit ActivationPanel (const juce::String& message)
     {
@@ -102,10 +102,38 @@ struct ActivationPanel : public juce::Component
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
-        copyId.onClick = [] { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); };
-        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &copyId }) addAndMakeVisible (c);
+        copyId.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); copyId.setButtonText ("Copied!"); };
+        mid.addMouseListener (this, false);
+        mid.setTooltip ("Click to copy");
+        pasteBtn.setTooltip ("Paste the key you copied");
+        pasteBtn.onClick = [this] { if (! pasteFromClipboard()) setStatus ("Copy your key first, then press PASTE."); };
+        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &copyId, &pasteBtn }) addAndMakeVisible (c);
         setSize (560, 300);
+        pasteFromClipboard();   // a key copied from the purchase email / page fills itself in
+        startTimer (800);       // ...and so does one copied while this window is open
     }
+    static juce::String keyIn (const juce::String& text)
+    {
+        for (auto t : juce::StringArray::fromTokens (text, " \t\r\n\"'<>", ""))
+            if (t.startsWithIgnoreCase ("HHS") && t.length() >= 20) return t.trim();
+        return {};
+    }
+    bool pasteFromClipboard()
+    {
+        const auto clip = juce::SystemClipboard::getTextFromClipboard();
+        if (clip == lastClip && key.getText().isNotEmpty()) return key.getText() == keyIn (clip) && keyIn (clip).isNotEmpty();
+        lastClip = clip;
+        const auto k = keyIn (clip);
+        if (k.isEmpty()) return false;
+        if (k != key.getText()) { key.setText (k, false); setStatus ("Key pasted - press Activate."); }
+        return true;
+    }
+    void timerCallback() override { if (activate.isEnabled() && ! key.hasKeyboardFocus (true)) pasteFromClipboard(); }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.eventComponent == &mid) { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); mid.setText ("Machine ID copied: " + hhs::license::machineId(), juce::dontSendNotification); }
+    }
+    juce::String lastClip;
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
     void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
     void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }
@@ -113,7 +141,7 @@ struct ActivationPanel : public juce::Component
     {
         auto r = getLocalBounds().reduced (22);
         title.setBounds (r.removeFromTop (34)); info.setBounds (r.removeFromTop (54)); r.removeFromTop (8);
-        key.setBounds (r.removeFromTop (34)); r.removeFromTop (8);
+        auto kr = r.removeFromTop (34); pasteBtn.setBounds (kr.removeFromRight (80)); kr.removeFromRight (6); key.setBounds (kr); r.removeFromTop (8);
         status.setBounds (r.removeFromTop (40));
         auto b = r.removeFromBottom (32);
         quitBtn.setBounds (b.removeFromRight (90)); b.removeFromRight (8); activate.setBounds (b.removeFromRight (130));
