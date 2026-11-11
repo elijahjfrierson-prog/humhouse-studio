@@ -1,0 +1,15 @@
+name = "humhouse-license"
+main = "src/index.js"
+compatibility_date = "2024-09-23"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "humhouse-license"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# secrets (wrangler secret put ...): PASS_PRIVATE_KEY (PKCS#8 PEM), ADMIN_TOKEN

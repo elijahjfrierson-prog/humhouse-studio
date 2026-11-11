@@ -4,3 +4,8 @@ build/
 build*/
 humhouse_private_key.json
 *.pem
+license-keys/
+keys.txt
+server/license/node_modules/
+server/license/.wrangler/
+server/license/.dev.vars

@@ -43,13 +43,21 @@ set(HHS_CORE_SOURCES
     Source/Drummer/KitEngine.cpp
 )
 
+# Linux needs curl for HTTPS (license activation); macOS / Windows / iOS use the system's own
+if(UNIX AND NOT APPLE)
+    set(HHS_USE_CURL 1)
+else()
+    set(HHS_USE_CURL 0)
+endif()
+set(HHS_LICENSE_URL "https://humhouse-license.workers.dev" CACHE STRING "HumHouse license server (regular build activation)")
 set(HHS_DEFS
     JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
+    JUCE_USE_CURL=${HHS_USE_CURL}
     JUCE_DISPLAY_SPLASH_SCREEN=0
     JUCE_PLUGINHOST_LADSPA=0
     JUCE_USE_MP3AUDIOFORMAT=1
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    HHS_LICENSE_URL="${HHS_LICENSE_URL}"
 )
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
 if(IOS)
@@ -89,6 +97,9 @@ set(HHS_LIBS
 # Session Drummer groove corpus (Groove MIDI Dataset, CC-BY 4.0), from HumHouse Drums X
 juce_add_binary_data(HHSDrummerData HEADER_NAME DrummerData.h NAMESPACE DrummerData SOURCES Resources/Drummer/rock_corpus.hhc)
 list(APPEND HHS_LIBS HHSDrummerData)
+if(APPLE OR WIN32)
+    list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
+endif()
 if(APPLE)
     list(APPEND HHS_LIBS "-framework AudioToolbox" "-framework CoreFoundation")
 endif()
@@ -120,6 +131,7 @@ function(hhs_add_app target product bundle licensed)
         FILE_SHARING_ENABLED TRUE
         DOCUMENT_BROWSER_ENABLED TRUE
         TARGETED_DEVICE_FAMILY "1,2"
+        NEEDS_CURL TRUE
     )
     if(IOS)   # bundled kits / sounds go inside the .app (bundledSoundsRoot = next to the executable)
         add_custom_command(TARGET ${target} POST_BUILD
@@ -136,6 +148,7 @@ function(hhs_add_app target product bundle licensed)
         Source/LanesView.cpp
         Source/DJView.cpp
     Source/PatchBay.cpp
+    Source/VideoView.cpp
     Source/Lang.cpp
         Source/Browser.cpp
         Source/ToolDialogs.cpp
@@ -143,7 +156,7 @@ function(hhs_add_app target product bundle licensed)
         Source/Theme.cpp
         Source/ScopeView.cpp
     )
-    target_compile_definitions(${target} PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="${product}" HHS_LICENSED=${licensed})
+    target_compile_definitions(${target} PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="${product}" HHS_LICENSED=${licensed} HHS_KEY_GATE=${licensed})
     target_link_libraries(${target} PRIVATE ${HHS_LIBS} HHSFonts
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endfunction()
@@ -154,7 +167,7 @@ endif()
 # --- Tests: engine, effects, note tools and project I/O, headless -------------
 if(NOT IOS)
 enable_testing()
-juce_add_console_app(HHSTests PRODUCT_NAME "HHSTests")
+juce_add_console_app(HHSTests PRODUCT_NAME "HHSTests" NEEDS_CURL TRUE)
 target_sources(HHSTests PRIVATE ${HHS_CORE_SOURCES} tests/CoreTests.cpp)
 target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="HumHouse Studio")
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}

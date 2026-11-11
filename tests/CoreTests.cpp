@@ -2256,6 +2256,21 @@ int main (int argc, char** argv)
         std::printf ("license: machine id %s, valid key ok, 3rd computer / edited / forged keys rejected\n", id.toRawUTF8());
     }
 
+    // online activation pass: signed by our license server, locked to one Machine ID, 14-day window
+    {
+        const juce::String pass = "HHP1.eyJza3UiOiJodW1ob3VzZV9zdHVkaW8iLCJsaWMiOiIwMTIzNDU2Nzg5YWJjZGVmIiwibWlkIjoiVEVTVC1QQVNTLTAwMDAtMDAwMSIsImlhdCI6MTAwMCwiZXhwIjoyMDAwfQ==.95069f3a92ed4012e5eb7a33729569d52b7e3aa538247c32ee706ba0690a75868439192a85d4d4b0035fe5b5920fa56d5049d1ac4de07ffe5ce6328ddfacaae120b3ba208d58ca5eb3e41ea92aa69a14fafbec2106b8d5480f793ec013c65c5dbe963f98f360a20bfe7ad44b255e8da677700afb83b955684e40b1883fc3a182462173a3b3c27895fd98d7b6778f6ef629b51388199b1649872dfa5eb3a36cbce894789b05a34898122e055734e1a4616a41b8ca8ab69a8a02db30f4e5acf917feaa883db84fc8eac7346d60f3de4559d2c01d75f25a6407861f35358f3364ab75dd373311be2ffaf5c13ece8cf09be7e733c524575216d111ce16789008dd3e";
+        const juce::String mid = "TEST-PASS-0000-0001";
+        CHECK (hhs::license::verifyPass (pass, mid, 1500).ok);
+        CHECK (hhs::license::verifyPass (pass, "test-pass-0000-0001", 1999).ok);
+        CHECK (! hhs::license::verifyPass (pass, mid, 2000).ok);                    // expired
+        CHECK (! hhs::license::verifyPass (pass, "TEST-PASS-0000-0002", 1500).ok);  // copied to another computer
+        CHECK (! hhs::license::verifyPass (pass.replace ("MDAwMSIs", "MDAwMiIs"), "TEST-PASS-0000-0002", 1500).ok);   // edited Machine ID
+        CHECK (! hhs::license::verifyPass (pass.dropLastCharacters (1) + "f", mid, 1500).ok);
+        CHECK (! hhs::license::verifyPass ({}, mid, 1500).ok);
+        CHECK (! hhs::license::verifyPass (pass.replace ("HHP1.", "HHS1."), mid, 1500).ok);
+        std::printf ("license pass: valid on its computer, expired / other computer / edited rejected\n");
+    }
+
     // 808 slide chains: every slid note keeps sounding (the 3rd, 4th... note never dies), through the real engine
     for (int cfg = 0; cfg < 28; ++cfg)
     {
