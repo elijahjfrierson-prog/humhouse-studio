@@ -1221,6 +1221,10 @@ struct LaneHeader : public juce::Component
             for (int t = 0; t < (int) mx.size() && t < 199; ++t)
                 rm.addItem (200 + t, t == 0 ? juce::String ("Master") : "Insert " + juce::String (t) + (mx[(size_t) t].name.isNotEmpty() ? " - " + mx[(size_t) t].name : juce::String()), true, t == cur);
             m.addSubMenu ("Route to mixer", rm);
+            m.addSubMenu ("Route to Patch Bay", patchBayRouteMenu (s, [i = index] (Project& p, int t) {
+                if (i >= (int) p.lanes.size()) return;
+                p.lanes[(size_t) i].mixerTrack = t;
+                for (auto& c : p.clips) if (c.lane == i) { if (c.isAudio()) c.mixerTrack = -1; else adoptLaneRoute (p, c); } }));
         }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
         m.addItem (11, "Duplicate track"); m.addItem (12, "Duplicate track with audio");
@@ -2962,6 +2966,18 @@ private:
             route.addItem (100 + (int) i, i == 0 ? juce::String ("Master") : juce::String ((int) i) + " " + p.mixer[i].name, true, p.clipInsert (clip) == (int) i);
         route.addSeparator(); route.addItem (99, "Follow track insert");
         m.addSubMenu ("Route to insert", route, clip.isAudio());
+        {   // audio clips play through the bay; a pattern clip sends its sounds there
+            const int uid = clip.uid;
+            m.addSubMenu ((clip.isAudio() ? "Route clip" : clip.patternIndex >= 0 ? "Route pattern" : "Route") + sel + " to Patch Bay", patchBayRouteMenu (s, [uid] (Project& pr, int t) {
+                for (auto& o : pr.clips)
+                {
+                    if (! (o.selected || o.uid == uid)) continue;
+                    if (o.isAudio()) o.mixerTrack = t;
+                    else if (o.patternIndex >= 0 && o.patternIndex < (int) pr.patterns.size())
+                        for (auto& [ch, nl] : pr.patterns[(size_t) o.patternIndex].notes)
+                            if (! nl.empty()) if (auto* c = pr.findChannel (ch); c != nullptr && c->type != ChannelType::Drummer) c->mixerTrack = t;
+                } }), clip.isAudio() || clip.patternIndex >= 0);
+        }
         std::vector<int> group;
         if (clip.takeGroup > 0)
             for (auto& o : p.clips) if (o.takeGroup == clip.takeGroup) group.push_back (o.uid);
@@ -3041,7 +3057,7 @@ private:
             m.addSubMenu ("Automate (new track below)", am, autoT.size() > 0);
         }
         m.showMenuAsync ({}, [this, uid = clip.uid, autoT, autoLane = clip.lane] (int r) {
-            if (r == 0) return;
+            if (r <= 0) return;
             if (r >= 2000) { if (r - 2000 < (int) autoT.size()) createAutomationClip (s, autoT[(size_t) (r - 2000)], autoLane); return; }
             if (r >= 300 && r <= 305)
             {

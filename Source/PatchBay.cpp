@@ -1,5 +1,6 @@
 #include "UI.h"
 #include <climits>
+#include <set>
 
 // Patch Bay: node view of the project. Step-sequencer nodes play sounds, sounds cable into their mixer insert's
 // FX chain and output, LFO nodes cabled onto an FX knob write an automation clip. Everything edits the normal
@@ -51,7 +52,7 @@ void loadLfos (Studio& s)
     if (! v.empty()) lfos() = v;
 }
 // Bays: several Patch Bays (intro, chorus...), each a set of channels (empty = all) routed to a Playlist track, a mixer insert or both
-struct Bay { juce::String name; std::vector<int> chans; int route = 2; int insert = 0; };
+struct Bay { juce::String name; std::vector<int> chans; int route = 2; int insert = 0; std::vector<int> stacks; int mode = 0; };   // stacks: FX stack node inserts feeding the bay insert; mode 0 MANUAL, 1 AUTO
 std::vector<Bay>& bays() { static std::vector<Bay> v { { "Bay 1", {}, 2, 0 } }; return v; }
 int& curBay() { static int i = 0; return i; }
 Bay& bay() { curBay() = juce::jlimit (0, (int) bays().size() - 1, curBay()); return bays()[(size_t) curBay()]; }
@@ -62,7 +63,8 @@ void saveBays (Studio& s)
     for (const auto& b : bays())
     {
         juce::StringArray ch; for (int id : b.chans) ch.add (juce::String (id));
-        rows.add (b.name.removeCharacters ("|;") + "|" + juce::String (b.route) + "|" + juce::String (b.insert) + "|" + ch.joinIntoString (","));
+        juce::StringArray st; for (int t : b.stacks) st.add (juce::String (t));
+        rows.add (b.name.removeCharacters ("|;") + "|" + juce::String (b.route) + "|" + juce::String (b.insert) + "|" + ch.joinIntoString (",") + "|" + st.joinIntoString (",") + "|" + juce::String (b.mode));
     }
     s.settings->setValue ("patchBays", rows.joinIntoString (";")); s.settings->saveIfNeeded();
 }
@@ -78,21 +80,74 @@ void loadBays (Studio& s)
         if (f.size() < 3) continue;
         Bay b { f[0], {}, juce::jlimit (0, 2, f[1].getIntValue()), juce::jmax (0, f[2].getIntValue()) };
         for (const auto& id : juce::StringArray::fromTokens (f[3], ",", "")) b.chans.push_back (id.getIntValue());
+        for (const auto& id : juce::StringArray::fromTokens (f[4], ",", "")) if (id.getIntValue() > 0) b.stacks.push_back (id.getIntValue());
+        b.mode = juce::jlimit (0, 1, f[5].getIntValue());
         v.push_back (b);
     }
     if (! v.empty()) bays() = v;
+}
+// a bay's insert (node 0) or FX stack node k (1..), node -1 = a new stack node; stack nodes feed the bay insert, not the Master
+int bayInsert (Project& p, int i, int node)
+{
+    if (i < 0 || i >= (int) bays().size()) return -1;
+    auto& b = bays()[(size_t) i];
+    const auto ok = [&] (int t) { return t > 0 && t < (int) p.mixer.size(); };
+    if (! ok (b.insert)) b.insert = p.addMixerTrack (b.name);
+    if (b.route == 0) b.route = 2;
+    b.stacks.erase (std::remove_if (b.stacks.begin(), b.stacks.end(), [&] (int t) { return ! ok (t) || t == b.insert; }), b.stacks.end());
+    if (node == 0) return b.insert;
+    if (node > 0 && node <= (int) b.stacks.size()) return b.stacks[(size_t) node - 1];
+    const int t = p.addMixerTrack (b.name + " FX " + juce::String ((int) b.stacks.size() + 1));
+    if (! ok (t)) return b.insert;
+    auto& mt = p.mixer[(size_t) t];
+    mt.routesToMaster = false; mt.sends.clear(); mt.sends.push_back ({ b.insert, 1.0f });
+    b.stacks.push_back (t);
+    return t;
+}
+void ensurePattern (Project& p)
+{
+    if (! p.patterns.empty()) return;
+    Pattern np; np.name = "Pattern 1"; p.patterns.push_back (np); p.currentPattern = 0;
 }
 bool inBay (int ch) { const auto& b = bay(); return b.chans.empty() || std::find (b.chans.begin(), b.chans.end(), ch) != b.chans.end(); }
 
 std::map<juce::String, juce::Point<int>>& positions() { static std::map<juce::String, juce::Point<int>> m; return m; }
 
 enum Kind { Seq, Sound, LfoNode, Fx, Out };
+// extra in/out dots per node (right-click a dot to add more) and free cables between any two dots ("from>out>to>in;...")
+std::map<juce::String, std::pair<int, int>>& extraDots() { static std::map<juce::String, std::pair<int, int>> m; return m; }
+struct Link { juce::String from, to; int out = 0, in = 0; };
+std::vector<Link>& links() { static std::vector<Link> v; return v; }
+void saveWires (Studio& s)
+{
+    if (s.settings == nullptr) return;
+    juce::StringArray d, l;
+    for (auto& [k, v] : extraDots()) if (v.first > 0 || v.second > 0) d.add (k + "," + juce::String (v.first) + "," + juce::String (v.second));
+    for (auto& x : links()) l.add (x.from + ">" + juce::String (x.out) + ">" + x.to + ">" + juce::String (x.in));
+    s.settings->setValue ("patchBayDots", d.joinIntoString (";")); s.settings->setValue ("patchBayLinks", l.joinIntoString (";")); s.settings->saveIfNeeded();
+}
+void loadWires (Studio& s)
+{
+    static bool done = false;
+    if (done || s.settings == nullptr) return;
+    done = true;
+    for (auto& row : juce::StringArray::fromTokens (s.settings->getValue ("patchBayDots"), ";", ""))
+    {
+        const auto f = juce::StringArray::fromTokens (row, ",", "");
+        if (f.size() == 3) extraDots()[f[0]] = { juce::jlimit (0, 6, f[1].getIntValue()), juce::jlimit (0, 6, f[2].getIntValue()) };
+    }
+    for (auto& row : juce::StringArray::fromTokens (s.settings->getValue ("patchBayLinks"), ";", ""))
+    {
+        const auto f = juce::StringArray::fromTokens (row, ">", "");
+        if (f.size() == 4) links().push_back ({ f[0], f[2], f[1].getIntValue(), f[3].getIntValue() });
+    }
+}
 struct Node { Kind kind; int a = 0, b = 0; juce::String key, title; juce::Rectangle<int> r; juce::Colour c; };
 
 class Canvas : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); setWantsKeyboardFocus (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
+    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); loadWires (s); setWantsKeyboardFocus (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
     ~Canvas() override { s.removeChangeListener (this); }
 
     void rebuild()
@@ -117,6 +172,11 @@ public:
             if (! trackY.count (c.mixerTrack)) trackY[c.mixerTrack] = y;
             y += 86;
         }
+        {
+            const auto& b = bay();
+            std::vector<int> mine { b.insert }; mine.insert (mine.end(), b.stacks.begin(), b.stacks.end());
+            for (int t : mine) if (t > 0 && t < (int) p.mixer.size() && ! trackY.count (t)) { trackY[t] = y; y += 86; }
+        }
         for (auto& [tr, ty] : trackY)
         {
             if (tr < 0 || tr >= (int) p.mixer.size()) continue;
@@ -127,7 +187,10 @@ public:
                 x += 190;
             }
             const auto& mt = p.mixer[(size_t) tr];
-            place ({ Out, tr, 0, "O" + juce::String (tr), (mt.name.isNotEmpty() ? mt.name : "Insert " + juce::String (tr)) + "  Out", {}, col::accent }, x, ty, 150, 70);
+            int feeds = 0;
+            for (auto& l : p.lanes) feeds += l.mixerTrack == tr;
+            for (auto& cl : p.clips) feeds += cl.mixerTrack == tr;
+            place ({ Out, tr, 0, "O" + juce::String (tr), (mt.name.isNotEmpty() ? mt.name : "Insert " + juce::String (tr)) + (feeds > 0 ? "  < " + juce::String (feeds) + " in" : juce::String ("  Out")), {}, col::accent }, x, ty, 150, 70);
         }
         repaint();
     }
@@ -137,28 +200,13 @@ public:
         g.fillAll (juce::Colour (0xff141619));
         g.setColour (juce::Colours::white.withAlpha (0.06f));
         for (int x = 0; x < getWidth(); x += 24) for (int yy = 0; yy < getHeight(); yy += 24) g.fillRect (x, yy, 2, 2);
-        auto& p = s.p();
-        // cables: sequencer -> sound -> FX chain -> out, LFO -> FX it automates
-        for (auto& n : nodes)
+        collectCables();
+        for (auto& c : cables) drawPath (g, c.path, c.colour, c.dashed);
+        if (dragFrom != nullptr)
         {
-            if (n.kind == Seq) cable (g, n, find (Sound, n.a), juce::Colour (0xff6ad1ff), false);
-            if (n.kind == Sound && n.b >= 0 && n.b < (int) p.mixer.size())
-            {
-                auto& fx = p.mixer[(size_t) n.b].fx;
-                cable (g, n, fx.empty() ? find (Out, n.b) : find (Fx, n.b, fx.front().uid), juce::Colour (0xff6ad1ff), false);
-            }
-            if (n.kind == Fx)
-            {
-                auto& fx = p.mixer[(size_t) n.a].fx;
-                for (size_t k = 0; k < fx.size(); ++k)
-                    if (fx[k].uid == n.b) cable (g, n, k + 1 < fx.size() ? find (Fx, n.a, fx[k + 1].uid) : find (Out, n.a), juce::Colour (0xff6ad1ff), false);
-            }
+            const auto a = dragIsIn ? inPort (*dragFrom, dragPort) : port (*dragFrom, dragPort);
+            wire (g, dragIsIn ? dragTo.toFloat() : a, dragIsIn ? a : dragTo.toFloat(), juce::Colours::white, true);
         }
-        for (auto& c : p.clips)
-            if (c.isAuto() && c.autoTarget.kind == AutoFxParam && c.autoTarget.name.startsWith ("LFO "))
-                if (auto* from = find (LfoNode, c.autoTarget.name.fromFirstOccurrenceOf ("LFO ", false, false).getIntValue() - 1))
-                    cable (g, *from, find (Fx, c.autoTarget.track, c.autoTarget.fxUid), juce::Colour (0xffd59cff), true);
-        if (dragFrom != nullptr) wire (g, port (*dragFrom), dragTo.toFloat(), juce::Colours::white, true);
         for (auto& n : nodes) drawNode (g, n);
     }
 
@@ -166,10 +214,38 @@ public:
     {
         moving = nullptr; dragFrom = nullptr;
         auto* n = at (e.getPosition());
-        if (n == nullptr) { if (e.mods.isPopupMenu()) canvasMenu(); return; }
+        if (n == nullptr)
+        {
+            if (e.mods.isPopupMenu()) { if (auto* c = cableAt (e.position)) cableMenu (*c); else canvasMenu(); }
+            return;
+        }
         grabKeyboardFocus();
-        if (n->kind == Seq || n->kind == Sound) lastChan = n->a;
-        if (port (*n).getDistanceFrom (e.position) < 12.0f && n->kind != Out) { dragFrom = n; dragTo = e.getPosition(); return; }
+        if (n->kind == Seq || n->kind == Sound) { lastChan = n->a; lastTrack = -1; }
+        if (n->kind == Fx || n->kind == Out) lastTrack = n->a;
+        for (int i = 0; i < outs (*n); ++i)
+            if (port (*n, i).getDistanceFrom (e.position) < 10.0f)
+            {
+                if (e.mods.isPopupMenu()) { dotMenu (*n, false, i); return; }
+                dragFrom = n; dragPort = i; dragIsIn = false; dragTo = e.getPosition(); return;
+            }
+        for (int i = 0; i < ins (*n); ++i)
+            if (inPort (*n, i).getDistanceFrom (e.position) < 10.0f)
+            {
+                if (e.mods.isPopupMenu()) { dotMenu (*n, true, i); return; }
+                // grab a plugged cable off its input dot to move or unplug it, or start a new cable backwards from an empty one
+                for (size_t k = 0; k < cables.size(); ++k)
+                    if (cables[k].to == n->key && cables[k].in == i && cables[k].type != ChainCable)
+                        if (auto* src = byKey (cables[k].from))
+                        {
+                            const auto c = cables[k]; const int sp = c.out;
+                            detach (c);
+                            n = nullptr;
+                            for (auto& x : nodes) if (x.key == c.from) n = &x;
+                            if (n == nullptr) return;
+                            dragFrom = n; dragPort = sp; dragIsIn = false; dragTo = e.getPosition(); juce::ignoreUnused (src); return;
+                        }
+                dragFrom = n; dragPort = i; dragIsIn = true; dragTo = e.getPosition(); return;
+            }
         if (e.mods.isPopupMenu()) { nodeMenu (*n); return; }
         if (n->kind == Seq && e.mods.isAltDown() && e.y > n->r.getY() + 30)
         {
@@ -199,10 +275,9 @@ public:
         auto* from = dragFrom; dragFrom = nullptr; repaint();
         auto* to = at (e.getPosition());
         if (to == nullptr || to == from) return;
-        if (from->kind == Seq && to->kind == Sound) moveSequence (from->a, to->a);
-        else if (from->kind == Sound && to->kind == Out) route (from->a, to->a);
-        else if (from->kind == Sound && to->kind == Fx) route (from->a, to->a);
-        else if (from->kind == LfoNode && to->kind == Fx) lfoToParam (from->a, to->a, to->b);
+        int outDot = dragPort, inDot = nearestIn (*to, e.position);
+        if (dragIsIn) { std::swap (from, to); inDot = dragPort; outDot = nearestOut (*from, e.position); }
+        connect (*from, outDot, *to, inDot);
     }
     bool keyPressed (const juce::KeyPress& k) override
     {
@@ -228,20 +303,158 @@ private:
         return nullptr;
     }
     Node* at (juce::Point<int> pt) { for (auto it = nodes.rbegin(); it != nodes.rend(); ++it) if (it->r.expanded (8, 0).contains (pt)) return &*it; return nullptr; }
-    static juce::Point<float> port (const Node& n) { return { (float) n.r.getRight(), (float) n.r.getY() + 14.0f }; }
-    static juce::Point<float> inPort (const Node& n) { return { (float) n.r.getX(), (float) n.r.getY() + 14.0f }; }
-    static void wire (juce::Graphics& g, juce::Point<float> a, juce::Point<float> b, juce::Colour c, bool dashed)
+    // every node has at least one in and one out dot, plus any extra ones added from a dot's right-click menu
+    static int ins (const Node& n)  { auto it = extraDots().find (n.key); return 1 + (it != extraDots().end() ? it->second.first : 0); }
+    static int outs (const Node& n) { auto it = extraDots().find (n.key); return 1 + (it != extraDots().end() ? it->second.second : 0); }
+    static float dotY (const Node& n, int i) { return (float) juce::jmin (n.r.getBottom() - 6, n.r.getY() + 14 + i * 14); }
+    static juce::Point<float> port (const Node& n, int i = 0) { return { (float) n.r.getRight(), dotY (n, i) }; }
+    static juce::Point<float> inPort (const Node& n, int i = 0) { return { (float) n.r.getX(), dotY (n, i) }; }
+    int nearestIn (const Node& n, juce::Point<float> pt) const  { int b = 0; for (int i = 1; i < ins (n); ++i)  if (inPort (n, i).getDistanceFrom (pt) < inPort (n, b).getDistanceFrom (pt)) b = i; return b; }
+    int nearestOut (const Node& n, juce::Point<float> pt) const { int b = 0; for (int i = 1; i < outs (n); ++i) if (port (n, i).getDistanceFrom (pt) < port (n, b).getDistanceFrom (pt)) b = i; return b; }
+    static juce::Path wirePath (juce::Point<float> a, juce::Point<float> b)
     {
         juce::Path w; w.startNewSubPath (a);
         const float dx = juce::jmax (40.0f, std::abs (b.x - a.x) * 0.5f);
         w.cubicTo (a.x + dx, a.y, b.x - dx, b.y, b.x, b.y);
+        return w;
+    }
+    static void drawPath (juce::Graphics& g, const juce::Path& w, juce::Colour c, bool dashed)
+    {
         g.setColour (c.withAlpha (0.85f));
         if (! dashed) { g.strokePath (w, juce::PathStrokeType (2.0f)); return; }
         juce::Path d; const float dash[] { 6.0f, 4.0f };
         juce::PathStrokeType (1.6f).createDashedStroke (d, w, dash, 2);
         g.fillPath (d);
     }
-    static void cable (juce::Graphics& g, const Node& a, const Node* b, juce::Colour c, bool dashed) { if (b != nullptr) wire (g, port (a), inPort (*b), c, dashed); }
+    static void wire (juce::Graphics& g, juce::Point<float> a, juce::Point<float> b, juce::Colour c, bool dashed) { drawPath (g, wirePath (a, b), c, dashed); }
+
+    // ---- cables: everything the project already connects, plus free cables; each one can be unplugged
+    enum CableType { ChainCable, SeqCable, RouteCable, LfoCable, SendCable, FreeCable };
+    struct Cable { CableType type; juce::String from, to; int out = 0, in = 0; juce::String autoName; int a = 0, b = 0; juce::Path path; juce::Colour colour; bool dashed = false; };
+    std::vector<Cable> cables;
+    Node* byKey (const juce::String& k) { for (auto& n : nodes) if (n.key == k) return &n; return nullptr; }
+    void addCable (CableType t, const Node& f, int o, const Node* to, int i, juce::Colour c, bool dashed, juce::String autoName = {}, int a = 0, int b = 0)
+    {
+        if (to == nullptr) return;
+        o = juce::jlimit (0, outs (f) - 1, o); i = juce::jlimit (0, ins (*to) - 1, i);
+        cables.push_back ({ t, f.key, to->key, o, i, autoName, a, b, wirePath (port (f, o), inPort (*to, i)), c, dashed });
+    }
+    Node* firstOf (int track) { auto& p = s.p(); if (track < 0 || track >= (int) p.mixer.size()) return nullptr; auto& fx = p.mixer[(size_t) track].fx; return fx.empty() ? find (Out, track) : find (Fx, track, fx.front().uid); }
+    void collectCables()
+    {
+        cables.clear();
+        auto& p = s.p();
+        const juce::Colour blue (0xff6ad1ff), lfoC (0xffd59cff), sendC (0xffffc04d);
+        for (auto& n : nodes)
+        {
+            if (n.kind == Seq) addCable (SeqCable, n, 0, find (Sound, n.a), 0, blue, false);
+            if (n.kind == Sound) addCable (RouteCable, n, 0, firstOf (n.b), 0, blue, false);
+            if (n.kind == Fx)
+            {
+                auto& fx = p.mixer[(size_t) n.a].fx;
+                for (size_t k = 0; k < fx.size(); ++k)
+                    if (fx[k].uid == n.b) addCable (ChainCable, n, 0, k + 1 < fx.size() ? find (Fx, n.a, fx[k + 1].uid) : find (Out, n.a), 0, blue, false);
+            }
+            if (n.kind == Out && n.a > 0 && n.a < (int) p.mixer.size())
+                for (auto& sd : p.mixer[(size_t) n.a].sends) addCable (SendCable, n, 0, firstOf (sd.target), 0, sendC, false, {}, n.a, sd.target);
+        }
+        std::set<juce::String> seen;
+        for (auto& c : p.clips)
+        {
+            if (! c.isAuto() || ! c.autoTarget.name.startsWith ("LFO ") || ! seen.insert (c.autoTarget.name).second) continue;
+            auto* from = find (LfoNode, c.autoTarget.name.fromFirstOccurrenceOf ("LFO ", false, false).getIntValue() - 1);
+            if (from == nullptr) continue;
+            const auto& a = c.autoTarget;
+            Node* to = a.kind == AutoFxParam ? find (Fx, a.track, a.fxUid)
+                     : (a.kind == AutoChanVol || a.kind == AutoChanPan || a.kind == AutoChanPitch) ? find (Sound, a.channel)
+                     : find (Out, a.track);
+            addCable (LfoCable, *from, 0, to, 0, lfoC, true, a.name);
+        }
+        for (auto& l : links())
+        {
+            auto* f = byKey (l.from); auto* to = byKey (l.to);
+            if (f != nullptr) addCable (FreeCable, *f, l.out, to, l.in, juce::Colours::white.withAlpha (0.7f), false);
+        }
+    }
+    const Cable* cableAt (juce::Point<float> pt) const
+    {
+        for (auto it = cables.rbegin(); it != cables.rend(); ++it)
+        {
+            juce::Point<float> near; it->path.getNearestPoint (pt, near);
+            if (near.getDistanceFrom (pt) < 7.0f) return &*it;
+        }
+        return nullptr;
+    }
+    // plug: whatever the two nodes mean together (sequence > sound, sound > insert, LFO > knob, insert > insert send); anything else is a free cable
+    void connect (const Node& f, int o, const Node& to, int i)
+    {
+        if (f.kind == Seq && to.kind == Sound) { moveSequence (f.a, to.a); return; }
+        if (f.kind == Sound && (to.kind == Out || to.kind == Fx)) { route (f.a, to.a); return; }
+        if (f.kind == LfoNode && to.kind != LfoNode) { lfoTo (f.a, to); return; }
+        if ((f.kind == Fx || f.kind == Out) && (to.kind == Fx || to.kind == Out) && f.a != to.a && f.a > 0)
+        {
+            bool ok = false;
+            s.edit ("Patch Bay: route insert", [&] (Project& p) {
+                for (auto& sd : p.mixer[(size_t) f.a].sends) if (sd.target == to.a) { ok = true; return; }
+                ok = p.toggleRoute (f.a, to.a);
+            });
+            if (ok) { rebuild(); return; }
+        }
+        for (auto& l : links()) if (l.from == f.key && l.to == to.key && l.out == o && l.in == i) return;
+        links().push_back ({ f.key, to.key, o, i }); saveWires (s); repaint();
+    }
+    void detach (const Cable& c)
+    {
+        switch (c.type)
+        {
+            case SeqCable: case ChainCable: break;   // a sound always plays its own sequence and an insert's FX run in order: remove the node instead
+            case RouteCable:
+                if (auto* f = byKey (c.from)) { const int ch = f->a; s.edit ("Patch Bay: unplug sound", [&] (Project& p) { if (auto* x = p.findChannel (ch)) x->mixerTrack = 0; }); }
+                break;
+            case SendCable: { const int a = c.a, b = c.b; s.edit ("Patch Bay: unplug send", [&] (Project& p) { p.toggleRoute (a, b); }); break; }
+            case LfoCable:
+            {
+                const auto nm = c.autoName;
+                s.edit ("Patch Bay: unplug LFO", [&] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& x) { return x.isAuto() && x.autoTarget.name == nm; }), p.clips.end()); });
+                break;
+            }
+            case FreeCable:
+                links().erase (std::remove_if (links().begin(), links().end(), [&] (const Link& l) { return l.from == c.from && l.to == c.to && l.out == c.out && l.in == c.in; }), links().end());
+                saveWires (s);
+                break;
+        }
+        rebuild();
+    }
+    void cableMenu (const Cable& c)
+    {
+        juce::PopupMenu m;
+        const bool fixed = c.type == SeqCable || c.type == ChainCable;
+        m.addItem (1, fixed ? "Fixed cable (remove the node to unplug)" : "Unplug cable", ! fixed);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), c] (int r) { if (safe != nullptr && r == 1) safe->detach (c); });
+    }
+    void dotMenu (const Node& n, bool in, int dot)
+    {
+        juce::PopupMenu m;
+        auto& d = extraDots()[n.key];
+        m.addItem (1, "Add input dot", d.first < 6); m.addItem (2, "Add output dot", d.second < 6);
+        m.addItem (3, "Remove extra dots", d.first > 0 || d.second > 0);
+        m.addSeparator(); m.addItem (4, juce::String ("Unplug everything on this ") + (in ? "input" : "output") + " dot");
+        const auto key = n.key;
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), key, in, dot] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            auto& e = extraDots()[key];
+            if (r == 1) ++e.first; else if (r == 2) ++e.second; else if (r == 3) e = { 0, 0 };
+            else if (r == 4)
+            {
+                std::vector<Cable> hit;
+                for (auto& c : safe->cables) if (in ? (c.to == key && c.in == dot) : (c.from == key && c.out == dot)) hit.push_back (c);
+                for (auto& c : hit) if (safe != nullptr) safe->detach (c);
+            }
+            if (safe == nullptr) return;
+            if (r == 3) links().erase (std::remove_if (links().begin(), links().end(), [&] (const Link& l) { return (l.from == key && l.out > 0) || (l.to == key && l.in > 0); }), links().end());
+            saveWires (safe->s); safe->repaint();
+        });
+    }
 
     void drawNode (juce::Graphics& g, const Node& n)
     {
@@ -250,10 +463,11 @@ private:
         g.setColour (juce::Colours::white.withAlpha (0.12f)); g.drawRoundedRectangle (r, 6.0f, 1.0f);
         g.setColour (n.c); g.fillRoundedRectangle (r.withWidth (4.0f), 2.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
-        g.drawText (n.title, n.r.getX() + 10, n.r.getY() + 4, n.r.getWidth() - 20, 18, juce::Justification::centredLeft, true);
+        fitText (g, n.title, n.r.getX() + 10, n.r.getY() + 4, n.r.getWidth() - 20, 18, juce::Justification::centredLeft, true);
         g.setColour (juce::Colour (0xff6ad1ff));
-        if (n.kind != LfoNode) g.fillEllipse (inPort (n).x - 5, inPort (n).y - 5, 10, 10);
-        if (n.kind != Out) { g.setColour (n.kind == LfoNode ? juce::Colour (0xffd59cff) : juce::Colour (0xff6ad1ff)); g.fillEllipse (port (n).x - 5, port (n).y - 5, 10, 10); }
+        for (int i = 0; i < ins (n); ++i) g.fillEllipse (inPort (n, i).x - 5, inPort (n, i).y - 5, 10, 10);
+        g.setColour (n.kind == LfoNode ? juce::Colour (0xffd59cff) : juce::Colour (0xff6ad1ff));
+        for (int i = 0; i < outs (n); ++i) g.fillEllipse (port (n, i).x - 5, port (n, i).y - 5, 10, 10);
         g.setFont (juce::FontOptions (10.5f)); g.setColour (col::dim);
         auto& p = s.p();
         if (n.kind == Seq)
@@ -270,12 +484,12 @@ private:
                 g.fillRoundedRectangle (cell, 3.0f);
                 if (k == play) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (cell, 3.0f, 1.5f); }
             }
-            g.setColour (col::dim); g.drawText ("click steps, Alt-click: hat roll, right-click: Piano Roll", n.r.getX() + 10, n.r.getY() + 20, 260, 12, juce::Justification::centredLeft);
+            g.setColour (col::dim); fitText (g, "click steps, Alt-click: hat roll, right-click: Piano Roll", n.r.getX() + 10, n.r.getY() + 20, 260, 12, juce::Justification::centredLeft);
         }
         else if (n.kind == LfoNode && n.a < (int) lfos().size())
         {
             const auto& l = lfos()[(size_t) n.a];
-            g.drawText (juce::String (shapeNames[l.shape]) + "  " + juce::String (l.perBar, 2) + " / bar  " + juce::String (juce::roundToInt (l.lo * 100)) + "-" + juce::String (juce::roundToInt (l.hi * 100)) + "%",
+            fitText (g, juce::String (shapeNames[l.shape]) + "  " + juce::String (l.perBar, 2) + " / bar  " + juce::String (juce::roundToInt (l.lo * 100)) + "-" + juce::String (juce::roundToInt (l.hi * 100)) + "%",
                         n.r.getX() + 10, n.r.getY() + 22, n.r.getWidth() - 20, 14, juce::Justification::centredLeft);
             juce::Path w; const auto box = r.reduced (10.0f).withTrimmedTop (32.0f);
             for (int i = 0; i <= 80; ++i)
@@ -284,11 +498,11 @@ private:
                 if (i == 0) w.startNewSubPath (x, yv); else w.lineTo (x, yv);
             }
             g.setColour (n.c); g.strokePath (w, juce::PathStrokeType (1.6f));
-            g.setColour (col::dim); g.drawText ("right-click: shape / rate / range", n.r.getX() + 10, n.r.getBottom() - 14, 170, 12, juce::Justification::centredLeft);
+            g.setColour (col::dim); fitText (g, "right-click: shape / rate / range", n.r.getX() + 10, n.r.getBottom() - 14, 170, 12, juce::Justification::centredLeft);
         }
-        else if (n.kind == Sound) g.drawText ("SIG OUT  >  insert " + juce::String (n.b), n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
-        else if (n.kind == Fx) g.drawText ("right-click: automate / gate / LFO", n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
-        else if (n.kind == Out) g.drawText ("drop a sound here to route it", n.r.getX() + 10, n.r.getY() + 30, 140, 14, juce::Justification::centredLeft);
+        else if (n.kind == Sound) fitText (g, "SIG OUT  >  insert " + juce::String (n.b), n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
+        else if (n.kind == Fx) fitText (g, "right-click: automate / gate / LFO", n.r.getX() + 10, n.r.getY() + 30, 150, 14, juce::Justification::centredLeft);
+        else if (n.kind == Out) fitText (g, "drop a sound here to route it", n.r.getX() + 10, n.r.getY() + 30, 140, 14, juce::Justification::centredLeft);
     }
 
     void toggle (int ch, int step)
@@ -319,6 +533,55 @@ private:
             if (auto* c = p.findChannel (ch); c != nullptr && track > 0 && track < (int) p.mixer.size()) c->mixerTrack = track;
         });
     }
+    // LFO cable onto any node: FX knob, sound volume / pan / pitch, insert volume / pan; anything else (sequence) automates its sound
+    void lfoTo (int li, const Node& to)
+    {
+        if (to.kind == Fx) { lfoToParam (li, to.a, to.b); return; }
+        juce::PopupMenu m;
+        const bool chan = to.kind == Sound || to.kind == Seq;
+        if (chan) { m.addItem (1, "Volume"); m.addItem (2, "Pan"); m.addItem (3, "Pitch"); }
+        else { m.addItem (4, "Volume"); m.addItem (5, "Pan"); }
+        const int a = to.a;
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, a, chan] (int r) {
+            if (safe == nullptr || r <= 0) return;
+            AutoTarget t;
+            const char* names[] { "", "Volume", "Pan", "Pitch", "Volume", "Pan" };
+            juce::String who;
+            if (chan)
+            {
+                t.kind = r == 1 ? AutoChanVol : r == 2 ? AutoChanPan : AutoChanPitch; t.channel = a;
+                if (auto* c = safe->s.p().findChannel (a)) { t.track = juce::jmax (0, c->mixerTrack); who = c->name; }
+            }
+            else
+            {
+                t.kind = r == 4 ? AutoInsertVol : AutoInsertPan; t.track = a;
+                if (a >= 0 && a < (int) safe->s.p().mixer.size()) who = safe->s.p().mixer[(size_t) a].name;
+            }
+            t.name = "LFO " + juce::String (li + 1) + " > " + who + " - " + names[r];
+            safe->applyLfo (li, t);
+        });
+    }
+    void applyLfo (int li, const AutoTarget& t)
+    {
+        if (li < 0 || li >= (int) lfos().size()) return;
+        createAutomationClip (s, t, (int) s.p().lanes.size() - 1);
+        const auto l = lfos()[(size_t) li];
+        s.edit ("Patch Bay: LFO shape", [&] (Project& p) {
+            Clip* c = nullptr;
+            for (auto& cl : p.clips) if (cl.isAuto() && cl.autoTarget.name == t.name && (c == nullptr || cl.uid > c->uid)) c = &cl;
+            if (c == nullptr) return;
+            const double period = p.beatsPerBar / juce::jmax (0.01, l.perBar);
+            const double stepB = juce::jmax (0.125, c->length / 4000.0);
+            c->autoPts.clear();
+            for (double b = 0.0; b <= c->length + 1.0e-9; b += stepB)
+            {
+                float v = l.shape == 4 ? l.lo + (l.hi - l.lo) * juce::Random ((juce::int64) std::floor (b / period * 4.0) + 7).nextFloat()
+                                       : lfoAt (l, b / period);
+                c->autoPts.push_back ({ b, juce::jlimit (0.0f, 1.0f, v) });
+            }
+        });
+        rebuild();
+    }
     void lfoToParam (int li, int track, int uid)
     {
         juce::PopupMenu m;
@@ -327,27 +590,12 @@ private:
         else if (auto* pl = s.engine.fxPlugin (track, uid))
             for (int k = 0; k < juce::jmin (128, pl->getParameters().size()); ++k) ps.push_back ({ "#" + juce::String (k), pl->getParameters()[k]->getName (32) });
         for (int i = 0; i < (int) ps.size(); ++i) m.addItem (i + 1, ps[(size_t) i].second);
+        if (ps.empty()) m.addItem (-1, "This plug-in has no automatable knobs", false);
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), ps, li, track, uid] (int r) {
             if (safe == nullptr || r <= 0 || li >= (int) lfos().size()) return;
-            auto& st = safe->s;
             AutoTarget t; t.kind = AutoFxParam; t.track = track; t.fxUid = uid; t.param = ps[(size_t) r - 1].first;
             t.name = "LFO " + juce::String (li + 1) + " > " + ps[(size_t) r - 1].second;
-            createAutomationClip (st, t, (int) st.p().lanes.size() - 1);
-            const auto l = lfos()[(size_t) li];
-            st.edit ("Patch Bay: LFO shape", [&] (Project& p) {
-                Clip* c = nullptr;
-                for (auto& cl : p.clips) if (cl.isAuto() && cl.autoTarget.name == t.name && (c == nullptr || cl.uid > c->uid)) c = &cl;
-                if (c == nullptr) return;
-                const double period = p.beatsPerBar / juce::jmax (0.01, l.perBar);
-                const double stepB = juce::jmax (0.125, c->length / 4000.0);
-                c->autoPts.clear();
-                for (double b = 0.0; b <= c->length + 1.0e-9; b += stepB)
-                {
-                    float v = l.shape == 4 ? l.lo + (l.hi - l.lo) * juce::Random ((juce::int64) std::floor (b / period * 4.0) + 7).nextFloat()
-                                           : lfoAt (l, b / period);
-                    c->autoPts.push_back ({ b, juce::jlimit (0.0f, 1.0f, v) });
-                }
-            });
+            safe->applyLfo (li, t);
         });
     }
     void nodeMenu (Node& n)
@@ -404,6 +652,7 @@ public:
         m.addSeparator();
         for (int i = 0; i < (int) bays().size(); ++i) bm.addItem (200 + i, bays()[(size_t) i].name, true, i == curBay());
         m.addSubMenu ("Go to bay", bm);
+        m.addItem (16, "AUTO: generate a pattern in " + juce::MidiMessage::getMidiNoteName (s.p().keyRoot, true, false, 3) + " for this bay");
         m.addItem (5, "New Patch Bay"); m.addItem (6, "Rename " + b.name); m.addItem (7, "Duplicate " + b.name); m.addItem (8, "Delete " + b.name, bays().size() > 1);
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this)] (int r) { if (safe != nullptr) safe->canvasResult (r); });
     }
@@ -413,9 +662,9 @@ public:
         auto& b = bay();
         auto addCh = [&] (Channel c) {
             int id = -1;
-            s.edit ("Patch Bay: add instrument", [&] (Project& p) { if (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) c.mixerTrack = b.insert; else c.mixerTrack = -1; id = p.addChannel (c); });
+            s.edit ("Patch Bay: add instrument", [&] (Project& p) { ensurePattern (p); if (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) c.mixerTrack = b.insert; else c.mixerTrack = -1; id = p.addChannel (c); });
             if (! b.chans.empty() && id >= 0) b.chans.push_back (id);
-            s.selectedChannel = id; saveBays (s); rebuild();
+            s.selectedChannel = id; saveBays (s); if (b.mode == 1) autoGen(); rebuild();
         };
         if (r == 1) { Channel c; c.type = ChannelType::Synth; c.name = "Synth"; c.keyTrack = true; addCh (c); }
         else if (r == 2) { Channel c; c.type = ChannelType::Synth; c.name = "808"; c.synth.wave = 4; c.glide = 0.08f; c.mono = true; c.rootKey = 36; c.colour = juce::Colour (0xffff5d8a); addCh (c); }
@@ -428,6 +677,7 @@ public:
             });
         }
         else if (r == 4) { lfos().push_back ({ 0, 1.0, 0.0f, 1.0f, "LFO " + juce::String ((int) lfos().size() + 1) }); saveLfos (s); rebuild(); }
+        else if (r == 16) { autoGen(); rebuild(); }
         else if (r == 5) { bays().push_back ({ "Bay " + juce::String ((int) bays().size() + 1), { -1 }, 2, 0 }); curBay() = (int) bays().size() - 1; saveBays (s); rebuild(); if (onBays) onBays(); }
         else if (r == 6) rename();
         else if (r == 7) { auto c = b; c.name << " copy"; bays().push_back (c); curBay() = (int) bays().size() - 1; saveBays (s); rebuild(); if (onBays) onBays(); }
@@ -457,9 +707,65 @@ public:
     void addChannelPublic (Channel c)
     {
         auto& b = bay(); int id = -1;
-        s.edit ("Patch Bay: add sound", [&] (Project& p) { c.mixerTrack = (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) ? b.insert : -1; id = p.addChannel (c); });
+        s.edit ("Patch Bay: add sound", [&] (Project& p) { ensurePattern (p); c.mixerTrack = (b.route != 0 && b.insert > 0 && b.insert < (int) p.mixer.size()) ? b.insert : -1; id = p.addChannel (c); });
         if (! b.chans.empty() && id >= 0) b.chans.push_back (id);
-        s.selectedChannel = id; saveBays (s); rebuild();
+        s.selectedChannel = id; saveBays (s); if (b.mode == 1) autoGen(); rebuild();
+    }
+    // AUTO: a 2-bar pattern for every sound in the bay, in the project's key and scale (drums: kick / snare-clap / hats / percs; 808 + bass: low roots; the rest: a melody)
+    void autoGen()
+    {
+        s.edit ("Patch Bay: AUTO pattern", [&] (Project& p) {
+            ensurePattern (p);
+            auto& pat = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
+            juce::Random rnd;
+            std::vector<int> keys, low;
+            for (int k = 55; k <= 79; ++k) if (inScale (k, p.keyRoot, p.scaleIndex)) keys.push_back (k);
+            for (int k = 28; k <= 43; ++k) if (inScale (k, p.keyRoot, p.scaleIndex)) low.push_back (k);
+            if (keys.empty()) keys.push_back (60);
+            if (low.empty()) low.push_back (36);
+            const int root = 36 + ((p.keyRoot % 12) + 12) % 12;
+            for (auto& c : p.channels)
+            {
+                if (! inBay (c.id) || c.type == ChannelType::Drummer) continue;
+                NoteList nl; const auto n = c.name.toLowerCase();
+                auto add = [&] (int key, double st, double l, float v) { Note x; x.key = key; x.start = st; x.length = l; x.velocity = v; nl.push_back (x); };
+                const bool melodic = c.type != ChannelType::Sampler || c.keyTrack;
+                if (n.contains ("808") || n.contains ("bass"))
+                {
+                    for (int bar = 0; bar < 2; ++bar)
+                        for (double st : { 0.0, 1.5, 2.75 })
+                            if (st == 0.0 || rnd.nextFloat() < 0.7f)
+                                add (st == 0.0 ? root : low[(size_t) rnd.nextInt ((int) low.size())], bar * 4.0 + st, st == 0.0 ? 1.25 : 0.75, 0.9f);
+                }
+                else if (! melodic || isDrumSampleName (c.name))
+                {
+                    const bool kick = n.contains ("kick") || n.contains ("kik") || n.contains ("bd");
+                    const bool snare = n.contains ("snare") || n.contains ("clap") || n.contains ("rim") || n.contains ("sd");
+                    const bool hat = n.contains ("hat") || n.contains ("hh") || n.contains ("ride") || n.contains ("shaker");
+                    for (int st = 0; st < 32; ++st)
+                    {
+                        const double b = st * 0.25; const int inBar = st % 16;
+                        bool on = false; float v = 0.85f;
+                        if (kick) on = inBar == 0 || inBar == 10 || (inBar == 7 && rnd.nextFloat() < 0.5f) || (inBar == 14 && rnd.nextFloat() < 0.3f);
+                        else if (snare) on = inBar == 4 || inBar == 12;
+                        else if (hat) { on = st % 2 == 0 || rnd.nextFloat() < 0.25f; v = st % 4 == 0 ? 0.8f : 0.55f; }
+                        else on = rnd.nextFloat() < 0.12f;
+                        if (on) add (60, b, 0.25, v);
+                    }
+                }
+                else
+                {
+                    int at = rnd.nextInt ((int) keys.size());
+                    for (int st = 0; st < 16; ++st)
+                    {
+                        if (st > 0 && rnd.nextFloat() < 0.3f) continue;
+                        at = juce::jlimit (0, (int) keys.size() - 1, at + rnd.nextInt (5) - 2);
+                        add (keys[(size_t) at], st * 0.5, rnd.nextFloat() < 0.3f ? 1.0 : 0.5, 0.65f + rnd.nextFloat() * 0.25f);
+                    }
+                }
+                pat.notes[c.id] = nl;
+            }
+        });
     }
     std::function<void()> onBays;
     void rename()
@@ -474,6 +780,7 @@ private:
     int fxTrack()
     {
         auto& p = s.p(); auto& b = bay();
+        if (lastTrack > 0 && lastTrack < (int) p.mixer.size()) return lastTrack;
         if (b.insert > 0 && b.insert < (int) p.mixer.size()) return b.insert;
         if (auto* c = p.findChannel (lastChan)) if (c->mixerTrack > 0) return c->mixerTrack;
         for (auto& c : p.channels) if (inBay (c.id) && c.mixerTrack > 0) return c.mixerTrack;
@@ -494,6 +801,7 @@ private:
                 if (b.insert <= 0 || b.insert >= (int) p.mixer.size()) b.insert = p.addMixerTrack (b.name);
                 for (auto& c : p.channels) if (inBay (c.id)) c.mixerTrack = b.insert;
             }
+            if (b.route != 1) ensurePattern (p);
             if (b.route != 1 && ! p.patterns.empty())
             {
                 const int pi = juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern);
@@ -625,14 +933,14 @@ private:
             }
         });
     }
-    int lastChan = -1;
+    int lastChan = -1, lastTrack = -1;
     std::unique_ptr<juce::FileChooser> chooser;
     void changeListenerCallback (juce::ChangeBroadcaster*) override { moving = nullptr; dragFrom = nullptr; rebuild(); }
     void timerCallback() override { if (isShowing() && s.engine.isPlaying()) repaint(); }
 
     Studio& s;
     std::vector<Node> nodes;
-    Node* moving = nullptr; Node* dragFrom = nullptr;
+    Node* moving = nullptr; Node* dragFrom = nullptr; int dragPort = 0; bool dragIsIn = false;
     juce::Point<int> grab, dragTo;
 };
 
@@ -659,9 +967,16 @@ struct PatchBayView : public juce::Component
         canvas = new Canvas (s);
         vp.setViewedComponent (canvas, true);
         addAndMakeVisible (vp);
-        for (auto* b : { &addBay, &menu, &send, &play }) addAndMakeVisible (b);
+        for (auto* b : { &addBay, &menu, &send, &play, &mode }) addAndMakeVisible (b);
+        mode.setTooltip ("MANUAL: program the pattern yourself.  AUTO: every sound you add gets a pattern in the song's key and scale (right-click the canvas > AUTO to regenerate)");
+        mode.onClick = [this] {
+            auto& b = bay();
+            b.mode = 1 - b.mode; saveBays (s);
+            if (b.mode == 1) { canvas->autoGen(); canvas->rebuild(); }
+            refresh();
+        };
         addAndMakeVisible (pick);
-        pick.onChange = [this] { if (pick.getSelectedItemIndex() >= 0) { curBay() = pick.getSelectedItemIndex(); canvas->rebuild(); } };
+        pick.onChange = [this] { if (pick.getSelectedItemIndex() >= 0) { curBay() = pick.getSelectedItemIndex(); canvas->rebuild(); refresh(); } };
         addBay.onClick = [this] { canvas->canvasResult (5); };
         menu.onClick = [this] { canvas->canvasMenu(); };
         send.onClick = [this] { canvas->canvasResult (13); };
@@ -676,6 +991,8 @@ struct PatchBayView : public juce::Component
         pick.clear (juce::dontSendNotification);
         for (int i = 0; i < (int) bays().size(); ++i) pick.addItem (bays()[(size_t) i].name, i + 1);
         pick.setSelectedItemIndex (juce::jlimit (0, (int) bays().size() - 1, curBay()), juce::dontSendNotification);
+        mode.setButtonText (bay().mode == 1 ? "AUTO" : "MANUAL");
+        mode.setToggleState (bay().mode == 1, juce::dontSendNotification);
     }
     void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
     void resized() override
@@ -683,14 +1000,14 @@ struct PatchBayView : public juce::Component
         auto r = getLocalBounds();
         auto bar = r.removeFromTop (phoneUI ? 44 : 32).reduced (4);
         pick.setBounds (bar.removeFromLeft (160)); bar.removeFromLeft (4);
-        for (auto* b : { &addBay, &send, &play, &menu }) { b->setBounds (bar.removeFromLeft (phoneUI ? 70 : 84)); bar.removeFromLeft (4); }
+        for (auto* b : { &addBay, &mode, &send, &play, &menu }) { b->setBounds (bar.removeFromLeft (phoneUI ? 70 : 84)); bar.removeFromLeft (4); }
         vp.setBounds (r);
     }
     Studio& s;
     Canvas* canvas = nullptr;
     juce::Viewport vp;
     juce::ComboBox pick;
-    juce::TextButton addBay { "+ BAY" }, menu { "ADD..." }, send { "SEND" }, play { "PLAY" };
+    juce::TextButton addBay { "+ BAY" }, menu { "ADD..." }, send { "SEND" }, play { "PLAY" }, mode { "MANUAL" };
 };
 
 std::unique_ptr<PatchBayWindow>& patchWindow() { static std::unique_ptr<PatchBayWindow> w; return w; }
@@ -703,5 +1020,28 @@ void showPatchBay (Studio& s)
     w->setVisible (true); w->toFront (true);
 }
 void closePatchBay() { patchWindow().reset(); }
+juce::PopupMenu patchBayRouteMenu (Studio& s, std::function<void (Project&, int)> apply)
+{
+    loadBays (s);
+    juce::PopupMenu m;
+    const auto& p = s.p();
+    const auto nm = [&p] (int t) { return t > 0 && t < (int) p.mixer.size() ? "  (" + p.mixer[(size_t) t].name + ")" : juce::String(); };
+    auto go = [&s, apply] (int i, int node) {
+        s.edit ("Route to Patch Bay", [&] (Project& pr) { const int t = bayInsert (pr, i, node); if (t > 0) apply (pr, t); });
+        saveBays (s);
+    };
+    for (int i = 0; i < (int) bays().size() && i < 32; ++i)
+    {
+        const auto& b = bays()[(size_t) i];
+        juce::PopupMenu bm;
+        bm.addItem ("Bay input" + nm (b.insert), [go, i] { go (i, 0); });
+        for (int k = 0; k < (int) b.stacks.size(); ++k) bm.addItem ("FX stack node " + juce::String (k + 1) + nm (b.stacks[(size_t) k]), [go, i, k] { go (i, k + 1); });
+        bm.addItem ("New FX stack node (own FX chain + automation, feeds " + b.name + ")", [go, i] { go (i, -1); });
+        m.addSubMenu (b.name, bm);
+    }
+    m.addSeparator();
+    m.addItem ("New Patch Bay", [go] { bays().push_back ({ "Bay " + juce::String ((int) bays().size() + 1), { -1 }, 2, 0 }); go ((int) bays().size() - 1, 0); });
+    return m;
+}
 std::unique_ptr<juce::Component> createPatchBayView (Studio& s) { return std::make_unique<PatchBayView> (s); }
 }

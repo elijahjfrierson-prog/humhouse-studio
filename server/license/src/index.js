@@ -3,7 +3,7 @@
 // POST /v1/deactivate {key, mid}     -> frees this computer's slot
 // Admin (Authorization: Bearer ADMIN_TOKEN): /v1/admin/lookup|revoke|unrevoke|free {key[, mid]}
 import MONITOR_HTML from "./monitor.html";
-const PASS_DAYS = 14;
+const PASS_DAYS = 36500;   // no time limit: a pass only stops working if its key is revoked (checked daily online)
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";   // Crockford base32
 
 export function normalizeKey(k) {

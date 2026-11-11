@@ -16,7 +16,7 @@ juce::File keyFile();
 bool storedValid();
 
 // Online activation: the license server (our own) hands out a signed pass locked to this Machine ID.
-// A key holds up to 3 computers; the pass lasts 14 days offline and is renewed in the background.
+// A key holds up to 3 computers; the pass has no time limit and is re-checked daily online (revoke locks it).
 struct Pass
 {
     bool ok = false;
