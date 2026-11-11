@@ -1,6 +1,7 @@
 // HumHouse license server (Cloudflare Worker + D1).
 // POST /v1/activate {key, mid, ver}  -> {ok, pass} | {ok:false, error}
 // POST /v1/deactivate {key, mid}     -> frees this computer's slot
+// POST /v1/restore {mid, ver}        -> {ok, pass} when this Machine ID is already on an active key
 // Admin (Authorization: Bearer ADMIN_TOKEN): /v1/admin/lookup|revoke|unrevoke|free {key[, mid]}
 import MONITOR_HTML from "./monitor.html";
 const PASS_DAYS = 1;   // daily check-in: the app renews silently in the background; a computer offline over 24 h sees the key screen at next launch
@@ -68,6 +69,19 @@ async function activate(env, body, req) {
     await log(env, hash, mid, "new", req, ver);
   } else await log(env, hash, mid, "renew", req, ver);
   return json({ ok: true, pass: await makePass(env, hash, mid, now) });
+}
+
+// this computer was already activated with a key: unlock it from its Machine ID alone (no key to paste)
+async function restore(env, body, req) {
+  const mid = String(body.mid || "").toUpperCase();
+  if (!validMid(mid)) return json({ ok: false, error: "Bad Machine ID." }, 400);
+  const row = await env.DB.prepare("SELECT a.key_hash hash FROM activations a JOIN keys k ON k.hash = a.key_hash " +
+    "WHERE a.mid = ?1 AND k.status = 'active' ORDER BY a.last_seen DESC LIMIT 1").bind(mid).first();
+  if (!row) return json({ ok: false, error: "This computer hasn't been activated yet. Paste your license key." }, 404);
+  const now = Math.floor(Date.now() / 1000), ver = String(body.ver || "").slice(0, 32);
+  await env.DB.prepare("UPDATE activations SET last_seen = ?3, app_version = ?4 WHERE key_hash = ?1 AND mid = ?2").bind(row.hash, mid, now, ver).run();
+  await log(env, row.hash, mid, "renew", req, ver);
+  return json({ ok: true, pass: await makePass(env, row.hash, mid, now) });
 }
 
 async function deactivate(env, body) {
@@ -191,6 +205,7 @@ export default {
     try { body = await req.json(); } catch { return json({ ok: false, error: "Bad request." }, 400); }
     if (url.pathname === "/v1/activate") return activate(env, body, req);
     if (url.pathname === "/v1/deactivate") return deactivate(env, body);
+    if (url.pathname === "/v1/restore") return restore(env, body, req);
     if (url.pathname.startsWith("/v1/admin/")) {
       const tok = (req.headers.get("authorization") || "").replace(/^Bearer /, "");
       if (!sameSecret(tok, env.ADMIN_TOKEN)) return json({ ok: false, error: "unauthorized" }, 401);
