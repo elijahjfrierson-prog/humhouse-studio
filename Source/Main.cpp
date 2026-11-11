@@ -87,7 +87,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         title.setText ("Activate HumHouse Studio", juce::dontSendNotification);
         title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
         info.setText ("Enter your license key (HHS-XXXXX-XXXXX-XXXXX-XXXXX). Each key works on up to 3 computers. "
-                      "An internet connection is needed once to activate.", juce::dontSendNotification);
+                      "It checks in online once a day by itself.", juce::dontSendNotification);
         info.setColour (juce::Label::textColourId, hhs::col::dim);
         info.setJustificationType (juce::Justification::topLeft);
         mid.setText ("Machine ID: " + hhs::license::machineId(), juce::dontSendNotification);
@@ -136,6 +136,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     juce::String lastClip;
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
     void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
+    void autoCheck (const juce::String& saved) { key.setText (saved, false); lastClip = juce::SystemClipboard::getTextFromClipboard(); activate.triggerClick(); }
     void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }
     void resized() override
     {
@@ -205,7 +206,14 @@ public:
        #endif
        #if HHS_KEY_GATE
         launchLine = commandLine;
-        if (! hhs::license::storedPass().ok) { showActivation ({}); return; }
+        if (! hhs::license::storedPass().ok)
+        {
+            // a bought key that only needs its daily check re-checks by itself: nothing to type
+            const auto saved = hhs::license::keyFile().loadFileAsString().trim();
+            showActivation ({});
+            if (saved.isNotEmpty() && activationPanel != nullptr) activationPanel->autoCheck (saved);
+            return;
+        }
         renewInBackground (true);   // every launch re-checks the key online
        #endif
         startMain (commandLine);
@@ -292,6 +300,7 @@ private:
     juce::ThreadPool licensePool { 1 };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
     std::unique_ptr<juce::DocumentWindow> activationWindow;
+    juce::Component::SafePointer<ActivationPanel> activationPanel;
     Watch licenseWatch;
 
     void showActivation (const juce::String& message)
@@ -312,6 +321,7 @@ private:
             });
         };
         activationWindow = std::make_unique<ActivationWindow> (p);
+        activationPanel = sp;
     }
     void lockApp (const juce::String& why)
     {
@@ -326,7 +336,7 @@ private:
     {
         watchLicense();
         const auto p = hhs::license::storedPass();
-        if (! force && juce::Time::currentTimeMillis() / 1000 - p.issued < 86400) return;
+        if (! force && p.ok && juce::Time::currentTimeMillis() / 1000 - p.issued < 23 * 3600) return;
         const auto key = hhs::license::keyFile().loadFileAsString().trim();
         licensePool.addJob ([this, key, alive = alive] {
             const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
@@ -342,8 +352,8 @@ private:
         licenseWatch.fn = [this] {
             if (window == nullptr) return;
             const auto p = hhs::license::storedPass();
-            if (! p.ok) lockApp (p.error);
-            else if (juce::Time::currentTimeMillis() / 1000 - p.issued >= 86400) renewInBackground();
+            if (! p.ok && ! p.expired) lockApp (p.error);   // being offline never locks mid-session
+            else if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();
         };
         licenseWatch.startTimer (20 * 60 * 1000);
     }

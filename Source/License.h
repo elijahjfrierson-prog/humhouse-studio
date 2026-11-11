@@ -16,10 +16,10 @@ juce::File keyFile();
 bool storedValid();
 
 // Online activation: the license server (our own) hands out a signed pass locked to this Machine ID.
-// A key holds up to 3 computers; the pass has no time limit and is re-checked daily online (revoke locks it).
+// A key holds up to 3 computers; the pass lasts a day and renews silently in the background (revoke locks it).
 struct Pass
 {
-    bool ok = false;
+    bool ok = false, expired = false;   // expired: genuine pass that just needs its daily online check
     juce::String error;
     juce::int64 issued = 0, expires = 0;
 };
@@ -27,6 +27,7 @@ Pass verifyPass (const juce::String& pass, const juce::String& machine, juce::in
 juce::File passFile();
 Pass storedPass();
 juce::String serverUrl();
+juce::String homeServerUrl();   // the owner's own License Server, if it's online (Cloudflare knows its address)
 
 struct Online
 {

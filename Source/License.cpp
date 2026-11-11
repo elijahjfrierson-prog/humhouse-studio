@@ -102,9 +102,9 @@ Pass verifyPass (const juce::String& passIn, const juce::String& machine, juce::
     const auto v = juce::JSON::parse (payload.toString());
     if (v["sku"].toString() != "humhouse_studio") return p;
     if (! v["mid"].toString().equalsIgnoreCase (machine.trim())) { p.error = "This activation belongs to another computer."; return p; }
-    p.issued = (juce::int64) v["iat"]; p.expires = (juce::int64) v["exp"];
+    p.issued = (juce::int64) v["iat"]; p.expires = juce::jmin ((juce::int64) v["exp"], p.issued + 86400);   // daily check-in, older long passes too
     if (p.issued > now + 86400) { p.error = "Your computer's clock is wrong."; return p; }
-    if (now >= p.expires) { p.error = "Activation expired: connect to the internet so HumHouse can check your key."; return p; }
+    if (now >= p.expires) { p.expired = true; p.error = "Connect to the internet so HumHouse can check your key (once a day)."; return p; }
     p.ok = true; p.error = {};
     return p;
 }
@@ -115,7 +115,58 @@ Pass storedPass()
 {
     const auto f = passFile();
     if (! f.existsAsFile()) return {};
-    return verifyPass (f.loadFileAsString(), machineId(), juce::Time::currentTimeMillis() / 1000);
+    const auto now = juce::Time::currentTimeMillis() / 1000;
+    auto p = verifyPass (f.loadFileAsString(), machineId(), now);
+    // clock turned back to stretch a pass: needs an online check
+    const auto seenFile = f.getSiblingFile ("license.seen");
+    const auto seen = seenFile.loadFileAsString().getLargeIntValue();
+    if (p.ok && seen > 0 && now < seen - 3600)
+    {
+        p.ok = false; p.expired = true;
+        p.error = "Your computer's clock went back: connect to the internet so HumHouse can check your key.";
+        return p;
+    }
+    if (now > seen) seenFile.replaceWithText (juce::String (now));
+    return p;
+}
+
+static juce::var postJson (const juce::String& url, const juce::var& body, int timeoutMs, int& status)
+{
+    auto in = juce::URL (url).withPOSTData (juce::JSON::toString (body, true))
+                  .createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
+                                          .withExtraHeaders ("Content-Type: application/json")
+                                          .withConnectionTimeoutMs (timeoutMs)
+                                          .withStatusCode (&status));
+    if (in == nullptr) return {};
+    const auto v = juce::JSON::parse (in->readEntireStreamAsString());
+    return v.isVoid() ? juce::var (juce::String()) : v;   // reached but unreadable: not void
+}
+
+juce::String homeServerUrl()
+{
+    auto in = juce::URL (serverUrl() + "/v1/servers")
+                  .createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress).withConnectionTimeoutMs (5000));
+    if (in == nullptr) return {};
+    const auto u = juce::JSON::parse (in->readEntireStreamAsString())["home"].toString();
+    return u.startsWith ("http://") || u.startsWith ("https://") ? u : juce::String();
+}
+
+// the key goes to the home server RSA-encrypted (PKCS#1 v1.5) to the pass key, so only that server can read it
+juce::String encryptForServer (const juce::String& text)
+{
+    juce::BigInteger n; n.parseString (passModulus, 16);
+    const int k = (n.getHighestBit() + 8) / 8;
+    const auto* m = text.toRawUTF8();
+    const int mLen = (int) std::strlen (m);
+    if (mLen > k - 11) return {};
+    juce::HeapBlock<unsigned char> em ((size_t) k, true);
+    em[1] = 2;
+    juce::Random rnd;
+    for (int i = 2; i < k - mLen - 1; ++i) em[i] = (unsigned char) (1 + rnd.nextInt (255));
+    std::memcpy (em + (k - mLen), m, (size_t) mLen);
+    auto c = fromBytes (em, (size_t) k);
+    c.exponentModulo (juce::BigInteger (65537), n);
+    return c.toString (16, k * 2);
 }
 
 juce::String serverUrl() { return HHS_LICENSE_URL; }
@@ -129,13 +180,19 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
     o->setProperty ("ver", JUCE_APPLICATION_VERSION_STRING);
     const juce::var body (o);
     int status = 0;
-    const auto url = juce::URL (serverUrl() + "/v1/activate").withPOSTData (juce::JSON::toString (body, true));
-    auto in = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inPostData)
-                                         .withExtraHeaders ("Content-Type: application/json")
-                                         .withConnectionTimeoutMs (12000)
-                                         .withStatusCode (&status));
-    if (in == nullptr) { r.error = "Can't reach the HumHouse license server. Check your internet and try again."; return r; }
-    const auto v = juce::JSON::parse (in->readEntireStreamAsString());
+    juce::var v;
+    // the owner's own server first; Cloudflare whenever it's off or doesn't answer properly
+    if (const auto home = homeServerUrl(); home.isNotEmpty())
+    {
+        auto* h = new juce::DynamicObject();
+        h->setProperty ("ek", encryptForServer (key.trim()));
+        h->setProperty ("mid", machine);
+        h->setProperty ("ver", JUCE_APPLICATION_VERSION_STRING);
+        v = postJson (home + "/v1/activate", juce::var (h), 6000, status);
+        if (! v.isObject() || status >= 500) v = juce::var();
+    }
+    if (! v.isObject()) v = postJson (serverUrl() + "/v1/activate", body, 12000, status);
+    if (v.isVoid()) { r.error = "Can't reach the HumHouse license server. Check your internet and try again."; return r; }
     if (! v.isObject()) { r.error = "The license server didn't answer properly. Try again in a minute."; return r; }
     if ((bool) v["ok"])
     {
