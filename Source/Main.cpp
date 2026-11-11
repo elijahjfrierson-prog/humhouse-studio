@@ -97,8 +97,8 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         key.setFont (juce::Font (juce::FontOptions (18.0f)));
         key.onReturnKey = [this] { activate.triggerClick(); };
         activate.onClick = [this] {
-            if (key.getText().trim().isEmpty()) { setStatus ("Type your license key first."); return; }
-            activate.setEnabled (false); setStatus ("Checking your key...");
+            activate.setEnabled (false);
+            setStatus (key.getText().trim().isEmpty() ? "Checking this computer's Machine ID..." : "Checking your key...");
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
@@ -128,7 +128,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         if (k != key.getText()) { key.setText (k, false); setStatus ("Key pasted - press Activate."); }
         return true;
     }
-    void timerCallback() override { if (activate.isEnabled() && ! key.hasKeyboardFocus (true)) pasteFromClipboard(); }
+    void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (e.eventComponent == &mid) { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); mid.setText ("Machine ID copied: " + hhs::license::machineId(), juce::dontSendNotification); }
@@ -136,7 +136,12 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     juce::String lastClip;
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
     void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
-    void autoCheck (const juce::String& saved) { key.setText (saved, false); lastClip = juce::SystemClipboard::getTextFromClipboard(); activate.triggerClick(); }
+    // a saved key, a copied key, or (neither) this computer's Machine ID: check by itself, nothing to type
+    void autoCheck (const juce::String& saved)
+    {
+        if (saved.isNotEmpty()) { key.setText (saved, false); lastClip = juce::SystemClipboard::getTextFromClipboard(); }
+        activate.triggerClick();
+    }
     void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }
     void resized() override
     {
@@ -211,7 +216,7 @@ public:
             // a bought key that only needs its daily check re-checks by itself: nothing to type
             const auto saved = hhs::license::keyFile().loadFileAsString().trim();
             showActivation ({});
-            if (saved.isNotEmpty() && activationPanel != nullptr) activationPanel->autoCheck (saved);
+            if (activationPanel != nullptr) activationPanel->autoCheck (saved);
             return;
         }
         renewInBackground (true);   // every launch re-checks the key online

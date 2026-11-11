@@ -182,7 +182,7 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
     int status = 0;
     juce::var v;
     // the owner's own server first; Cloudflare whenever it's off or doesn't answer properly
-    if (const auto home = homeServerUrl(); home.isNotEmpty())
+    if (const auto home = key.trim().isNotEmpty() ? homeServerUrl() : juce::String(); home.isNotEmpty())
     {
         auto* h = new juce::DynamicObject();
         h->setProperty ("ek", encryptForServer (key.trim()));
@@ -191,7 +191,9 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
         v = postJson (home + "/v1/activate", juce::var (h), 6000, status);
         if (! v.isObject() || status >= 500) v = juce::var();
     }
-    if (! v.isObject()) v = postJson (serverUrl() + "/v1/activate", body, 12000, status);
+    if (key.trim().isEmpty())   // no key saved/pasted: an already-activated computer unlocks from its Machine ID
+        v = postJson (serverUrl() + "/v1/restore", body, 12000, status);
+    else if (! v.isObject()) v = postJson (serverUrl() + "/v1/activate", body, 12000, status);
     if (v.isVoid()) { r.error = "Can't reach the HumHouse license server. Check your internet and try again."; return r; }
     if (! v.isObject()) { r.error = "The license server didn't answer properly. Try again in a minute."; return r; }
     if ((bool) v["ok"])
@@ -202,7 +204,7 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
         return r;
     }
     r.error = v["error"].toString().isNotEmpty() ? v["error"].toString() : juce::String ("Activation failed.");
-    r.lockNow = status == 403 || status == 404 || (bool) v["revoked"] || (bool) v["full"];
+    r.lockNow = key.trim().isNotEmpty() && (status == 403 || status == 404 || (bool) v["revoked"] || (bool) v["full"]);
     return r;
 }
 
