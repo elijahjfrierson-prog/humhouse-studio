@@ -49,7 +49,7 @@ if(UNIX AND NOT APPLE)
 else()
     set(HHS_USE_CURL 0)
 endif()
-set(HHS_LICENSE_URL "https://humhouse-license.workers.dev" CACHE STRING "HumHouse license server (regular build activation)")
+set(HHS_LICENSE_URL "https://humhouse-license.humhouse.workers.dev" CACHE STRING "HumHouse license server (regular build activation)")
 set(HHS_DEFS
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=${HHS_USE_CURL}
