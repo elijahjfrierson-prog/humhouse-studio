@@ -97,6 +97,9 @@ set(HHS_LIBS
 # Session Drummer groove corpus (Groove MIDI Dataset, CC-BY 4.0), from HumHouse Drums X
 juce_add_binary_data(HHSDrummerData HEADER_NAME DrummerData.h NAMESPACE DrummerData SOURCES Resources/Drummer/rock_corpus.hhc)
 list(APPEND HHS_LIBS HHSDrummerData)
+# fingerprints of every sold key (scripts/hhs_keyprints.py): a real key unlocks even with the license server down
+juce_add_binary_data(HHSKeyprints HEADER_NAME KeyprintData.h NAMESPACE KeyprintData SOURCES Resources/License/keyprints.bin)
+list(APPEND HHS_LIBS HHSKeyprints)
 if(APPLE OR WIN32)
     list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
 endif()

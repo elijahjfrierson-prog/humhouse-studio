@@ -1,5 +1,6 @@
 #include "License.h"
 #include <juce_cryptography/juce_cryptography.h>
+#include "KeyprintData.h"
 
 namespace hhs::license
 {
@@ -171,6 +172,59 @@ juce::String encryptForServer (const juce::String& text)
 
 juce::String serverUrl() { return HHS_LICENSE_URL; }
 
+// exactly what the license server does (normalizeKey in server/license/src/index.js)
+static juce::String normKey (const juce::String& in)
+{
+    auto s = in.trim().toUpperCase();
+    if (s.startsWith ("HHS")) s = s.substring (3);
+    s = s.retainCharacters ("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ").replaceCharacter ('O', '0').replaceCharacter ('I', '1').replaceCharacter ('L', '1');
+    return s.length() == 20 && s.containsOnly ("0123456789ABCDEFGHJKMNPQRSTVWXYZ") ? s : juce::String();
+}
+static juce::String prettyKey (const juce::String& n)
+{
+    return "HHS-" + n.substring (0, 5) + "-" + n.substring (5, 10) + "-" + n.substring (10, 15) + "-" + n.substring (15, 20);
+}
+juce::String findKey (const juce::String& text)
+{
+    const auto up = text.toUpperCase();
+    for (int i = up.indexOf ("HHS"); i >= 0; i = up.indexOf (i + 1, "HHS"))
+    {
+        juce::String raw;
+        for (int j = i + 3; j < up.length() && raw.length() < 20; ++j)
+        {
+            const auto c = up[j];
+            if (juce::CharacterFunctions::isLetterOrDigit (c)) raw += juce::String::charToString (c);
+            else if (! juce::String (" -_.\t\r\n").containsChar (c)) break;
+        }
+        if (const auto n = normKey (raw); n.isNotEmpty()) return prettyKey (n);
+    }
+    const auto n = normKey (text);
+    return n.isNotEmpty() ? prettyKey (n) : juce::String();
+}
+bool knownKey (const juce::String& key)
+{
+    const auto n = normKey (key);
+    if (n.isEmpty()) return false;
+    const auto d = juce::SHA256 (("HHSOFF|" + n).toUTF8()).getRawData();
+    const auto* p = reinterpret_cast<const unsigned char*> (KeyprintData::keyprints_bin);
+    size_t lo = 0, hi = (size_t) KeyprintData::keyprints_binSize / 6;
+    while (lo < hi)
+    {
+        const auto mid = (lo + hi) / 2;
+        const int c = std::memcmp (p + mid * 6, d.getData(), 6);
+        if (c == 0) return true;
+        if (c < 0) lo = mid + 1; else hi = mid;
+    }
+    return false;
+}
+static juce::File graceFile() { return keyFile().getSiblingFile ("license.grace"); }
+static bool graceTimeOk()
+{
+    const auto t = graceFile().loadFileAsString().getLargeIntValue(), now = juce::Time::currentTimeMillis() / 1000;
+    return t > 0 && now >= t - 3600 && now - t < 7 * 86400;
+}
+bool graceOk() { return knownKey (keyFile().loadFileAsString()) && graceTimeOk(); }
+
 Online activateOnline (const juce::String& key, const juce::String& machine)
 {
     Online r;
@@ -194,6 +248,14 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
     if (key.trim().isEmpty())   // no key saved/pasted: an already-activated computer unlocks from its Machine ID
         v = postJson (serverUrl() + "/v1/restore", body, 12000, status);
     else if (! v.isObject()) v = postJson (serverUrl() + "/v1/activate", body, 12000, status);
+    // server off / busy / lost its data, and this is one of our sold keys: unlock now, confirm online later (7 days max)
+    const bool down = v.isVoid() || ! v.isObject() || status == 0 || status >= 500 || (status == 404 && ! (bool) v["revoked"]);
+    if (key.trim().isNotEmpty() && down && ! (bool) v["ok"] && knownKey (key))
+    {
+        if (! graceFile().existsAsFile()) { graceFile().getParentDirectory().createDirectory(); graceFile().replaceWithText (juce::String (juce::Time::currentTimeMillis() / 1000)); }
+        if (graceTimeOk()) { r.ok = r.provisional = true; return r; }
+        r.error = "Connect to the internet once so HumHouse can confirm your key."; return r;
+    }
     if (v.isVoid()) { r.error = "Can't reach the HumHouse license server. Check your internet and try again."; return r; }
     if (! v.isObject()) { r.error = "The license server didn't answer properly. Try again in a minute."; return r; }
     if ((bool) v["ok"])
@@ -211,6 +273,8 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
 bool saveActivation (const juce::String& key, const juce::String& pass)
 {
     keyFile().getParentDirectory().createDirectory();
+    if (pass.isEmpty()) return keyFile().replaceWithText (key.trim());
+    graceFile().deleteFile();
     return keyFile().replaceWithText (key.trim()) && passFile().replaceWithText (pass);
 }
 
