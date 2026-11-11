@@ -1,0 +1,6 @@
+-- home License Server sync (run once on the live D1)
+ALTER TABLE events ADD COLUMN id TEXT;
+ALTER TABLE events ADD COLUMN origin TEXT NOT NULL DEFAULT 'cf';
+ALTER TABLE events ADD COLUMN ver TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS events_id ON events(id);
+CREATE TABLE IF NOT EXISTS home (k INTEGER PRIMARY KEY, url TEXT NOT NULL, seen INTEGER NOT NULL);

@@ -420,12 +420,18 @@ static void autoPlacePatterns (Project& p)
         if (! hasNotes) continue;
         pt.placed = true;
         bool onList = false;
-        for (auto& c : p.clips) onList |= c.patternIndex == i;
+        for (auto& c : p.clips)
+            if (c.patternIndex == i)
+            {
+                if (! onList && c.patOffset == 0.0) { pt.autoClip = c.uid; pt.autoLen = c.length = juce::jmax (c.length, pt.lengthBeats()); }
+                onList = true;
+            }
         if (onList) continue;
         int lane = -1;
         for (int l = 0; l < (int) p.lanes.size() && lane < 0; ++l)
         {
-            bool used = p.lanes[(size_t) l].compLane >= 0 || p.lanes[(size_t) l].armed;
+            const auto& ln = p.lanes[(size_t) l];
+            bool used = ln.compLane >= 0 || ln.armed || ln.muted;
             for (auto& c : p.clips) used |= c.lane == l;
             if (! used) lane = l;
         }

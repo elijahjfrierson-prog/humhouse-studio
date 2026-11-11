@@ -222,6 +222,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("name", pt.name, nullptr); t.setProperty ("colour", (juce::int64) pt.colour.getARGB(), nullptr);
         if (pt.loopBeats > 0.0) t.setProperty ("loop", pt.loopBeats, nullptr);
         t.setProperty ("placed", pt.placed, nullptr);
+        if (pt.autoClip != 0) { t.setProperty ("autoClip", pt.autoClip, nullptr); t.setProperty ("autoLen", pt.autoLen, nullptr); }
         for (auto& [id, list] : pt.notes) { auto n = notesTree (list); n.setProperty ("ch", id, nullptr); t.appendChild (n, nullptr); }
         pats.appendChild (t, nullptr);
     }
@@ -412,6 +413,7 @@ Project projectFromTree (const juce::ValueTree& root)
         pt.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0xff3d8aff));
         pt.loopBeats = (double) t.getProperty ("loop", 0.0);
         pt.placed = (bool) t.getProperty ("placed", true);   // older songs: leave their arrangement alone
+        pt.autoClip = (int) t.getProperty ("autoClip", 0); pt.autoLen = (double) t.getProperty ("autoLen", 0.0);
         for (auto n : t) pt.notes[(int) n["ch"]] = treeNotes (n);
         p.patterns.push_back (pt);
     }
