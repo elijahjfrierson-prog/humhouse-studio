@@ -1389,6 +1389,11 @@ public:
         {
             int y = getHeight() - hbarH - 4 - 5 * 48;
             for (auto* b : { &zoomInBtn, &zoomOutBtn, &tallBtn, &slimBtn, &fitBtn }) { b->setBounds (getWidth() - 56, y, 52, 44); b->toFront (false); y += 48; }
+            if (addDrummer.isVisible())   // phone: the toolbar runs off-screen, so Drums sits on the side column
+            {
+                addDrummer.setButtonText ("DRUMS");
+                addDrummer.setBounds (getWidth() - 56, getHeight() - hbarH - 4 - 6 * 48, 52, 44); addDrummer.toFront (false);
+            }
         }
         layoutHeaders();
     }
