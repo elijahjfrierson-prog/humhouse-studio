@@ -2124,7 +2124,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         ~LoadMeter()
         {
             if (e.offline.load() || n <= 0) return;
-            const float l = (float) ((juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate)));
+            const float l = juce::jmin (1.0f, (float) ((juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate))));   // a late block reads 100%, never thousands
             const float o = e.renderLoad.load();
             e.renderLoad.store (l > o ? l : o + (l - o) * 0.02f);
         }
@@ -2444,6 +2444,14 @@ void Engine::applyAutomation (double beat)
                 auto it = channelRt.find (ch->id);
                 if (it != channelRt.end() && it->second->inst) it->second->inst->update (*ch);
             }
+        }
+        else if (at.kind == AutoChanParam)
+        {
+            auto it = channelRt.find (at.channel);
+            if (it == channelRt.end() || ! it->second->plugin || ! at.param.startsWithChar ('#')) continue;
+            const auto& ps = it->second->plugin->getParameters();
+            const int i = at.param.substring (1).getIntValue();
+            if (i >= 0 && i < ps.size() && std::abs (ps[i]->getValue() - v) > 1.0e-5f) ps[i]->setValue (v);
         }
         else if (at.kind == AutoFxParam && at.track >= 0 && at.track < (int) trackRt.size())
         {

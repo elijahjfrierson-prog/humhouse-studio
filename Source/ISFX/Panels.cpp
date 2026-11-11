@@ -44,6 +44,7 @@ struct Preview::RenderAll : juce::Thread
         Renderer r; std::vector<juce::uint8> px; juce::JPEGImageFormat jpg; jpg.setQuality (0.9f);
         for (int f = 0; f < total && ! threadShouldExit(); ++f)
         {
+            while (hostBusy().load() && ! threadShouldExit()) wait (50);
             px.clear();
             if (r.render (*proj, proj->seq(), frameToTicks (f, fps), W, H, px, H) && px.size() >= (size_t) W * H * 4)
             {

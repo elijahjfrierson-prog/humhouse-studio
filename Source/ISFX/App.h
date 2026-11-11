@@ -14,6 +14,8 @@
 
 namespace isfx
 {
+// the host is recording: background video renders wait so audio + UI get the machine
+inline std::atomic<bool>& hostBusy() { static std::atomic<bool> b { false }; return b; }
 // ---- theme
 namespace theme
 {

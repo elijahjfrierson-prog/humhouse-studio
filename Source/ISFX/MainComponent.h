@@ -27,6 +27,9 @@ ISFXLookAndFeel& sharedLookAndFeel();
 class MainComponent : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
+    // VIDEO page hidden / docked away: no timer, no playback, so it costs the DAW nothing
+    void setActive (bool on) { if (on == active) return; active = on; if (on) startTimerHz (30); else { stopTimer(); if (player.isPlaying()) player.stop(); } }
+    bool active = true;
     // external: the host app's device (HumHouse VIDEO tab) - adds our player as one more callback, never reopens the device
     explicit MainComponent (juce::AudioDeviceManager* external = nullptr);
     void hostTransport (bool playing, double seconds);   // follow the host's play/stop + playhead
