@@ -1040,7 +1040,7 @@ void Engine::prepare (double sr, int block)
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
     antTmp.setSize (2, maxBlock);
-    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.08 * sr)));   // ~25 ms ahead
+    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.08 * sr)));   // ~80 ms ahead (grows on dropouts)
     patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
@@ -1550,7 +1550,13 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
             if (take < n) juce::FloatVectorOperations::clear (out[ch] + take, n - take);
         }
         antFifo.finishedRead (n1 + n2);
-        if (st == 1 && antPrimed.load() && take < n) ++antUnderruns;
+        if (st == 1 && antPrimed.load() && take < n)
+        {
+            ++antUnderruns;
+            // adaptive render-ahead: a dropout means this machine needs more cushion for non-live tracks; grow it (up to ~250 ms)
+            const int cap = juce::jmin (antFifo.getTotalSize() - 2 * maxBlock, (int) (0.25 * sampleRate));
+            if (antTarget.load() < cap) antTarget = juce::jmin (cap, antTarget.load() + 2 * n);
+        }
         if (numOut > 0 && out[0] != nullptr)
         {
             const float* hr = numOut > 1 && out[1] != nullptr ? out[1] : out[0];
@@ -1981,13 +1987,32 @@ void Engine::processTrack (int t)
     if (! tr.frozen)
     {
         auto& S = sources[(size_t) t];
+        // 64-bit bus summing: many inputs add up in double, then round once (cleaner at high track counts)
+        constexpr int kSumMax = 8192;
+        static thread_local double acc[2][kSumMax];
+        const bool wide = S.size() >= 2 && n <= kSumMax;
+        if (wide) for (int ch = 0; ch < 2; ++ch) { const float* x = tr.out.getReadPointer (ch); for (int i = 0; i < n; ++i) acc[ch][i] = x[i]; }
         for (size_t k = 0; k < S.size(); ++k)
         {
             auto& srt = *trackRt[(size_t) S[k].first];
             const int dl = tr.inputAlign - srt.arrival;
             if (dl > 0 && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
+            else if (wide)
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    const float* x = srt.out.getReadPointer (ch); const double g = S[k].second;
+                    for (int i = 0; i < n; ++i) acc[ch][i] += g * (double) x[i];
+                }
             else for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, srt.out, ch, 0, n, S[k].second);
         }
+        if (wide)   // delayed (PDC) inputs were added to tr.out directly; fold them in with the 64-bit sum
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                float* y = tr.out.getWritePointer (ch);
+                const float* x0 = tr.out.getReadPointer (ch);
+                juce::ignoreUnused (x0);
+                for (int i = 0; i < n; ++i) y[i] = (float) acc[ch][i];
+            }
     }
 
     const float mag = tr.out.getMagnitude (0, n);
