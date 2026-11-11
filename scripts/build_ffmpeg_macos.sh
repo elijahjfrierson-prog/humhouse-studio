@@ -11,7 +11,7 @@ for arch in arm64 x86_64; do
   ./configure --prefix="$WORK/p-$arch" --enable-shared --disable-static --disable-programs --disable-doc \
     --disable-autodetect --enable-videotoolbox --enable-audiotoolbox --enable-zlib --enable-pthreads \
     --disable-avdevice --disable-avfilter --disable-postproc --disable-network --install-name-dir='@rpath' \
-    --cc="clang -arch $arch" --extra-cflags="-arch $arch -mmacosx-version-min=11.0" --extra-ldflags="-arch $arch -mmacosx-version-min=11.0" "${extra[@]}"
+    --cc="clang -arch $arch" --extra-cflags="-arch $arch -mmacosx-version-min=11.0" --extra-ldflags="-arch $arch -mmacosx-version-min=11.0" ${extra[@]+"${extra[@]}"}
   make -j"$(sysctl -n hw.ncpu)" >/dev/null && make install >/dev/null
   cd "$WORK"
 done

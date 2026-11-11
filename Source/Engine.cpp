@@ -1040,7 +1040,7 @@ void Engine::prepare (double sr, int block)
     sampleRate = sr; maxBlock = std::max (block, 64);
     scratch.setSize (2, maxBlock); inputScratch.setSize (8, maxBlock);
     antTmp.setSize (2, maxBlock);
-    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.08 * sr)));   // ~25 ms ahead
+    antTarget = juce::jlimit (2 * maxBlock, antFifo.getTotalSize() - 2 * maxBlock, std::max (3 * maxBlock, (int) (0.08 * sr)));   // ~80 ms ahead (grows on dropouts)
     patLen.reserve (std::max<size_t> (1024, proj.patterns.size() * 2));   // the audio thread never grows it
     if (retroBuf.getNumSamples() != (int) (sr * 60.0)) { retroBuf.setSize (2, (int) (sr * 60.0)); retroBuf.clear(); retroWrite = 0; retroTotal = 0; retroRunFrom = 0; retroEndBeat = -1.0; }
     prepareRuntimes();
@@ -1550,7 +1550,13 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
             if (take < n) juce::FloatVectorOperations::clear (out[ch] + take, n - take);
         }
         antFifo.finishedRead (n1 + n2);
-        if (st == 1 && antPrimed.load() && take < n) ++antUnderruns;
+        if (st == 1 && antPrimed.load() && take < n)
+        {
+            ++antUnderruns;
+            // adaptive render-ahead: a dropout means this machine needs more cushion for non-live tracks; grow it (up to ~250 ms)
+            const int cap = juce::jmin (antFifo.getTotalSize() - 2 * maxBlock, (int) (0.25 * sampleRate));
+            if (antTarget.load() < cap) antTarget = juce::jmin (cap, antTarget.load() + 2 * n);
+        }
         if (numOut > 0 && out[0] != nullptr)
         {
             const float* hr = numOut > 1 && out[1] != nullptr ? out[1] : out[0];
