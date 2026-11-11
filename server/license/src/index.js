@@ -86,7 +86,13 @@ async function feed(env) {
     "FROM events e LEFT JOIN keys k ON k.hash = e.key_hash WHERE e.at > ?1 AND e.result != 'unknown' GROUP BY e.key_hash ORDER BY last DESC LIMIT 300").bind(since).all();
   const keys = st.results.map(r => ({ ...r, score: Math.min(100, r.blocked * 25 + Math.max(0, r.countries - 1) * 30 + Math.max(0, r.ips - 3) * 10 + Math.max(0, r.mids - 3) * 20 + r.rev * 10) }));
   const tot = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM keys) keys, (SELECT COUNT(DISTINCT key_hash) FROM activations) used, (SELECT COUNT(*) FROM activations) machines, (SELECT COUNT(*) FROM keys WHERE status = 'revoked') revoked, (SELECT COUNT(*) FROM events WHERE result = 'unknown' AND at > ?1) unknown").bind(since).first();
-  return json({ ok: true, now: Math.floor(Date.now() / 1000), totals: tot, events: ev.results, keys });
+  // sales = each key's first activation ("new"), placed where it happened; the monitor multiplies by the Value box
+  const sales = await env.DB.prepare(
+    "SELECT country, city, AVG(lat) lat, AVG(lon) lon, COUNT(*) n, SUM(at > ?1) week FROM " +
+    "(SELECT e.key_hash, e.country, e.city, e.lat, e.lon, e.at FROM events e WHERE e.result = 'new' AND e.at = " +
+    "(SELECT MIN(x.at) FROM events x WHERE x.key_hash = e.key_hash AND x.result = 'new') GROUP BY e.key_hash) " +
+    "GROUP BY country, city ORDER BY n DESC LIMIT 500").bind(since).all();
+  return json({ ok: true, now: Math.floor(Date.now() / 1000), totals: tot, events: ev.results, keys, sales: sales.results });
 }
 
 async function admin(env, path, body) {

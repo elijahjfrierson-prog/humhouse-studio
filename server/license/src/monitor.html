@@ -19,9 +19,11 @@ input{background:#15181d;color:#fff;border:1px solid #333;border-radius:4px;padd
 <div id="login"><h1>HumHouse License Monitor</h1><input id="tok" type="password" placeholder="Admin token"><button onclick="setTok()">Open</button></div>
 <header><h1>HUMHOUSE LICENSES</h1><span class="stat">keys <b id="sk">-</b></span><span class="stat">in use <b id="su">-</b></span>
 <span class="stat">computers <b id="sm">-</b></span><span class="stat">revoked <b id="sr">-</b></span><span class="stat">fake-key tries (7d) <b id="sx">-</b></span>
+<span class="stat">sales <b id="ss">-</b></span><span class="stat">revenue <b id="sv">-</b></span>
+<span class="stat">value $ <input id="val" type="number" min="0" step="0.01" style="width:70px" oninput="localStorage.setItem('hhsValue',this.value);tick()"></span>
 <span class="stat" id="live" style="margin-left:auto">●</span></header>
-<div id="wrap"><svg id="map" viewBox="0 0 960 500" preserveAspectRatio="xMidYMid meet"><g id="land"></g><g id="dots"></g></svg>
-<div id="side"><h3 style="margin:4px 0 8px">Keys — green = normal, red = suspicious</h3><div id="keys"></div><h3>Live feed</h3><div id="feed"></div></div></div>
+<div id="wrap"><svg id="map" viewBox="0 0 960 500" preserveAspectRatio="xMidYMid meet"><g id="land"></g><g id="sales"></g><g id="dots"></g></svg>
+<div id="side"><h3 style="margin:4px 0 8px">Keys — green = normal, red = suspicious</h3><div id="keys"></div><h3>Sales by place</h3><div id="salesList"></div><h3>Live feed</h3><div id="feed"></div></div></div>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js"></script>
 <script>
@@ -32,11 +34,20 @@ async function api(p,b){const r=await fetch("/v1/admin/"+p,{method:"POST",header
 fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(r=>r.json()).then(w=>{d3.select("#land").selectAll("path").data(topojson.feature(w,w.objects.countries).features).join("path").attr("class","land").attr("d",path)});
 const ago=t=>{const s=Math.floor(Date.now()/1000)-t;return s<60?s+"s":s<3600?Math.floor(s/60)+"m":s<86400?Math.floor(s/3600)+"h":Math.floor(s/86400)+"d"};
 async function act(a,h){if(a==="revoke"&&!confirm("Revoke this key? Every computer on it locks at its next check."))return;await api(a,{hash:h});tick()}
-async function tick(){try{const d=await api("feed");const t=d.totals||{};sk.textContent=t.keys;su.textContent=t.used;sm.textContent=t.machines;sr.textContent=t.revoked;sx.textContent=t.unknown;live.style.color="#2ecc71";
+async function tick(){try{const d=await api("feed");const t=d.totals||{};sk.textContent=t.keys;su.textContent=t.used;sm.textContent=t.machines;sr.textContent=t.revoked;sx.textContent=t.unknown;live.style.color="#2ecc71";drawSales(d);
 const ev=d.events.filter(e=>e.lat||e.lon);const recent=ev.filter(e=>d.now-e.at<3600);
 d3.select("#dots").selectAll("g").data(ev.slice(0,300),e=>e.at+e.mid+e.result).join(en=>{const g=en.append("g");g.append("circle").attr("r",2.5);g.append("circle").attr("class","blip").attr("fill","none").attr("stroke-width",1.5);return g})
 .attr("transform",e=>"translate("+proj([e.lon,e.lat])+")").each(function(e){const c=resCol[e.result]||"#fff";const s=d3.select(this).selectAll("circle");s.attr("fill",(x,i)=>i?"none":c).attr("stroke",c);d3.select(this).select(".blip").style("display",d.now-e.at<3600?null:"none")});
 keys.innerHTML=d.keys.sort((a,b)=>b.score-a.score||b.last-a.last).map(k=>`<div class="k"><span class="flag" style="background:${k.status==="revoked"?"#555":colr(k.score)}"></span><span class="t"><b>${k.h.slice(0,12)}</b> ${k.status==="revoked"?"REVOKED ":""}· ${k.mids} computers tried · ${k.countries} countries · ${k.ips} IPs · ${k.blocked} blocked tries · ${ago(k.last)} ago</span>${k.status==="revoked"?`<button onclick="act('unrevoke','${k.h}')">Unrevoke</button>`:`<button onclick="act('revoke','${k.h}')">Revoke</button>`}<button onclick="act('free','${k.h}')">Free slots</button></div>`).join("")||"No activations yet.";
 feed.innerHTML=d.events.slice(0,60).map(e=>`<div><span style="color:${resCol[e.result]}">●</span> ${ago(e.at)} · ${e.result} · ${e.city?e.city+", ":""}${e.country||"?"} · ${e.key_hash.slice(0,12)} · ${e.mid}</div>`).join("")}catch(x){live.style.color="#e74c3c"}}
-function start(){if(!tok)return;login.style.display="none";tick();setInterval(tick,5000)}start();
+function money(n){return "$"+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+function drawSales(d){const v=parseFloat(val.value)||0,s=d.sales||[];const tot=s.reduce((a,x)=>a+x.n,0);ss.textContent=tot;sv.textContent=money(tot*v);
+const r=d3.scaleSqrt().domain([1,d3.max(s,x=>x.n)||1]).range([4,22]);
+d3.select("#sales").selectAll("circle").data(s.filter(x=>x.lat!=null),x=>x.country+x.city).join("circle").attr("transform",x=>"translate("+proj([x.lon,x.lat])+")")
+.attr("r",x=>r(x.n)).attr("fill","#f1c40f").attr("fill-opacity",.28).attr("stroke","#f1c40f").attr("stroke-width",1).selectAll("title").data(x=>[x]).join("title")
+.text(x=>(x.city?x.city+", ":"")+(x.country||"?")+": "+x.n+" sales · "+money(x.n*v)+" · "+x.week+" this week");
+const byC={};s.forEach(x=>{const c=x.country||"?";byC[c]=(byC[c]||0)+x.n});
+salesList.innerHTML=Object.entries(byC).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<div><b>${c}</b> · ${n} sales · ${money(n*v)}</div>`).join("")+
+s.slice(0,40).map(x=>`<div style="opacity:.75">&nbsp; ${x.city||"?"}, ${x.country||"?"} · ${x.n} · ${money(x.n*v)}</div>`).join("")||"No sales yet."}
+function start(){if(!tok)return;val.value=localStorage.getItem("hhsValue")||"";login.style.display="none";tick();setInterval(tick,5000)}start();
 </script></body></html>
