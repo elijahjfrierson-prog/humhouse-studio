@@ -351,7 +351,7 @@ void Timeline::mouseDown (const juce::MouseEvent& e)
     }
 
     int edge = 0; const Clip* c = clipAt (pos, edge);
-    if (e.mods.isPopupMenu()) { if (c) clipMenu (c->id); return; }
+    if (e.mods.isPopupMenu()) { if (c) clipMenu (c->id); else emptyMenu (trackAt (pos.y), secToTicks (std::max (0.0, xToSec (pos.x)))); return; }
     int tr = trackAt (pos.y);
     bool trackLocked = tr >= 0 && tr < (int) s.tracks.size() && s.tracks[(size_t) tr].locked;
 
@@ -606,6 +606,30 @@ void Timeline::filesDropped (const juce::StringArray& paths, int x, int y)
     Ticks at = magnetSnap (secToTicks (std::max (0.0, xToSec (x))), 0);
     snapGuide = -1;
     if (onFilesDropped) onFilesDropped (files, trackAt (y), at);
+}
+
+void Timeline::emptyMenu (int track, Ticks at)
+{
+    juce::PopupMenu m, looks;
+    m.addItem (1, "Add adjustment layer here (2 bars)");
+    const auto& lib = lookLibrary();
+    for (int i = 0; i < (int) lib.size(); ++i) looks.addItem (100 + i, lib[(size_t) i].name);
+    m.addSubMenu ("Add adjustment layer with look", looks, ! lib.empty());
+    m.addItem (2, "Paste at playhead  (Ctrl+V)", ! st.clipboard.empty());
+    m.showMenuAsync (juce::PopupMenu::Options(), [this, track, at] (int r)
+    {
+        if (r == 2) { juce::KeyPress k ('v', juce::ModifierKeys::commandModifier, 0); keyPressed (k); return; }
+        if (r != 1 && r < 100) return;
+        FxStack fx; juce::String name = "Adjustment layer";
+        if (r >= 100) { auto& l = lookLibrary()[(size_t) (r - 100)]; applyLook (fx, l, 1.0f); name = l.name; }
+        const Ticks beat = st.project.song.valid ? secToTicks (st.project.song.beatSec()) : secToTicks (0.5);
+        const int bpb = st.project.song.valid ? std::max (1, st.project.song.beatsPerBar) : 4;
+        st.edit ("Add adjustment layer");
+        auto id = addEffectClipOn (st.project.seq(), track, fx, name, magnetSnap (at, 0), beat * bpb * 2);
+        if (id.isNotEmpty()) st.selected = { id };
+        if (onEdited) onEdited();
+        repaint();
+    });
 }
 
 void Timeline::clipMenu (const juce::String& id)

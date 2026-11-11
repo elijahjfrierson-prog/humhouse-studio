@@ -102,6 +102,7 @@ private:
         redoBtn { "Redo", juce::Colour (0xffc9ced8), juce::Colours::white, juce::Colour (0xff9b5cff) },
         startBtn { "Go to start", juce::Colour (0xffc9ced8), juce::Colours::white, juce::Colour (0xff9b5cff) };
     juce::ComboBox qualityBox;
+    juce::TextButton renderBtn { "RENDER" };
     juce::TextButton fileBtn { "File" }, saveBtn { "Save" }, importBtn { "Import" }, presetsBtn { "Presets" },
         pluginsBtn { "Plug-ins" }, playBtn { "Play" }, exportBtn { "EXPORT" },
         toolBtn[4] { juce::TextButton ("E Select"), juce::TextButton ("P Paint"), juce::TextButton ("D Delete"), juce::TextButton ("C Cut") },

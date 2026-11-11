@@ -103,6 +103,11 @@ public:
     void setQuality (int div) { quality = juce::jmax (1, div); requestFrame (lastReq); }
     int getQuality() const { return quality; }
     void setLive (bool b) { if (live.exchange (b) && ! b) requestFrame (lastReq); }
+    // RENDER: the whole timeline rendered ahead at 1080/div; playback then shows finished frames (no skipping)
+    void startRenderAll (int div);
+    void cancelRenderAll();
+    float renderAllProgress() const;   // < 0 none, 0..1 rendering, 1 done
+    void projectEdited (const Project&);   // an edit that changes the project drops the render
     // on-video transform: drag inside = move, corners = scale (Shift = free X/Y), edges = crop, knob = rotate (Shift = 15 deg)
     std::function<void()> onEdited, onSelect;
     void mouseDown (const juce::MouseEvent&) override;
@@ -138,6 +143,8 @@ private:
     std::atomic<double> lastMs { 0 }, avgMs { 0 };
     std::atomic<int> quality { 2 };
     double fps = 0, fpsT0 = 0; int fpsCount = 0;
+    struct RenderAll;
+    std::shared_ptr<RenderAll> rall;
 };
 
 // ---- timeline
@@ -168,6 +175,7 @@ public:
     void zoomBy (float f, int anchorX);
     void ensureVisible (Ticks t);
     void clipMenu (const juce::String& id);
+    void emptyMenu (int track, Ticks at);   // right-click an empty spot: add adjustment layer
 public:
     void clipMenuSpeed (const juce::String& id);   // Ctrl+R Speed/Duration dialog
     bool switchAngles = true;
