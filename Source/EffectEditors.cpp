@@ -176,7 +176,7 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
     return it != all.end() ? it->second : none;
 }
 
-class ParamGrid : public juce::Component
+class ParamGrid : public juce::Component, private juce::Timer
 {
 public:
     struct P { juce::String id, name; float mn, mx, def, value; std::vector<const char*> choices; };
@@ -235,6 +235,22 @@ public:
         }
         visibleCount = (int) params.size();
         layoutSize();
+        startTimerHz (15);
+    }
+    // automation clips on this effect: their knobs move with the lane and their names turn red, same as the LANE mini plug-in
+    std::function<int (const juce::String&, float&)> autoValue;   // 0 = not automated, 1 = automated (not playing here), 2 = v is live 0..1
+    void timerCallback() override
+    {
+        if (! autoValue || ! isShowing()) return;
+        for (size_t i = 0; i < params.size() && i < (size_t) labels.size(); ++i)
+        {
+            float v = 0.0f;
+            const int st = autoValue (params[i].id, v);
+            labels[(int) i]->setColour (juce::Label::textColourId, st > 0 ? juce::Colour (0xffff5a5a) : col::dim);
+            if (st == 2)
+                if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i]); k != nullptr && ! k->isMouseButtonDown())
+                    k->setValue (params[i].mn + juce::jlimit (0.0f, 1.0f, v) * (params[i].mx - params[i].mn), juce::dontSendNotification);
+        }
     }
     void layoutSize()
     {
@@ -1248,6 +1264,16 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         },
         [&s, title] { s.commit (title); }, slot->type);
     grid->onParamMenu = [&s, track, slotUid] (const juce::String& id) { linkToControllerMenu (s, track, slotUid, id); };
+    grid->autoValue = [&s, track, slotUid] (const juce::String& id, float& v) {
+        int st = 0; const double pos = s.engine.positionBeats();
+        for (auto& c : s.p().clips)
+            if (c.isAuto() && c.autoTarget.kind == AutoFxParam && c.autoTarget.track == track && c.autoTarget.fxUid == slotUid && c.autoTarget.param == id)
+            {
+                st = juce::jmax (st, 1);
+                if (! c.muted && pos >= c.start && pos < c.start + c.length) { v = autoValueAt (c.autoPts, c.patOffset + pos - c.start); st = 2; }
+            }
+        return st;
+    };
     auto liveFx = [&s, track, slotUid] { return s.engine.builtinFx (track, slotUid); };
     auto tapFn = [&s, track]() -> ScopeTap* { return s.engine.trackScope (track); };
     const auto& ty = slot->type;
