@@ -340,7 +340,8 @@ ISFXLookAndFeel& sharedLookAndFeel() { static ISFXLookAndFeel l; return l; }
 void MainComponent::paint (juce::Graphics& g)
 {
     g.fillAll (theme::bg);
-    g.setGradientFill (juce::ColourGradient (juce::Colours::black, 0, 0, theme::panel, 0, 44, false)); g.fillRect (0, 0, getWidth(), 44);
+    const int topH = getWidth() < 1860 ? 80 : 44;
+    g.setGradientFill (juce::ColourGradient (juce::Colours::black, 0, 0, theme::panel, 0, (float) topH, false)); g.fillRect (0, 0, getWidth(), topH);
     g.setColour (theme::line); g.fillRect (0, 43, getWidth(), 1);
     drawLogo (g, { 12.0f, 0.0f, 40.0f, 44.0f });
 }
@@ -348,19 +349,24 @@ void MainComponent::paint (juce::Graphics& g)
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
-    auto top = r.removeFromTop (44).reduced (6, 7);
+    // too narrow for one row (embedded in HumHouse VIDEO): transport/render/export move to a second row so nothing overlaps
+    const bool twoRows = getWidth() < 1860;
+    auto top = r.removeFromTop (twoRows ? 80 : 44).reduced (6, 7);
+    auto right = twoRows ? top.removeFromBottom (30) : top;
+    if (twoRows) top = top.removeFromTop (30);
     top.removeFromLeft (50);
     auto place = [] (juce::Rectangle<int>& row, juce::Component& c, int w) { c.setBounds (row.removeFromLeft (w)); row.removeFromLeft (5); };
     place (top, fileBtn, 56); place (top, saveBtn, 56); place (top, undoBtn, 30); place (top, redoBtn, 30); place (top, importBtn, 70); place (top, presetsBtn, 76); place (top, pluginsBtn, 80);
     top.removeFromLeft (6); place (top, mediaTgl, 58); place (top, inspTgl, 72); place (top, maxPrevBtn, 92); place (top, maxTlBtn, 98); place (top, movieBtn, 104);
-    exportBtn.setBounds (top.removeFromRight (110)); top.removeFromRight (6);
-    playBtn.setBounds (top.removeFromRight (70)); top.removeFromRight (4);
-    startBtn.setBounds (top.removeFromRight (26).reduced (3, 6)); top.removeFromRight (6);
-    qualityBox.setBounds (top.removeFromRight (70)); top.removeFromRight (6);
-    renderBtn.setBounds (top.removeFromRight (104)); top.removeFromRight (10);
-    aspectBox.setBounds (top.removeFromRight (230)); top.removeFromRight (6);
-    seqBox.setBounds (top.removeFromRight (240)); top.removeFromRight (6);
-    status.setBounds (top);
+    exportBtn.setBounds (right.removeFromRight (110)); right.removeFromRight (6);
+    playBtn.setBounds (right.removeFromRight (70)); right.removeFromRight (4);
+    startBtn.setBounds (right.removeFromRight (26).reduced (3, twoRows ? 3 : 6)); right.removeFromRight (6);
+    qualityBox.setBounds (right.removeFromRight (70)); right.removeFromRight (6);
+    renderBtn.setBounds (right.removeFromRight (104)); right.removeFromRight (10);
+    aspectBox.setBounds (right.removeFromRight (230)); right.removeFromRight (6);
+    seqBox.setBounds (right.removeFromRight (240)); right.removeFromRight (6);
+    if (twoRows) right.removeFromLeft (50);
+    status.setBounds (right);
 
     const bool showBottom = ! maxPreview;
     int bh = maxTimeline ? r.getHeight() - 120 : juce::jlimit (200, std::max (200, r.getHeight() - 160), (int) (r.getHeight() * timelineFrac));
@@ -519,7 +525,7 @@ void MainComponent::mouseDown (const juce::MouseEvent& e) { draggingSplit = ! ma
 void MainComponent::mouseDrag (const juce::MouseEvent& e)
 {
     if (! draggingSplit) return;
-    float avail = (float) std::max (1, getHeight() - 44);
+    float avail = (float) std::max (1, getHeight() - (getWidth() < 1860 ? 80 : 44));
     timelineFrac = juce::jlimit (0.15f, 0.85f, (float) (getHeight() - e.y) / avail);
     maxTimeline = false; maxTlBtn.setToggleState (false, juce::dontSendNotification);
     resized();
