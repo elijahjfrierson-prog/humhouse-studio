@@ -105,7 +105,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
-        copyId.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); copyId.setButtonText ("Copied!"); };
+        copyId.onClick = [this] { copyAndUnlock(); };   // one click: copy, fill in, unlock this computer by its ID
         mid.addMouseListener (this, false);
         mid.setTooltip ("Click to copy");
         pasteBtn.setTooltip ("Paste the key you copied");
@@ -123,6 +123,15 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     {
         const auto strip = [] (const juce::String& t) { return t.toUpperCase().retainCharacters ("0123456789ABCDEF"); };
         return text.trim().isNotEmpty() && strip (text) == strip (hhs::license::machineId()) && text.trim().length() <= 24;
+    }
+    void copyAndUnlock()
+    {
+        const auto id = hhs::license::machineId();
+        juce::SystemClipboard::copyTextToClipboard (id);
+        lastClip = id;
+        copyId.setButtonText ("Copied!");
+        mid.setText ("Machine ID copied: " + id, juce::dontSendNotification);
+        key.setText (id, true);   // -> typed(): unlocks an already-activated computer
     }
     void typed()
     {
@@ -151,7 +160,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (e.eventComponent == &mid) { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); mid.setText ("Machine ID copied: " + hhs::license::machineId(), juce::dontSendNotification); }
+        if (e.eventComponent == &mid) copyAndUnlock();
     }
     juce::String lastClip;
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
