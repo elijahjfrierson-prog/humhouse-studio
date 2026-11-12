@@ -147,7 +147,7 @@ struct Node { Kind kind; int a = 0, b = 0; juce::String key, title; juce::Rectan
 class Canvas : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); loadWires (s); setWantsKeyboardFocus (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
+    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); loadWires (s); setWantsKeyboardFocus (true); setOpaque (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
     ~Canvas() override { s.removeChangeListener (this); }
 
     void rebuild()
