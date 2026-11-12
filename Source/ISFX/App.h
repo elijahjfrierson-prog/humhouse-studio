@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "Model.h"
@@ -224,15 +225,29 @@ private:
 };
 
 // drag source for transitions (drop on a cut) and effects/looks (drop on a clip or empty space = effect layer)
+// length for new transitions, in beats (VIDEO library slider: short to long)
+inline std::atomic<float>& transitionBeats() { static std::atomic<float> b { 0.5f }; return b; }
+
 class FxLibrary : public juce::Component, public juce::DragAndDropContainer, private juce::ListBoxModel
 {
 public:
     explicit FxLibrary (AppState& s);
-    void resized() override { list.setBounds (getLocalBounds().reduced (6).withTrimmedTop (20)); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6).withTrimmedTop (20);
+        search.setBounds (r.removeFromTop (24)); r.removeFromTop (4);
+        transLen.setBounds (r.removeFromTop (24)); r.removeFromTop (4);
+        list.setBounds (r);
+    }
     void paint (juce::Graphics&) override;
 private:
-    struct Row { juce::String label, desc, help; bool header = false; };
-    std::vector<Row> rows;
+    struct Row { juce::String label, desc, help; bool header = false; juce::String folder; };
+    std::vector<Row> rows, all;
+    std::set<juce::String> closed;
+    juce::TextEditor search;
+    juce::Slider transLen;
+    void refilter();
+    void listBoxItemClicked (int, const juce::MouseEvent&) override;
     int getNumRows() override { return (int) rows.size(); }
     void paintListBoxItem (int, juce::Graphics&, int, int, bool) override;
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override;

@@ -168,7 +168,11 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     // a saved key, a copied key, or (neither) this computer's Machine ID: check by itself, nothing to type
     void autoCheck (const juce::String& saved)
     {
-        if (saved.isNotEmpty()) { key.setText (saved, false); lastClip = juce::SystemClipboard::getTextFromClipboard(); }
+        const auto clip = juce::SystemClipboard::getTextFromClipboard();
+        const auto fresh = keyIn (clip);
+        lastClip = clip;
+        if (fresh.isNotEmpty() && fresh != keyIn (saved)) key.setText (fresh, false);   // a key copied just now wins over an old saved one
+        else if (saved.isNotEmpty()) key.setText (saved, false);
         activate.triggerClick();
     }
     void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }

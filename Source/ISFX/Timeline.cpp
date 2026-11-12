@@ -545,15 +545,16 @@ void Timeline::itemDropped (const SourceDetails& d)
     const Ticks beat = st.project.song.valid ? secToTicks (st.project.song.beatSec()) : secToTicks (0.5);
     if (desc.startsWith ("transition:"))
     {
+        const Ticks transTicks = std::max<Ticks> (1, (Ticks) std::llround ((double) beat * transitionBeats().load()));
         auto ty = (TransitionType) desc.fromFirstOccurrenceOf (":", false, false).getIntValue();
         int tr = trackAt (d.localPosition.y);
         Ticks at = secToTicks (std::max (0.0, xToSec (d.localPosition.x)));
         Ticks reach = secToTicks (40.0 / pxPerSec) + beat;
         Sequence probe = st.project.seq();
-        if (setTransitionAtCut (probe, tr, at, ty, beat / 2, reach))
+        if (setTransitionAtCut (probe, tr, at, ty, transTicks, reach))
         {
             st.edit ("Add transition");
-            setTransitionAtCut (st.project.seq(), tr, at, ty, beat / 2, reach);
+            setTransitionAtCut (st.project.seq(), tr, at, ty, transTicks, reach);
             if (onEdited) onEdited();
         }
         return;

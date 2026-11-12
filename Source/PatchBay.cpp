@@ -942,8 +942,22 @@ private:
         m.addSubMenu ("Shape", sh); m.addSubMenu ("Rate", rt); m.addSubMenu ("Range", rg);
         m.addItem (40, "Remove LFO", lfos().size() > 1);
         const int li = n.a;
-        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, rates] (int r) {
+        juce::PopupMenu cn, mx;
+        std::vector<Node> targets;
+        for (const auto& o : nodes)
+            if (! (o.kind == LfoNode && o.a == li)) { targets.push_back (o); cn.addItem (500 + (int) targets.size() - 1, o.title); }
+        const auto& pj = s.p();
+        for (int i = 1; i < (int) pj.mixer.size(); ++i)
+        {
+            Node o; o.kind = Out; o.a = i; o.key = "O" + juce::String (i);
+            o.title = pj.mixer[(size_t) i].name.isNotEmpty() ? pj.mixer[(size_t) i].name : "Insert " + juce::String (i);
+            targets.push_back (o); mx.addItem (500 + (int) targets.size() - 1, o.title);
+        }
+        cn.addSubMenu ("Mixer inserts", mx);
+        m.addSeparator(); m.addSubMenu ("Connect to", cn);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, rates, targets] (int r) {
             if (safe == nullptr || r <= 0 || li >= (int) lfos().size()) return;
+            if (r >= 500) { if (r - 500 < (int) targets.size()) safe->lfoTo (li, targets[(size_t) (r - 500)]); return; }
             auto& l = lfos()[(size_t) li];
             if (r >= 10 && r < 15) l.shape = r - 10;
             else if (r >= 20 && r < 27) l.perBar = rates[r - 20];
