@@ -234,6 +234,27 @@ inline void updateFloating (juce::Component& c)
     if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
 }
 
+// settings / tool windows that never lock the app: not modal, float like plug-in windows, X or Esc always closes them
+inline juce::DocumentWindow* openToolWindow (const juce::String& title, juce::Component* content, bool resizable)
+{
+    struct W : juce::DocumentWindow
+    {
+        explicit W (const juce::String& t) : juce::DocumentWindow (t, juce::Colour (0xff1b1e23), juce::DocumentWindow::closeButton) {}
+        void closeButtonPressed() override { juce::Component::SafePointer<W> sp (this); juce::MessageManager::callAsync ([sp] { delete sp.getComponent(); }); }
+        bool keyPressed (const juce::KeyPress& k) override { if (k == juce::KeyPress::escapeKey) { closeButtonPressed(); return true; } return false; }
+    };
+    auto* w = new W (title);
+    w->setUsingNativeTitleBar (true);
+    w->setContentOwned (content, true);
+    w->setResizable (resizable, false);
+    w->centreWithSize (w->getWidth(), w->getHeight());
+    w->setVisible (true);
+    makeCaptureFriendly (*w);
+    markFloating (*w);
+    w->toFront (true);
+    return w;
+}
+
 // Zoomed out, ruler bar numbers thin to every 2 / 4 / 8 (then 16...) bars so they never crowd; the grid itself is unchanged
 inline int rulerLabelStep (float barPx)
 {

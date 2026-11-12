@@ -80,10 +80,19 @@ public:
 
 private:
     std::function<bool()> valid;
+    bool modalRaised = false;
     void timerCallback() override
     {
         if (valid && ! valid()) { stopTimer(); close (this); return; }
         // FL-style: plug-in windows float over the app while you click around it, but not over other apps
+        // a dialog that needs an answer is open: never float over it (it would sit hidden under this window and lock the app)
+        if (auto* mc = juce::Component::getCurrentlyModalComponent())
+        {
+            if (isAlwaysOnTop()) setAlwaysOnTop (false);
+            if (auto* top = mc->getTopLevelComponent(); top != nullptr && ! modalRaised && juce::Process::isForegroundProcess()) { top->toFront (true); modalRaised = true; }
+            return;
+        }
+        modalRaised = false;
         updateFloating (*this);
         if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); if (front != isAlwaysOnTop()) setAlwaysOnTop (front); }
     }
