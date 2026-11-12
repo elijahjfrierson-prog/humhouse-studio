@@ -225,6 +225,7 @@ public:
                const juce::String& presetKind = {})
         : params (std::move (ps)), onSet (std::move (setLive)), onCommit (std::move (commit)), kind (presetKind)
     {
+        setOpaque (true);   // paints its whole area: a redraw never repaints what's behind it
         if (kind.isNotEmpty())
         {
             setupButton (presetBtn, "PRESETS", "Save or load a preset for this effect / instrument");
