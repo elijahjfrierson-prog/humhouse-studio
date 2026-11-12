@@ -1094,11 +1094,12 @@ if (phoneUI)
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
                 r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
+            videoTab.setVisible (false);   // phone: no VIDEO page
             // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
                 { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
-                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &videoTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
@@ -1989,6 +1990,7 @@ private:
 
     void setView (int v)
     {
+        if (phoneUI && v == 4) return;   // phone: no VIDEO page
         if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab };

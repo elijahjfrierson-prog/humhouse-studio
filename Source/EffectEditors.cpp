@@ -8,6 +8,46 @@ namespace hhs
 {
 namespace
 {
+Studio*& fxStudio() { static Studio* p = nullptr; return p; }
+
+// phone: a DELETE FX bar on top of the effect's own window (removes it from the rack; the window closes itself)
+struct PhoneFxFrame : public juce::Component, private juce::ComponentListener
+{
+    PhoneFxFrame (juce::Component* c, const juce::String& key) : inner (c)
+    {
+        const auto t = juce::StringArray::fromTokens (key, ":", "");
+        const int track = t.size() > 1 ? t[1].getIntValue() : -1, uid = t.size() > 2 ? t[2].getIntValue() : -1;
+        del.onClick = [track, uid] {
+            auto* s = fxStudio();
+            if (s == nullptr) return;
+            s->edit ("Delete FX", [&] (Project& p) {
+                if (track < 0 || track >= (int) p.mixer.size()) return;
+                auto& f = p.mixer[(size_t) track].fx;
+                for (auto& x : f) if (x.uid == uid) { FxSlot e; e.uid = p.newUid(); x = e; }
+                while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
+            });
+        };
+        addAndMakeVisible (del); addAndMakeVisible (*inner);
+        inner->addComponentListener (this);
+        fit();
+    }
+    ~PhoneFxFrame() override { inner->removeComponentListener (this); }
+    void fit() { setSize (juce::jmax (220, inner->getWidth()), inner->getHeight() + barH); }
+    void resized() override
+    {
+        laying = true;
+        auto r = getLocalBounds();
+        del.setBounds (r.removeFromTop (barH).reduced (6, 4));
+        inner->setBounds (r);
+        laying = false;
+    }
+    void componentMovedOrResized (juce::Component&, bool, bool wasResized) override { if (wasResized && ! laying) fit(); }
+    static constexpr int barH = 44;
+    std::unique_ptr<juce::Component> inner;
+    juce::TextButton del { "DELETE FX" };
+    bool laying = false;
+};
+
 class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
@@ -17,6 +57,7 @@ public:
     {
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+        if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
         setContentOwned (content, true);
         setResizable (false, false);
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
@@ -629,7 +670,13 @@ public:
         listenB.setBounds (b.removeFromLeft (64)); b.removeFromLeft (4);
         delB.setBounds (b.removeFromLeft (28));
     }
-    void mouseMove (const juce::MouseEvent& e) override { hover = e.position; const int h = hit (e.position); hot = h; repaint(); }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        hover = e.position; const int h = hit (e.position);
+        const auto now = juce::Time::getMillisecondCounter();
+        if (h != hot || now - lastHoverPaint > 33) { lastHoverPaint = now; repaint(); }
+        hot = h;
+    }
     void mouseExit (const juce::MouseEvent&) override { hot = -1; hover = { -1, -1 }; repaint(); }
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -805,6 +852,7 @@ private:
     float range = 20.0f, f0 = 1000.0f, g0 = 0.0f;
     bool altSolo = false;
     juce::Point<float> hover { -1, -1 }, drag0;
+    juce::uint32 lastHoverPaint = 0;
     juce::ComboBox typeBox;
     juce::Label fL, gL, qL;
     juce::Slider qS;
@@ -1229,6 +1277,7 @@ static void linkToControllerMenu (Studio& s, int track, int slotUid, const juce:
 
 void openEffectEditor (Studio& s, int track, int slotUid)
 {
+    fxStudio() = &s;
     auto* slot = findSlot (s, track, slotUid);
     if (slot == nullptr) return;
     const auto key = "fx:" + juce::String (track) + ":" + juce::String (slotUid);
