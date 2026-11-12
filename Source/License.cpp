@@ -201,17 +201,19 @@ juce::String findKey (const juce::String& text)
     const auto n = normKey (text);
     return n.isNotEmpty() ? prettyKey (n) : juce::String();
 }
+// 16-byte fingerprints: matching one by brute force would take ~2^110 tries
+static constexpr size_t kPrint = 16;
 bool knownKey (const juce::String& key)
 {
     const auto n = normKey (key);
     if (n.isEmpty()) return false;
     const auto d = juce::SHA256 (("HHSOFF|" + n).toUTF8()).getRawData();
     const auto* p = reinterpret_cast<const unsigned char*> (KeyprintData::keyprints_bin);
-    size_t lo = 0, hi = (size_t) KeyprintData::keyprints_binSize / 6;
+    size_t lo = 0, hi = (size_t) KeyprintData::keyprints_binSize / kPrint;
     while (lo < hi)
     {
         const auto mid = (lo + hi) / 2;
-        const int c = std::memcmp (p + mid * 6, d.getData(), 6);
+        const int c = std::memcmp (p + mid * kPrint, d.getData(), kPrint);
         if (c == 0) return true;
         if (c < 0) lo = mid + 1; else hi = mid;
     }
