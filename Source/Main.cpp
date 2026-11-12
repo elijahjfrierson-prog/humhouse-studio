@@ -105,12 +105,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
-        copyId.onClick = [this] { copyAndUnlock(); };   // one click: copy, fill in, unlock this computer by its ID
-        mid.addMouseListener (this, false);
-        mid.setTooltip ("Click to copy");
-        pasteBtn.setTooltip ("Paste the key you copied");
-        pasteBtn.onClick = [this] { if (! pasteFromClipboard()) setStatus ("Copy your key first, then press PASTE."); };
-        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &copyId, &pasteBtn }) addAndMakeVisible (c);
+        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn }) addAndMakeVisible (c);
         setSize (560, 300);
         pasteFromClipboard();   // a key copied from the purchase email / page fills itself in
         startTimer (800);       // ...and so does one copied while this window is open
@@ -144,7 +139,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         const auto k = keyIn (text);
         if (k.isEmpty()) return;
         if (k != text) key.setText (k, false);
-        if (activate.isEnabled()) { setStatus ("Key pasted - activating..."); activate.triggerClick(); }
+        setStatus ("Key filled in - click Activate.");
     }
     bool pasteFromClipboard()
     {
@@ -154,13 +149,13 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         const auto k = keyIn (clip);
         if (k.isEmpty()) return false;
         if (k != key.getText()) key.setText (k, false);
-        if (activate.isEnabled()) { setStatus ("Key pasted - activating..."); activate.triggerClick(); }   // pasted = submitted
+        setStatus ("Key filled in - click Activate.");   // a copied key fills itself in; you only click Activate
         return true;
     }
     void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (e.eventComponent == &mid) copyAndUnlock();
+        juce::ignoreUnused (e);
     }
     juce::String lastClip;
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
@@ -180,11 +175,10 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     {
         auto r = getLocalBounds().reduced (22);
         title.setBounds (r.removeFromTop (34)); info.setBounds (r.removeFromTop (54)); r.removeFromTop (8);
-        auto kr = r.removeFromTop (34); pasteBtn.setBounds (kr.removeFromRight (80)); kr.removeFromRight (6); key.setBounds (kr); r.removeFromTop (8);
+        auto kr = r.removeFromTop (34); key.setBounds (kr); r.removeFromTop (8);
         status.setBounds (r.removeFromTop (40));
         auto b = r.removeFromBottom (32);
         quitBtn.setBounds (b.removeFromRight (90)); b.removeFromRight (8); activate.setBounds (b.removeFromRight (130));
-        copyId.setBounds (b.removeFromLeft (150));
         mid.setBounds (r.removeFromBottom (24));
     }
 };
