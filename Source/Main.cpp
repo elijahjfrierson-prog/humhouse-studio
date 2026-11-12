@@ -96,7 +96,9 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         key.setTextToShowWhenEmpty ("HHS-XXXXX-XXXXX-XXXXX-XXXXX", hhs::col::dim);
         key.setFont (juce::Font (juce::FontOptions (18.0f)));
         key.onReturnKey = [this] { activate.triggerClick(); };
+        key.onTextChange = [this] { typed(); };   // Cmd/Ctrl+V or typing: a full key (or this Machine ID) submits by itself
         activate.onClick = [this] {
+            if (isMachineId (key.getText())) key.setText ({}, false);   // Machine ID in the box = unlock this computer by its ID
             if (const auto k = hhs::license::findKey (key.getText()); k.isNotEmpty()) key.setText (k, false);
             activate.setEnabled (false);
             setStatus (key.getText().trim().isEmpty() ? "Checking this computer's Machine ID..." : "Checking your key...");
@@ -116,6 +118,24 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     static juce::String keyIn (const juce::String& text)
     {
         return hhs::license::findKey (text);   // the exact HHS-XXXXX-XXXXX-XXXXX-XXXXX form the server checks
+    }
+    static bool isMachineId (const juce::String& text)
+    {
+        const auto strip = [] (const juce::String& t) { return t.toUpperCase().retainCharacters ("0123456789ABCDEF"); };
+        return text.trim().isNotEmpty() && strip (text) == strip (hhs::license::machineId()) && text.trim().length() <= 24;
+    }
+    void typed()
+    {
+        const auto text = key.getText();
+        if (isMachineId (text))
+        {
+            if (activate.isEnabled()) { setStatus ("Machine ID pasted - unlocking this computer..."); activate.triggerClick(); }
+            return;
+        }
+        const auto k = keyIn (text);
+        if (k.isEmpty()) return;
+        if (k != text) key.setText (k, false);
+        if (activate.isEnabled()) { setStatus ("Key pasted - activating..."); activate.triggerClick(); }
     }
     bool pasteFromClipboard()
     {
