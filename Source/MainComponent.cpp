@@ -2044,7 +2044,8 @@ private:
         const int bar = (int) (pos / bpb) + 1, beat = (int) std::fmod (pos, (double) bpb) + 1, step = (int) (std::fmod (pos, 1.0) * 4) + 1;
         posLabel.setText (juce::String (bar) + ":" + juce::String (beat) + ":" + juce::String (step), juce::dontSendNotification);
         const int cpu = juce::jlimit (0, 100, juce::roundToInt (engine.cpuLoad() * 100.0));
-        cpuLabel.setText ("CPU " + juce::String (cpu) + "%", juce::dontSendNotification);
+        const int drops = engine.dropouts.load();
+        cpuLabel.setText ("CPU " + juce::String (cpu) + "%" + (drops > 0 ? "  " + juce::String (drops) + " late" : juce::String()), juce::dontSendNotification);
         const auto cc = cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good;
         if (cpuLabel.findColour (juce::Label::textColourId) != cc) cpuLabel.setColour (juce::Label::textColourId, cc);
         recBtn.setToggleState (engine.isRecording(), juce::dontSendNotification);

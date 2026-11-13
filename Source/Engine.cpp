@@ -165,7 +165,8 @@ struct FxRuntime
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
-    int deadSamples = 0;               // sound goes in, pure digital silence comes out
+    int deadSamples = 0;
+    int quietSamples = 0;              // smart disable: silence in for longer than its tail -> it isn't run               // sound goes in, pure digital silence comes out
     std::atomic<bool> silentBypass { false };   // ...for 3 s: the plug-in is skipped so it can't mute the whole song
 };
 
@@ -2056,6 +2057,8 @@ void Engine::processTrack (int t)
                 if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
                 if (f.silentBypass.load()) continue;
                 const float inMag = std::max (view.getMagnitude (0, 0, n), view.getMagnitude (1, 0, n));
+                if (inMag < 1.0e-6f) f.quietSamples += n; else f.quietSamples = 0;
+                if (f.quietSamples > (int) (juce::jlimit (0.5, 10.0, f.tail + 0.5) * sampleRate)) continue;   // FL-style smart disable: silent in, tail rung out = no CPU
                 for (int c = 0; c < nch; ++c)
                     if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
                 if (pl.getMainBusNumInputChannels() == 1)   // mono plugin on a stereo bus: feed it the mono sum, not just the left side
@@ -2136,7 +2139,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         ~LoadMeter()
         {
             if (e.offline.load() || n <= 0) return;
-            const float l = juce::jmin (1.0f, (float) ((juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate))));   // a late block reads 100%, never thousands
+            const double raw = (juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate));
+            if (raw >= 1.0) e.dropouts.fetch_add (1, std::memory_order_relaxed);   // a late block = a possible crackle
+            const float l = juce::jmin (1.0f, (float) raw);   // a late block reads 100%, never thousands
             const float o = e.renderLoad.load();
             e.renderLoad.store (l > o ? l : o + (l - o) * 0.02f);
         }
