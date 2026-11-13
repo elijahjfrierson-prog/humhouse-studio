@@ -165,9 +165,9 @@ struct FxRuntime
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
-    int deadSamples = 0;
-    int quietSamples = 0;              // smart disable: silence in for longer than its tail -> it isn't run               // sound goes in, pure digital silence comes out
-    std::atomic<bool> silentBypass { false };   // ...for 3 s: the plug-in is skipped so it can't mute the whole song
+    int deadSamples = 0;               // sound goes in, (near) silence or garbage comes out: the dry sound passes instead
+    int quietSamples = 0;              // smart disable: silence in for longer than its tail -> it isn't run
+    std::atomic<bool> silentBypass { false };   // dead for 0.5 s: the plug-in is skipped so it can never mute the song
 };
 
 static int pluginChannels (const juce::AudioPluginInstance& p)
@@ -2067,9 +2067,10 @@ void Engine::processTrack (int t)
                 f.midi.clear();
                 pl.processBlock (pv, f.midi);
                 const float outMag = std::max (pv.getMagnitude (0, 0, n), pv.getMagnitude (outs > 1 ? 1 : 0, 0, n));
-                if (inMag > 0.01f && outMag < 1.0e-9f) f.deadSamples += n; else if (outMag >= 1.0e-9f) f.deadSamples = 0;
-                if (f.deadSamples > (int) (3.0 * sampleRate)) { f.silentBypass.store (true); continue; }   // the dry sound passes on
-                if (outMag >= 1.0e-9f || inMag <= 0.01f)
+                const bool dead = inMag > 0.01f && ! (outMag >= inMag * 1.0e-3f);   // >60 dB quieter than its input, or NaN
+                if (dead) f.deadSamples += n; else f.deadSamples = 0;
+                if (f.deadSamples > (int) (0.5 * sampleRate)) { f.silentBypass.store (true); continue; }
+                if (! dead)
                 {
                     view.copyFrom (0, 0, pv, 0, 0, n);
                     view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
