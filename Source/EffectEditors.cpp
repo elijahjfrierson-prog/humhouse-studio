@@ -37,14 +37,14 @@ struct PhoneFxFrame : public juce::Component, private juce::ComponentListener
     {
         laying = true;
         auto r = getLocalBounds();
-        del.setBounds (r.removeFromTop (barH).reduced (6, 4));
+        del.setBounds (r.removeFromTop (barH).removeFromRight (110).reduced (6, 4));   // top right, like a close button
         inner->setBounds (r);
         laying = false;
     }
     void componentMovedOrResized (juce::Component&, bool, bool wasResized) override { if (wasResized && ! laying) fit(); }
     static constexpr int barH = 44;
     std::unique_ptr<juce::Component> inner;
-    juce::TextButton del { "DELETE FX" };
+    juce::TextButton del { "DELETE" };
     bool laying = false;
 };
 

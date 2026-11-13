@@ -165,6 +165,8 @@ struct FxRuntime
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
+    int deadSamples = 0;               // sound goes in, pure digital silence comes out
+    std::atomic<bool> silentBypass { false };   // ...for 3 s: the plug-in is skipped so it can't mute the whole song
 };
 
 static int pluginChannels (const juce::AudioPluginInstance& p)
@@ -2052,6 +2054,8 @@ void Engine::processTrack (int t)
                 const juce::ScopedTryLock cl (pl.getCallbackLock());
                 const int nch = f.buf.getNumChannels(), outs = pl.getTotalNumOutputChannels();
                 if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
+                if (f.silentBypass.load()) continue;
+                const float inMag = std::max (view.getMagnitude (0, 0, n), view.getMagnitude (1, 0, n));
                 for (int c = 0; c < nch; ++c)
                     if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
                 if (pl.getMainBusNumInputChannels() == 1)   // mono plugin on a stereo bus: feed it the mono sum, not just the left side
@@ -2059,8 +2063,16 @@ void Engine::processTrack (int t)
                 juce::AudioBuffer<float> pv (f.buf.getArrayOfWritePointers(), nch, n);
                 f.midi.clear();
                 pl.processBlock (pv, f.midi);
-                view.copyFrom (0, 0, pv, 0, 0, n);
-                view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
+                const float outMag = std::max (pv.getMagnitude (0, 0, n), pv.getMagnitude (outs > 1 ? 1 : 0, 0, n));
+                if (inMag > 0.01f && outMag < 1.0e-9f) f.deadSamples += n; else if (outMag >= 1.0e-9f) f.deadSamples = 0;
+                if (f.deadSamples > (int) (3.0 * sampleRate)) { f.silentBypass.store (true); continue; }   // the dry sound passes on
+                if (outMag >= 1.0e-9f || inMag <= 0.01f)
+                {
+                    view.copyFrom (0, 0, pv, 0, 0, n);
+                    view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x)) *x = 0.0f;
+                }
             }
         }
     }
