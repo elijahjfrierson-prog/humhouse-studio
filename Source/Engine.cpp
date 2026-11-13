@@ -121,10 +121,14 @@ struct Engine::ChannelRuntime
     int cutGroup = 0;
     // plug-in instruments: keys we sent a note-on for, so stop / loop / seek / choke can end every one of them
     std::bitset<128> held; bool panic = false, cutTails = false;
-    // CUT note ends: a 10 ms fade at the note end (no click), then all-sound-off once it's silent
-    float cutGain = 1.0f, cutTarget = 1.0f; bool soundOffNext = false;
-    std::array<std::pair<int, float>, 64> gainEv {}; int numGainEv = 0;
-    void gainAt (int at, float g) { if (numGainEv < (int) gainEv.size()) gainEv[(size_t) numGainEv++] = { at, g }; }
+    // CUT note ends: every note that leaves the channel silent fades out over 3 ms ending exactly at its note end
+    // (back-to-back notes included), then all-sound-off; unscheduled ends (choke, preview) fade 5 ms after
+    struct GainEv { int at; float target; int endAt; bool post; };
+    float cutGain = 1.0f, cutTarget = 1.0f, cutRate = 0.0f; bool soundOffNext = false, cutPost = false;
+    std::array<GainEv, 64> gainEv {}; int numGainEv = 0;
+    std::array<int, 32> preFaded {}; int numPreFaded = 0;
+    void gainAt (int at, float g, int endAt, bool post = false) { if (numGainEv < (int) gainEv.size()) gainEv[(size_t) numGainEv++] = { at, g, endAt, post }; }
+    bool preFadedAt (int t) const { for (int k = 0; k < numPreFaded; ++k) if (preFaded[(size_t) k] == t) return true; return false; }
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
@@ -1869,20 +1873,62 @@ struct EngineJobs
         channelJob (e, ci);
         if (ci < (int) e->chanCost.size()) e->chanCost[(size_t) ci] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->chanCost[(size_t) ci] * 0.9f);
     }
-    static void applyCutFade (Engine::ChannelRuntime& rt, juce::AudioBuffer<float>& b, int n, double sr)
+    // plan the 3 ms fade-outs that must end exactly where a scheduled note end leaves the channel silent
+    static void planCutFades (Engine::ChannelRuntime& rt, int n, double sr)
     {
-        const float down = 1.0f / (float) (0.010 * sr), up = 1.0f / (float) (0.002 * sr);
+        rt.numPreFaded = 0;
+        const int F = juce::jmax (1, (int) (0.003 * sr));
+        std::bitset<128> sched;
+        for (int k = 0; k < rt.numActive; ++k) sched.set ((size_t) juce::jlimit (0, 127, rt.active[(size_t) k].key));
+        for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (! ev.on && ev.key >= 0 && ev.key < 128) sched.set ((size_t) ev.key); }
+        if ((rt.held & ~sched).any()) return;   // a live / preview note is held: nothing to plan against
+        auto onFrom = [&rt] (int key, int from, int to) {   // a note-on for key in [from, to)
+            for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (ev.on && ev.key == key && ev.offset >= from && ev.offset < to) return true; }
+            return false;
+        };
+        auto silentAt = [&] (int T) {   // no other note is still sounding just after T
+            for (int k = 0; k < rt.numActive; ++k)
+            {
+                const auto& a = rt.active[(size_t) k];
+                if ((double) n + a.remaining > (double) T && ! onFrom (a.key, T, std::numeric_limits<int>::max())) return false;
+            }
+            for (int k = 0; k < rt.numEvents; ++k)
+            {
+                const auto& ev = rt.events[(size_t) k];
+                if (ev.key < 0 || ev.key > 127) continue;
+                if (! ev.on && ev.offset > T && ! onFrom (ev.key, T, ev.offset)) return false;
+                if (ev.on && ev.offset < T && ! sched[(size_t) ev.key]) return false;   // preview note-on
+            }
+            return true;
+        };
+        auto plan = [&] (int T) {
+            if (T <= 0 || rt.preFadedAt (T) || rt.numPreFaded >= (int) rt.preFaded.size() || ! silentAt (T)) return;
+            rt.preFaded[(size_t) rt.numPreFaded++] = T;
+            rt.gainAt (juce::jmax (0, T - F), 0.0f, T);
+        };
+        for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (! ev.on && ev.key >= 0 && ev.key < 128) plan (ev.offset); }
+        for (int k = 0; k < rt.numActive; ++k) if (rt.active[(size_t) k].remaining < (double) F) plan (n + (int) rt.active[(size_t) k].remaining);
+    }
+    static void applyCutFade (Engine::ChannelRuntime& rt, juce::AudioBuffer<float>& b, int n)
+    {
+        std::stable_sort (rt.gainEv.begin(), rt.gainEv.begin() + rt.numGainEv, [] (auto& x, auto& y) { return x.at < y.at; });
         auto* L = b.getWritePointer (0); auto* R = b.getWritePointer (1);
         int ge = 0;
+        float& g = rt.cutGain;
         for (int i = 0; i < n; ++i)
         {
-            while (ge < rt.numGainEv && rt.gainEv[(size_t) ge].first <= i) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
-            float& g = rt.cutGain;
-            if (g > rt.cutTarget) { g = std::max (rt.cutTarget, g - down); if (g <= 0.0f) rt.soundOffNext = true; }
-            else if (g < rt.cutTarget) g = std::min (rt.cutTarget, g + up);
+            while (ge < rt.numGainEv && rt.gainEv[(size_t) ge].at <= i)
+            {
+                const auto& ev = rt.gainEv[(size_t) ge++];
+                rt.cutTarget = ev.target; rt.cutPost = ev.post;
+                rt.cutRate = std::abs (ev.target - g) / (float) juce::jmax (1, ev.endAt - i);
+                if (ev.target > 0.0f) rt.soundOffNext = false;   // a new note: never cut it next block
+            }
+            if (g > rt.cutTarget) { g = std::max (rt.cutTarget, g - rt.cutRate); if (g <= 0.0f && rt.cutPost) { rt.soundOffNext = true; rt.cutPost = false; } }
+            else if (g < rt.cutTarget) g = std::min (rt.cutTarget, g + rt.cutRate);
             L[i] *= g; R[i] *= g;
         }
-        while (ge < rt.numGainEv) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
+        for (; ge < rt.numGainEv; ++ge) { const auto& ev = rt.gainEv[(size_t) ge]; rt.cutTarget = ev.target; rt.cutPost = ev.post; rt.cutRate = std::abs (ev.target - g) / (float) juce::jmax (1, ev.endAt - n); }
         rt.numGainEv = 0;
     }
     static void channelJob (Engine* e, int i)
@@ -1905,19 +1951,25 @@ struct EngineJobs
                 rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0);
                 rt->panic = false;
             }
-            if (! rt->cutTails) { rt->cutGain = rt->cutTarget = 1.0f; rt->soundOffNext = false; }
+            if (! rt->cutTails) { rt->cutGain = rt->cutTarget = 1.0f; rt->soundOffNext = rt->cutPost = false; }
             if (rt->soundOffNext) { rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0); rt->soundOffNext = false; }
             rt->numGainEv = 0;
             std::sort (rt->events.begin(), rt->events.begin() + rt->numEvents, [] (auto& a, auto& b) { return a.offset != b.offset ? a.offset < b.offset : ! a.on && b.on; });
+            const int postLen = (int) (0.005 * e->sampleRate), upLen = (int) (0.001 * e->sampleRate);
+            if (rt->cutTails) planCutFades (*rt, n, e->sampleRate);
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
-                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->gainAt (ev.offset, 0.0f); sentOff = true; continue; }
+                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->gainAt (ev.offset, 0.0f, ev.offset + postLen, true); sentOff = true; continue; }
                 if (ev.key > 127) continue;
-                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); if (rt->cutTails) rt->gainAt (ev.offset, 1.0f); continue; }
+                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); if (rt->cutTails) rt->gainAt (ev.offset, 1.0f, ev.offset + upLen); continue; }
                 rt->midi.addEvent (juce::MidiMessage::noteOff (1, ev.key), ev.offset);
                 rt->held.reset ((size_t) ev.key); sentOff = true;
-                if (rt->cutTails && rt->held.none()) rt->gainAt (ev.offset, 0.0f);   // CUT: fade out the release tail
+                if (rt->cutTails && rt->held.none())
+                {
+                    if (rt->preFadedAt (ev.offset) || (ev.offset == 0 && rt->cutGain <= 0.0f && rt->cutTarget <= 0.0f)) { rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset); rt->gainAt (ev.offset, 0.0f, ev.offset); }   // faded to 0 right here: cut
+                    else rt->gainAt (ev.offset, 0.0f, ev.offset + postLen, true);   // CUT: fade out the release tail
+                }
             }
             if (rt->numEvents == 0 && rt->numActive == 0 && rt->held.none() && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
@@ -1929,7 +1981,7 @@ struct EngineJobs
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
-            if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f)) applyCutFade (*rt, view, n, e->sampleRate);
+            if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f || rt->numPreFaded > 0)) applyCutFade (*rt, view, n);
         }
         else if (rt->inst)
         {

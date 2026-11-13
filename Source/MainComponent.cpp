@@ -1256,8 +1256,56 @@ if (phoneUI)
         o.dialogTitle = "Key commands"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
         o.launchAsync();
     }
+    // quick-added shortcuts: "menu:<menu text>" -> key, run like clicking that menu item
+    static int findMenuId (const juce::PopupMenu& m, const juce::String& text)
+    {
+        for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+        {
+            const auto& i = it.getItem();
+            if (i.subMenu != nullptr) { if (const int r = findMenuId (*i.subMenu, text)) return r; continue; }
+            if (i.itemID != 0 && i.isEnabled && i.text == text) return i.itemID;
+        }
+        return 0;
+    }
+    static juce::String findMenuText (const juce::PopupMenu& m, int id)
+    {
+        for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+        {
+            const auto& i = it.getItem();
+            if (i.subMenu != nullptr) { const auto r = findMenuText (*i.subMenu, id); if (r.isNotEmpty()) return r; continue; }
+            if (i.itemID == id) return i.text;
+        }
+        return {};
+    }
+    juce::String menuTextFor (int id)
+    {
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i) { const auto t = findMenuText (getMenuForIndex (i, names[i]), id); if (t.isNotEmpty()) return t; }
+        return {};
+    }
+    bool runMenuText (const juce::String& text)
+    {
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i)
+            if (const int id = findMenuId (getMenuForIndex (i, names[i]), text)) { menuItemSelected (id, 0); return true; }
+        return false;
+    }
+    juce::String commandUsing (const juce::KeyPress& k, const juce::String& except)   // which command already has this key ("" = free)
+    {
+        for (auto& [id, key] : userKeys) if (id != except && id.startsWith ("menu:") && key == k) return "\"" + id.fromFirstOccurrenceOf ("menu:", false, false) + "\"";
+        for (auto& a : keyActions()) { const auto it = userKeys.find (a.id); if ((it != userKeys.end() ? it->second : a.def) == k) return a.name; }
+        return {};
+    }
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (! remapping)
+            for (auto& [id, key] : userKeys)
+                if (id.startsWith ("menu:") && key.isValid() && k == key)
+                {
+                    const auto text = id.fromFirstOccurrenceOf ("menu:", false, false);
+                    juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this), text] { if (sp != nullptr) sp->runMenuText (text); });
+                    return true;
+                }
         if (! remapping && ! userKeys.empty())
         {
             for (auto& a : keyActions())
@@ -2722,7 +2770,68 @@ private:
 
     struct ShortcutsWindow : juce::DocumentWindow
     {
-        ShortcutsWindow (const juce::String& text, std::function<void()> close)
+        // top bar: + ADD SHORTCUT (any menu command, press a key) and EDIT KEYS (change / clear / reset any key)
+        struct Pane : juce::Component
+        {
+            Pane (juce::TextEditor* t, MainComponent& m) : text (t), main (m)
+            {
+                setWantsKeyboardFocus (true);
+                for (auto* b : { &add, &edit }) { b->setWantsKeyboardFocus (false); b->setColour (juce::TextButton::buttonColourId, col::accent.withAlpha (0.85f)); addAndMakeVisible (b); }
+                add.setTooltip ("Pick any menu command, then press the key you want for it");
+                edit.setTooltip ("Change, clear or reset the key of any command");
+                add.onClick = [this] { pickCommand(); };
+                edit.onClick = [this] { main.showKeyCommands(); };
+                status.setColour (juce::Label::textColourId, col::accent2); addAndMakeVisible (status);
+                addAndMakeVisible (text.get());
+                showMine();
+            }
+            void resized() override
+            {
+                auto r = getLocalBounds();
+                auto bar = r.removeFromTop (38).reduced (6, 4);
+                add.setBounds (bar.removeFromLeft (150)); bar.removeFromLeft (6); edit.setBounds (bar.removeFromLeft (110)); bar.removeFromLeft (8);
+                status.setBounds (bar);
+                text->setBounds (r);
+            }
+            void showMine()
+            {
+                juce::String mine;
+                for (auto& [id, k] : main.userKeys)
+                    if (id.startsWith ("menu:") && k.isValid()) mine << k.getTextDescriptionWithIcons() << " = " << id.fromFirstOccurrenceOf ("menu:", false, false) << "\n";
+                status.setText (waitingFor.isNotEmpty() ? "Press the key for \"" + waitingFor + "\"  (Esc = cancel)"
+                                : mine.isEmpty() ? juce::String ("+ ADD SHORTCUT puts a key on any menu command") : juce::String ("Your added shortcuts are listed at the top"), juce::dontSendNotification);
+                auto t = base.isEmpty() ? (base = text->getText()) : base;
+                text->setText (mine.isEmpty() ? t : "YOUR SHORTCUTS (Edit keys to change or clear)\n" + mine + "\n" + t, false);
+            }
+            void pickCommand()
+            {
+                juce::PopupMenu m;
+                const auto names = main.getMenuBarNames();
+                for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], main.getMenuForIndex (i, names[i]));
+                juce::Component::SafePointer<Pane> safe (this);
+                main.showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&add).withStandardItemHeight (30), [safe] (int r)
+                {
+                    if (safe == nullptr || r == 0) return;
+                    safe->waitingFor = safe->main.menuTextFor (r);
+                    safe->showMine(); safe->grabKeyboardFocus();
+                });
+            }
+            bool keyPressed (const juce::KeyPress& k) override
+            {
+                if (waitingFor.isEmpty()) return false;
+                if (k != juce::KeyPress (juce::KeyPress::escapeKey))
+                {
+                    const auto clash = main.commandUsing (k, "menu:" + waitingFor);
+                    if (clash.isNotEmpty()) { status.setText (k.getTextDescriptionWithIcons() + " is already " + clash + ". Pick another key or change that one in Edit keys.", juce::dontSendNotification); return true; }
+                    if (waitingFor.containsAnyOf ("=;")) { status.setText ("That command can't take a shortcut.", juce::dontSendNotification); waitingFor = {}; return true; }
+                    main.userKeys["menu:" + waitingFor] = k; main.saveKeys();
+                }
+                waitingFor = {}; showMine(); return true;
+            }
+            std::unique_ptr<juce::TextEditor> text; MainComponent& main;
+            juce::TextButton add { "+ ADD SHORTCUT" }, edit { "EDIT KEYS" }; juce::Label status; juce::String waitingFor, base;
+        };
+        ShortcutsWindow (const juce::String& text, std::function<void()> close, MainComponent& main)
             : juce::DocumentWindow ("Shortcuts  (Cmd/Ctrl+U to close)", col::panel, juce::DocumentWindow::closeButton), onClose (std::move (close))
         {
             auto* ed = new juce::TextEditor();
@@ -2730,12 +2839,13 @@ private:
             ed->setFont (juce::FontOptions (14.0f)); ed->setText (text, false);
             ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
             ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
-            setContentOwned (ed, false);
+            setContentOwned (new Pane (ed, main), false);
             setUsingNativeTitleBar (! phoneUI); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
         }
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override
         {
+            if (auto* p = dynamic_cast<Pane*> (getContentComponent()); p != nullptr && p->waitingFor.isNotEmpty()) return p->keyPressed (k);
             if (k == juce::KeyPress ('u', juce::ModifierKeys::commandModifier, 0) || k == juce::KeyPress::escapeKey) { if (onClose) onClose(); return true; }
             return false;
         }
@@ -2760,7 +2870,7 @@ private:
           << "Alt+A roll audio clips | E select | P/B paint | D delete | T mute | C slice | Alt+wheel = track heights\n\n"
           << "HELP\nHover anything for 1 second to see what it does | Cmd/Ctrl+U = this Shortcuts window\n\n"
           << "Ctrl = Cmd and Alt = Option on macOS.";
-        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); });
+        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); }, *this);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
