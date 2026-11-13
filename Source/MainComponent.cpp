@@ -3,6 +3,9 @@
 #include "ProjectImport.h"
 #include <thread>
 #include "BinaryData.h"
+#if HHS_WITH_ISFX && ! JUCE_IOS
+ #include <juce_opengl/juce_opengl.h>
+#endif
 
 namespace hhs
 {
@@ -741,6 +744,9 @@ public:
     MainComponent()
     {
         juce::Desktop::getInstance().addGlobalMouseListener (&previewStopper);
+       #if HHS_WITH_ISFX && ! JUCE_IOS
+        if (! phoneUI && studio.settings->getBoolValue ("gpuDraw", true)) { gpu.setComponentPaintingEnabled (true); gpu.attachTo (*this); }
+       #endif
         if (phoneUI) juce::Desktop::getInstance().addGlobalMouseListener (&doubleTapMenu);
         openPianoMain = [this] (int ch) { studio.selectedChannel = ch; rackHidden = false; setView (0); studio.sendChangeMessage(); };
         juce::PropertiesFile::Options o;
@@ -1058,6 +1064,9 @@ public:
         miniKb = nullptr;
         kbState.removeListener (&kbListen);
         rackPopOut = nullptr;
+       #if HHS_WITH_ISFX && ! JUCE_IOS
+        gpu.detach();
+       #endif
         juce::Desktop::getInstance().removeGlobalMouseListener (&previewStopper);
         juce::Desktop::getInstance().removeGlobalMouseListener (&doubleTapMenu);
         openPianoMain = nullptr; patchView = nullptr; videoView = nullptr;
@@ -1662,6 +1671,9 @@ private:
         void mouseDown (const juce::MouseEvent&) override { e.stopPreview (150); }
         Engine& e;
     } previewStopper { engine };
+   #if HHS_WITH_ISFX && ! JUCE_IOS
+    juce::OpenGLContext gpu;   // the graphics card draws the window (meters, curves, spectrum), not the CPU
+   #endif
     std::unique_ptr<juce::Component> rack, piano, playlist, mixer, browser, lanes;
     struct SplitBar : juce::Component   // drag to resize Channel Rack vs Piano Roll; click to minimize / show the Piano Roll
     {
