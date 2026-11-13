@@ -1,15 +1,17 @@
-# Guard: third-party plug-in editors go straight into their window (as in 1.5.2) and the window is never rebuilt
-# after it is on screen. Wrapping, resizing or rebuilding made VST3 views (Analog Lab, ZENOLOGY, Surge XT) an empty box.
+# Guard: plug-in windows stay exactly as in 1.5.3, when Analog Lab / ZENOLOGY / Surge XT opened full size:
+# the HUMHOUSE VIEW frame only follows the plug-in's own size, and the window is never resized or rebuilt once shown.
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../Source/EffectEditors.cpp" src)
-foreach(bad "PluginFrame" "PluginFrame::resizable")
+foreach(bad "PluginFrame::resizable" "goodSizes" "repairs" "native->setSize" "native->setVisible (true)")
     string(FIND "${src}" "${bad}" hit)
     if(NOT hit LESS 0)
-        message(FATAL_ERROR "Plug-in editors must not be wrapped (${bad}); put createEditorIfNeeded() straight into EditorWindow")
+        message(FATAL_ERROR "Plug-in window code must stay as in 1.5.3; found '${bad}' (this collapsed Analog Lab / ZENOLOGY)")
     endif()
 endforeach()
-string(REGEX MATCH "createEditorIfNeeded\\(\\) : nullptr;[^;]*;[^;]*;[^\n]*\n[^\n]*new EditorWindow" direct "${src}")
-if(direct STREQUAL "")
-    message(FATAL_ERROR "Plug-in editor must be passed directly to new EditorWindow")
+string(REGEX MATCHALL "else ed = new PluginFrame \\(\\*plugin, ed\\);\n +EditorWindow::windows\\(\\)\\.add \\(new EditorWindow \\(" calls "${src}")
+list(LENGTH calls n)
+math(EXPR n "${n} / 2")   # each match holds one ";" so CMake splits it in two
+if(NOT n EQUAL 2)
+    message(FATAL_ERROR "Both plug-in editor windows (FX + instrument) must be: PluginFrame straight into a fixed-size EditorWindow (found ${n})")
 endif()
 string(FIND "${src}" "setResizable (resizable, false);" ctor)
 string(FIND "${src}" "setVisible (true);\n        makeCaptureFriendly" vis)

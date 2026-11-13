@@ -70,6 +70,8 @@ public:
         setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
+        // FX windows open in front of the Mixer pop-out (also always-on-top on macOS while HumHouse is in front)
+        if (! floatWithTopmost && juce::Process::isForegroundProcess()) setOnTopSafely (*this, true);
         toFront (true);
         startTimer (300);
     }
@@ -96,7 +98,59 @@ private:
         }
         modalRaised = false;
         updateFloating (*this);
+        if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); setOnTopSafely (*this, front); }
     }
+};
+
+// any third-party plug-in window: its own UI or HUMHOUSE VIEW (every parameter as our sliders, our colours)
+class PluginFrame : public juce::Component
+{
+public:
+    PluginFrame (juce::AudioProcessor& p, juce::Component* nativeEd) : proc (p), native (nativeEd)
+    {
+        toggle.setClickingTogglesState (true);
+        toggle.setColour (juce::TextButton::buttonOnColourId, col::accent);
+        toggle.onClick = [this] { show (toggle.getToggleState()); };
+        addAndMakeVisible (toggle);
+        addAndMakeVisible (native.get());
+        fit();
+    }
+    ~PluginFrame() override { ours.reset(); native.reset(); }
+    void show (bool humhouse)
+    {
+        if (humhouse && ours == nullptr)
+        {
+            ours = std::make_unique<juce::GenericAudioProcessorEditor> (proc);
+            ours->setColour (juce::ResizableWindow::backgroundColourId, col::panel);
+            ours->setSize (juce::jmax (420, native->getWidth()), juce::jlimit (240, 700, ours->getHeight()));
+            addChildComponent (ours.get());
+        }
+        native->setVisible (! humhouse);
+        if (ours != nullptr) ours->setVisible (humhouse);
+        fit();
+    }
+    void childBoundsChanged (juce::Component* c) override { if (c != nullptr && c != &toggle && c->isVisible() && ! fitting) fit(); }   // the plug-in resized its own UI
+    void paint (juce::Graphics& g) override { g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
+    void resized() override
+    {
+        toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
+        if (auto* c = current()) c->setTopLeftPosition (0, bar);
+    }
+private:
+    juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
+    void fit()
+    {
+        const juce::ScopedValueSetter<bool> sv (fitting, true);
+        auto* c = current();
+        setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
+        resized();
+    }
+    static constexpr int bar = 28;
+    juce::AudioProcessor& proc;
+    std::unique_ptr<juce::Component> native;
+    std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
+    juce::TextButton toggle { "HUMHOUSE VIEW" };
+    bool fitting = false;
 };
 
 bool focusExisting (const juce::String& key)
@@ -1257,9 +1311,9 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         s.engine.beginRiskyPluginCall (plugin->getPluginDescription());
         juce::Component* ed = plugin->hasEditor() ? plugin->createEditorIfNeeded() : nullptr;
         s.engine.endRiskyPluginCall();
-        // the plug-in's own editor goes straight into the window, exactly as in 1.5.2 (no wrapper, no resizing):
-        // wrapping / resizing native views made Analog Lab, ZENOLOGY and Surge XT open as an empty box
+        // HUMHOUSE VIEW frame exactly as in 1.5.3: fixed-size window, the frame follows the plug-in's own size
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
+        else ed = new PluginFrame (*plugin, ed);
         EditorWindow::windows().add (new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
                                                        [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin));
         return;
@@ -1893,6 +1947,7 @@ void openChannelEditor (Studio& s, int channelId)
         juce::Component* ed = plugin->hasEditor() ? plugin->createEditorIfNeeded() : nullptr;
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
+        else ed = new PluginFrame (*plugin, ed);
         EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
         return;
     }
