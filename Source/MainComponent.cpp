@@ -2685,13 +2685,9 @@ private:
         if (phoneUI) { showPhoneLatency(); return; }
         auto* sel = new juce::AudioDeviceSelectorComponent (engine.deviceManager, 0, 32, 0, 2, true, false, true, false);
         sel->setSize (560, 480);
-        juce::DialogWindow::LaunchOptions o;
-        o.content.setOwned (fitToScreen (sel));
-        o.dialogTitle = "Audio settings - device, inputs, buffer size, sample rate";
-        o.dialogBackgroundColour = col::panel;
-        o.escapeKeyTriggersCloseButton = true;
-        o.useNativeTitleBar = ! phoneUI;
-        o.launchAsync();
+        static juce::Component::SafePointer<juce::DocumentWindow> open;
+        if (open != nullptr) { open->toFront (true); delete sel; return; }
+        open = openToolWindow ("Audio settings - device, inputs, buffer size, sample rate", fitToScreen (sel), true);
     }
 
     // phone: pick the buffer from a list (the desktop device panel crashed on iPhone); lower = less delay

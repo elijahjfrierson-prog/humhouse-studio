@@ -45,14 +45,19 @@ void showPluginScanner (Studio& s)
     auto* c = new juce::PluginListComponent (s.engine.formats, s.engine.knownPlugins, pedal, s.settings, true);
     c->setNumberOfThreadsForScanning (2);   // each plugin is probed in its own child process, so this is crash-safe
     c->setSize (780, 540);
-    juce::DialogWindow::LaunchOptions o;
-    o.content.setOwned (fitToScreen (c));
-    o.dialogTitle = "Plugin House - scan for VST3 / AU plugins (Options > Scan)";
-    o.dialogBackgroundColour = col::panel;
-    o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = ! phoneUI;
-    o.resizable = true;
-    o.launchAsync();
+    if (phoneUI)
+    {
+        juce::DialogWindow::LaunchOptions o;
+        o.content.setOwned (fitToScreen (c));
+        o.dialogTitle = "Plugin House - scan for VST3 / AU plugins (Options > Scan)";
+        o.dialogBackgroundColour = col::panel;
+        o.escapeKeyTriggersCloseButton = true;
+        o.useNativeTitleBar = false;
+        o.resizable = true;
+        o.launchAsync();
+        return;
+    }
+    openToolWindow ("Plugin House - scan for VST3 / AU plugins (Options > Scan)", fitToScreen (c), true);
 }
 
 void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
