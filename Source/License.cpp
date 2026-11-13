@@ -268,7 +268,8 @@ Online activateOnline (const juce::String& key, const juce::String& machine)
         return r;
     }
     r.error = v["error"].toString().isNotEmpty() ? v["error"].toString() : juce::String ("Activation failed.");
-    r.lockNow = key.trim().isNotEmpty() && (status == 403 || status == 404 || (bool) v["revoked"] || (bool) v["full"]);
+    r.revoked = (bool) v["revoked"];
+    r.lockNow = r.revoked || (key.trim().isNotEmpty() && (status == 403 || status == 404 || (bool) v["full"]));
     return r;
 }
 
