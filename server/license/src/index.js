@@ -77,8 +77,17 @@ async function restore(env, body, req) {
   if (!validMid(mid)) return json({ ok: false, error: "Bad Machine ID." }, 400);
   const row = await env.DB.prepare("SELECT a.key_hash hash FROM activations a JOIN keys k ON k.hash = a.key_hash " +
     "WHERE a.mid = ?1 AND k.status = 'active' ORDER BY a.last_seen DESC LIMIT 1").bind(mid).first();
-  if (!row) return json({ ok: false, error: "This computer hasn't been activated yet. Paste your license key." }, 404);
   const now = Math.floor(Date.now() / 1000), ver = String(body.ver || "").slice(0, 32);
+  if (!row) {
+    // no key: this computer gets its own one-computer license, shown on the monitor (revoke it there)
+    const dev = await sha256Hex("HHSDEV|" + mid);
+    const k = await env.DB.prepare("SELECT status FROM keys WHERE hash = ?1").bind(dev).first();
+    if (k && k.status !== "active") { await log(env, dev, mid, "revoked", req); return json({ ok: false, revoked: true, error: "This computer's HumHouse license was revoked." }, 403); }
+    if (!k) await env.DB.prepare("INSERT OR IGNORE INTO keys (hash, status, max_machines, note) VALUES (?1, 'active', 1, ?2)").bind(dev, "auto " + mid).run();
+    const ins = await env.DB.prepare("INSERT OR IGNORE INTO activations (key_hash, mid, first_seen, last_seen, app_version) VALUES (?1, ?2, ?3, ?3, ?4)").bind(dev, mid, now, ver).run();
+    await log(env, dev, mid, ins.meta.changes ? "new" : "renew", req, ver);
+    return json({ ok: true, pass: await makePass(env, dev, mid, now) });
+  }
   await env.DB.prepare("UPDATE activations SET last_seen = ?3, app_version = ?4 WHERE key_hash = ?1 AND mid = ?2").bind(row.hash, mid, now, ver).run();
   await log(env, row.hash, mid, "renew", req, ver);
   return json({ ok: true, pass: await makePass(env, row.hash, mid, now) });

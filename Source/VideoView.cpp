@@ -22,13 +22,16 @@ public:
     {
         ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
         addAndMakeVisible (*ed);
-        for (auto* b : { &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
+        setLookAndFeel (&isfx::sharedLookAndFeel());   // same buttons/fonts/colours as the InSequence FX app
+        for (auto* b : { &push, &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
+        push.setTooltip ("PUSH the whole VIDEO sequence or the selected clips onto the Record timeline as editable clips; the video pops out and follows the playhead");
+        push.onClick = [this] { pushMenu(); };
         addAndMakeVisible (info);
         follow.setClickingTogglesState (true); follow.setToggleState (true, juce::dontSendNotification);
         follow.setTooltip ("The video plays and scrubs with HumHouse's playhead (Beat / Record / Mix)");
         pop.setTooltip ("Detach the video editor into its own window (click again to dock it)");
         toRecord.setTooltip ("Put the video's song on a new Record track as a normal clip you can move and edit");
-        info.setColour (juce::Label::textColourId, col::dim);
+        info.setColour (juce::Label::textColourId, isfx::theme::dim);
         info.setMinimumHorizontalScale (0.5f);
         info.setText ("Import a song and takes, AUTO SYNC, GENERATE 3 EDITS - FOLLOW keeps it locked to the playhead", juce::dontSendNotification);
         pop.onClick = [this] { popped() ? dock() : popOut(); };
@@ -37,19 +40,21 @@ public:
         toMixer.onClick = [this] { tracksMenu(); };
         startTimerHz (30);
     }
-    ~EditorView() override { stopTimer(); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
+    ~EditorView() override { stopTimer(); setLookAndFeel (nullptr); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (col::bg);
-        if (popped()) { g.setColour (col::dim); g.setFont (juce::FontOptions (15.0f)); g.drawText ("Video editor is popped out - click DOCK to bring it back", getLocalBounds().withTrimmedTop (bar), juce::Justification::centred); }
+        g.fillAll (isfx::theme::bg);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black, 0, 0, isfx::theme::panel, 0, (float) bar, false)); g.fillRect (0, 0, getWidth(), bar);
+        if (popped()) { g.setColour (isfx::theme::dim); g.setFont (juce::FontOptions (15.0f)); g.drawText ("Video editor is popped out - click DOCK to bring it back", getLocalBounds().withTrimmedTop (bar), juce::Justification::centred); }
     }
     void resized() override
     {
         auto r = getLocalBounds(); auto b = r.removeFromTop (bar).reduced (4);
-        pop.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
-        follow.setBounds (b.removeFromLeft (90)); b.removeFromLeft (4);
-        toRecord.setBounds (b.removeFromLeft (140)); b.removeFromLeft (4);
-        toMixer.setBounds (b.removeFromLeft (150)); b.removeFromLeft (8);
+        push.setBounds (b.removeFromLeft (80)); b.removeFromLeft (4);
+        pop.setBounds (b.removeFromLeft (100)); b.removeFromLeft (4);
+        follow.setBounds (b.removeFromLeft (96)); b.removeFromLeft (4);
+        toRecord.setBounds (b.removeFromLeft (170)); b.removeFromLeft (4);
+        toMixer.setBounds (b.removeFromLeft (180)); b.removeFromLeft (8);
         info.setBounds (b);
         if (! popped()) ed->setBounds (r);
     }
@@ -57,7 +62,7 @@ private:
     struct Win : juce::DocumentWindow
     {
         std::function<void()> onClose;
-        Win() : juce::DocumentWindow ("HumHouse VIDEO", col::bg, juce::DocumentWindow::allButtons) {}
+        Win() : juce::DocumentWindow ("HumHouse VIDEO", isfx::theme::bg, juce::DocumentWindow::allButtons) {}
         void closeButtonPressed() override { if (onClose) onClose(); }
     };
     bool popped() const { return win != nullptr; }
@@ -94,6 +99,39 @@ private:
         });
         info.setText ("Song is on the Record timeline - edit it there, the video follows the playhead", juce::dontSendNotification);
     }
+    void pushMenu()
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "PUSH whole sequence to REC (sound + picture)");
+        m.addItem (2, "PUSH selected clips to REC", ed->hasSelection());
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&push),
+            [safe = juce::Component::SafePointer<EditorView> (this)] (int r) { if (safe && r > 0) safe->pushToRecord (r == 2); });
+    }
+    // every VIDEO clip with sound lands on Record at its own spot, one lane + mixer insert per VIDEO track;
+    // the picture pops out and follows the Record playhead so you edit to it
+    void pushToRecord (bool selectedOnly)
+    {
+        const auto dir = hhsHome().getChildFile ("Video Push").getChildFile (juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S"));
+        const auto cl = ed->renderClips (dir, selectedOnly);
+        if (cl.empty()) { info.setText (selectedOnly ? "None of the selected clips has sound" : "No VIDEO clip has sound yet - import audio or video with sound first", juce::dontSendNotification); return; }
+        s.edit (selectedOnly ? "PUSH clips to REC" : "PUSH sequence to REC", [&] (Project& p) {
+            std::map<int, int> laneOf;
+            for (auto& c : cl)
+            {
+                if (! laneOf.count (c.track))
+                {
+                    Lane l; l.name = "VIDEO V" + juce::String (c.track + 1); l.mixerTrack = p.addMixerTrack (l.name);
+                    p.lanes.push_back (l); laneOf[c.track] = (int) p.lanes.size() - 1;
+                }
+                Clip k; k.uid = p.newUid(); k.lane = laneOf[c.track]; k.audioFile = c.file; k.patternIndex = -1;
+                k.start = secondsToBeats (c.start, p.bpm); k.length = secondsToBeats (c.seconds, p.bpm);
+                p.clips.push_back (k);
+            }
+        });
+        follow.setToggleState (true, juce::dontSendNotification);
+        if (! popped()) popOut();
+        info.setText (juce::String ((int) cl.size()) + " clip(s) pushed to REC - edit them there, the popped-out video follows the playhead", juce::dontSendNotification);
+    }
     void tracksMenu()
     {
         juce::PopupMenu m, to;
@@ -124,6 +162,8 @@ private:
     }
     void timerCallback() override
     {
+        isfx::hostBusy() = s.engine.isRecording();
+        ed->setActive (isShowing() || popped());
         if (! follow.getToggleState() || (! isShowing() && ! popped())) { hostWasPlaying = s.engine.isPlaying(); return; }
         const bool playing = s.engine.isPlaying();
         const double t = beatsToSeconds (s.engine.positionBeats(), s.p().bpm);
@@ -133,7 +173,7 @@ private:
     Studio& s;
     std::unique_ptr<isfx::MainComponent> ed;
     std::unique_ptr<Win> win;
-    juce::TextButton pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" }, toMixer { "TRACKS TO MIXER" };
+    juce::TextButton push { "PUSH" }, pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" }, toMixer { "TRACKS TO MIXER" };
     juce::Label info;
     bool hostWasPlaying = false; double lastT = -1.0;
     static constexpr int bar = 34;

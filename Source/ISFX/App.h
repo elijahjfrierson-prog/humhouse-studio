@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <juce_gui_extra/juce_gui_extra.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "Model.h"
@@ -14,12 +15,14 @@
 
 namespace isfx
 {
+// the host is recording: background video renders wait so audio + UI get the machine
+inline std::atomic<bool>& hostBusy() { static std::atomic<bool> b { false }; return b; }
 // ---- theme
 namespace theme
 {
-    // HumHouse palette (VIDEO tab)
-    const juce::Colour bg { 0xff0e1013 }, panel { 0xff16191e }, panel2 { 0xff1d2127 }, line { 0xff2c3139 },
-                       text { 0xffdfe4ec }, dim { 0xff7f8896 }, accent { 0xff9b5cff }, accent2 { 0xff38d1ff },
+    // chrome + electric blue, matching the InSequence FX logo (VIDEO tab looks exactly like the FX app)
+    const juce::Colour bg { 0xff060709 }, panel { 0xff0d0f14 }, panel2 { 0xff141821 }, line { 0xff232a38 },
+                       text { 0xffe4e9f2 }, dim { 0xff8890a2 }, accent { 0xff3d7bff }, accent2 { 0xff9cc0ff },
                        good { 0xff3ddc84 }, warn { 0xffffb020 }, bad { 0xffff4d4d };
 }
 void drawLogo (juce::Graphics&, juce::Rectangle<float> area);  // chrome InSequence FX mark + wordmark
@@ -222,15 +225,29 @@ private:
 };
 
 // drag source for transitions (drop on a cut) and effects/looks (drop on a clip or empty space = effect layer)
+// length for new transitions, in beats (VIDEO library slider: short to long)
+inline std::atomic<float>& transitionBeats() { static std::atomic<float> b { 0.5f }; return b; }
+
 class FxLibrary : public juce::Component, public juce::DragAndDropContainer, private juce::ListBoxModel
 {
 public:
     explicit FxLibrary (AppState& s);
-    void resized() override { list.setBounds (getLocalBounds().reduced (6).withTrimmedTop (20)); }
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (6).withTrimmedTop (20);
+        search.setBounds (r.removeFromTop (24)); r.removeFromTop (4);
+        transLen.setBounds (r.removeFromTop (24)); r.removeFromTop (4);
+        list.setBounds (r);
+    }
     void paint (juce::Graphics&) override;
 private:
-    struct Row { juce::String label, desc, help; bool header = false; };
-    std::vector<Row> rows;
+    struct Row { juce::String label, desc, help; bool header = false; juce::String folder; };
+    std::vector<Row> rows, all;
+    std::set<juce::String> closed;
+    juce::TextEditor search;
+    juce::Slider transLen;
+    void refilter();
+    void listBoxItemClicked (int, const juce::MouseEvent&) override;
     int getNumRows() override { return (int) rows.size(); }
     void paintListBoxItem (int, juce::Graphics&, int, int, bool) override;
     juce::var getDragSourceDescription (const juce::SparseSet<int>&) override;

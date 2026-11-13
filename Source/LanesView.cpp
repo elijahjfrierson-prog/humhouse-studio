@@ -28,6 +28,7 @@ class LanesView : public juce::Component, private juce::Timer, private juce::Cha
 public:
     explicit LanesView (Studio& st) : s (st)
     {
+        setOpaque (true);   // paints its whole area: a redraw never repaints what's behind it
         setupButton (fxBtn, "FX LANES", "Every effect on the selected mixer track as its own lane: curve, knobs and the track spectrum", true);
         setupButton (autoBtn, "AUTOMATION", "Every automation as a live mini plug-in: click to open its effect, right-click for mute / delete / add", true);
         fxBtn.setRadioGroupId (7101); autoBtn.setRadioGroupId (7101);

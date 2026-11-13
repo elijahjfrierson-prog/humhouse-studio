@@ -1094,11 +1094,12 @@ if (phoneUI)
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
                 r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
+            videoTab.setVisible (false);   // phone: no VIDEO page
             // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
                 { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
-                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &videoTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
@@ -1989,6 +1990,7 @@ private:
 
     void setView (int v)
     {
+        if (phoneUI && v == 4) return;   // phone: no VIDEO page
         if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab };
@@ -2041,9 +2043,11 @@ private:
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
         const int bar = (int) (pos / bpb) + 1, beat = (int) std::fmod (pos, (double) bpb) + 1, step = (int) (std::fmod (pos, 1.0) * 4) + 1;
         posLabel.setText (juce::String (bar) + ":" + juce::String (beat) + ":" + juce::String (step), juce::dontSendNotification);
-        const int cpu = juce::roundToInt (engine.cpuLoad() * 100.0);
-        cpuLabel.setText ("CPU " + juce::String (cpu) + "%", juce::dontSendNotification);
-        cpuLabel.setColour (juce::Label::textColourId, cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good);
+        const int cpu = juce::jlimit (0, 100, juce::roundToInt (engine.cpuLoad() * 100.0));
+        const int drops = engine.dropouts.load();
+        cpuLabel.setText ("CPU " + juce::String (cpu) + "%" + (drops > 0 ? "  " + juce::String (drops) + " late" : juce::String()), juce::dontSendNotification);
+        const auto cc = cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good;
+        if (cpuLabel.findColour (juce::Label::textColourId) != cc) cpuLabel.setColour (juce::Label::textColourId, cc);
         recBtn.setToggleState (engine.isRecording(), juce::dontSendNotification);
         playBtn.setToggleState (engine.isPlaying(), juce::dontSendNotification);
         playBtn.setColour (juce::TextButton::buttonOnColourId, engine.isCountingIn() ? col::accent : col::good);
@@ -2682,13 +2686,9 @@ private:
         if (phoneUI) { showPhoneLatency(); return; }
         auto* sel = new juce::AudioDeviceSelectorComponent (engine.deviceManager, 0, 32, 0, 2, true, false, true, false);
         sel->setSize (560, 480);
-        juce::DialogWindow::LaunchOptions o;
-        o.content.setOwned (fitToScreen (sel));
-        o.dialogTitle = "Audio settings - device, inputs, buffer size, sample rate";
-        o.dialogBackgroundColour = col::panel;
-        o.escapeKeyTriggersCloseButton = true;
-        o.useNativeTitleBar = ! phoneUI;
-        o.launchAsync();
+        static juce::Component::SafePointer<juce::DocumentWindow> open;
+        if (open != nullptr) { open->toFront (true); delete sel; return; }
+        open = openToolWindow ("Audio settings - device, inputs, buffer size, sample rate", fitToScreen (sel), true);
     }
 
     // phone: pick the buffer from a list (the desktop device panel crashed on iPhone); lower = less delay

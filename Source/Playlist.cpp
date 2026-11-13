@@ -3448,7 +3448,7 @@ void createAutomationClip (Studio& s, const AutoTarget& t, int belowLane)
     }
     else if (auto* ch = p.findChannel (t.channel))
         v = autoFromValue (t.kind, t.kind == AutoChanVol ? ch->volume : t.kind == AutoChanPan ? ch->pan : ch->pitch);
-    if (t.kind == AutoFxParam) v = 1.0f;   // VST3 / FX / instrument knobs start at the top; pull them down from there
+    if (t.kind == AutoFxParam || t.kind == AutoChanParam) v = 1.0f;   // VST3 / FX / instrument knobs start at the top; pull them down from there
     v = juce::jlimit (0.0f, 1.0f, v);
     s.edit ("Automate " + t.name, [&] (Project& pr) {
         const int at = juce::jlimit (0, (int) pr.lanes.size(), belowLane + 1);

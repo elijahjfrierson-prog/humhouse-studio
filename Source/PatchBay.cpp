@@ -147,7 +147,7 @@ struct Node { Kind kind; int a = 0, b = 0; juce::String key, title; juce::Rectan
 class Canvas : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
 public:
-    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); loadWires (s); setWantsKeyboardFocus (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
+    explicit Canvas (Studio& st) : s (st) { loadLfos (s); loadBays (s); loadWires (s); setWantsKeyboardFocus (true); setOpaque (true); s.addChangeListener (this); setSize (1800, 1400); rebuild(); startTimerHz (15); }
     ~Canvas() override { s.removeChangeListener (this); }
 
     void rebuild()
@@ -485,7 +485,7 @@ private:
             copyRhythm (soundTakes ? to.a : f.a, soundTakes ? f.a : to.a);
         }
         if (f.kind == Sound && (to.kind == Out || to.kind == Fx)) { route (f.a, to.a); return; }
-        if (f.kind == LfoNode && to.kind != LfoNode && to.kind != AutoNode) { lfoTo (f.a, to); return; }
+        if (f.kind == LfoNode && ! (to.kind == LfoNode && to.a == f.a)) { lfoTo (f.a, to); if (to.kind != LfoNode && to.kind != AutoNode) return; }
         if (f.kind == AutoNode && to.kind != AutoNode && to.kind != LfoNode) { retarget (f.key.substring (1), to); return; }
         if ((f.kind == Fx || f.kind == Out) && (to.kind == Fx || to.kind == Out) && f.a != to.a && f.a > 0)
         {
@@ -643,13 +643,12 @@ private:
     void moveSequence (int fromCh, int toCh)
     {
         s.edit ("Patch Bay: sequence to sound", [&] (Project& p) {
-            if (p.patterns.empty()) return;
+            if (p.patterns.empty() || fromCh == toCh) return;
             auto& pt = p.patterns[(size_t) juce::jlimit (0, (int) p.patterns.size() - 1, p.currentPattern)];
             auto it = pt.notes.find (fromCh);
             if (it == pt.notes.end()) return;
-            auto& dst = pt.notes[toCh];
-            dst.insert (dst.end(), it->second.begin(), it->second.end());
-            pt.notes.erase (fromCh);
+            const auto src = it->second;   // stacked: the first sound keeps playing it too
+            mergeNotes (pt.notes[toCh], src, 0);
         });
     }
     void copyRhythm (int fromCh, int toCh)
@@ -661,10 +660,39 @@ private:
             if (it == pt.notes.end() || it->second.empty()) return;
             auto& dst = pt.notes[toCh];
             const int shift = dst.empty() ? 0 : dst.front().key - it->second.front().key;   // keep the target's own pitch
-            auto src = it->second;
-            dst.clear();
-            for (auto nt : src) { nt.key = juce::jlimit (0, 127, nt.key + shift); dst.push_back (nt); }
+            const auto src = it->second;
+            mergeNotes (dst, src, shift);   // added on top: nothing the target already plays is cut
         });
+    }
+    static void mergeNotes (NoteList& dst, const NoteList& src, int shift)
+    {
+        for (auto nt : src)
+        {
+            nt.key = juce::jlimit (0, 127, nt.key + shift);
+            bool dup = false;
+            for (const auto& d : dst) dup |= d.key == nt.key && std::abs (d.start - nt.start) < 1.0e-6;
+            if (! dup) dst.push_back (nt);
+        }
+        std::sort (dst.begin(), dst.end(), [] (const Note& a, const Note& b) { return a.start < b.start; });
+    }
+    // a sound that shares its insert with other sounds gets its own insert (feeding the old one), so FX / gates added for it never cut the rest
+    int ownInsert (int ch)
+    {
+        int t = -1;
+        s.edit ("Patch Bay: own insert", [&] (Project& p) {
+            auto* c = p.findChannel (ch);
+            if (c == nullptr) return;
+            const int old = c->mixerTrack;
+            bool shared = old <= 0;
+            for (auto& o : p.channels) shared |= o.id != ch && o.mixerTrack == old;
+            if (! shared) { t = old; return; }
+            t = p.addMixerTrack (c->name);
+            if (t <= 0 || t >= (int) p.mixer.size()) { t = old; return; }
+            if (old > 0 && old < (int) p.mixer.size()) { auto& mt = p.mixer[(size_t) t]; mt.routesToMaster = false; mt.sends.clear(); mt.sends.push_back ({ old, 1.0f }); }
+            c->mixerTrack = t;
+        });
+        rebuild();
+        return t;
     }
     // quick knobs on every node: 0 level, 1 pan, 2 automate (LFO: 0 = depth)
     static bool hasK (const Node& n, int w) { return n.kind == AutoNode ? false : n.kind == LfoNode ? w == 0 : true; }
@@ -776,32 +804,78 @@ private:
         });
     }
     // LFO cable onto any node: FX knob, sound volume / pan / pitch, insert volume / pan; anything else (sequence) automates its sound
+    // LFO onto any node: sound (volume / pan / pitch / every instrument + VST knob / its insert), insert (volume / pan / sends / every FX knob), FX, other LFOs, automation
     void lfoTo (int li, const Node& to)
     {
         if (to.kind == Fx) { lfoToParam (li, to.a, to.b); return; }
-        juce::PopupMenu m;
+        if (to.kind == LfoNode || to.kind == AutoNode) { lfoStack (li, to); return; }
+        auto& p = s.p();
         const bool chan = to.kind == Sound || to.kind == Seq;
-        if (chan) { m.addItem (1, "Volume"); m.addItem (2, "Pan"); m.addItem (3, "Pitch"); }
-        else { m.addItem (4, "Volume"); m.addItem (5, "Pan"); }
-        const int a = to.a;
-        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, a, chan] (int r) {
-            if (safe == nullptr || r <= 0) return;
-            AutoTarget t;
-            const char* names[] { "", "Volume", "Pan", "Pitch", "Volume", "Pan" };
-            juce::String who;
-            if (chan)
+        int track = to.a; juce::String who = to.title;
+        std::vector<AutoTarget> ts;
+        juce::PopupMenu m, kn, ins;
+        auto add = [&] (juce::PopupMenu& menu, AutoTarget t, const juce::String& label) { t.name = "LFO " + juce::String (li + 1) + " > " + t.name; ts.push_back (t); menu.addItem ((int) ts.size(), label); };
+        if (chan)
+        {
+            auto* c = p.findChannel (to.a);
+            if (c == nullptr) return;
+            who = c->name; track = c->mixerTrack;
+            const char* nm3[] { "Volume", "Pan", "Pitch" };
+            for (int k = 0; k < 3; ++k) { AutoTarget t; t.kind = k == 0 ? AutoChanVol : k == 1 ? AutoChanPan : AutoChanPitch; t.channel = c->id; t.track = juce::jmax (0, track); t.name = who + " - " + nm3[k]; add (m, t, nm3[k]); }
+            if (auto* pl = s.engine.channelPlugin (c->id))
             {
-                t.kind = r == 1 ? AutoChanVol : r == 2 ? AutoChanPan : AutoChanPitch; t.channel = a;
-                if (auto* c = safe->s.p().findChannel (a)) { t.track = juce::jmax (0, c->mixerTrack); who = c->name; }
+                for (int k = 0; k < juce::jmin (256, pl->getParameters().size()); ++k)
+                {
+                    const auto pn = pl->getParameters()[k]->getName (32);
+                    AutoTarget t; t.kind = AutoChanParam; t.channel = c->id; t.track = juce::jmax (0, track); t.param = "#" + juce::String (k); t.name = who + " - " + pn; add (kn, t, pn);
+                }
+                m.addSubMenu ("Instrument knobs (" + pl->getName() + ")", kn);
             }
-            else
+        }
+        if (track > 0 && track < (int) p.mixer.size())
+        {
+            auto& menu = chan ? ins : m;
+            const auto& mt = p.mixer[(size_t) track];
+            const auto tn = mt.name.isNotEmpty() ? mt.name : "Insert " + juce::String (track);
+            { AutoTarget t; t.kind = AutoInsertVol; t.track = track; t.name = tn + " - Volume"; add (menu, t, "Insert volume"); }
+            { AutoTarget t; t.kind = AutoInsertPan; t.track = track; t.name = tn + " - Pan"; add (menu, t, "Insert pan"); }
+            for (const auto& sd : mt.sends) { AutoTarget t; t.kind = AutoSendLevel; t.track = track; t.param = juce::String (sd.target); t.name = tn + " - Send " + juce::String (sd.target); add (menu, t, "Send to insert " + juce::String (sd.target)); }
+            for (const auto& f : mt.fx)
             {
-                t.kind = r == 4 ? AutoInsertVol : AutoInsertPan; t.track = a;
-                if (a >= 0 && a < (int) safe->s.p().mixer.size()) who = safe->s.p().mixer[(size_t) a].name;
+                juce::PopupMenu fm;
+                for (const auto& pr : fxParams (track, f.uid)) { AutoTarget t; t.kind = AutoFxParam; t.track = track; t.fxUid = f.uid; t.param = pr.first; t.name = tn + " - " + pr.second; add (fm, t, pr.second); }
+                juce::String fxn = f.type;
+                if (auto* pl = s.engine.fxPlugin (track, f.uid)) fxn = pl->getName();
+                else for (auto& e : builtinEffects()) if (f.type == e.id) fxn = juce::String (e.name);
+                menu.addSubMenu (fxn, fm);
             }
-            t.name = "LFO " + juce::String (li + 1) + " > " + who + " - " + names[r];
-            safe->applyLfo (li, t);
+            if (chan) m.addSubMenu ("Its mixer insert (" + tn + ")", ins);
+        }
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, ts] (int r) {
+            if (safe == nullptr || r <= 0 || r > (int) ts.size()) return;
+            safe->applyLfo (li, ts[(size_t) r - 1]);
         });
+    }
+    // LFO onto another LFO or an automation node: it rides on top (multiplies those moves), so LFOs stack into chains
+    void lfoStack (int li, const Node& to)
+    {
+        if (li < 0 || li >= (int) lfos().size()) return;
+        const auto l = lfos()[(size_t) li];
+        const juce::String pre = to.kind == LfoNode ? "LFO " + juce::String (to.a + 1) + " > " : juce::String();
+        const juce::String exact = to.kind == AutoNode ? to.key.substring (1) : juce::String();
+        s.edit ("Patch Bay: stack LFO", [&] (Project& p) {
+            const double period = p.beatsPerBar / juce::jmax (0.01, l.perBar);
+            for (auto& c : p.clips)
+            {
+                if (! c.isAuto() || (exact.isNotEmpty() ? c.autoTarget.name != exact : ! c.autoTarget.name.startsWith (pre))) continue;
+                const auto old = c.autoPts;
+                const double stepB = juce::jmax (0.125, c.length / 4000.0);
+                c.autoPts.clear();
+                for (double x = 0.0; x <= c.length + 1.0e-9; x += stepB)
+                    c.autoPts.push_back ({ x, juce::jlimit (0.0f, 1.0f, autoValueAt (old, x) * lfoAt (l, x / period)) });
+            }
+        });
+        rebuild();
     }
     void applyLfo (int li, const AutoTarget& t)
     {
@@ -868,8 +942,22 @@ private:
         m.addSubMenu ("Shape", sh); m.addSubMenu ("Rate", rt); m.addSubMenu ("Range", rg);
         m.addItem (40, "Remove LFO", lfos().size() > 1);
         const int li = n.a;
-        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, rates] (int r) {
+        juce::PopupMenu cn, mx;
+        std::vector<Node> targets;
+        for (const auto& o : nodes)
+            if (! (o.kind == LfoNode && o.a == li)) { targets.push_back (o); cn.addItem (500 + (int) targets.size() - 1, o.title); }
+        const auto& pj = s.p();
+        for (int i = 1; i < (int) pj.mixer.size(); ++i)
+        {
+            Node o; o.kind = Out; o.a = i; o.key = "O" + juce::String (i);
+            o.title = pj.mixer[(size_t) i].name.isNotEmpty() ? pj.mixer[(size_t) i].name : "Insert " + juce::String (i);
+            targets.push_back (o); mx.addItem (500 + (int) targets.size() - 1, o.title);
+        }
+        cn.addSubMenu ("Mixer inserts", mx);
+        m.addSeparator(); m.addSubMenu ("Connect to", cn);
+        m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), li, rates, targets] (int r) {
             if (safe == nullptr || r <= 0 || li >= (int) lfos().size()) return;
+            if (r >= 500) { if (r - 500 < (int) targets.size()) safe->lfoTo (li, targets[(size_t) (r - 500)]); return; }
             auto& l = lfos()[(size_t) li];
             if (r >= 10 && r < 15) l.shape = r - 10;
             else if (r >= 20 && r < 27) l.perBar = rates[r - 20];
@@ -1035,6 +1123,7 @@ private:
     int fxTrack()
     {
         auto& p = s.p(); auto& b = bay();
+        if (lastTrack <= 0 && p.findChannel (lastChan) != nullptr) if (const int t = ownInsert (lastChan); t > 0) return t;
         if (lastTrack > 0 && lastTrack < (int) p.mixer.size()) return lastTrack;
         if (b.insert > 0 && b.insert < (int) p.mixer.size()) return b.insert;
         if (auto* c = p.findChannel (lastChan)) if (c->mixerTrack > 0) return c->mixerTrack;
@@ -1075,6 +1164,8 @@ private:
         lastChan = ch;
         juce::PopupMenu m, vm, un, mv;
         m.addItem (1, "Open in Piano Roll");
+        m.addItem (4, c->type == ChannelType::Plugin ? "Open " + c->name + " (VST window)" : "Open " + c->name);
+        m.addItem (5, "Own mixer insert (its FX never touch the other sounds)");
         m.addItem (2, "Hi-hat roll / stutter (Alt+S)...");
         vm.addItem (10, "Poly", true, ! c->mono); vm.addItem (11, "Mono", true, c->mono && c->glide <= 0.0f); vm.addItem (12, "Legato (glide)", true, c->mono && c->glide > 0.0f);
         m.addSubMenu ("Voice mode", vm);
@@ -1087,6 +1178,8 @@ private:
             auto& s = safe->s;
             if (r == 1) { s.selectedChannel = ch; if (openPianoMain) openPianoMain (ch); }
             else if (r == 2) safe->hatMenu (ch, -1);
+            else if (r == 4) { s.selectedChannel = ch; openChannelEditor (s, ch); }
+            else if (r == 5) safe->ownInsert (ch);
             else if (r >= 10 && r <= 12) s.edit ("Voice mode", [&] (Project& p) { if (auto* c = p.findChannel (ch)) { c->mono = r != 10; c->glide = r == 12 ? juce::jmax (0.06f, c->glide) : r == 11 ? 0.0f : c->glide; } });
             else if (r > 20 && r < 30) s.edit ("Unison", [&] (Project& p) { if (auto* c = p.findChannel (ch)) c->synth.unison = r - 20; });
             else if (r >= 100)

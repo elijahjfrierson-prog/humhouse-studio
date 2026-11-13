@@ -44,6 +44,7 @@ struct Preview::RenderAll : juce::Thread
         Renderer r; std::vector<juce::uint8> px; juce::JPEGImageFormat jpg; jpg.setQuality (0.9f);
         for (int f = 0; f < total && ! threadShouldExit(); ++f)
         {
+            while (hostBusy().load() && ! threadShouldExit()) wait (50);
             px.clear();
             if (r.render (*proj, proj->seq(), frameToTicks (f, fps), W, H, px, H) && px.size() >= (size_t) W * H * 4)
             {
@@ -493,16 +494,54 @@ juce::var MediaPanel::getDragSourceDescription (const juce::SparseSet<int>& rows
 
 FxLibrary::FxLibrary (AppState& s) : st (s)
 {
-    rows.push_back ({ "TRANSITIONS  (drag onto a cut)", {}, {}, true });
     auto tn = transitionNames();
     for (int i = 1; i < tn.size(); ++i)
-        rows.push_back ({ tn[i], "transition:" + juce::String (i), "Drag onto the cut between two clips. It locks to that cut and moves with it. Set length, amount and direction in the Inspector.", false });
-    rows.push_back ({ "EFFECTS & LOOKS  (drag onto clips)", {}, {}, true });
+        all.push_back ({ tn[i], "transition:" + juce::String (i), "Drag onto the cut between two clips. It locks to that cut and moves with it. Its length comes from the LENGTH slider; fine-tune length, amount and direction in the Inspector.", false, "TRANSITIONS" });
+    const auto nTrans = all.size();
     for (auto& l : lookLibrary())
-        rows.push_back ({ l.name, "look:" + l.name, l.help + "\nDrop on a clip for an effect layer over it, or on empty space for a 2-bar layer. Trim, move, fade (opacity) or disable it like any clip.", false });
+        all.push_back ({ l.name, "look:" + l.name, l.help + "\nDrop on a clip for an effect layer over it, or on empty space for a 2-bar layer. Trim, move, fade (opacity) or disable it like any clip.", false,
+                         "FX - " + (l.category.isNotEmpty() ? l.category.toUpperCase() : juce::String ("LOOKS")) });
+    std::stable_sort (all.begin() + (std::ptrdiff_t) nTrans, all.end(), [] (const Row& x, const Row& y) { return x.folder < y.folder; });
+    search.setTextToShowWhenEmpty ("Search video FX + transitions", juce::Colours::grey);
+    search.onTextChange = [this] { refilter(); };
+    search.onEscapeKey = [this] { search.clear(); refilter(); };
+    transLen.setSliderStyle (juce::Slider::LinearHorizontal);
+    transLen.setRange (0.125, 8.0, 0.125);
+    transLen.setSkewFactorFromMidPoint (1.0);
+    transLen.setTextBoxStyle (juce::Slider::TextBoxRight, false, 78, 20);
+    transLen.setTextValueSuffix (" beats");
+    transLen.setValue (transitionBeats().load(), juce::dontSendNotification);
+    transLen.setTooltip ("LENGTH of new transitions: drag left = short, right = long (in beats of the song)");
+    transLen.onValueChange = [this] { transitionBeats() = (float) transLen.getValue(); };
     list.setModel (this); list.setRowHeight (22);
     list.setColour (juce::ListBox::backgroundColourId, theme::panel);
-    addAndMakeVisible (list);
+    addAndMakeVisible (search); addAndMakeVisible (transLen); addAndMakeVisible (list);
+    refilter();
+}
+
+// folders (click a header to open / close it); typing searches every folder
+void FxLibrary::refilter()
+{
+    rows.clear();
+    const auto q = search.getText().trim();
+    juce::String folder;
+    for (auto& it : all)
+    {
+        if (q.isNotEmpty() && ! it.label.containsIgnoreCase (q) && ! it.folder.containsIgnoreCase (q)) continue;
+        const bool shut = q.isEmpty() && closed.count (it.folder) > 0;
+        if (it.folder != folder) { folder = it.folder; rows.push_back ({ (shut ? "+  " : "-  ") + folder, {}, {}, true, folder }); }
+        if (! shut) rows.push_back (it);
+    }
+    list.updateContent();
+    list.repaint();
+}
+
+void FxLibrary::listBoxItemClicked (int row, const juce::MouseEvent&)
+{
+    if (row < 0 || row >= getNumRows() || ! rows[(size_t) row].header || search.getText().trim().isNotEmpty()) return;
+    const auto f = rows[(size_t) row].folder;
+    if (closed.count (f) > 0) closed.erase (f); else closed.insert (f);
+    refilter();
 }
 
 void FxLibrary::paint (juce::Graphics& g)

@@ -76,11 +76,11 @@ struct WelcomeWindow : public juce::DocumentWindow
 
 #if HHS_KEY_GATE
 // regular build: no key, no app. The key is checked by our license server (3 computers per key).
-struct ActivationPanel : public juce::Component, private juce::Timer
+struct ActivationPanel : public juce::Component, public juce::TextDragAndDropTarget, private juce::Timer
 {
     juce::Label title, info, status, mid;
     juce::TextEditor key;
-    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" }, pasteBtn { "PASTE" };
+    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" }, pasteBtn { "PASTE KEY" };
     std::function<void (juce::String)> onActivate;
     explicit ActivationPanel (const juce::String& message)
     {
@@ -96,27 +96,56 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         key.setTextToShowWhenEmpty ("HHS-XXXXX-XXXXX-XXXXX-XXXXX", hhs::col::dim);
         key.setFont (juce::Font (juce::FontOptions (18.0f)));
         key.onReturnKey = [this] { activate.triggerClick(); };
+        key.onTextChange = [this] { typed(); };   // Cmd/Ctrl+V or typing: a full key (or this Machine ID) submits by itself
         activate.onClick = [this] {
+            if (isMachineId (key.getText())) key.setText ({}, false);   // Machine ID in the box = unlock this computer by its ID
+            if (const auto k = hhs::license::findKey (key.getText()); k.isNotEmpty()) key.setText (k, false);
             activate.setEnabled (false);
             setStatus (key.getText().trim().isEmpty() ? "Checking this computer's Machine ID..." : "Checking your key...");
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
-        copyId.onClick = [this] { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); copyId.setButtonText ("Copied!"); };
-        mid.addMouseListener (this, false);
-        mid.setTooltip ("Click to copy");
-        pasteBtn.setTooltip ("Paste the key you copied");
-        pasteBtn.onClick = [this] { if (! pasteFromClipboard()) setStatus ("Copy your key first, then press PASTE."); };
-        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &copyId, &pasteBtn }) addAndMakeVisible (c);
+        pasteBtn.setTooltip ("Paste the license key you copied (or press Cmd/Ctrl+V in the box, or drag the highlighted key onto this window)");
+        pasteBtn.onClick = [this] {
+            const auto k = keyIn (juce::SystemClipboard::getTextFromClipboard());
+            if (k.isEmpty()) { setStatus ("No license key on the clipboard. Highlight your HHS-... key, press Cmd/Ctrl+C, then PASTE KEY."); return; }
+            key.setText (k, false); setStatus ("Key filled in - click Activate.");
+        };
+        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &pasteBtn }) addAndMakeVisible (c);
         setSize (560, 300);
         pasteFromClipboard();   // a key copied from the purchase email / page fills itself in
         startTimer (800);       // ...and so does one copied while this window is open
     }
     static juce::String keyIn (const juce::String& text)
     {
-        for (auto t : juce::StringArray::fromTokens (text, " \t\r\n\"'<>", ""))
-            if (t.startsWithIgnoreCase ("HHS") && t.length() >= 20) return t.trim();
-        return {};
+        return hhs::license::findKey (text);   // the exact HHS-XXXXX-XXXXX-XXXXX-XXXXX form the server checks
+    }
+    static bool isMachineId (const juce::String& text)
+    {
+        const auto strip = [] (const juce::String& t) { return t.toUpperCase().retainCharacters ("0123456789ABCDEF"); };
+        return text.trim().isNotEmpty() && strip (text) == strip (hhs::license::machineId()) && text.trim().length() <= 24;
+    }
+    void copyAndUnlock()
+    {
+        const auto id = hhs::license::machineId();
+        juce::SystemClipboard::copyTextToClipboard (id);
+        lastClip = id;
+        copyId.setButtonText ("Copied!");
+        mid.setText ("Machine ID copied: " + id, juce::dontSendNotification);
+        key.setText (id, true);   // -> typed(): unlocks an already-activated computer
+    }
+    void typed()
+    {
+        const auto text = key.getText();
+        if (isMachineId (text))
+        {
+            if (activate.isEnabled()) { setStatus ("Machine ID pasted - unlocking this computer..."); activate.triggerClick(); }
+            return;
+        }
+        const auto k = keyIn (text);
+        if (k.isEmpty()) return;
+        if (k != text) key.setText (k, false);
+        setStatus ("Key filled in - click Activate.");
     }
     bool pasteFromClipboard()
     {
@@ -125,21 +154,39 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         lastClip = clip;
         const auto k = keyIn (clip);
         if (k.isEmpty()) return false;
-        if (k != key.getText()) { key.setText (k, false); setStatus ("Key pasted - press Activate."); }
+        if (k != key.getText()) key.setText (k, false);
+        setStatus ("Key filled in - click Activate.");   // a copied key fills itself in; you only click Activate
         return true;
     }
-    void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
+    void timerCallback() override   // a copied key always lands in the box by itself (no remembered clipboard, no waiting)
+    {
+        const auto k = keyIn (juce::SystemClipboard::getTextFromClipboard());
+        if (k.isNotEmpty() && k != key.getText()) { key.setText (k, false); setStatus ("Key filled in - click Activate."); }
+    }   // the key box has focus on open, so don't wait for it to lose it
     void mouseUp (const juce::MouseEvent& e) override
     {
-        if (e.eventComponent == &mid) { juce::SystemClipboard::copyTextToClipboard (hhs::license::machineId()); mid.setText ("Machine ID copied: " + hhs::license::machineId(), juce::dontSendNotification); }
+        juce::ignoreUnused (e);
     }
     juce::String lastClip;
+    // drag the highlighted key from the email / web page onto this window
+    bool isInterestedInTextDrag (const juce::String&) override { return true; }
+    void textDropped (const juce::String& text, int, int) override
+    {
+        const auto k = keyIn (text);
+        if (k.isEmpty()) { setStatus ("That isn't a HumHouse license key (HHS-XXXXX-XXXXX-XXXXX-XXXXX)."); return; }
+        key.setText (k, false); setStatus ("Key filled in - click Activate.");
+    }
+    void visibilityChanged() override { if (isShowing()) juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<ActivationPanel> (this)] { if (sp) sp->key.grabKeyboardFocus(); }); }
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
     void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
     // a saved key, a copied key, or (neither) this computer's Machine ID: check by itself, nothing to type
     void autoCheck (const juce::String& saved)
     {
-        if (saved.isNotEmpty()) { key.setText (saved, false); lastClip = juce::SystemClipboard::getTextFromClipboard(); }
+        const auto clip = juce::SystemClipboard::getTextFromClipboard();
+        const auto fresh = keyIn (clip);
+        lastClip = clip;
+        if (fresh.isNotEmpty() && fresh != keyIn (saved)) key.setText (fresh, false);   // a key copied just now wins over an old saved one
+        else if (saved.isNotEmpty()) key.setText (saved, false);
         activate.triggerClick();
     }
     void paint (juce::Graphics& g) override { g.fillAll (hhs::col::bg); }
@@ -147,11 +194,10 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     {
         auto r = getLocalBounds().reduced (22);
         title.setBounds (r.removeFromTop (34)); info.setBounds (r.removeFromTop (54)); r.removeFromTop (8);
-        auto kr = r.removeFromTop (34); pasteBtn.setBounds (kr.removeFromRight (80)); kr.removeFromRight (6); key.setBounds (kr); r.removeFromTop (8);
+        auto kr = r.removeFromTop (34); pasteBtn.setBounds (kr.removeFromRight (110)); kr.removeFromRight (6); key.setBounds (kr); r.removeFromTop (8);
         status.setBounds (r.removeFromTop (40));
         auto b = r.removeFromBottom (32);
         quitBtn.setBounds (b.removeFromRight (90)); b.removeFromRight (8); activate.setBounds (b.removeFromRight (130));
-        copyId.setBounds (b.removeFromLeft (150));
         mid.setBounds (r.removeFromBottom (24));
     }
 };
@@ -211,15 +257,9 @@ public:
        #endif
        #if HHS_KEY_GATE
         launchLine = commandLine;
-        if (! hhs::license::storedPass().ok)
-        {
-            // a bought key that only needs its daily check re-checks by itself: nothing to type
-            const auto saved = hhs::license::keyFile().loadFileAsString().trim();
-            showActivation ({});
-            if (activationPanel != nullptr) activationPanel->autoCheck (saved);
-            return;
-        }
-        renewInBackground (true);   // every launch re-checks the key online
+        // no key screen: the app opens, and behind it the server gives this computer its license
+        // (a saved bought key is used if there is one). Only a revoke from the monitor locks it.
+        renewInBackground (true);
        #endif
         startMain (commandLine);
     }
@@ -344,8 +384,15 @@ private:
         if (! force && p.ok && juce::Time::currentTimeMillis() / 1000 - p.issued < 23 * 3600) return;
         const auto key = hhs::license::keyFile().loadFileAsString().trim();
         licensePool.addJob ([this, key, alive = alive] {
-            const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
-            juce::MessageManager::callAsync ([this, key, r, alive] {
+            auto r = hhs::license::activateOnline (key, hhs::license::machineId());
+            auto used = key;
+            if (! r.ok && ! r.revoked && key.isNotEmpty())   // an old / mistyped saved key: this computer's own license instead
+            {
+                const auto d = hhs::license::activateOnline ({}, hhs::license::machineId());
+                if (d.ok || d.revoked) { r = d; used = {}; }
+                else r.lockNow = false;
+            }
+            juce::MessageManager::callAsync ([this, key = used, r, alive] {
                 if (! *alive) return;
                 if (r.ok) hhs::license::saveActivation (key, r.pass);
                 else if (r.lockNow) lockApp (r.error);
@@ -357,8 +404,7 @@ private:
         licenseWatch.fn = [this] {
             if (window == nullptr) return;
             const auto p = hhs::license::storedPass();
-            if (! p.ok && ! p.expired) lockApp (p.error);   // being offline never locks mid-session
-            else if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();
+            if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();   // only the server's revoke locks
         };
         licenseWatch.startTimer (20 * 60 * 1000);
     }

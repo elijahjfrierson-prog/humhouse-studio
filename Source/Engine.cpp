@@ -121,6 +121,10 @@ struct Engine::ChannelRuntime
     int cutGroup = 0;
     // plug-in instruments: keys we sent a note-on for, so stop / loop / seek / choke can end every one of them
     std::bitset<128> held; bool panic = false, cutTails = false;
+    // CUT note ends: a 10 ms fade at the note end (no click), then all-sound-off once it's silent
+    float cutGain = 1.0f, cutTarget = 1.0f; bool soundOffNext = false;
+    std::array<std::pair<int, float>, 64> gainEv {}; int numGainEv = 0;
+    void gainAt (int at, float g) { if (numGainEv < (int) gainEv.size()) gainEv[(size_t) numGainEv++] = { at, g }; }
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
@@ -165,6 +169,9 @@ struct FxRuntime
     juce::MidiBuffer midi;
     double tail = 0.0;
     std::atomic<float> load { 0.0f };
+    int deadSamples = 0;               // sound goes in, (near) silence or garbage comes out: the dry sound passes instead
+    int quietSamples = 0;              // smart disable: silence in for longer than its tail -> it isn't run
+    std::atomic<bool> silentBypass { false };   // dead for 0.5 s: the plug-in is skipped so it can never mute the song
 };
 
 static int pluginChannels (const juce::AudioPluginInstance& p)
@@ -1862,6 +1869,22 @@ struct EngineJobs
         channelJob (e, ci);
         if (ci < (int) e->chanCost.size()) e->chanCost[(size_t) ci] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->chanCost[(size_t) ci] * 0.9f);
     }
+    static void applyCutFade (Engine::ChannelRuntime& rt, juce::AudioBuffer<float>& b, int n, double sr)
+    {
+        const float down = 1.0f / (float) (0.010 * sr), up = 1.0f / (float) (0.002 * sr);
+        auto* L = b.getWritePointer (0); auto* R = b.getWritePointer (1);
+        int ge = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            while (ge < rt.numGainEv && rt.gainEv[(size_t) ge].first <= i) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
+            float& g = rt.cutGain;
+            if (g > rt.cutTarget) { g = std::max (rt.cutTarget, g - down); if (g <= 0.0f) rt.soundOffNext = true; }
+            else if (g < rt.cutTarget) g = std::min (rt.cutTarget, g + up);
+            L[i] *= g; R[i] *= g;
+        }
+        while (ge < rt.numGainEv) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
+        rt.numGainEv = 0;
+    }
     static void channelJob (Engine* e, int i)
     {
         auto* rt = e->channelOrder[(size_t) i];
@@ -1882,16 +1905,19 @@ struct EngineJobs
                 rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0);
                 rt->panic = false;
             }
+            if (! rt->cutTails) { rt->cutGain = rt->cutTarget = 1.0f; rt->soundOffNext = false; }
+            if (rt->soundOffNext) { rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0); rt->soundOffNext = false; }
+            rt->numGainEv = 0;
             std::sort (rt->events.begin(), rt->events.begin() + rt->numEvents, [] (auto& a, auto& b) { return a.offset != b.offset ? a.offset < b.offset : ! a.on && b.on; });
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
-                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset); sentOff = true; continue; }
+                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->gainAt (ev.offset, 0.0f); sentOff = true; continue; }
                 if (ev.key > 127) continue;
-                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); continue; }
+                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); if (rt->cutTails) rt->gainAt (ev.offset, 1.0f); continue; }
                 rt->midi.addEvent (juce::MidiMessage::noteOff (1, ev.key), ev.offset);
                 rt->held.reset ((size_t) ev.key); sentOff = true;
-                if (rt->cutTails && rt->held.none()) rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset);   // CUT: no release tail
+                if (rt->cutTails && rt->held.none()) rt->gainAt (ev.offset, 0.0f);   // CUT: fade out the release tail
             }
             if (rt->numEvents == 0 && rt->numActive == 0 && rt->held.none() && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
@@ -1903,6 +1929,7 @@ struct EngineJobs
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
+            if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f)) applyCutFade (*rt, view, n, e->sampleRate);
         }
         else if (rt->inst)
         {
@@ -1994,7 +2021,7 @@ void Engine::processTrack (int t)
         constexpr int kSumMax = 8192;
         static thread_local double acc[2][kSumMax];
         const bool wide = S.size() >= 2 && n <= kSumMax;
-        if (wide) for (int ch = 0; ch < 2; ++ch) { const float* x = tr.out.getReadPointer (ch); for (int i = 0; i < n; ++i) acc[ch][i] = x[i]; }
+        if (wide) for (int ch = 0; ch < 2; ++ch) std::fill (acc[ch], acc[ch] + n, 0.0);
         for (size_t k = 0; k < S.size(); ++k)
         {
             auto& srt = *trackRt[(size_t) S[k].first];
@@ -2008,13 +2035,11 @@ void Engine::processTrack (int t)
                 }
             else for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, srt.out, ch, 0, n, S[k].second);
         }
-        if (wide)   // delayed (PDC) inputs were added to tr.out directly; fold them in with the 64-bit sum
+        if (wide)   // tr.out already holds this track's own input + the delayed (PDC) inputs: add the 64-bit sum on top, never overwrite
             for (int ch = 0; ch < 2; ++ch)
             {
                 float* y = tr.out.getWritePointer (ch);
-                const float* x0 = tr.out.getReadPointer (ch);
-                juce::ignoreUnused (x0);
-                for (int i = 0; i < n; ++i) y[i] = (float) acc[ch][i];
+                for (int i = 0; i < n; ++i) y[i] = (float) ((double) y[i] + acc[ch][i]);
             }
     }
 
@@ -2052,6 +2077,10 @@ void Engine::processTrack (int t)
                 const juce::ScopedTryLock cl (pl.getCallbackLock());
                 const int nch = f.buf.getNumChannels(), outs = pl.getTotalNumOutputChannels();
                 if (! cl.isLocked() || pl.isSuspended() || outs == 0 || pluginChannels (pl) > nch || n > f.buf.getNumSamples()) continue;
+                if (f.silentBypass.load()) continue;
+                const float inMag = std::max (view.getMagnitude (0, 0, n), view.getMagnitude (1, 0, n));
+                if (inMag < 1.0e-6f) f.quietSamples += n; else f.quietSamples = 0;
+                if (f.quietSamples > (int) (juce::jlimit (0.5, 10.0, f.tail + 0.5) * sampleRate)) continue;   // FL-style smart disable: silent in, tail rung out = no CPU
                 for (int c = 0; c < nch; ++c)
                     if (c < 2) f.buf.copyFrom (c, 0, view, c, 0, n); else f.buf.clear (c, 0, n);
                 if (pl.getMainBusNumInputChannels() == 1)   // mono plugin on a stereo bus: feed it the mono sum, not just the left side
@@ -2059,8 +2088,17 @@ void Engine::processTrack (int t)
                 juce::AudioBuffer<float> pv (f.buf.getArrayOfWritePointers(), nch, n);
                 f.midi.clear();
                 pl.processBlock (pv, f.midi);
-                view.copyFrom (0, 0, pv, 0, 0, n);
-                view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
+                const float outMag = std::max (pv.getMagnitude (0, 0, n), pv.getMagnitude (outs > 1 ? 1 : 0, 0, n));
+                const bool dead = inMag > 0.01f && ! (outMag >= inMag * 1.0e-3f);   // >60 dB quieter than its input, or NaN
+                if (dead) f.deadSamples += n; else f.deadSamples = 0;
+                if (f.deadSamples > (int) (0.5 * sampleRate)) { f.silentBypass.store (true); continue; }
+                if (! dead)
+                {
+                    view.copyFrom (0, 0, pv, 0, 0, n);
+                    view.copyFrom (1, 0, pv, outs > 1 ? 1 : 0, 0, n);
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x)) *x = 0.0f;
+                }
             }
         }
     }
@@ -2124,7 +2162,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
         ~LoadMeter()
         {
             if (e.offline.load() || n <= 0) return;
-            const float l = (float) ((juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate)));
+            const double raw = (juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / juce::jmax (1.0, e.sampleRate));
+            if (raw >= 1.0) e.dropouts.fetch_add (1, std::memory_order_relaxed);   // a late block = a possible crackle
+            const float l = juce::jmin (1.0f, (float) raw);   // a late block reads 100%, never thousands
             const float o = e.renderLoad.load();
             e.renderLoad.store (l > o ? l : o + (l - o) * 0.02f);
         }
@@ -2444,6 +2484,14 @@ void Engine::applyAutomation (double beat)
                 auto it = channelRt.find (ch->id);
                 if (it != channelRt.end() && it->second->inst) it->second->inst->update (*ch);
             }
+        }
+        else if (at.kind == AutoChanParam)
+        {
+            auto it = channelRt.find (at.channel);
+            if (it == channelRt.end() || ! it->second->plugin || ! at.param.startsWithChar ('#')) continue;
+            const auto& ps = it->second->plugin->getParameters();
+            const int i = at.param.substring (1).getIntValue();
+            if (i >= 0 && i < ps.size() && std::abs (ps[i]->getValue() - v) > 1.0e-5f) ps[i]->setValue (v);
         }
         else if (at.kind == AutoFxParam && at.track >= 0 && at.track < (int) trackRt.size())
         {

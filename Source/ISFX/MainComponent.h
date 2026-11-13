@@ -27,6 +27,9 @@ ISFXLookAndFeel& sharedLookAndFeel();
 class MainComponent : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer, private juce::ScrollBar::Listener
 {
 public:
+    // VIDEO page hidden / docked away: no timer, no playback, so it costs the DAW nothing
+    void setActive (bool on) { if (on == active) return; active = on; if (on) { devices.addAudioCallback (&player); startTimerHz (30); } else { stopTimer(); if (player.isPlaying()) player.stop(); devices.removeAudioCallback (&player); } }
+    bool active = true;
     // external: the host app's device (HumHouse VIDEO tab) - adds our player as one more callback, never reopens the device
     explicit MainComponent (juce::AudioDeviceManager* external = nullptr);
     void hostTransport (bool playing, double seconds);   // follow the host's play/stop + playhead
@@ -34,6 +37,9 @@ public:
     juce::File songFile() const;
     struct TrackRender { juce::String name; juce::File file; double seconds = 0; };
     std::vector<TrackRender> renderTracks (const juce::File& dir);   // each audible track with sound -> its own stereo WAV
+    struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };
+    std::vector<ClipRender> renderClips (const juce::File& dir, bool selectedOnly);   // PUSH: each clip with sound -> WAV at its timeline spot
+    bool hasSelection() const { return ! st.selected.isEmpty(); }
     ~MainComponent() override;
     void resized() override;
     void paint (juce::Graphics&) override;

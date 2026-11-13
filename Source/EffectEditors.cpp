@@ -8,6 +8,46 @@ namespace hhs
 {
 namespace
 {
+Studio*& fxStudio() { static Studio* p = nullptr; return p; }
+
+// phone: a DELETE FX bar on top of the effect's own window (removes it from the rack; the window closes itself)
+struct PhoneFxFrame : public juce::Component, private juce::ComponentListener
+{
+    PhoneFxFrame (juce::Component* c, const juce::String& key) : inner (c)
+    {
+        const auto t = juce::StringArray::fromTokens (key, ":", "");
+        const int track = t.size() > 1 ? t[1].getIntValue() : -1, uid = t.size() > 2 ? t[2].getIntValue() : -1;
+        del.onClick = [track, uid] {
+            auto* s = fxStudio();
+            if (s == nullptr) return;
+            s->edit ("Delete FX", [&] (Project& p) {
+                if (track < 0 || track >= (int) p.mixer.size()) return;
+                auto& f = p.mixer[(size_t) track].fx;
+                for (auto& x : f) if (x.uid == uid) { FxSlot e; e.uid = p.newUid(); x = e; }
+                while (! f.empty() && f.back().type.isEmpty()) f.pop_back();
+            });
+        };
+        addAndMakeVisible (del); addAndMakeVisible (*inner);
+        inner->addComponentListener (this);
+        fit();
+    }
+    ~PhoneFxFrame() override { inner->removeComponentListener (this); }
+    void fit() { setSize (juce::jmax (220, inner->getWidth()), inner->getHeight() + barH); }
+    void resized() override
+    {
+        laying = true;
+        auto r = getLocalBounds();
+        del.setBounds (r.removeFromTop (barH).removeFromRight (110).reduced (6, 4));   // top right, like a close button
+        inner->setBounds (r);
+        laying = false;
+    }
+    void componentMovedOrResized (juce::Component&, bool, bool wasResized) override { if (wasResized && ! laying) fit(); }
+    static constexpr int barH = 44;
+    std::unique_ptr<juce::Component> inner;
+    juce::TextButton del { "DELETE" };
+    bool laying = false;
+};
+
 class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
@@ -17,6 +57,7 @@ public:
     {
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+        if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
         setContentOwned (content, true);
         setResizable (false, false);
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
@@ -39,17 +80,26 @@ public:
 
 private:
     std::function<bool()> valid;
+    bool modalRaised = false;
     void timerCallback() override
     {
         if (valid && ! valid()) { stopTimer(); close (this); return; }
         // FL-style: plug-in windows float over the app while you click around it, but not over other apps
+        // a dialog that needs an answer is open: never float over it (it would sit hidden under this window and lock the app)
+        if (auto* mc = juce::Component::getCurrentlyModalComponent())
+        {
+            if (isAlwaysOnTop()) setAlwaysOnTop (false);
+            if (auto* top = mc->getTopLevelComponent(); top != nullptr && ! modalRaised && juce::Process::isForegroundProcess()) { top->toFront (true); modalRaised = true; }
+            return;
+        }
+        modalRaised = false;
         updateFloating (*this);
         if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); if (front != isAlwaysOnTop()) setAlwaysOnTop (front); }
     }
 };
 
 // any third-party plug-in window: its own UI or HUMHOUSE VIEW (every parameter as our sliders, our colours)
-class PluginFrame : public juce::Component
+class PluginFrame : public juce::Component, private juce::Timer
 {
 public:
     PluginFrame (juce::AudioProcessor& p, juce::Component* nativeEd) : proc (p), native (nativeEd)
@@ -59,9 +109,13 @@ public:
         toggle.onClick = [this] { show (toggle.getToggleState()); };
         addAndMakeVisible (toggle);
         addAndMakeVisible (native.get());
+        if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
         fit();
+        startTimer (250);
     }
     ~PluginFrame() override { ours.reset(); native.reset(); }
+    // the plug-in's own UI can be dragged bigger / smaller
+    bool canResize() const { auto* ed = dynamic_cast<juce::AudioProcessorEditor*> (native.get()); return ed != nullptr && ed->isResizable(); }
     void show (bool humhouse)
     {
         if (humhouse && ours == nullptr)
@@ -75,21 +129,51 @@ public:
         if (ours != nullptr) ours->setVisible (humhouse);
         fit();
     }
-    void childBoundsChanged (juce::Component* c) override { if (c != nullptr && c != &toggle && c->isVisible() && ! fitting) fit(); }   // the plug-in resized its own UI
+    void childBoundsChanged (juce::Component* c) override
+    {
+        if (c == nullptr || c == &toggle || ! c->isVisible() || fitting) return;   // the plug-in resized its own UI
+        if (c == native.get() && tiny (*c) && repairs < 6) { startTimer (60); return; }   // collapsed (Analog Lab, ZENOLOGY): put it back, don't shrink the window
+        fit();
+    }
     void paint (juce::Graphics& g) override { g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
     void resized() override
     {
         toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
-        if (auto* c = current()) c->setTopLeftPosition (0, bar);
+        auto* c = current();
+        if (c == nullptr) return;
+        c->setTopLeftPosition (0, bar);
+        if (! fitting && (c != native.get() || canResize()))   // the window was dragged: the UI follows it
+        {
+            const juce::ScopedValueSetter<bool> sv (fitting, true);
+            c->setSize (getWidth(), juce::jmax (40, getHeight() - bar));
+        }
     }
 private:
+    static bool tiny (const juce::Component& c) { return c.getWidth() < 200 && c.getHeight() < 150; }
+    static std::map<juce::String, juce::Point<int>>& goodSizes() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    void timerCallback() override
+    {
+        // some plug-ins report their real size only after their view is attached, or collapse to a stub after a
+        // window / screen change: re-ask the plug-in for its size, else restore the last good size
+        if (native->isVisible() && tiny (*native) && repairs < 6)
+        {
+            ++repairs;
+            const juce::ScopedValueSetter<bool> sv (fitting, true);
+            native->setVisible (false); native->setVisible (true);
+            if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
+        }
+        fit();
+        if (++ticks >= 8) stopTimer(); else startTimer (250);
+    }
     juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
         auto* c = current();
+        if (c == native.get() && ! tiny (*c)) goodSizes()[proc.getName()] = { c->getWidth(), c->getHeight() };
         setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
-        resized();
+        toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
+        c->setTopLeftPosition (0, bar);
     }
     static constexpr int bar = 28;
     juce::AudioProcessor& proc;
@@ -97,6 +181,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
+    int repairs = 0, ticks = 0;
 };
 
 bool focusExisting (const juce::String& key)
@@ -184,6 +269,7 @@ public:
                const juce::String& presetKind = {})
         : params (std::move (ps)), onSet (std::move (setLive)), onCommit (std::move (commit)), kind (presetKind)
     {
+        setOpaque (true);   // paints its whole area: a redraw never repaints what's behind it
         if (kind.isNotEmpty())
         {
             setupButton (presetBtn, "PRESETS", "Save or load a preset for this effect / instrument");
@@ -246,7 +332,8 @@ public:
         {
             float v = 0.0f;
             const int st = autoValue (params[i].id, v);
-            labels[(int) i]->setColour (juce::Label::textColourId, st > 0 ? juce::Colour (0xffff5a5a) : col::dim);
+            const auto lc = st > 0 ? juce::Colour (0xffff5a5a) : col::dim;
+            if (labels[(int) i]->findColour (juce::Label::textColourId) != lc) labels[(int) i]->setColour (juce::Label::textColourId, lc);
             if (st == 2)
                 if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i]); k != nullptr && ! k->isMouseButtonDown())
                     k->setValue (params[i].mn + juce::jlimit (0.0f, 1.0f, v) * (params[i].mx - params[i].mn), juce::dontSendNotification);
@@ -628,7 +715,13 @@ public:
         listenB.setBounds (b.removeFromLeft (64)); b.removeFromLeft (4);
         delB.setBounds (b.removeFromLeft (28));
     }
-    void mouseMove (const juce::MouseEvent& e) override { hover = e.position; const int h = hit (e.position); hot = h; repaint(); }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        hover = e.position; const int h = hit (e.position);
+        const auto now = juce::Time::getMillisecondCounter();
+        if (h != hot || now - lastHoverPaint > 33) { lastHoverPaint = now; repaint(); }
+        hot = h;
+    }
     void mouseExit (const juce::MouseEvent&) override { hot = -1; hover = { -1, -1 }; repaint(); }
     void mouseDown (const juce::MouseEvent& e) override
     {
@@ -773,7 +866,11 @@ private:
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
-            t->read (snap.data(), fftN, t->heard());
+            const int w = t->heard();   // no new audio (stopped): stop redrawing a still curve
+            if (w == lastHeard && drag < 0 && ++idleTicks > 30) return;
+            if (w != lastHeard) idleTicks = 0;
+            lastHeard = w;
+            t->read (snap.data(), fftN, w);
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
             for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
             fft.performFrequencyOnlyForwardTransform (fftBuf.data());
@@ -793,12 +890,14 @@ private:
     std::unique_ptr<BuiltinEffect> model;
     juce::dsp::FFT fft { fftOrder };
     std::vector<float> snap, fftBuf, spec;
+    int lastHeard = -1, idleTicks = 0;
     double rate = 0;
     int hot = -1, drag = -1, sel = -1;
     static constexpr int barH = 30;
     float range = 20.0f, f0 = 1000.0f, g0 = 0.0f;
     bool altSolo = false;
     juce::Point<float> hover { -1, -1 }, drag0;
+    juce::uint32 lastHoverPaint = 0;
     juce::ComboBox typeBox;
     juce::Label fL, gL, qL;
     juce::Slider qS;
@@ -937,7 +1036,11 @@ public:
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
-            t->read (snap.data(), fftN, t->heard());
+            const int w = t->heard();   // no new audio (stopped): stop redrawing a still curve
+            if (w == lastHeard && drag < 0 && ++idleTicks > 30) return;
+            if (w != lastHeard) idleTicks = 0;
+            lastHeard = w;
+            t->read (snap.data(), fftN, w);
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
             for (int i = 0; i < fftN; ++i) fftBuf[(size_t) i] = snap[(size_t) i] * (0.5f - 0.5f * std::cos (juce::MathConstants<float>::twoPi * (float) i / (float) fftN));
             fft.performFrequencyOnlyForwardTransform (fftBuf.data());
@@ -957,6 +1060,7 @@ public:
     std::unique_ptr<BuiltinEffect> model;
     juce::dsp::FFT fft { fftOrder };
     std::vector<float> snap, fftBuf, spec;
+    int lastHeard = -1, idleTicks = 0;
     double rate = 48000;
     int drag = -1;
     juce::TextButton analyze { "ANALYZE" };
@@ -1003,7 +1107,14 @@ public:
         fitText (g, "-" + juce::String (shown, 1), meter.toNearestInt().removeFromBottom (14), juce::Justification::centred);
     }
 private:
-    void timerCallback() override { if (isShowing()) repaint(); }
+    int still = 0;
+    void timerCallback() override   // the GR meter redraws only while it moves
+    {
+        if (! isShowing()) return;
+        const float gr = std::abs (live && live() ? live()->meter (0) : 0.0f);
+        if (gr > 0.01f || shown > 0.01f) still = 0;
+        if (still++ < 3) repaint();
+    }
     ParamGrid& grid;
     std::function<BuiltinEffect*()> live;
     juce::String thId, ratioId, kneeId;
@@ -1211,6 +1322,7 @@ static void linkToControllerMenu (Studio& s, int track, int slotUid, const juce:
 
 void openEffectEditor (Studio& s, int track, int slotUid)
 {
+    fxStudio() = &s;
     auto* slot = findSlot (s, track, slotUid);
     if (slot == nullptr) return;
     const auto key = "fx:" + juce::String (track) + ":" + juce::String (slotUid);
@@ -1232,8 +1344,10 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        EditorWindow::windows().add (new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
-                                                       [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin));
+        auto* w = new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
+                                    [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin);
+        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+        EditorWindow::windows().add (w);
         return;
     }
 
@@ -1866,7 +1980,9 @@ void openChannelEditor (Studio& s, int channelId)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
+        auto* w = new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin);
+        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+        EditorWindow::windows().add (w);
         return;
     }
     if (ch->type == ChannelType::Drummer)

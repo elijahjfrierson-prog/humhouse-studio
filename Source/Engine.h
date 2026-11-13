@@ -60,7 +60,8 @@ public:
     Project& project() { return proj; }
     void publishProject();
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
-    std::atomic<float> renderLoad { 0.0f };     // third-party plug-ins run crash-protected in a helper process
+    std::atomic<float> renderLoad { 0.0f };
+    std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
     std::atomic<bool> anticipativeOn { true };   // render playback ahead (like Reaper's anticipative FX) while nothing is live
     std::atomic<int> antUnderruns { 0 };   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
     juce::CriticalSection& getLock() { return lock; }

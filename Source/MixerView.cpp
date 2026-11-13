@@ -381,6 +381,7 @@ public:
     }
     explicit FxPanel (Studio& st) : s (st)
     {
+        setOpaque (true);   // paints its whole area: a redraw never repaints what's behind it
         title.setFont (juce::FontOptions (14.0f, juce::Font::bold));
         title.setColour (juce::Label::textColourId, col::accent);
         addAndMakeVisible (title);
@@ -694,6 +695,7 @@ class MixerView : public juce::Component, private juce::ChangeListener, private 
 public:
     explicit MixerView (Studio& st) : s (st), fx (st)
     {
+        setOpaque (true);   // paints its whole area: a redraw never repaints what's behind it
         s.addChangeListener (this);
         viewport.setViewedComponent (&holder, false);
         viewport.setScrollBarsShown (false, true);

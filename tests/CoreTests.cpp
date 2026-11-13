@@ -1001,6 +1001,33 @@ int main (int argc, char** argv)
         }
         juce::ignoreUnused (blk);
     }
+    // PDC + 64-bit bus sum: inputs delayed to line up with a latency FX still reach the Master (never silent)
+    {
+        auto peakWith = [] (bool linPhase)
+        {
+            Engine e; e.prepare (44100, 512);
+            auto& p = e.project(); p.songMode = false;
+            while (p.mixer.size() < 4) p.mixer.push_back ({});
+            for (int t = 1; t <= 3; ++t)
+            {
+                Channel c; c.type = ChannelType::Synth; c.name = "S" + juce::String (t); c.mixerTrack = t;
+                const int id = p.addChannel (c);
+                Note nt; nt.key = 48; nt.start = 0.0; nt.length = 2.0; nt.velocity = 0.3f;
+                p.patterns[(size_t) p.currentPattern].notes[id].push_back (nt);
+            }
+            FxSlot eq; eq.uid = 9001; eq.type = "steq7"; eq.params["phase"] = linPhase ? 1.0f : 0.0f;
+            p.mixer[1].fx.push_back (eq);
+            e.sync();
+            const auto f = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs_pdc_test.wav");
+            CHECK (e.renderToWav (f, false, {}, -1));
+            f.deleteFile();
+            return e.lastRenderPeak;
+        };
+        const float plain = peakWith (false), lat = peakWith (true);
+        std::printf ("PDC master peak: plain %.3f, linear-phase on track 1 %.3f\n", plain, lat);
+        CHECK (plain > 0.05f);
+        CHECK (lat > plain * 0.8f);
+    }
     // NORM: a quiet mic comes up strong, a loud one never clips
     for (float amp : { 0.02f, 0.9f })
     {
