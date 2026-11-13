@@ -146,7 +146,11 @@ async function dump(env, body) {
   return json(res);
 }
 
+const totals = { at: 0, v: null };
+const feedCache = { at: 0, res: null };
+
 async function feed(env) {
+  if (feedCache.res && Date.now() - feedCache.at < 30000) return json(feedCache.res);
   const since = Math.floor(Date.now() / 1000) - 7 * 86400;
   const ev = await env.DB.prepare("SELECT at, key_hash, mid, result, country, city, lat, lon FROM events WHERE at > ?1 ORDER BY at DESC LIMIT 500").bind(since).all();
   // suspicion per key over 7 days: blocked 4th-computer tries, countries, IPs, distinct computers
@@ -155,20 +159,27 @@ async function feed(env) {
     "COUNT(DISTINCT e.ip) ips, COUNT(DISTINCT e.mid) mids, MAX(e.at) last, k.status status " +
     "FROM events e LEFT JOIN keys k ON k.hash = e.key_hash WHERE e.at > ?1 AND e.result != 'unknown' GROUP BY e.key_hash ORDER BY last DESC LIMIT 300").bind(since).all();
   const keys = st.results.map(r => ({ ...r, score: Math.min(100, r.blocked * 25 + Math.max(0, r.countries - 1) * 30 + Math.max(0, r.ips - 3) * 10 + Math.max(0, r.mids - 3) * 20 + r.rev * 10) }));
-  const tot = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM keys) keys, (SELECT COUNT(DISTINCT key_hash) FROM activations) used, (SELECT COUNT(*) FROM activations) machines, (SELECT COUNT(*) FROM keys WHERE status = 'revoked') revoked, (SELECT COUNT(*) FROM events WHERE result = 'unknown' AND at > ?1) unknown").bind(since).first();
+  // counting 100k keys reads 100k rows (D1 free tier = 5M reads/day): keep the totals for 10 min
+  if (!totals.v || Date.now() - totals.at > 600000) {
+    totals.v = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM keys) keys, (SELECT COUNT(DISTINCT key_hash) FROM activations) used, (SELECT COUNT(*) FROM activations) machines, (SELECT COUNT(*) FROM keys WHERE status = 'revoked') revoked, (SELECT COUNT(*) FROM events WHERE result = 'unknown' AND at > ?1) unknown").bind(since).first();
+    totals.at = Date.now();
+  }
+  const tot = totals.v;
   // sales = each key's first activation ("new"), placed where it happened; the monitor multiplies by the Value box
   const sales = await env.DB.prepare(
     "SELECT country, city, AVG(lat) lat, AVG(lon) lon, COUNT(*) n, SUM(at > ?1) week FROM " +
-    "(SELECT e.key_hash, e.country, e.city, e.lat, e.lon, e.at FROM events e WHERE e.result = 'new' AND e.at = " +
-    "(SELECT MIN(x.at) FROM events x WHERE x.key_hash = e.key_hash AND x.result = 'new') GROUP BY e.key_hash) " +
+    "(SELECT key_hash, country, city, lat, lon, MIN(at) at FROM events WHERE result = 'new' GROUP BY key_hash) " +
     "GROUP BY country, city ORDER BY n DESC LIMIT 500").bind(since).all();
-  return json({ ok: true, now: Math.floor(Date.now() / 1000), totals: tot, events: ev.results, keys, sales: sales.results });
+  feedCache.res = { ok: true, now: Math.floor(Date.now() / 1000), totals: tot, events: ev.results, keys, sales: sales.results };
+  feedCache.at = Date.now();
+  return json(feedCache.res);
 }
 
 async function admin(env, path, body, req) {
   if (path === "feed") return feed(env);
   if (path === "sync") return sync(env, body, req);
   if (path === "dump") return dump(env, body);
+  totals.at = 0; feedCache.at = 0;   // revoke / free / lookup: show the change on the next refresh
   const norm = normalizeKey(body.key);
   const hash = norm ? await keyHash(norm) : (/^[0-9a-f]{64}$/.test(String(body.hash || "")) ? body.hash : null);
   if (!hash) return json({ ok: false, error: "bad key" }, 400);
@@ -201,6 +212,15 @@ function sameSecret(a, b) {
 
 export default {
   async fetch(req, env) {
+    try { return await route(req, env); }
+    catch (e) {   // database down or over its daily limit: apps treat this as offline and keep their pass
+      return json({ ok: false, error: "License server busy, try again in a few minutes." }, 503);
+    }
+  }
+};
+
+async function route(req, env) {
+  {
     const url = new URL(req.url);
     if (req.method === "GET" && url.pathname === "/monitor")
       return new Response(MONITOR_HTML, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
@@ -222,4 +242,4 @@ export default {
     }
     return json({ ok: false, error: "not found" }, 404);
   }
-};
+}

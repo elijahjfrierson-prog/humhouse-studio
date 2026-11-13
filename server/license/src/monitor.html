@@ -21,7 +21,8 @@ input{background:#15181d;color:#fff;border:1px solid #333;border-radius:4px;padd
 <span class="stat">computers <b id="sm">-</b></span><span class="stat">revoked <b id="sr">-</b></span><span class="stat">fake-key tries (7d) <b id="sx">-</b></span>
 <span class="stat">sales <b id="ss">-</b></span><span class="stat">revenue <b id="sv">-</b></span>
 <span class="stat">value $ <input id="val" type="number" min="0" step="0.01" style="width:70px" oninput="localStorage.setItem('hhsValue',this.value);tick()"></span>
-<span class="stat" id="live" style="margin-left:auto">●</span></header>
+<span class="stat" id="upd" style="margin-left:auto;opacity:.7"></span><button onclick="tick(true)" style="background:#7c4dff;color:#fff;border:0;border-radius:4px;padding:5px 12px;font-weight:600;cursor:pointer">REFRESH</button>
+<span class="stat" id="live">●</span></header>
 <div id="wrap"><svg id="map" viewBox="0 0 960 500" preserveAspectRatio="xMidYMid meet"><g id="land"></g><g id="sales"></g><g id="dots"></g></svg>
 <div id="side"><h3 style="margin:4px 0 8px">Keys — green = normal, red = suspicious</h3><div id="keys"></div><h3>Sales by place</h3><div id="salesList"></div><h3>Live feed</h3><div id="feed"></div></div></div>
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
@@ -33,8 +34,9 @@ function setTok(){tok=document.getElementById("tok").value.trim();localStorage.s
 async function api(p,b){const r=await fetch("/v1/admin/"+p,{method:"POST",headers:{authorization:"Bearer "+tok,"content-type":"application/json"},body:JSON.stringify(b||{})});if(r.status==401){localStorage.removeItem("hhsAdmin");location.reload()}return r.json()}
 fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(r=>r.json()).then(w=>{d3.select("#land").selectAll("path").data(topojson.feature(w,w.objects.countries).features).join("path").attr("class","land").attr("d",path)});
 const ago=t=>{const s=Math.floor(Date.now()/1000)-t;return s<60?s+"s":s<3600?Math.floor(s/60)+"m":s<86400?Math.floor(s/3600)+"h":Math.floor(s/86400)+"d"};
-async function act(a,h){if(a==="revoke"&&!confirm("Revoke this key? Every computer on it locks at its next check."))return;await api(a,{hash:h});tick()}
-async function tick(){try{const d=await api("feed");const t=d.totals||{};sk.textContent=t.keys;su.textContent=t.used;sm.textContent=t.machines;sr.textContent=t.revoked;sx.textContent=t.unknown;live.style.color="#2ecc71";drawSales(d);
+async function act(a,h){if(a==="revoke"&&!confirm("Revoke this key? Every computer on it locks at its next check."))return;await api(a,{hash:h});tick(true)}
+const DAY=86400000;async function feedData(force){const c=JSON.parse(localStorage.getItem("hhsFeed")||"null");if(!force&&c&&Date.now()-c.t<DAY)return c.d;const d=await api("feed");if(d&&d.ok)localStorage.setItem("hhsFeed",JSON.stringify({t:Date.now(),d}));return d}
+async function tick(force){try{const d=await feedData(force);upd.textContent="updated "+new Date((JSON.parse(localStorage.getItem("hhsFeed")||"{}").t)||Date.now()).toLocaleString();const t=d.totals||{};sk.textContent=t.keys;su.textContent=t.used;sm.textContent=t.machines;sr.textContent=t.revoked;sx.textContent=t.unknown;live.style.color="#2ecc71";drawSales(d);
 const ev=d.events.filter(e=>e.lat||e.lon);const recent=ev.filter(e=>d.now-e.at<3600);
 d3.select("#dots").selectAll("g").data(ev.slice(0,300),e=>e.at+e.mid+e.result).join(en=>{const g=en.append("g");g.append("circle").attr("r",2.5);g.append("circle").attr("class","blip").attr("fill","none").attr("stroke-width",1.5);return g})
 .attr("transform",e=>"translate("+proj([e.lon,e.lat])+")").each(function(e){const c=resCol[e.result]||"#fff";const s=d3.select(this).selectAll("circle");s.attr("fill",(x,i)=>i?"none":c).attr("stroke",c);d3.select(this).select(".blip").style("display",d.now-e.at<3600?null:"none")});
@@ -49,5 +51,5 @@ d3.select("#sales").selectAll("circle").data(s.filter(x=>x.lat!=null),x=>x.count
 const byC={};s.forEach(x=>{const c=x.country||"?";byC[c]=(byC[c]||0)+x.n});
 salesList.innerHTML=Object.entries(byC).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<div><b>${c}</b> · ${n} sales · ${money(n*v)}</div>`).join("")+
 s.slice(0,40).map(x=>`<div style="opacity:.75">&nbsp; ${x.city||"?"}, ${x.country||"?"} · ${x.n} · ${money(x.n*v)}</div>`).join("")||"No sales yet."}
-function start(){if(!tok)return;val.value=localStorage.getItem("hhsValue")||"";login.style.display="none";tick();setInterval(tick,5000)}start();
+function start(){if(!tok)return;val.value=localStorage.getItem("hhsValue")||"";login.style.display="none";tick();setInterval(()=>tick(),3600000)}start();
 </script></body></html>
