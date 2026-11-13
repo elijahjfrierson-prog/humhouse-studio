@@ -31,7 +31,7 @@ juce::String homeServerUrl();   // the owner's own License Server, if it's onlin
 
 struct Online
 {
-    bool ok = false, lockNow = false;   // lockNow: revoked / unknown key / no free computer slot
+    bool ok = false, lockNow = false, revoked = false;   // lockNow: revoked / unknown key / no free computer slot
     bool provisional = false;           // server down/busy but the key is one of ours: unlocked, confirmed online later
     juce::String error, pass;
 };

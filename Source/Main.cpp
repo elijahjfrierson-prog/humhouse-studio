@@ -257,15 +257,9 @@ public:
        #endif
        #if HHS_KEY_GATE
         launchLine = commandLine;
-        if (! hhs::license::storedPass().ok)
-        {
-            // a bought key that only needs its daily check re-checks by itself: nothing to type
-            const auto saved = hhs::license::keyFile().loadFileAsString().trim();
-            showActivation ({});
-            if (activationPanel != nullptr) activationPanel->autoCheck (saved);
-            return;
-        }
-        renewInBackground (true);   // every launch re-checks the key online
+        // no key screen: the app opens, and behind it the server gives this computer its license
+        // (a saved bought key is used if there is one). Only a revoke from the monitor locks it.
+        renewInBackground (true);
        #endif
         startMain (commandLine);
     }
@@ -390,8 +384,15 @@ private:
         if (! force && p.ok && juce::Time::currentTimeMillis() / 1000 - p.issued < 23 * 3600) return;
         const auto key = hhs::license::keyFile().loadFileAsString().trim();
         licensePool.addJob ([this, key, alive = alive] {
-            const auto r = hhs::license::activateOnline (key, hhs::license::machineId());
-            juce::MessageManager::callAsync ([this, key, r, alive] {
+            auto r = hhs::license::activateOnline (key, hhs::license::machineId());
+            auto used = key;
+            if (! r.ok && ! r.revoked && key.isNotEmpty())   // an old / mistyped saved key: this computer's own license instead
+            {
+                const auto d = hhs::license::activateOnline ({}, hhs::license::machineId());
+                if (d.ok || d.revoked) { r = d; used = {}; }
+                else r.lockNow = false;
+            }
+            juce::MessageManager::callAsync ([this, key = used, r, alive] {
                 if (! *alive) return;
                 if (r.ok) hhs::license::saveActivation (key, r.pass);
                 else if (r.lockNow) lockApp (r.error);
@@ -403,8 +404,7 @@ private:
         licenseWatch.fn = [this] {
             if (window == nullptr) return;
             const auto p = hhs::license::storedPass();
-            if (! p.ok && ! p.expired && ! hhs::license::graceOk()) lockApp (p.error);   // being offline never locks mid-session
-            else if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();
+            if (! p.ok || juce::Time::currentTimeMillis() / 1000 - p.issued >= 23 * 3600) renewInBackground();   // only the server's revoke locks
         };
         licenseWatch.startTimer (20 * 60 * 1000);
     }
