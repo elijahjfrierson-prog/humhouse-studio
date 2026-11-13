@@ -218,6 +218,17 @@ struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
         setCurrentRange (start, visible, juce::dontSendNotification);
     }
 };
+// Float / un-float a window without ever rebuilding it. JUCE rebuilds the native window when the platform can't change
+// "always on top" live (X11); a rebuilt window drops hosted VST3 views (Analog Lab, ZENOLOGY, Surge XT) to an empty box.
+// Before the window is on screen the flag is free to set everywhere.
+inline void setOnTopSafely (juce::Component& c, bool onTop)
+{
+    if (onTop == c.isAlwaysOnTop()) return;
+   #if JUCE_LINUX || JUCE_BSD
+    if (c.isOnDesktop()) return;
+   #endif
+    c.setAlwaysOnTop (onTop);
+}
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
@@ -231,7 +242,7 @@ inline void updateFloating (juce::Component& c)
 {
     if (! floatWithTopmost) return;
     const bool front = juce::Process::isForegroundProcess();
-    if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
+    setOnTopSafely (c, front);
 }
 
 // settings / tool windows that never lock the app: not modal, float like plug-in windows, X or Esc always closes them

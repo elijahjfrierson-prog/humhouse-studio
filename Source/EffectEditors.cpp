@@ -65,11 +65,12 @@ public:
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         if (phoneUI) centreWithSize (juce::jmin (getWidth(), area.getWidth()), juce::jmin (getHeight(), area.getHeight()));
         else centreWithSize (getWidth(), getHeight());
+        // FX windows open in front of the Mixer pop-out (also always-on-top on macOS while HumHouse is in front);
+        // set before the window exists so it is never rebuilt around a hosted plug-in view
+        if (floatWithTopmost || juce::Process::isForegroundProcess()) setOnTopSafely (*this, true);
         setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
-        // FX windows open in front of the Mixer pop-out (also always-on-top on macOS while HumHouse is in front)
-        if (floatWithTopmost || juce::Process::isForegroundProcess()) setAlwaysOnTop (true);
         toFront (true);
         startTimer (300);
     }
@@ -90,13 +91,13 @@ private:
         // a dialog that needs an answer is open: never float over it (it would sit hidden under this window and lock the app)
         if (auto* mc = juce::Component::getCurrentlyModalComponent())
         {
-            if (isAlwaysOnTop()) setAlwaysOnTop (false);
+            setOnTopSafely (*this, false);
             if (auto* top = mc->getTopLevelComponent(); top != nullptr && ! modalRaised && juce::Process::isForegroundProcess()) { top->toFront (true); modalRaised = true; }
             return;
         }
         modalRaised = false;
         updateFloating (*this);
-        if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); if (front != isAlwaysOnTop()) setAlwaysOnTop (front); }
+        if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); setOnTopSafely (*this, front); }
     }
 };
 

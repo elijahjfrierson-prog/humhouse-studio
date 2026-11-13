@@ -1988,7 +1988,7 @@ private:
         {
             updateFloating (*this);
             if (! floatWithTopmost)   // Mac: a pop-out (full screen or not) stays over the Beat / Rec screens while the app is in front, so it never drops behind
-                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
+                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setOnTopSafely (*this, want);
             fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
         }
     };
