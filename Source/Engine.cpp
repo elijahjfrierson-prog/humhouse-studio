@@ -1997,7 +1997,7 @@ void Engine::processTrack (int t)
         constexpr int kSumMax = 8192;
         static thread_local double acc[2][kSumMax];
         const bool wide = S.size() >= 2 && n <= kSumMax;
-        if (wide) for (int ch = 0; ch < 2; ++ch) { const float* x = tr.out.getReadPointer (ch); for (int i = 0; i < n; ++i) acc[ch][i] = x[i]; }
+        if (wide) for (int ch = 0; ch < 2; ++ch) std::fill (acc[ch], acc[ch] + n, 0.0);
         for (size_t k = 0; k < S.size(); ++k)
         {
             auto& srt = *trackRt[(size_t) S[k].first];
@@ -2011,13 +2011,11 @@ void Engine::processTrack (int t)
                 }
             else for (int ch = 0; ch < 2; ++ch) tr.out.addFrom (ch, 0, srt.out, ch, 0, n, S[k].second);
         }
-        if (wide)   // delayed (PDC) inputs were added to tr.out directly; fold them in with the 64-bit sum
+        if (wide)   // tr.out already holds this track's own input + the delayed (PDC) inputs: add the 64-bit sum on top, never overwrite
             for (int ch = 0; ch < 2; ++ch)
             {
                 float* y = tr.out.getWritePointer (ch);
-                const float* x0 = tr.out.getReadPointer (ch);
-                juce::ignoreUnused (x0);
-                for (int i = 0; i < n; ++i) y[i] = (float) acc[ch][i];
+                for (int i = 0; i < n; ++i) y[i] = (float) ((double) y[i] + acc[ch][i]);
             }
     }
 
