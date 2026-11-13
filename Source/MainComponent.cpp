@@ -62,16 +62,7 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
     static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
     static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
-    if (build::font == "Barlow" && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
-    if (build::font.isNotEmpty() && build::font != "Barlow")   // Layout > BUILD font
-    {
-        static juce::String last; static juce::Typeface::Ptr plain, bold;
-        if (last != build::font) { last = build::font; plain = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::plain)));
-                                   bold = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::bold))); }
-        if (plain != nullptr && plain->getName() != last) plain = bold = nullptr;   // font not on this device: the OS stand-in draws boxes, keep ours
-        if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
-    }
-    if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
+    if (pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;   // HumHouse font (Barlow) everywhere
     return juce::LookAndFeel_V4::getTypefaceForFont (f);
 }
 void showWhatsNewIfUpdated()
@@ -1526,9 +1517,6 @@ if (phoneUI)
                 const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
-                juce::PopupMenu fm;
-                fm.addItem (253, "Pro (sleek, default)", true, true);
-                m.addSubMenu ("Font", fm);
             }
             {
                 juce::PopupMenu pm;
