@@ -99,7 +99,7 @@ private:
 };
 
 // any third-party plug-in window: its own UI or HUMHOUSE VIEW (every parameter as our sliders, our colours)
-class PluginFrame : public juce::Component
+class PluginFrame : public juce::Component, private juce::Timer
 {
 public:
     PluginFrame (juce::AudioProcessor& p, juce::Component* nativeEd) : proc (p), native (nativeEd)
@@ -109,9 +109,13 @@ public:
         toggle.onClick = [this] { show (toggle.getToggleState()); };
         addAndMakeVisible (toggle);
         addAndMakeVisible (native.get());
+        if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
         fit();
+        startTimer (250);
     }
     ~PluginFrame() override { ours.reset(); native.reset(); }
+    // the plug-in's own UI can be dragged bigger / smaller
+    bool canResize() const { auto* ed = dynamic_cast<juce::AudioProcessorEditor*> (native.get()); return ed != nullptr && ed->isResizable(); }
     void show (bool humhouse)
     {
         if (humhouse && ours == nullptr)
@@ -125,21 +129,51 @@ public:
         if (ours != nullptr) ours->setVisible (humhouse);
         fit();
     }
-    void childBoundsChanged (juce::Component* c) override { if (c != nullptr && c != &toggle && c->isVisible() && ! fitting) fit(); }   // the plug-in resized its own UI
+    void childBoundsChanged (juce::Component* c) override
+    {
+        if (c == nullptr || c == &toggle || ! c->isVisible() || fitting) return;   // the plug-in resized its own UI
+        if (c == native.get() && tiny (*c) && repairs < 6) { startTimer (60); return; }   // collapsed (Analog Lab, ZENOLOGY): put it back, don't shrink the window
+        fit();
+    }
     void paint (juce::Graphics& g) override { g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
     void resized() override
     {
         toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
-        if (auto* c = current()) c->setTopLeftPosition (0, bar);
+        auto* c = current();
+        if (c == nullptr) return;
+        c->setTopLeftPosition (0, bar);
+        if (! fitting && (c != native.get() || canResize()))   // the window was dragged: the UI follows it
+        {
+            const juce::ScopedValueSetter<bool> sv (fitting, true);
+            c->setSize (getWidth(), juce::jmax (40, getHeight() - bar));
+        }
     }
 private:
+    static bool tiny (const juce::Component& c) { return c.getWidth() < 200 && c.getHeight() < 150; }
+    static std::map<juce::String, juce::Point<int>>& goodSizes() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    void timerCallback() override
+    {
+        // some plug-ins report their real size only after their view is attached, or collapse to a stub after a
+        // window / screen change: re-ask the plug-in for its size, else restore the last good size
+        if (native->isVisible() && tiny (*native) && repairs < 6)
+        {
+            ++repairs;
+            const juce::ScopedValueSetter<bool> sv (fitting, true);
+            native->setVisible (false); native->setVisible (true);
+            if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
+        }
+        fit();
+        if (++ticks >= 8) stopTimer(); else startTimer (250);
+    }
     juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
         auto* c = current();
+        if (c == native.get() && ! tiny (*c)) goodSizes()[proc.getName()] = { c->getWidth(), c->getHeight() };
         setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
-        resized();
+        toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
+        c->setTopLeftPosition (0, bar);
     }
     static constexpr int bar = 28;
     juce::AudioProcessor& proc;
@@ -147,6 +181,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
+    int repairs = 0, ticks = 0;
 };
 
 bool focusExisting (const juce::String& key)
@@ -1309,8 +1344,10 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        EditorWindow::windows().add (new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
-                                                       [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin));
+        auto* w = new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
+                                    [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin);
+        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+        EditorWindow::windows().add (w);
         return;
     }
 
@@ -1943,7 +1980,9 @@ void openChannelEditor (Studio& s, int channelId)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
+        auto* w = new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin);
+        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+        EditorWindow::windows().add (w);
         return;
     }
     if (ch->type == ChannelType::Drummer)

@@ -73,7 +73,7 @@ public:
         if (v == nullptr) for (auto& c : voices) if (c.releasing) { v = &c; break; }   // steal a fading voice before a held one
         if (v == nullptr) { v = &voices[(size_t) next]; next = (next + 1) % (int) voices.size(); }
         *v = {};
-        v->active = true; v->dir = 1; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.002f, release);
+        v->active = true; v->dir = 1; v->key = key; v->gain = vel; v->fadeLen = juce::jmax (0.006f, release);   // at least a 6 ms fade at the note end: no click
         v->semis = (glide > 0.0f && lastSemis > -900.0 && (mono || slide)) ? lastSemis : target;
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
@@ -332,7 +332,7 @@ public:
         const float sr = (float) sampleRate;
         const float aInc = 1.0f / std::max (1.0f, p.attack * sr);
         const float dCoef = std::exp (-1.0f / std::max (1.0f, p.decay * sr * 0.3f));
-        const float rCoef = std::exp (-1.0f / std::max (1.0f, p.release * sr * 0.3f));
+        const float rCoef = std::exp (-1.0f / std::max (1.0f, std::max (0.006f, p.release) * sr * 0.3f));
         const float swell = 1.0f - std::exp (-1.0f / (0.015f * (float) sr));
         const float g = std::tan (juce::MathConstants<float>::pi * juce::jlimit (20.0f, sr * 0.45f, p.cutoff) / sr);
         const float kq = 2.0f - 2.0f * juce::jlimit (0.0f, 0.97f, p.resonance);
