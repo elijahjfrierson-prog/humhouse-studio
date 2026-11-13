@@ -76,11 +76,11 @@ struct WelcomeWindow : public juce::DocumentWindow
 
 #if HHS_KEY_GATE
 // regular build: no key, no app. The key is checked by our license server (3 computers per key).
-struct ActivationPanel : public juce::Component, private juce::Timer
+struct ActivationPanel : public juce::Component, public juce::TextDragAndDropTarget, private juce::Timer
 {
     juce::Label title, info, status, mid;
     juce::TextEditor key;
-    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" }, pasteBtn { "PASTE" };
+    juce::TextButton activate { "Activate" }, quitBtn { "Quit" }, copyId { "Copy Machine ID" }, pasteBtn { "PASTE KEY" };
     std::function<void (juce::String)> onActivate;
     explicit ActivationPanel (const juce::String& message)
     {
@@ -105,7 +105,13 @@ struct ActivationPanel : public juce::Component, private juce::Timer
             if (onActivate) onActivate (key.getText());
         };
         quitBtn.onClick = [] { juce::JUCEApplication::getInstance()->quit(); };
-        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn }) addAndMakeVisible (c);
+        pasteBtn.setTooltip ("Paste the license key you copied (or press Cmd/Ctrl+V in the box, or drag the highlighted key onto this window)");
+        pasteBtn.onClick = [this] {
+            const auto k = keyIn (juce::SystemClipboard::getTextFromClipboard());
+            if (k.isEmpty()) { setStatus ("No license key on the clipboard. Highlight your HHS-... key, press Cmd/Ctrl+C, then PASTE KEY."); return; }
+            key.setText (k, false); setStatus ("Key filled in - click Activate.");
+        };
+        for (auto* c : std::initializer_list<juce::Component*> { &title, &info, &key, &status, &mid, &activate, &quitBtn, &pasteBtn }) addAndMakeVisible (c);
         setSize (560, 300);
         pasteFromClipboard();   // a key copied from the purchase email / page fills itself in
         startTimer (800);       // ...and so does one copied while this window is open
@@ -152,12 +158,25 @@ struct ActivationPanel : public juce::Component, private juce::Timer
         setStatus ("Key filled in - click Activate.");   // a copied key fills itself in; you only click Activate
         return true;
     }
-    void timerCallback() override { if (activate.isEnabled()) pasteFromClipboard(); }   // the key box has focus on open, so don't wait for it to lose it
+    void timerCallback() override   // a copied key always lands in the box by itself (no remembered clipboard, no waiting)
+    {
+        const auto k = keyIn (juce::SystemClipboard::getTextFromClipboard());
+        if (k.isNotEmpty() && k != key.getText()) { key.setText (k, false); setStatus ("Key filled in - click Activate."); }
+    }   // the key box has focus on open, so don't wait for it to lose it
     void mouseUp (const juce::MouseEvent& e) override
     {
         juce::ignoreUnused (e);
     }
     juce::String lastClip;
+    // drag the highlighted key from the email / web page onto this window
+    bool isInterestedInTextDrag (const juce::String&) override { return true; }
+    void textDropped (const juce::String& text, int, int) override
+    {
+        const auto k = keyIn (text);
+        if (k.isEmpty()) { setStatus ("That isn't a HumHouse license key (HHS-XXXXX-XXXXX-XXXXX-XXXXX)."); return; }
+        key.setText (k, false); setStatus ("Key filled in - click Activate.");
+    }
+    void visibilityChanged() override { if (isShowing()) juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<ActivationPanel> (this)] { if (sp) sp->key.grabKeyboardFocus(); }); }
     void setStatus (const juce::String& s) { status.setText (s, juce::dontSendNotification); }
     void failed (const juce::String& s) { setStatus (s); activate.setEnabled (true); }
     // a saved key, a copied key, or (neither) this computer's Machine ID: check by itself, nothing to type
@@ -175,7 +194,7 @@ struct ActivationPanel : public juce::Component, private juce::Timer
     {
         auto r = getLocalBounds().reduced (22);
         title.setBounds (r.removeFromTop (34)); info.setBounds (r.removeFromTop (54)); r.removeFromTop (8);
-        auto kr = r.removeFromTop (34); key.setBounds (kr); r.removeFromTop (8);
+        auto kr = r.removeFromTop (34); pasteBtn.setBounds (kr.removeFromRight (110)); kr.removeFromRight (6); key.setBounds (kr); r.removeFromTop (8);
         status.setBounds (r.removeFromTop (40));
         auto b = r.removeFromBottom (32);
         quitBtn.setBounds (b.removeFromRight (90)); b.removeFromRight (8); activate.setBounds (b.removeFromRight (130));
