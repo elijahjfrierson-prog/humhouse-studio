@@ -368,10 +368,11 @@ public:
     ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
         setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (fitToScreen (c), true); setResizable (true, false);
-        centreWithSize (getWidth(), getHeight()); setVisible (true);
+        centreWithSize (getWidth(), getHeight());
+        if (floatWithTopmost) setOnTopSafely (*this, true);
+        setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
-        if (floatWithTopmost) setAlwaysOnTop (true);
         startTimer (300);
     }
     void closeButtonPressed() override { juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<juce::Component> (this)] { delete sp.getComponent(); }); }

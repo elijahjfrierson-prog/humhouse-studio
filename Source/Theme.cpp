@@ -396,12 +396,6 @@ void putBuild (std::map<juce::String, juce::String>& v)
     v["tbB"] = build::toolbarBottom ? "1" : "0"; v["mD"] = build::mixDock ? "1" : "0"; v["hint"] = build::hint ? "1" : "0";
     v["bW"] = juce::String (build::browserW); v["mH"] = juce::String (build::mixH); v["lH"] = juce::String (build::lanesH); v["tbH"] = juce::String (build::toolbarH); v["font"] = build::font;
 }
-static constexpr const char* kReadableFonts[] { "Helvetica Neue", "Avenir Next", "Futura", "Gill Sans", "Menlo", "Segoe UI", "Arial", "Verdana", "Tahoma", "Inter", "Roboto", "DejaVu Sans", "Ubuntu", "Noto Sans", "Liberation Sans", "Courier New" };
-static bool isReadableFont (const juce::String& f)
-{
-    for (auto* r : kReadableFonts) if (f == r) return true;
-    return false;
-}
 void readBuild (std::map<juce::String, juce::String>& v)
 {
     const auto oldFont = build::font;
@@ -413,7 +407,7 @@ void readBuild (std::map<juce::String, juce::String>& v)
     build::mixDock = flag ("mD", false); build::hint = flag ("hint", true);
     build::browserW = num ("bW", 160, 520, 260); build::mixH = num ("mH", 140, 700, 260); build::lanesH = num ("lH", 120, 700, 240); build::toolbarH = num ("tbH", 36, 72, 48);
     // a font saved by an older version (symbol / emoji fonts) would turn every label into gibberish: only real text fonts
-    if (auto it = v.find ("font"); it != v.end()) build::font = it->second == "Barlow" || isReadableFont (it->second) ? it->second : juce::String();
+    build::font = {};   // one font: Barlow
     if (build::font != oldFont) juce::Typeface::clearTypefaceCache();
 }
 void relayout() { if (relayoutMain) relayoutMain(); }
@@ -676,15 +670,9 @@ struct BuildPanel : juce::Component
                { auto m = i == 0 ? a : a.removeFromBottom (a.getHeight() * 0.45f);
                  for (int k = 0; k < 6; ++k) g.fillRect (m.getX() + 3 + (float) k * (m.getWidth() - 6) / 6.0f, m.getY() + 2, 2.0f, m.getHeight() - 4); });
         combo (hintPos, hintLbl, "Hint bar", { "Show", "Hide" }, [this] (int id) { commit ("hint", id == 1 ? "1" : "0"); });
-        juce::StringArray fonts { "Options > Font choice", "HumHouse Pro (Barlow)" };
-        const auto have = juce::Font::findAllTypefaceNames();
-        for (auto* f : kReadableFonts)
-            if (have.contains (f)) fonts.add (f);   // only real text fonts: symbol / emoji fonts turned every label into gibberish
-        fontNames = fonts;
         combo (langBox, langLbl, "Language", languageNames(), [this] (int id) {
             applyLanguage (id - 1);
             if (s.settings) { s.settings->setValue ("language", id - 1); s.settings->saveIfNeeded(); } });
-        combo (fontBox, fontLbl, "Font", fonts, [this] (int id) { commit ("font", id == 1 ? juce::String() : id == 2 ? juce::String ("Barlow") : fontNames[id - 1]); });
         auto slider = [this] (juce::Slider& sl, juce::Label& l, const char* text, int lo, int hi, const char* key)
         {
             addAndMakeVisible (sl); addAndMakeVisible (l); l.setText (text, juce::dontSendNotification);
@@ -846,8 +834,6 @@ struct BuildPanel : juce::Component
         toolbarPos.setSelectedId (build::toolbarBottom ? 2 : 1, juce::dontSendNotification);
         mixerPos.setSelectedId (build::mixDock ? 2 : 1, juce::dontSendNotification);
         hintPos.setSelectedId (build::hint ? 1 : 2, juce::dontSendNotification);
-        const int fi = build::font.isEmpty() ? 0 : build::font == "Barlow" ? 1 : fontNames.indexOf (build::font);
-        if (fi >= 0) fontBox.setSelectedItemIndex (fi, juce::dontSendNotification); else fontBox.setText (build::font, juce::dontSendNotification);
         browserW.setValue (build::browserW, juce::dontSendNotification); mixH.setValue (build::mixH, juce::dontSendNotification); lanesH.setValue (build::lanesH, juce::dontSendNotification); toolbarH.setValue (build::toolbarH, juce::dontSendNotification);
         loadOrder();
         map.repaint();
@@ -873,7 +859,7 @@ struct BuildPanel : juce::Component
             l1.setBounds (a.removeFromTop (16)); c1.setBounds (a); l2.setBounds (b.removeFromTop (16)); c2.setBounds (b);
         };
         pair (browserLbl, browserC, rackLbl, rackC); pair (toolbarLbl, toolbarC, mixerLbl, mixerC);
-        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (lanesHLbl, lanesH); line (hintLbl, hintPos); line (fontLbl, fontBox); line (langLbl, langBox);
+        line (browserWLbl, browserW); line (toolbarHLbl, toolbarH); line (mixHLbl, mixH); line (lanesHLbl, lanesH); line (hintLbl, hintPos); line (langLbl, langBox);
         r.removeFromTop (6);
         auto tl = r.removeFromTop (26); resetTb.setBounds (tl.removeFromRight (150).reduced (0, 1)); tbLbl.setBounds (tl);
         view.setBounds (r);
