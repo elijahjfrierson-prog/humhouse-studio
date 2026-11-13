@@ -52,14 +52,16 @@ class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
     EditorWindow (const juce::String& title, juce::Component* content, juce::String k, std::function<bool()> stillValid,
-                  juce::AudioProcessor* p = nullptr)
+                  juce::AudioProcessor* p = nullptr, bool resizable = false)
         : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), proc (p), valid (std::move (stillValid))
     {
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
         setContentOwned (content, true);
-        setResizable (false, false);
+        // decided before the window is on screen: changing it later rebuilds the native window, and hosted plug-in
+        // views (Analog Lab, ZENOLOGY, Surge XT on macOS) lose their window and collapse to an empty box
+        setResizable (resizable, false);
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         if (phoneUI) centreWithSize (juce::jmin (getWidth(), area.getWidth()), juce::jmin (getHeight(), area.getHeight()));
         else centreWithSize (getWidth(), getHeight());
@@ -116,6 +118,7 @@ public:
     ~PluginFrame() override { ours.reset(); native.reset(); }
     // the plug-in's own UI can be dragged bigger / smaller
     bool canResize() const { auto* ed = dynamic_cast<juce::AudioProcessorEditor*> (native.get()); return ed != nullptr && ed->isResizable(); }
+    static bool resizable (juce::Component* c) { auto* pf = dynamic_cast<PluginFrame*> (c); return pf != nullptr && pf->canResize() && ! phoneUI; }
     void show (bool humhouse)
     {
         if (humhouse && ours == nullptr)
@@ -171,6 +174,15 @@ private:
         const juce::ScopedValueSetter<bool> sv (fitting, true);
         auto* c = current();
         if (c == native.get() && ! tiny (*c)) goodSizes()[proc.getName()] = { c->getWidth(), c->getHeight() };
+        if (c == native.get() && tiny (*c))   // collapsed / not sized yet: keep a real window, the plug-in grows into it
+        {
+            const auto g = goodSizes().find (proc.getName());
+            const int w = g != goodSizes().end() ? g->second.x : juce::jmax (getWidth(), 640), h = g != goodSizes().end() ? g->second.y : juce::jmax (getHeight() - bar, 400);
+            setSize (w, h + bar);
+            toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
+            c->setTopLeftPosition (0, bar);
+            return;
+        }
         setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
         toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
         c->setTopLeftPosition (0, bar);
@@ -1345,8 +1357,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
         auto* w = new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
-                                    [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin);
-        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+                                    [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin,
+                                    PluginFrame::resizable (ed));
         EditorWindow::windows().add (w);
         return;
     }
@@ -1980,8 +1992,8 @@ void openChannelEditor (Studio& s, int channelId)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        auto* w = new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin);
-        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
+        auto* w = new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin,
+                                    PluginFrame::resizable (ed));
         EditorWindow::windows().add (w);
         return;
     }

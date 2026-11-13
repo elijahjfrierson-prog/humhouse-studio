@@ -218,6 +218,7 @@ target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_ST
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
+add_test(NAME PluginWindowGuard COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_plugin_windows.cmake)
 endif()
 
 if(TARGET HHSTests AND MSVC)
