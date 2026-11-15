@@ -2160,7 +2160,7 @@ void Engine::processTrack (int t)
             auto& f = *tr.fx[k];
             const float mix = juce::jlimit (0.0f, 1.0f, slot.mix);
             if (slot.bypass || mix <= 0.0f) { f.load = 0.0f; continue; }
-            if (tr.live && lowLatency.load (std::memory_order_relaxed) && ! offline.load (std::memory_order_relaxed)   // Low Latency Mode: the live track skips high-latency plug-ins (never in exports / freeze)
+            if (llNow   // Low Latency Mode while a track is armed: every path to the master skips high-latency plug-ins, so nothing holds the monitored input back (never in exports / freeze)
                 && (f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0) > lowLatencyLimit.load (std::memory_order_relaxed))
             { f.load = 0.0f; continue; }
             struct LoadMeter { std::atomic<float>& out; juce::int64 t0; double block;
@@ -2635,6 +2635,7 @@ void Engine::mixTracks (const float* const*, int, int)
         if (ln.armed && ln.mixerTrack > 0 && ln.mixerTrack < (int) trackRt.size() && trackRt[(size_t) ln.mixerTrack]) trackRt[(size_t) ln.mixerTrack]->live = true;
     const bool ll = lowLatency.load (std::memory_order_relaxed) && ! offline.load (std::memory_order_relaxed);   // exports / freeze keep every plug-in
     const int llLim = lowLatencyLimit.load (std::memory_order_relaxed);
+    llNow = ll && std::any_of (trackRt.begin(), trackRt.end(), [] (const auto& t) { return t && t->live; });
     for (auto& L : levels)
         for (int t : L)
         {
@@ -2648,7 +2649,7 @@ void Engine::mixTracks (const float* const*, int, int)
                     if (mt.fx[k].bypass || mt.fx[k].mix <= 0.0f) continue;
                     auto& f = *tr.fx[k];
                     const int lat = f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
-                    if (ll && tr.live && lat > llLim) continue;   // skipped in Low Latency Mode
+                    if (llNow && lat > llLim) continue;   // skipped in Low Latency Mode
                     own += lat;
                 }
             int in = 0;

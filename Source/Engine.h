@@ -293,6 +293,7 @@ private:
     int idleThresholdBlocks = 0;
     std::vector<double> patLen;
     int currentBlock = 0, currentLevel = 0;
+    bool llNow = false;   // Low Latency Mode active this block (on, a track is armed, not offline)
     PlayContext ctx;
     std::atomic<bool> offline { false };
     int renderTrackOnly = -1;
