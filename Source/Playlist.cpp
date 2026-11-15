@@ -1898,6 +1898,7 @@ public:
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
         if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; clipMenu (i); return; }   // phone: double tap = the right-click menu (stem split, settings...)
+        if (i >= 0 && p.clips[(size_t) i].isAuto() && hitAutoCurve (p.clips[(size_t) i], e.position) >= 0) return;   // mouseDown already straightened that curve
         if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
         {
             const int uid = p.clips[(size_t) i].uid;
