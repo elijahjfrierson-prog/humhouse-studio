@@ -355,6 +355,14 @@ public:
         }
     }
     float valueOf (const juce::String& id) const { for (auto& p : params) if (p.id == id) return p.value; return 0.0f; }
+    // what the knob shows right now (follows playing automation, which moves sliders without touching params)
+    float liveValueOf (const juce::String& id) const
+    {
+        for (size_t i = 0; i < params.size(); ++i)
+            if (params[i].id == id)
+                if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) return (float) k->getValue();
+        return valueOf (id);
+    }
     juce::String choiceOf (const juce::String& id) const
     {
         for (auto& p : params)
@@ -1286,8 +1294,8 @@ public:
         g.setColour (juce::Colours::white.withAlpha (0.18f)); g.drawEllipse (cone, 1.2f);
         g.drawEllipse (cone.reduced (cone.getWidth() * 0.32f), 1.0f);
         const auto m = micPoint();
-        const float dist = grid.valueOf ("micdist"), r = juce::jlimit (5.0f, 16.0f, 15.0f / std::sqrt (juce::jmax (0.1f, dist)));
-        const float ang = juce::degreesToRadians (grid.valueOf ("micangle"));
+        const float dist = grid.liveValueOf ("micdist"), r = juce::jlimit (5.0f, 16.0f, 15.0f / std::sqrt (juce::jmax (0.1f, dist)));
+        const float ang = juce::degreesToRadians (grid.liveValueOf ("micangle"));
         g.setColour (col::accent.withAlpha (0.28f)); g.fillEllipse (m.x - r * 2, m.y - r * 2, r * 4, r * 4);
         g.setColour (col::accent); g.fillEllipse (m.x - r, m.y - r, r * 2, r * 2);
         g.setColour (juce::Colours::white); g.drawEllipse (m.x - r, m.y - r, r * 2, r * 2, 1.5f);
@@ -1296,8 +1304,8 @@ public:
         const auto info = getLocalBounds().removeFromBottom (20).reduced (8, 0);
         g.setColour (juce::Colour (0xc0000000)); g.fillRect (info.toFloat());
         g.setColour (juce::Colours::white.withAlpha (0.85f)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.drawText (grid.choiceOf ("mic") + "  |  X " + juce::String (grid.valueOf ("micx"), 2) + "  Y " + juce::String (grid.valueOf ("micy"), 2)
-                    + "  |  " + juce::String (dist, 1) + " ft  " + juce::String (juce::roundToInt (grid.valueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
+        g.drawText (grid.choiceOf ("mic") + "  |  X " + juce::String (grid.liveValueOf ("micx"), 2) + "  Y " + juce::String (grid.liveValueOf ("micy"), 2)
+                    + "  |  " + juce::String (dist, 1) + " ft  " + juce::String (juce::roundToInt (grid.liveValueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
                     + "  |  " + grid.choiceOf ("cab") + "   (drag mic, wheel = distance, shift+wheel = angle)", info, juce::Justification::centredLeft, true);
     }
     void mouseDown (const juce::MouseEvent& e) override { moveMic (e.position); }
@@ -1306,8 +1314,8 @@ public:
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         const float d = (w.deltaY != 0 ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
-        if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.valueOf ("micangle") + d * 30.0f);
-        else grid.setExternal ("micdist", grid.valueOf ("micdist") - d * 1.5f);
+        if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.liveValueOf ("micangle") + d * 30.0f);
+        else grid.setExternal ("micdist", grid.liveValueOf ("micdist") - d * 1.5f);
         grid.commitNow(); repaint();
     }
 private:
@@ -1327,7 +1335,7 @@ private:
     juce::Point<float> micPoint() const
     {
         const auto c = speaker();
-        return { c.getX() + grid.valueOf ("micx") * c.getWidth(), c.getY() + (1.0f - grid.valueOf ("micy")) * c.getHeight() };
+        return { c.getX() + grid.liveValueOf ("micx") * c.getWidth(), c.getY() + (1.0f - grid.liveValueOf ("micy")) * c.getHeight() };
     }
     void moveMic (juce::Point<float> p)
     {
@@ -1338,8 +1346,8 @@ private:
     }
     void timerCallback() override
     {
-        const juce::String key = grid.choiceOf ("model") + grid.choiceOf ("mic") + grid.choiceOf ("cab") + juce::String (grid.valueOf ("micx")) + juce::String (grid.valueOf ("micy"))
-                               + juce::String (grid.valueOf ("micdist")) + juce::String (grid.valueOf ("micangle"));
+        const juce::String key = grid.choiceOf ("model") + grid.choiceOf ("mic") + grid.choiceOf ("cab") + juce::String (grid.liveValueOf ("micx")) + juce::String (grid.liveValueOf ("micy"))
+                               + juce::String (grid.liveValueOf ("micdist")) + juce::String (grid.liveValueOf ("micangle"));
         if (key != last) { last = key; repaint(); }
     }
     ParamGrid& grid; juce::Image img; juce::String last;
