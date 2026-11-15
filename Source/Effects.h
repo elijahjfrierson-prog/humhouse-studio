@@ -55,6 +55,7 @@ protected:
 struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
+std::unique_ptr<BuiltinEffect> createAmpRig();   // HumHouse Amplitude amp rig (desktop only)
 void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 
 std::atomic<int>& scopeLag();   // samples rendered ahead but not heard yet: visuals hold back by this much

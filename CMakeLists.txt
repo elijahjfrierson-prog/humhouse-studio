@@ -27,6 +27,7 @@ set(HHS_CORE_SOURCES
     Source/Instruments.cpp
     Source/Effects.cpp
     Source/StudioEffects.cpp
+    Source/AmpSim.cpp
     Source/Engine.cpp
     Source/PluginSandbox.cpp
     Source/ProjectIO.cpp

@@ -1982,6 +1982,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
+        { "hhamp", "HumHouse Amplitude (amp rig)", "Guitar" },
         { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
     return fx;
 }
@@ -2032,6 +2033,7 @@ private:
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
 {
     if (id == "peakctl") return std::make_unique<PeakController>();
+    if (id == "hhamp") { auto a = createAmpRig(); return a; }
     if (auto s = createStudioEffect (id)) return s;
     if (id == "purify") { auto f = createPurify(); f->initDefaults(); return f; }
     if (id == "scope") return std::make_unique<ScopeFx>();
