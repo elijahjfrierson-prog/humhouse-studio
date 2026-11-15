@@ -1,3 +1,4 @@
+#include <AmpData.h>
 #include "UI.h"
 #include "Instruments.h"
 #include "Drummer/DrummerCore.h"
@@ -354,6 +355,12 @@ public:
         }
     }
     float valueOf (const juce::String& id) const { for (auto& p : params) if (p.id == id) return p.value; return 0.0f; }
+    juce::String choiceOf (const juce::String& id) const
+    {
+        for (auto& p : params)
+            if (p.id == id && ! p.choices.empty()) return p.choices[(size_t) juce::jlimit (0, (int) p.choices.size() - 1, (int) std::round (p.value - p.mn))];
+        return {};
+    }
     void commitNow() { onCommit(); }
     void hideWhere (const std::function<bool (const juce::String&)>& hide)
     {
@@ -1250,6 +1257,94 @@ private:
     juce::OwnedArray<juce::TextButton> pads;
 };
 
+// Amplitude: the 3D amp room. Drag the mic across the speaker (left/right = centre to edge, up/down = height),
+// wheel = distance, shift+wheel = angle. Same parameters as the knobs below, so automation moves the mic too.
+class AmpStage : public juce::Component, private juce::Timer
+{
+public:
+    explicit AmpStage (ParamGrid& g) : grid (g)
+    {
+        img = juce::ImageCache::getFromMemory (AmpData::amp_stage_jpg, AmpData::amp_stage_jpgSize);
+        setOpaque (true); startTimerHz (15);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (juce::Colour (0xff0d0d10));
+        const auto st = stage();
+        if (img.isValid()) g.drawImage (img, st, juce::RectanglePlacement::stretchToFit);
+        // badge plate over the grille with our model name
+        const auto grille = toStage ({ 0.325f, 0.36f, 0.37f, 0.47f });
+        const auto badge = juce::Rectangle<float> (grille.getX() + grille.getWidth() * 0.06f, grille.getY() + grille.getHeight() * 0.05f,
+                                                   juce::jmin (grille.getWidth() * 0.5f, 180.0f), juce::jmax (16.0f, grille.getHeight() * 0.11f));
+        g.setColour (juce::Colour (0xe0141418)); g.fillRoundedRectangle (badge, 3.0f);
+        g.setColour (col::accent.withAlpha (0.9f)); g.drawRoundedRectangle (badge, 3.0f, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.92f));
+        g.setFont (juce::FontOptions (badge.getHeight() * 0.62f, juce::Font::bold | juce::Font::italic));
+        g.drawFittedText (grid.choiceOf ("model"), badge.reduced (4, 1).toNearestInt(), juce::Justification::centred, 1);
+        // speaker cone + mic target
+        const auto cone = speaker();
+        g.setColour (juce::Colours::white.withAlpha (0.18f)); g.drawEllipse (cone, 1.2f);
+        g.drawEllipse (cone.reduced (cone.getWidth() * 0.32f), 1.0f);
+        const auto m = micPoint();
+        const float dist = grid.valueOf ("micdist"), r = juce::jlimit (5.0f, 16.0f, 15.0f / std::sqrt (juce::jmax (0.1f, dist)));
+        const float ang = juce::degreesToRadians (grid.valueOf ("micangle"));
+        g.setColour (col::accent.withAlpha (0.28f)); g.fillEllipse (m.x - r * 2, m.y - r * 2, r * 4, r * 4);
+        g.setColour (col::accent); g.fillEllipse (m.x - r, m.y - r, r * 2, r * 2);
+        g.setColour (juce::Colours::white); g.drawEllipse (m.x - r, m.y - r, r * 2, r * 2, 1.5f);
+        g.drawLine (m.x, m.y, m.x + std::sin (ang) * r * 2.2f, m.y - std::cos (ang) * r * 2.2f, 1.5f);
+        // readout
+        const auto info = getLocalBounds().removeFromBottom (20).reduced (8, 0);
+        g.setColour (juce::Colour (0xc0000000)); g.fillRect (info.toFloat());
+        g.setColour (juce::Colours::white.withAlpha (0.85f)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.drawText (grid.choiceOf ("mic") + "  |  X " + juce::String (grid.valueOf ("micx"), 2) + "  Y " + juce::String (grid.valueOf ("micy"), 2)
+                    + "  |  " + juce::String (dist, 1) + " ft  " + juce::String (juce::roundToInt (grid.valueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
+                    + "  |  " + grid.choiceOf ("cab") + "   (drag mic, wheel = distance, shift+wheel = angle)", info, juce::Justification::centredLeft, true);
+    }
+    void mouseDown (const juce::MouseEvent& e) override { moveMic (e.position); }
+    void mouseDrag (const juce::MouseEvent& e) override { moveMic (e.position); }
+    void mouseUp (const juce::MouseEvent&) override { grid.commitNow(); }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const float d = (w.deltaY != 0 ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
+        if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.valueOf ("micangle") + d * 30.0f);
+        else grid.setExternal ("micdist", grid.valueOf ("micdist") - d * 1.5f);
+        grid.commitNow(); repaint();
+    }
+private:
+    juce::Rectangle<float> stage() const
+    {
+        auto b = getLocalBounds().toFloat().withTrimmedBottom (20);
+        if (! img.isValid()) return b;
+        const float s = juce::jmin (b.getWidth() / (float) img.getWidth(), b.getHeight() / (float) img.getHeight());
+        return b.withSizeKeepingCentre ((float) img.getWidth() * s, (float) img.getHeight() * s);
+    }
+    juce::Rectangle<float> toStage (juce::Rectangle<float> n) const
+    {
+        const auto st = stage();
+        return { st.getX() + n.getX() * st.getWidth(), st.getY() + n.getY() * st.getHeight(), n.getWidth() * st.getWidth(), n.getHeight() * st.getHeight() };
+    }
+    juce::Rectangle<float> speaker() const { const auto gr = toStage ({ 0.325f, 0.36f, 0.37f, 0.47f }); const float d = juce::jmin (gr.getWidth(), gr.getHeight()) * 0.92f; return gr.withSizeKeepingCentre (d, d); }
+    juce::Point<float> micPoint() const
+    {
+        const auto c = speaker();
+        return { c.getX() + grid.valueOf ("micx") * c.getWidth(), c.getY() + (1.0f - grid.valueOf ("micy")) * c.getHeight() };
+    }
+    void moveMic (juce::Point<float> p)
+    {
+        const auto c = speaker();
+        grid.setExternal ("micx", juce::jlimit (0.0f, 1.0f, (p.x - c.getX()) / c.getWidth()));
+        grid.setExternal ("micy", juce::jlimit (0.0f, 1.0f, 1.0f - (p.y - c.getY()) / c.getHeight()));
+        repaint();
+    }
+    void timerCallback() override
+    {
+        const juce::String key = grid.choiceOf ("model") + grid.choiceOf ("mic") + grid.choiceOf ("cab") + juce::String (grid.valueOf ("micx")) + juce::String (grid.valueOf ("micy"))
+                               + juce::String (grid.valueOf ("micdist")) + juce::String (grid.valueOf ("micangle"));
+        if (key != last) { last = key; repaint(); }
+    }
+    ParamGrid& grid; juce::Image img; juce::String last;
+};
+
 class FxEditor : public juce::Component
 {
 public:
@@ -1393,6 +1488,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
+    else if (ty == "hhamp") { visual = new AmpStage (*grid); vh = 360; }
     else if (ty == "glitch")
     {
         grid->hideWhere ([] (const juce::String& id) { return id == "fx" || id == "steplen" || (id.startsWithChar ('s') && id != "smooth"); });
