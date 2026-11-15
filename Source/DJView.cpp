@@ -1,3 +1,4 @@
+#include <mutex>
 #include <set>
 #include <tuple>
 #include "UI.h"
@@ -171,10 +172,8 @@ struct Deck : public juce::Component, private juce::Timer
             juce::File voc = cached;
             if (! voc.existsAsFile())
             {
-                dir.deleteRecursively();
-                const auto files = hhs::splitStemsToFiles (f, 0.0, 1.0e9, dir, hhs::StemSetMain, &splitProgress, &splitCancel);
-                voc = files.size() > (size_t) hhs::StemVocals ? files[(size_t) hhs::StemVocals] : juce::File();
-                for (size_t i = 0; i < files.size(); ++i) if (i != (size_t) hhs::StemVocals) files[i].deleteFile();   // only the vocal is kept
+                dir.deleteRecursively(); dir.createDirectory();
+                if (! splitVocal (f, cached, splitProgress, splitCancel)) { cached.deleteFile(); return; }
             }
             if (splitCancel || ! voc.existsAsFile()) return;
             juce::MessageManager::callAsync ([self, voc, gen]
@@ -184,6 +183,47 @@ struct Deck : public juce::Component, private juce::Timer
                 if (auto* r = fm2.createReaderFor (voc)) { self->src->setVocal (r); self->vocReady = true; self->vocK.setEnabled (true); self->beatK.setEnabled (true); self->repaint(); }
             });
         });
+    }
+    // vocal stem in 20 s windows (0.5 s crossfaded overlap): ~100 MB at a time instead of the whole song, any length;
+    // one split at a time across both decks
+    static bool splitVocal (const juce::File& in, const juce::File& out, std::atomic<float>& progress, std::atomic<bool>& cancel)
+    {
+        static std::timed_mutex one;
+        std::unique_lock<std::timed_mutex> held (one, std::defer_lock);
+        while (! held.try_lock_for (std::chrono::milliseconds (100))) if (cancel) return false;
+        juce::AudioFormatManager fm2; fm2.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r (fm2.createReaderFor (in));
+        if (r == nullptr || r->lengthInSamples <= 0 || r->sampleRate <= 0) return false;
+        const int nch = (int) juce::jlimit (1u, 2u, r->numChannels);
+        const juce::int64 total = r->lengthInSamples, L = (juce::int64) (r->sampleRate * 20.0), ov = (juce::int64) (r->sampleRate * 0.5);
+        std::unique_ptr<juce::OutputStream> os (out.createOutputStream());
+        if (os == nullptr) return false;
+        std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), r->sampleRate, (unsigned) nch, 32, {}, 0));
+        if (w == nullptr) return false;
+        os.release();
+        juce::AudioBuffer<float> tail (nch, (int) ov); tail.clear();
+        for (juce::int64 s0 = 0; s0 < total; s0 += L)
+        {
+            if (cancel) return false;
+            const int n = (int) juce::jmin (L + ov, total - s0), keep = (int) juce::jmin (L, total - s0);
+            juce::AudioBuffer<float> src (nch, n);
+            r->read (&src, 0, n, s0, true, true);
+            std::vector<juce::AudioBuffer<float>> st;
+            if (! hhs::splitStems (src, r->sampleRate, hhs::StemSetMain, st, nullptr, &cancel) || st.size() <= (size_t) hhs::StemVocals) return false;
+            auto& v = st[(size_t) hhs::StemVocals];
+            if (s0 > 0)   // fade the previous window's overlap into this one's start: no seam
+                for (int c = 0; c < nch; ++c)
+                    for (int i = 0; i < juce::jmin ((int) ov, keep); ++i)
+                    {
+                        const float g = (float) i / (float) ov;
+                        v.setSample (c, i, v.getSample (c, i) * g + tail.getSample (c, i) * (1.0f - g));
+                    }
+            if (! w->writeFromAudioSampleBuffer (v, 0, keep)) return false;
+            tail.clear();
+            for (int c = 0; c < nch; ++c) if (n > keep) tail.copyFrom (c, 0, v, c, keep, n - keep);
+            progress = (float) juce::jmin (1.0, (double) (s0 + keep) / (double) total);
+        }
+        return true;
     }
     static juce::Colour padColour (int i) { const juce::Colour c[] { juce::Colours::red, juce::Colours::orange, juce::Colours::yellow, juce::Colours::limegreen }; return c[i & 3]; }
     void hotCue (int i)
