@@ -79,7 +79,9 @@ public:
     bool isRecording() const { return recording.load(); }
     // Retro Record: the last 60 s of mic input is always kept (armed or not); this drops it on REC as a clip
     bool retroRecord();
-    double positionBeats() const { return std::max (0.0, position.load() - antAheadBeats.load()); }   // what you hear (render-ahead aware)
+    // what you hear (render-ahead aware). Stopped = exactly the marker: a stale render-ahead count left from the last play
+    // used to pull it (and Paste / drops at the playhead) up to 250 ms before where the marker was put
+    double positionBeats() const { return std::max (0.0, playing.load() ? position.load() - antAheadBeats.load() : position.load()); }
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
