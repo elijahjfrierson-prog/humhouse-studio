@@ -1289,6 +1289,21 @@ public:
         g.setColour (juce::Colours::white.withAlpha (0.92f));
         g.setFont (juce::FontOptions (badge.getHeight() * 0.62f, juce::Font::bold | juce::Font::italic));
         g.drawFittedText (grid.choiceOf ("model"), badge.reduced (4, 1).toNearestInt(), juce::Justification::centred, 1);
+        // the amp's own knobs turn with their parameter (and its automation), like the real panel
+        for (int k = 0; k < numKnobs; ++k)
+        {
+            const auto kc = knobCentre (k);
+            const float kr = knobRadius();
+            const float v = juce::jlimit (0.0f, 1.0f, grid.liveValueOf (knobIds[k]) / 10.0f);
+            const float a = juce::degreesToRadians (-135.0f + 270.0f * v);
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a2a2e), kc.x, kc.y - kr, juce::Colour (0xff050506), kc.x, kc.y + kr, false));
+            g.fillEllipse (kc.x - kr, kc.y - kr, kr * 2, kr * 2);
+            const float cr = kr * 0.58f;
+            g.setGradientFill (juce::ColourGradient (juce::Colour (0xffe8e8ec), kc.x - cr * 0.4f, kc.y - cr * 0.6f, juce::Colour (0xff6c6c72), kc.x + cr * 0.5f, kc.y + cr, true));
+            g.fillEllipse (kc.x - cr, kc.y - cr, cr * 2, cr * 2);
+            g.setColour (k == dragKnob ? col::accent : juce::Colours::white);
+            g.drawLine (kc.x + std::sin (a) * cr * 0.25f, kc.y - std::cos (a) * cr * 0.25f, kc.x + std::sin (a) * kr * 0.95f, kc.y - std::cos (a) * kr * 0.95f, juce::jmax (1.2f, kr * 0.16f));
+        }
         // speaker cone + mic target
         const auto cone = speaker();
         g.setColour (juce::Colours::white.withAlpha (0.18f)); g.drawEllipse (cone, 1.2f);
@@ -1304,16 +1319,42 @@ public:
         const auto info = getLocalBounds().removeFromBottom (20).reduced (8, 0);
         g.setColour (juce::Colour (0xc0000000)); g.fillRect (info.toFloat());
         g.setColour (juce::Colours::white.withAlpha (0.85f)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        if (dragKnob >= 0)
+            g.drawText (juce::String (knobNames[dragKnob]) + "  " + juce::String (grid.liveValueOf (knobIds[dragKnob]), 1), info, juce::Justification::centredLeft, true);
+        else
         g.drawText (grid.choiceOf ("mic") + "  |  X " + juce::String (grid.liveValueOf ("micx"), 2) + "  Y " + juce::String (grid.liveValueOf ("micy"), 2)
                     + "  |  " + juce::String (dist, 1) + " ft  " + juce::String (juce::roundToInt (grid.liveValueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
                     + "  |  " + grid.choiceOf ("cab") + "   (drag mic, wheel = distance, shift+wheel = angle)", info, juce::Justification::centredLeft, true);
     }
-    void mouseDown (const juce::MouseEvent& e) override { moveMic (e.position); }
-    void mouseDrag (const juce::MouseEvent& e) override { moveMic (e.position); }
-    void mouseUp (const juce::MouseEvent&) override { grid.commitNow(); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragKnob = -1;
+        for (int k = 0; k < numKnobs; ++k)
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.4f) { dragKnob = k; dragFrom = grid.liveValueOf (knobIds[k]); repaint(); return; }
+        moveMic (e.position);
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (dragKnob < 0) { moveMic (e.position); return; }
+        const float dv = (float) (e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY()) * (e.mods.isShiftDown() ? 0.01f : 0.05f);
+        grid.setExternal (knobIds[dragKnob], juce::jlimit (0.0f, 10.0f, dragFrom + dv));
+        repaint();
+    }
+    void mouseUp (const juce::MouseEvent&) override { dragKnob = -1; grid.commitNow(); repaint(); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        for (int k = 0; k < numKnobs; ++k)
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.4f) { grid.setExternal (knobIds[k], knobDefaults[k]); grid.commitNow(); repaint(); return; }
+    }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         const float d = (w.deltaY != 0 ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
+        for (int k = 0; k < numKnobs; ++k)   // wheel over an amp knob turns it
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.4f)
+            {
+                grid.setExternal (knobIds[k], juce::jlimit (0.0f, 10.0f, grid.liveValueOf (knobIds[k]) + d * 2.0f));
+                grid.commitNow(); repaint(); return;
+            }
         if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.liveValueOf ("micangle") + d * 30.0f);
         else grid.setExternal ("micdist", grid.liveValueOf ("micdist") - d * 1.5f);
         grid.commitNow(); repaint();
@@ -1331,6 +1372,19 @@ private:
         const auto st = stage();
         return { st.getX() + n.getX() * st.getWidth(), st.getY() + n.getY() * st.getHeight(), n.getWidth() * st.getWidth(), n.getHeight() * st.getHeight() };
     }
+    // knob centres on the render's control panel (fractions of the 1062 x 550 image)
+    static constexpr int numKnobs = 8;
+    static constexpr const char* knobIds[numKnobs] { "gain", "bass", "mid", "treble", "presence", "master", "bias", "sag" };
+    static constexpr const char* knobNames[numKnobs] { "Gain", "Bass", "Mid", "Treble", "Presence", "Master", "Bias", "Sag" };
+    static constexpr float knobDefaults[numKnobs] { 6.5f, 5.5f, 6.0f, 6.5f, 7.0f, 7.5f, 5.0f, 5.0f };
+    static constexpr float knobX[numKnobs] { 410.4f, 441.2f, 478.7f, 505.5f, 533.6f, 560.4f, 588.5f, 616.6f };
+    juce::Point<float> knobCentre (int k) const
+    {
+        const auto st = stage();
+        return { st.getX() + knobX[k] / 1062.0f * st.getWidth(), st.getY() + 174.0f / 550.0f * st.getHeight() };
+    }
+    float knobRadius() const { return 9.6f / 1062.0f * stage().getWidth(); }
+    int dragKnob = -1; float dragFrom = 0.0f;
     juce::Rectangle<float> speaker() const { const auto gr = toStage ({ 0.325f, 0.36f, 0.37f, 0.47f }); const float d = juce::jmin (gr.getWidth(), gr.getHeight()) * 0.92f; return gr.withSizeKeepingCentre (d, d); }
     juce::Point<float> micPoint() const
     {
@@ -1346,8 +1400,11 @@ private:
     }
     void timerCallback() override
     {
-        const juce::String key = grid.choiceOf ("model") + grid.choiceOf ("mic") + grid.choiceOf ("cab") + juce::String (grid.liveValueOf ("micx")) + juce::String (grid.liveValueOf ("micy"))
+        const juce::String key0 = grid.choiceOf ("model") + grid.choiceOf ("mic") + grid.choiceOf ("cab") + juce::String (grid.liveValueOf ("micx")) + juce::String (grid.liveValueOf ("micy"))
                                + juce::String (grid.liveValueOf ("micdist")) + juce::String (grid.liveValueOf ("micangle"));
+        juce::String knobs;
+        for (int k = 0; k < numKnobs; ++k) knobs << grid.liveValueOf (knobIds[k]) << ",";
+        const juce::String key = key0 + knobs;
         if (key != last) { last = key; repaint(); }
     }
     ParamGrid& grid; juce::Image img; juce::String last;
