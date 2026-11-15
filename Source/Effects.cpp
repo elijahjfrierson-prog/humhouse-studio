@@ -1513,7 +1513,7 @@ public:
     {
         sr = s;
         shifter.prepare (s); psola.prepare (s); harmPsola.prepare (s); period = (float) (0.008 * s);
-        dblL.assign (8192, 0.0f); dblR.assign (8192, 0.0f); dblW = 0; dblPh = 0; harmSemis = 0; harmG = 0;
+        dblL.assign (8192, 0.0f); dblR.assign (8192, 0.0f); dblW = 0; dblPh = 0; harmSemis = 0; harmG = 0; flexW = 1;
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         for (auto& f : tone) f.clear();
@@ -1676,7 +1676,7 @@ public:
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
                         if (tailMidi > 0 && std::abs (tailMidi - (float) heldNote) < 1.0f)
-                            targetRatio = std::pow (2.0f, juce::jlimit (-1.5f, 1.5f, (float) heldNote - tailMidi) / 12.0f);
+                            targetRatio = std::pow (2.0f, flexW * juce::jlimit (-1.5f, 1.5f, (float) heldNote - tailMidi) / 12.0f);   // Flex-Tune holds on the tail too
                     }
                     if (midi > 0)
                     {
@@ -1715,11 +1715,13 @@ public:
                         heldNote = target;
                         float semis = juce::jlimit (-1.5f, 1.5f, (float) target - nowC + natVib * (nowC - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
+                        flexW = 1.0f;
                         if (flex > 0.001f)
                         {
                             // Flex-Tune: a note sung near the key note is tuned, scoops / slides / runs far from it stay as sung
                             const float hi = 0.5f - 0.4f * flex, lo = 0.4f * hi, dist = std::abs ((float) target - centre);
-                            semis *= juce::jlimit (0.0f, 1.0f, 1.0f - (dist - lo) / (hi - lo));
+                            flexW = juce::jlimit (0.0f, 1.0f, 1.0f - (dist - lo) / (hi - lo));
+                            semis *= flexW;
                         }
                         if (harmony > 0) harmSemis = (float) (harmonyNote (target, harmony, root, scale) - target);
                         targetRatio = std::pow (2.0f, semis / 12.0f);
@@ -1730,7 +1732,7 @@ public:
                     // drifting under rasp is pulled back onto the key note instead of riding a frozen ratio off it
                     else if (midi == -1.0f && heldNote > 0 && std::abs (roughMidi - (float) heldNote) < 1.0f && wetTarget > 0.5f)
                     {
-                        const float want = juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
+                        const float want = flexW * juce::jlimit (-1.5f, 1.5f, (float) heldNote - roughMidi), cur = 12.0f * std::log2 (targetRatio);
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.75 s
@@ -1815,7 +1817,7 @@ private:
         for (int s = 0; s < steps; ++s) { do k += dir; while (! hhs::inScale (k, root, scale) && std::abs (k - note) < 12); }
         return k;
     }
-    PsolaShifter harmPsola; std::vector<float> dblL, dblR; int dblW = 0; float dblPh = 0, harmSemis = 0, harmG = 0;
+    PsolaShifter harmPsola; std::vector<float> dblL, dblR; int dblW = 0; float dblPh = 0, harmSemis = 0, harmG = 0, flexW = 1;
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     std::vector<float> cbL = std::vector<float> (4096, 0.0f), cbR = std::vector<float> (4096, 0.0f); int cbW = 0; double poS = 0.0; float combG = 0.0f; bool breathy = false;
