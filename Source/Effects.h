@@ -105,7 +105,7 @@ struct Biquad
 {
     float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     float z1[2] {}, z2[2] {};
-    enum Type { LowPass, HighPass, Peak, LowShelf, HighShelf, BandPass };
+    enum Type { LowPass, HighPass, Peak, LowShelf, HighShelf, BandPass, Notch };
     void set (Type t, double sr, double freq, double q, double gainDb);
     inline float tick (float x, int ch)
     {
@@ -118,7 +118,7 @@ struct Biquad
 };
 
 // Mixer EQ band shape (MixerTrack::meqType) -> filter; cuts and notch work without gain
-inline Biquad::Type meqShape (int t) { return t == 1 ? Biquad::LowShelf : t == 2 ? Biquad::HighShelf : t == 3 ? Biquad::HighPass : t == 4 ? Biquad::LowPass : t == 5 ? Biquad::BandPass : Biquad::Peak; }
+inline Biquad::Type meqShape (int t) { return t == 1 ? Biquad::LowShelf : t == 2 ? Biquad::HighShelf : t == 3 ? Biquad::HighPass : t == 4 ? Biquad::LowPass : t == 5 ? Biquad::Notch : Biquad::Peak; }
 inline bool meqNeedsGain (int t) { return t <= 2; }
 
 // YIN pitch detector + granular shifter, shared by AutoPitch
