@@ -163,7 +163,8 @@ struct Deck : public juce::Component, private juce::Timer
         splitCancel = true; splitPool.removeAllJobs (true, 20000); splitCancel = false; splitProgress = 0.0f;
         vocK.setEnabled (false); beatK.setEnabled (false);
         const auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio")
-                             .getChildFile ("Hum Verse Stems").getChildFile (f.getFileNameWithoutExtension() + "_" + juce::String::toHexString (f.hashCode64()) + juce::String::toHexString (f.getSize()));
+                             .getChildFile ("Hum Verse Stems").getChildFile (f.getFileNameWithoutExtension() + "_" + juce::String::toHexString (f.hashCode64()) + juce::String::toHexString (f.getSize())
+                             + "_" + juce::String::toHexString (f.getLastModificationTime().toMilliseconds()));   // re-exported song = new split
         const auto cached = dir.getChildFile (f.getFileNameWithoutExtension() + " - " + juce::String (hhs::stemName (hhs::StemSetMain, hhs::StemVocals)) + ".wav");
         juce::Component::SafePointer<Deck> self (this);
         const auto gen = ++splitGen;
