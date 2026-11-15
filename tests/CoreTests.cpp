@@ -1885,7 +1885,9 @@ int main (int argc, char** argv)
         if (! fx) continue;
         fx->prepare (48000, 128);
         if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
-        CHECK (fx->latencySamples() == 0);
+        // the Amplitude rig oversamples 4x (a few samples of delay); the engine's PDC lines it up
+        if (juce::String (info.id) == "hhamp") CHECK (fx->latencySamples() > 0 && fx->latencySamples() < 64);
+        else CHECK (fx->latencySamples() == 0);
     }
     // Consolidate: only the chosen clips render, from the first one's start, and every clip's mute comes back
     {
