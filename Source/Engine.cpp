@@ -834,7 +834,7 @@ void Engine::sync()
         if (it != uiClipRt.end() && it->second->file == c.audioFile)
         {
             const bool inRam = dynamic_cast<MemoryClipReader*> (it->second->reader.get()) != nullptr;
-            const juce::int64 bytes = it->second->length * 8;
+            const juce::int64 bytes = it->second->length * 4 * (juce::int64) juce::jmax (1u, it->second->reader ? it->second->reader->numChannels : 2u);
             if (fresh) { if (inRam) ramUsed += bytes; continue; }
             // RAM disk cache: clips that fit the budget play from memory; a RAM take that no longer fits (or the
             // cache is off / low-memory warning) goes back to streaming from disk
@@ -846,9 +846,9 @@ void Engine::sync()
         // a take you just recorded (punch / loop) is loaded into RAM, so it plays the moment the loop comes back round
         if (fresh || (ramCache.load() && ramUsed < ramBudget))
             if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * maxRamTakeSeconds)
-                && (fresh || ramUsed + r->lengthInSamples * 8 <= ramBudget))
+                && (fresh || ramUsed + r->lengthInSamples * 4 * (juce::int64) juce::jmax (1u, r->numChannels) <= ramBudget))
             {
-                if (! fresh) ramUsed += r->lengthInSamples * 8;
+                if (! fresh) ramUsed += r->lengthInSamples * 4 * (juce::int64) juce::jmax (1u, r->numChannels);   // MemoryClipReader keeps every channel as float
                 rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
                 rt->reader = std::make_unique<MemoryClipReader> (*r);
                 rt->tmp.setSize (2, maxBlock * 4 + 8);
