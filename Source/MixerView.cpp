@@ -326,10 +326,16 @@ public:
         repaint();
     }
     void mouseUp (const juce::MouseEvent&) override { if (drag >= 0) s.commit ("Mixer EQ"); drag = -1; repaint(); }
+    // flat = no effect: a cut / notch band (which filters without gain) goes back to its default shape too
+    static void flatBand (MixerTrack& mt, int b)
+    {
+        mt.meqGain[(size_t) b] = 0.0f;
+        if (! meqNeedsGain (mt.meqType[(size_t) b]) && mt.meqType[(size_t) b] != 0) mt.meqType[(size_t) b] = MixerTrack().meqType[(size_t) b];
+    }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
         const int b = near (e.position); if (b < 0) return;
-        s.edit ("Mixer EQ: flat band", [&] (Project& p) { if (auto* mt = at (p)) mt->meqGain[(size_t) b] = 0.0f; });
+        s.edit ("Mixer EQ: flat band", [&] (Project& p) { if (auto* mt = at (p)) flatBand (*mt, b); });
         repaint();
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
@@ -361,9 +367,9 @@ private:
             if (safe == nullptr || r <= 0) return;
             s.edit ("Mixer EQ", [&] (Project& p) {
                 auto* mt = at (p); if (mt == nullptr) return;
-                if (r == 1) mt->meqGain[(size_t) b] = 0.0f;
+                if (r == 1) flatBand (*mt, b);
                 else if (r <= 5) mt->meqQ[(size_t) b] = r == 2 ? 0.5f : r == 3 ? 1.0f : r == 4 ? 4.0f : 10.0f;
-                else { MixerTrack d; mt->meqFreq = d.meqFreq; mt->meqGain = d.meqGain; mt->meqQ = d.meqQ; } });
+                else { MixerTrack d; mt->meqFreq = d.meqFreq; mt->meqGain = d.meqGain; mt->meqQ = d.meqQ; mt->meqType = d.meqType; } });
             repaint();
         });
     }
