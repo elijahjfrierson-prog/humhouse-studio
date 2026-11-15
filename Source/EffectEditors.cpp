@@ -1356,17 +1356,27 @@ private:
 class FxEditor : public juce::Component
 {
 public:
-    FxEditor (ParamGrid* g, juce::Component* v, int visualH) : grid (g), visual (v), vh (visualH)
+    FxEditor (ParamGrid* g, juce::Component* v, int visualH) : grid (g), visual (v), vh (visualH), gridH (g->getHeight())
     {
-        addAndMakeVisible (*grid); addAndMakeVisible (*visual);
-        setSize (juce::jmax (640, grid->getWidth()), vh + grid->getHeight());
+        vp.setViewedComponent (grid.get(), false); vp.setScrollBarsShown (true, false);
+        addAndMakeVisible (vp); addAndMakeVisible (*visual);
+        int maxH = 900;   // tall knob grids (Amplitude) scroll instead of running off the screen
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) maxH = juce::jmax (400, d->userArea.getHeight() - 120);
+        const bool scroll = vh + gridH > maxH;
+        setSize (juce::jmax (640, grid->getWidth() + (scroll ? vp.getScrollBarThickness() : 0)), juce::jmin (maxH, vh + gridH));
     }
     void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
-    void resized() override { auto r = getLocalBounds(); visual->setBounds (r.removeFromTop (vh).reduced (10, 8)); grid->setBounds (r); }
+    void resized() override
+    {
+        auto r = getLocalBounds(); visual->setBounds (r.removeFromTop (vh).reduced (10, 8)); vp.setBounds (r);
+        const bool scroll = gridH > r.getHeight();
+        grid->setSize (r.getWidth() - (scroll ? vp.getScrollBarThickness() : 0), juce::jmax (r.getHeight(), gridH));
+    }
 private:
     std::unique_ptr<ParamGrid> grid;
     std::unique_ptr<juce::Component> visual;
-    int vh;
+    juce::Viewport vp;
+    int vh, gridH;
 };
 }
 
