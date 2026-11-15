@@ -225,7 +225,7 @@ private:
     std::vector<float> comb = std::vector<float> (4096, 0.0f); int combW = 0;
     struct StompState { float z[6] {}; double ph = 0; float env = 0; int w = 0; };
     StompState stomp[numStomps + numPost];
-    std::vector<float> dly[numStomps + numPost > 0 ? 2 : 1]; std::vector<float> sprBuf;
+    std::vector<float> dly[numStomps + numPost], sprBuf;   // one delay line per pedal slot
 
     float combTick (float x)
     {
@@ -371,7 +371,7 @@ private:
     void modFx (int s, int type, float** ch, int nch, int n, float k1, float k2, float k3)
     {
         auto& st = stomp[s]; const double fs = sr; const double twoPi = juce::MathConstants<double>::twoPi;
-        auto& d = dly[s >= numStomps ? s - numStomps : 0];
+        auto& d = dly[s];
         if (d.empty()) return;
         const int N = (int) d.size();
         for (int i = 0; i < n; ++i)
