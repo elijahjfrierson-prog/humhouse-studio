@@ -165,6 +165,7 @@ public:
         ts.clear(); for (auto& f : stageHp) f.z = 0; for (auto& f : stageLp) f.z = 0; sagEnv = 0;
         for (auto& b : cabF) b.clear(); for (auto& b : micF) b.clear(); for (auto& b : eqF) b.clear();
         for (auto& st : stomp) st = {};
+        for (auto& st : postR) st = {};
         for (auto& d : dly) std::fill (d.begin(), d.end(), 0.0f);
         std::fill (sprBuf.begin(), sprBuf.end(), 0.0f); if (verb) verb->reset(); if (os) os->reset();
     }
@@ -224,7 +225,7 @@ private:
     float sagEnv = 0, key = -1, micLevel = 1, combGain = 0, roomSize = 0.5f; int combD = 1;
     std::vector<float> comb = std::vector<float> (4096, 0.0f); int combW = 0;
     struct StompState { float z[6] {}; double ph = 0; float env = 0; int w = 0; };
-    StompState stomp[numStomps + numPost];
+    StompState stomp[numStomps + numPost], postR[numPost];   // postR = right-channel state of the stereo post pedals
     std::vector<float> dly[numStomps + numPost], sprBuf;   // one delay line per pedal slot
 
     float combTick (float x)
@@ -365,7 +366,11 @@ private:
         float* bufs[] { b.getWritePointer (0), b.getNumChannels() > 1 ? b.getWritePointer (1) : b.getWritePointer (0) };
         const float k1 = p (base + 1) / 10.0f, k2 = p (base + 2) / 10.0f, k3 = p (base + 3) / 10.0f;
         if (type >= amp::PhaseNinety && type <= amp::SpringVerb) modFx (s, type, bufs, b.getNumChannels() > 1 ? 2 : 1, n, k1, k2, k3);
-        else for (int ch = 0; ch < (b.getNumChannels() > 1 ? 2 : 1); ++ch) runPedal (s, bufs[ch], n, {});
+        else
+        {
+            runPedal (s, bufs[0], n, {});
+            if (b.getNumChannels() > 1) { std::swap (stomp[s], postR[s - numStomps]); runPedal (s, bufs[1], n, {}); std::swap (stomp[s], postR[s - numStomps]); }
+        }
     }
     // time / modulation pedals (work in mono pre-amp or stereo post-amp)
     void modFx (int s, int type, float** ch, int nch, int n, float k1, float k2, float k3)
