@@ -116,6 +116,10 @@ struct Biquad
     void clear() { z1[0] = z1[1] = z2[0] = z2[1] = 0; }
 };
 
+// Mixer EQ band shape (MixerTrack::meqType) -> filter; cuts and notch work without gain
+inline Biquad::Type meqShape (int t) { return t == 1 ? Biquad::LowShelf : t == 2 ? Biquad::HighShelf : t == 3 ? Biquad::HighPass : t == 4 ? Biquad::LowPass : t == 5 ? Biquad::BandPass : Biquad::Peak; }
+inline bool meqNeedsGain (int t) { return t <= 2; }
+
 // YIN pitch detector + granular shifter, shared by AutoPitch
 // Auto-Tune style shifter: one resampling read head (full sound, no phasing), re-spliced by whole
 // pitch periods at a waveform-matched point with a short crossfade, so it doesn't click. Latency ~0.1-6 ms.

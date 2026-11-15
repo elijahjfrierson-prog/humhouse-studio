@@ -1079,7 +1079,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        if (phoneMenu != nullptr) phoneMenu->setBounds (r);   // phone turned while the menu is open
+        if (phoneMenu != nullptr) phoneMenu->setBounds (phoneSafe (r));   // phone turned while the menu is open
 if (phoneUI)
         {
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
@@ -1856,6 +1856,12 @@ private:
         else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
     }
     std::unique_ptr<PhoneMenuList> phoneMenu;
+    // below the notch / status bar and above the home bar, so the menu's X CLOSE can be tapped
+    juce::Rectangle<int> phoneSafe (juce::Rectangle<int> r) const
+    {
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) r = d->safeAreaInsets.subtractedFrom (r);
+        return r;
+    }
     void showMenuOrList (juce::PopupMenu m, const juce::PopupMenu::Options& o, std::function<void (int)> cb)
     {
         if (! phoneUI) { m.showMenuAsync (o, std::move (cb)); return; }
@@ -1864,7 +1870,7 @@ private:
         phoneMenu->done = [safe, cb] (int r) {
             juce::MessageManager::callAsync ([safe, cb, r] { if (safe == nullptr) return; safe->phoneMenu.reset(); if (cb) cb (r); });
         };
-        addAndMakeVisible (*phoneMenu); phoneMenu->setBounds (getLocalBounds()); phoneMenu->toFront (true);
+        addAndMakeVisible (*phoneMenu); phoneMenu->setBounds (phoneSafe (getLocalBounds())); phoneMenu->toFront (true);
     }
     void showAllMenus()
     {

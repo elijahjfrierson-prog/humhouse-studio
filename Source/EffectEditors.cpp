@@ -103,7 +103,7 @@ private:
 };
 
 // any third-party plug-in window: its own UI or HUMHOUSE VIEW (every parameter as our sliders, our colours)
-class PluginFrame : public juce::Component
+class PluginFrame : public juce::Component, private juce::Timer
 {
 public:
     PluginFrame (juce::AudioProcessor& p, juce::Component* nativeEd) : proc (p), native (nativeEd)
@@ -114,8 +114,9 @@ public:
         addAndMakeVisible (toggle);
         addAndMakeVisible (native.get());
         fit();
+        startTimer (250);
     }
-    ~PluginFrame() override { ours.reset(); native.reset(); }
+    ~PluginFrame() override { stopTimer(); ours.reset(); native.reset(); }
     void show (bool humhouse)
     {
         if (humhouse && ours == nullptr)
@@ -138,9 +139,26 @@ public:
     }
 private:
     juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
+    static std::map<juce::String, juce::Point<int>>& lastGood() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    bool collapsed() const { return native->getWidth() < 160 || native->getHeight() < 100; }
+    // ZENOLOGY (and some others) report a 0-size view when first attached: once the window is on screen,
+    // a collapsed native UI is pushed out to its last good size (or 1000x640) so it draws full size
+    void timerCallback() override
+    {
+        if (++ticks > 16) { stopTimer(); return; }
+        if (! native->isVisible()) return;
+        if (collapsed())
+        {
+            auto it = lastGood().find (proc.getName());
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
+            native->setSize (want.x, want.y);   // collapsed rescue
+        }
+        else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
+    }
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
+        if (! collapsed()) lastGood()[proc.getName()] = { native->getWidth(), native->getHeight() };
         auto* c = current();
         setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
         resized();
@@ -151,6 +169,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
+    int ticks = 0;
 };
 
 bool focusExisting (const juce::String& key)

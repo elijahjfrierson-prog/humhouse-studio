@@ -1,7 +1,15 @@
 # Guard: plug-in windows stay exactly as in 1.5.3, when Analog Lab / ZENOLOGY / Surge XT opened full size:
 # the HUMHOUSE VIEW frame only follows the plug-in's own size, and the window is never resized or rebuilt once shown.
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../Source/EffectEditors.cpp" src)
-foreach(bad "PluginFrame::resizable" "goodSizes" "repairs" "native->setSize" "native->setVisible (true)")
+# the only native resize allowed: pushing a collapsed (0-size) view out to its last good size
+string(REGEX MATCHALL "native->setSize" ns "${src}")
+string(FIND "${src}" "if (collapsed())" c1)
+string(FIND "${src}" "native->setSize (want.x, want.y);   // collapsed rescue" c2)
+list(LENGTH ns nn)
+if(NOT nn EQUAL 1 OR c1 LESS 0 OR c2 LESS c1)
+    message(FATAL_ERROR "native->setSize is only allowed once, as the collapsed rescue")
+endif()
+foreach(bad "PluginFrame::resizable" "goodSizes" "repairs" "native->setVisible (true)")
     string(FIND "${src}" "${bad}" hit)
     if(NOT hit LESS 0)
         message(FATAL_ERROR "Plug-in window code must stay as in 1.5.3; found '${bad}' (this collapsed Analog Lab / ZENOLOGY)")

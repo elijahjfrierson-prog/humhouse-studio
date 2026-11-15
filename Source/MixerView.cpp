@@ -277,14 +277,14 @@ public:
         for (float f : { 100.0f, 1000.0f, 10000.0f }) g.drawVerticalLine ((int) xOf (f), r.getY(), r.getBottom());
         g.drawHorizontalLine ((int) yOf (0.0f), r.getX(), r.getRight());
         Biquad bq[5];
-        for (int b = 0; b < 5; ++b) bq[b].set (b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak, 48000.0, juce::jlimit (20.0f, 21000.0f, mt->meqFreq[(size_t) b]), juce::jlimit (0.1f, 18.0f, mt->meqQ[(size_t) b]), mt->meqGain[(size_t) b]);
+        for (int b = 0; b < 5; ++b) bq[b].set (meqShape (mt->meqType[(size_t) b]), 48000.0, juce::jlimit (20.0f, 21000.0f, mt->meqFreq[(size_t) b]), juce::jlimit (0.1f, 18.0f, mt->meqQ[(size_t) b]), mt->meqGain[(size_t) b]);
         juce::Path curve;
         for (int x = 0; x <= getWidth(); x += 2)
         {
             const double f = freqOf ((float) x), w = juce::MathConstants<double>::twoPi * f / 48000.0;
             const std::complex<double> z = std::polar (1.0, -w), z2 = z * z;
             double db = 0.0;
-            for (auto& q : bq) db += 20.0 * std::log10 (std::abs (((double) q.b0 + (double) q.b1 * z + (double) q.b2 * z2) / (1.0 + (double) q.a1 * z + (double) q.a2 * z2)) + 1e-9);
+            for (int b = 0; b < 5; ++b) { if (meqNeedsGain (mt->meqType[(size_t) b]) && std::abs (mt->meqGain[(size_t) b]) <= 0.01f) continue; auto& q = bq[b]; db += 20.0 * std::log10 (std::abs (((double) q.b0 + (double) q.b1 * z + (double) q.b2 * z2) / (1.0 + (double) q.a1 * z + (double) q.a2 * z2)) + 1e-9); }
             const float y = yOf ((float) db);
             if (x == 0) curve.startNewSubPath ((float) x, y); else curve.lineTo ((float) x, y);
         }
@@ -296,6 +296,7 @@ public:
         for (int b = 0; b < 5; ++b)
         {
             const auto c = dot (b);
+            if (b == selected) { g.setColour (juce::Colours::white); g.drawEllipse (c.x - 8.0f, c.y - 8.0f, 16.0f, 16.0f, 1.5f); }
             g.setColour (b == drag || b == hover ? juce::Colours::white : col::accent.brighter (0.3f));
             g.fillEllipse (c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f);
             g.setColour (juce::Colours::black); fitText (g, nm[b], juce::Rectangle<float> (c.x - 5.0f, c.y - 5.0f, 10.0f, 10.0f), juce::Justification::centred);
@@ -312,6 +313,7 @@ public:
     void mouseDown (const juce::MouseEvent& e) override
     {
         drag = near (e.position);
+        if (drag >= 0 && drag != selected) { selected = drag; if (onSelect) onSelect (selected); }
         if (drag >= 0 && e.mods.isPopupMenu()) { bandMenu (drag); drag = -1; }
     }
     void mouseDrag (const juce::MouseEvent& e) override
@@ -335,6 +337,8 @@ public:
         s.live ([&] (Project& p) { if (auto* mt = at (p)) mt->meqQ[(size_t) b] = juce::jlimit (0.1f, 18.0f, mt->meqQ[(size_t) b] * (w.deltaY > 0 ? 1.12f : 1.0f / 1.12f)); });
         s.commit ("Mixer EQ Q"); repaint();
     }
+    int selected = 2;
+    std::function<void (int)> onSelect;
 private:
     Studio& s; std::function<int()> track;
     int drag = -1, hover = -1;
@@ -423,6 +427,16 @@ public:
         eqLabel.setText ("EQ  (drag dots, wheel = Q, double-click = flat)", juce::dontSendNotification);
         eqGraph = std::make_unique<MiniEqGraph> (s, [this] { return track(); });
         addAndMakeVisible (*eqGraph);
+        eqGraph->onSelect = [this] (int) { showEqBand(); };
+        eqShape.addItemList ({ "Bell", "Low shelf", "High shelf", "Low cut", "High cut", "Notch" }, 1);
+        eqShape.setTooltip ("Shape of the selected EQ band");
+        eqShape.onChange = [this] {
+            const int b = eqGraph->selected, ty = eqShape.getSelectedItemIndex();
+            if (ty < 0) return;
+            s.edit ("Mini EQ shape", [&] (Project& p) { p.mixer[(size_t) track()].meqType[(size_t) b] = ty; });
+            eqGraph->repaint();
+        };
+        addAndMakeVisible (eqShape);
         eqLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         eqLabel.setColour (juce::Label::textColourId, col::accent);
         addAndMakeVisible (eqLabel);
@@ -488,7 +502,7 @@ public:
             eqKnobs[b * 3 + 1]->setValue (t.meqGain[(size_t) b], juce::dontSendNotification);
             eqKnobs[b * 3 + 2]->setValue (t.meqQ[(size_t) b], juce::dontSendNotification);
         }
-        if (eqGraph != nullptr) eqGraph->repaint();
+        if (eqGraph != nullptr) { eqShape.setSelectedItemIndex (t.meqType[(size_t) eqGraph->selected], juce::dontSendNotification); eqGraph->repaint(); }
         sendKnobs.clear();
         for (size_t k = 0; k < t.sends.size(); ++k)
         {
@@ -538,6 +552,13 @@ public:
         r.removeFromTop (4);
         eqLabel.setBounds (r.removeFromTop (16));
         eqGraph->setBounds (r.removeFromTop (96).reduced (2, 0));
+        {
+            // selected band: FREQ / GAIN / Q knobs + SHAPE
+            auto row = r.removeFromTop (phoneUI ? 56 : 44).reduced (2, 0);
+            eqShape.setBounds (row.removeFromRight (juce::jmax (70, row.getWidth() / 3)).withSizeKeepingCentre (juce::jmax (70, row.getWidth() / 3), 24));
+            eqRow = row;
+            showEqBand();
+        }
         r.removeFromTop (4);
         sendsLabel.setBounds (r.removeFromTop (18));
         for (auto* k : sendKnobs) k->setBounds (r.removeFromTop (30).removeFromLeft (30));
@@ -596,6 +617,21 @@ private:
     }
     Studio& s;
     juce::Label title, sendsLabel, eqLabel;
+    juce::ComboBox eqShape;
+    juce::Rectangle<int> eqRow;
+    void showEqBand()
+    {
+        const int sel = eqGraph != nullptr ? eqGraph->selected : 2, w = eqRow.getWidth() / 3;
+        for (int i = 0; i < eqKnobs.size(); ++i)
+        {
+            const bool show = i / 3 == sel && ! eqRow.isEmpty();
+            if (show && eqKnobs[i]->getParentComponent() == nullptr) addChildComponent (eqKnobs[i]);
+            eqKnobs[i]->setVisible (show);
+            if (show) eqKnobs[i]->setBounds (eqRow.getX() + (i % 3) * w, eqRow.getY(), w, eqRow.getHeight());
+        }
+        const auto& p = s.p(); const int t = track();
+        if (t >= 0 && t < (int) p.mixer.size()) eqShape.setSelectedItemIndex (p.mixer[(size_t) t].meqType[(size_t) sel], juce::dontSendNotification);
+    }
     juce::OwnedArray<Knob> eqKnobs;   // kept (hidden) for automation / undo sync; the graph edits the same values
     std::unique_ptr<MiniEqGraph> eqGraph;   // band b: [b*3] freq, [b*3+1] gain, [b*3+2] Q
     juce::OwnedArray<SlotButton> slots;

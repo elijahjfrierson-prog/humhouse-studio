@@ -280,6 +280,8 @@ juce::ValueTree projectToTree (const Project& p)
             juce::StringArray q;
             for (size_t b = 0; b < 5; ++b) { q.add (juce::String (m.meqFreq[b])); q.add (juce::String (m.meqGain[b])); q.add (juce::String (m.meqQ[b])); }
             t.setProperty ("meq", q.joinIntoString (","), nullptr);
+            juce::StringArray ty; for (auto v : m.meqType) ty.add (juce::String (v));
+            t.setProperty ("meqT", ty.joinIntoString (","), nullptr);
         }
         for (auto& s : m.sends) { juce::ValueTree st ("SEND"); st.setProperty ("to", s.target, nullptr); st.setProperty ("lvl", s.level, nullptr); t.appendChild (st, nullptr); }
         for (auto& f : m.fx)
@@ -453,6 +455,8 @@ Project projectFromTree (const juce::ValueTree& root)
             if (q.size() == 15)
                 for (size_t b = 0; b < 5; ++b)
                 { m.meqFreq[b] = q[(int) b * 3].getFloatValue(); m.meqGain[b] = q[(int) b * 3 + 1].getFloatValue(); m.meqQ[b] = q[(int) b * 3 + 2].getFloatValue(); }
+            juce::StringArray ty; ty.addTokens (t["meqT"].toString(), ",", {});
+            if (ty.size() == 5) for (size_t b = 0; b < 5; ++b) m.meqType[b] = juce::jlimit (0, 5, ty[(int) b].getIntValue());
         }
         for (auto c : t)
         {

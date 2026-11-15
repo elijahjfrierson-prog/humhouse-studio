@@ -310,6 +310,7 @@ struct Engine::TrackRuntime
     juce::File frozenFile;
     std::array<Biquad, 5> meq;
     std::array<float, 15> meqKey {};
+    std::array<int, 5> meqTy { -1, -1, -1, -1, -1 };
 };
 
 // short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
@@ -2015,13 +2016,15 @@ void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
     bool on[5]; bool any = false;
     for (size_t b = 0; b < 5; ++b)
     {
-        on[b] = std::abs (mt.meqGain[b]) > 0.01f;
+        const int ty = juce::jlimit (0, 5, mt.meqType[b]);
+        on[b] = meqNeedsGain (ty) ? std::abs (mt.meqGain[b]) > 0.01f : true;
         any |= on[b];
         const float f = juce::jlimit (20.0f, (float) (sampleRate * 0.45), mt.meqFreq[b]), g = mt.meqGain[b], q = juce::jlimit (0.1f, 18.0f, mt.meqQ[b]);
-        if (on[b] && (tr.meqKey[b * 3] != f || tr.meqKey[b * 3 + 1] != g || tr.meqKey[b * 3 + 2] != q))
+        if (on[b] && (tr.meqKey[b * 3] != f || tr.meqKey[b * 3 + 1] != g || tr.meqKey[b * 3 + 2] != q || tr.meqTy[b] != ty))
         {
-            tr.meq[b].set (b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak, sampleRate, f, q, g);
-            tr.meqKey[b * 3] = f; tr.meqKey[b * 3 + 1] = g; tr.meqKey[b * 3 + 2] = q;
+            if (tr.meqTy[b] != ty) tr.meq[b].clear();
+            tr.meq[b].set (meqShape (ty), sampleRate, f, q, g);
+            tr.meqKey[b * 3] = f; tr.meqKey[b * 3 + 1] = g; tr.meqKey[b * 3 + 2] = q; tr.meqTy[b] = ty;
         }
         else if (! on[b] && tr.meqKey[b * 3 + 1] != 0.0f) { tr.meq[b].clear(); tr.meqKey[b * 3 + 1] = 0.0f; }
     }
@@ -2031,6 +2034,8 @@ void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
         {
             float v = *x;
             for (size_t b = 0; b < 5; ++b) if (on[b]) v = tr.meq[b].tick (v, ch);
+            // a bad sample (NaN/inf from the input) would stick in the filter and silence the track for good
+            if (! std::isfinite (v)) { for (auto& q : tr.meq) q.clear(); v = 0.0f; }
             *x = v;
         }
 }

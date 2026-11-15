@@ -312,6 +312,7 @@ struct MixerTrack
     float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
     // FL-style mini EQ under the FX slots: low shelf, 3 peaks, high shelf; each band has freq / gain / Q
     std::array<float, 5> meqFreq { 80.0f, 300.0f, 1000.0f, 3500.0f, 10000.0f }, meqGain { 0, 0, 0, 0, 0 }, meqQ { 0.7f, 1.0f, 1.0f, 1.0f, 0.7f };
+    std::array<int, 5> meqType { 1, 0, 0, 0, 2 };   // band shape: 0 bell, 1 low shelf, 2 high shelf, 3 low cut, 4 high cut, 5 notch
 };
 
 // Link to controller: a controller effect (Peak Controller) drives one knob of another effect

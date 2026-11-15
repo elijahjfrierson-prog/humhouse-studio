@@ -2104,7 +2104,14 @@ public:
     {
         const double at = juce::jmax (0.0, snap (x < 0 ? s.engine.positionBeats() : xToBeat ((float) x)));
         int lane = laneAt ((float) y);
+        const bool onTop = phoneUI && x < 0 && y < 0;   // phone Import: new tracks go in as Track 1, at the top
+        int topAt = 0;
         s.edit ("Add audio", [&] (Project& p) {
+            auto newLane = [&] (const juce::String& name) {
+                if (! onTop) { Lane l; l.name = name; l.mixerTrack = p.addMixerTrack (name); p.lanes.push_back (l); return (int) p.lanes.size() - 1; }
+                insertLane (p, topAt); p.lanes[(size_t) topAt].name = name; p.mixer[(size_t) p.lanes[(size_t) topAt].mixerTrack].name = name;
+                return topAt++;
+            };
             for (auto& path : files)
             {
                 juce::File f (path);
@@ -2114,26 +2121,24 @@ public:
                     if (pat < 0) continue;
                     if (lane < 0 || lane >= (int) p.lanes.size())
                     {
-                        Lane l; l.name = p.patterns[(size_t) pat].name; l.mixerTrack = p.addMixerTrack (l.name);
-                        p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                        lane = newLane (p.patterns[(size_t) pat].name);
                     }
                     Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.patternIndex = pat;
                     c.length = p.patterns[(size_t) pat].lengthBeats();
                     p.clips.push_back (c);
-                    ++lane;
+                    lane = onTop ? -1 : lane + 1;
                     continue;
                 }
                 const double secs = audioSeconds (f);
                 if (secs <= 0) continue;
                 if (lane < 0 || lane >= (int) p.lanes.size())
                 {
-                    Lane l; l.name = f.getFileNameWithoutExtension(); l.mixerTrack = p.addMixerTrack (l.name);
-                    p.lanes.push_back (l); lane = (int) p.lanes.size() - 1;
+                    lane = newLane (f.getFileNameWithoutExtension());
                 }
                 Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.audioFile = f; c.patternIndex = -1;
                 c.length = secondsToBeats (secs, p.bpm);
                 p.clips.push_back (c);
-                ++lane;
+                lane = onTop ? -1 : lane + 1;
             }
         });
     }
