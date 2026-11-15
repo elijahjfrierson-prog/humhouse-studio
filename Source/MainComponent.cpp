@@ -1531,7 +1531,7 @@ if (phoneUI)
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
-                pm.addItem (473, "Low Latency Mode (armed tracks skip plug-ins with over ~5 ms delay, like Logic)", true, engine.lowLatency.load());
+                pm.addItem (473, "Low Latency Mode (while a track is armed, plug-ins with over ~5 ms delay are skipped, like Logic)", true, engine.lowLatency.load());
                 pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
@@ -1608,7 +1608,7 @@ if (phoneUI)
             flag = ! flag.load();
             studio.settings->setValue (id == 473 ? "lowLatency" : "ramCache", flag.load());
             if (id == 474) engine.sync();
-            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: armed tracks skip plug-ins with long delay" : "Low Latency Mode off")
+            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: while a track is armed, long-delay plug-ins are skipped" : "Low Latency Mode off")
                              : (flag.load() ? "RAM disk cache on: clips play from memory" : "RAM disk cache off: clips stream from disk"));
             return;
         }

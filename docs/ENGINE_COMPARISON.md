@@ -25,7 +25,7 @@ It is a study of architecture, not of their code: none of their code or binaries
 
 ## Gaps closed (this build)
 1. **Track Freeze**: one click in the Mixer (FREEZE button / insert menu) renders the insert to audio and switches its plug-ins off.
-2. **Low Latency Mode** (Options > Performance): armed tracks skip plug-ins with more than ~5 ms delay, and PDC drops their delay too (Logic).
+2. **Low Latency Mode** (Options > Performance): while a track is armed, plug-ins with more than ~5 ms delay are skipped on every path, so nothing delays what you hear (Logic). Exports and Freeze keep them all.
 3. **Per-track / per-thread CPU**: each Mixer strip shows its insert's CPU %; the CPU tooltip lists every processing thread and the heaviest inserts.
 4. **Voice-level multithreading**: every instrument already runs on its own core, heaviest first. Splitting one instrument's voices across cores is still open.
 5. **RAM disk cache** (Options > Performance, on by default on desktop): clips up to 1.5 GB total play from memory instead of streaming (Pro Tools Disk Cache).
