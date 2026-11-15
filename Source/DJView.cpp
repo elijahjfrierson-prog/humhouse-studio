@@ -181,7 +181,7 @@ struct Deck : public juce::Component, private juce::Timer
             {
                 if (self == nullptr || gen != self->splitGen.load() || self->src == nullptr) return;
                 juce::AudioFormatManager fm2; fm2.registerBasicFormats();
-                if (auto* r = fm2.createReaderFor (voc)) { self->src->setVocal (r); self->vocK.setEnabled (true); self->beatK.setEnabled (true); self->repaint(); }
+                if (auto* r = fm2.createReaderFor (voc)) { self->src->setVocal (r); self->vocReady = true; self->vocK.setEnabled (true); self->beatK.setEnabled (true); self->repaint(); }
             });
         });
     }
@@ -206,7 +206,7 @@ struct Deck : public juce::Component, private juce::Timer
         const double sr = r->sampleRate;
         bpm = guessBpm (*r, f.getFileNameWithoutExtension());
         analyse (*r);
-        tp.stop(); tp.setSource (nullptr);
+        tp.stop(); vocReady = false; tp.setSource (nullptr);
         src = std::make_unique<StemPairSource> (r.release());
         tp.setSource (src.get(), 32768, &io, sr, 4);   // read-ahead on its own thread: the audio callback never touches the disk
         startSplit (f);
@@ -403,7 +403,7 @@ struct Deck : public juce::Component, private juce::Timer
     void timerCallback() override
     {
         play.setButtonText (tp.isPlaying() ? "PAUSE" : "PLAY");
-        if (const bool ready = src != nullptr && src->hasVocal(); ! ready && file.existsAsFile())
+        if (const bool ready = vocReady.load(); ! ready && file.existsAsFile())
         {
             const auto t = "SPLIT " + juce::String ((int) (splitProgress.load() * 100.0f)) + "%";
             if (vocK.label != t) { vocK.label = t; vocK.repaint(); }
@@ -426,7 +426,7 @@ struct Deck : public juce::Component, private juce::Timer
     DeckKnob vocK { "VOCAL", 0.0, 1.5, 1.0 }, beatK { "BEAT", 0.0, 1.5, 1.0 }, filtK { "FILTER", -1.0, 1.0, 0.0 }, echoK { "ECHO", 0.0, 1.0, 0.0 };
     std::atomic<float> vocG { 1.0f }, beatG { 1.0f }, filt { 0.0f }, echo { 0.0f }, splitProgress { 0.0f };
     std::atomic<double> echoSec { 0.375 };   // echo time in seconds
-    std::atomic<bool> splitCancel { false };
+    std::atomic<bool> splitCancel { false }, vocReady { false };   // vocReady: the audio thread's only view of the vocal (never touches src)
     std::atomic<int> splitGen { 0 };
     juce::ThreadPool splitPool { 1 };
     // audio-thread state (DjMix only)
@@ -573,7 +573,7 @@ struct DjMix : public juce::AudioSource
     {
         float* l = tmp.getWritePointer (0); float* r = tmp.getWritePointer (1);
         const float vg = d.vocG.load(), bg = d.beatG.load();
-        if (d.src != nullptr && d.src->hasVocal() && (std::abs (vg - 1.0f) > 1.0e-4f || std::abs (bg - 1.0f) > 1.0e-4f))
+        if (d.vocReady.load() && (std::abs (vg - 1.0f) > 1.0e-4f || std::abs (bg - 1.0f) > 1.0e-4f))
         {
             const float* vl = tmp.getReadPointer (2); const float* vr = tmp.getReadPointer (3);
             for (int i = 0; i < n; ++i) { l[i] = bg * (l[i] - vl[i]) + vg * vl[i]; r[i] = bg * (r[i] - vr[i]) + vg * vr[i]; }
