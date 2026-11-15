@@ -1,5 +1,6 @@
 #pragma once
 #include <set>
+#include <array>
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
@@ -25,14 +26,15 @@ public:
     // (other apps such as OBS can't starve them mid-block)
     void setWorkgroup (const juce::AudioWorkgroup& wg);
     std::atomic<long> workerJobs { 0 }, runs { 0 };
+    std::array<std::atomic<juce::int64>, 65> busy {};   // ticks spent on jobs per worker; [64] = the calling audio / render thread
 private:
     struct Worker : juce::Thread
     {
-        explicit Worker (WorkerPool& p) : juce::Thread ("HHS audio worker"), pool (p) {}
-        void run() override { pool.workerLoop(); }
-        WorkerPool& pool;
+        Worker (WorkerPool& p, int i) : juce::Thread ("HHS audio worker"), pool (p), idx (i) {}
+        void run() override { pool.workerLoop (idx); }
+        WorkerPool& pool; int idx;
     };
-    void workerLoop();
+    void workerLoop (int idx);
     std::vector<std::unique_ptr<Worker>> threads;
     std::atomic<bool> quit { false };
     std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 }, wgGeneration { 0 };
@@ -62,6 +64,11 @@ public:
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
+    std::atomic<bool> lowLatency { false };      // Logic-style Low Latency Mode: armed tracks skip plug-ins with more delay than lowLatencyLimit
+    std::atomic<int> lowLatencyLimit { 256 };    // samples (about 5 ms)
+    std::atomic<bool> ramCache { true };         // Pro Tools-style disk cache: clips play from RAM (up to the budget) instead of streaming
+    float trackLoad (int track) const;           // share of the audio block this insert used (0..1)
+    std::vector<float> coreLoads();              // busy share per processing thread since the last call; last = audio / render thread
     std::atomic<bool> anticipativeOn { true };   // render playback ahead (like Reaper's anticipative FX) while nothing is live
     std::atomic<int> antUnderruns { 0 };   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
     juce::CriticalSection& getLock() { return lock; }
@@ -246,6 +253,7 @@ private:
     juce::AudioWorkgroup deviceWorkgroup;
     std::atomic<bool> mtOn { true }, smartOn { true };
     std::vector<float> trackCost, chanCost;
+    std::vector<juce::int64> coreSeen; juce::int64 coreSeenAt = 0; const void* coreSeenPool = nullptr;
     std::vector<int> chanJobOrder;
     juce::TimeSliceThread diskThread { "HHS disk" };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);

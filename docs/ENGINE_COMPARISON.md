@@ -23,13 +23,13 @@ It is a study of architecture, not of their code: none of their code or binaries
 - Out-of-process plug-in hosting like Logic, which FL/Ableton/Pro Tools don't do by default.
 - Silent-plug-in skipping like Pro Tools' Dynamic Plug-in Processing.
 
-## Where Zenith lacks (next builds)
-1. **Track Freeze** (one click render track + FX to audio, unload the plug-ins): Logic/Ableton/Pro Tools all have it.
-2. **Low Latency Mode**: bypass high-latency plug-ins on the live track only while recording (Logic).
-3. **Per-core / per-track CPU meter** visible to the user (Logic's per-core meter, FL's per-insert CPU).
-4. **Voice-level multithreading** for big instruments (FL splits a generator's voices across cores).
-5. **Disk cache / RAM preload** setting for huge audio sessions (Pro Tools).
-6. **Hybrid DSP-style split**: pin record-armed tracks to a dedicated high-priority worker (Pro Tools Hybrid Engine idea, done in software).
+## Gaps closed (this build)
+1. **Track Freeze**: one click in the Mixer (FREEZE button / insert menu) renders the insert to audio and switches its plug-ins off.
+2. **Low Latency Mode** (Options > Performance): armed tracks skip plug-ins with more than ~5 ms delay, and PDC drops their delay too (Logic).
+3. **Per-track / per-thread CPU**: each Mixer strip shows its insert's CPU %; the CPU tooltip lists every processing thread and the heaviest inserts.
+4. **Voice-level multithreading**: every instrument already runs on its own core, heaviest first. Splitting one instrument's voices across cores is still open.
+5. **RAM disk cache** (Options > Performance, on by default on desktop): clips up to 1.5 GB total play from memory instead of streaming (Pro Tools Disk Cache).
+6. **Armed tracks first**: in every mix level the live tracks are scheduled first, so the audio thread itself picks them up (Hybrid Engine idea in software).
 
 ## Stress test plan (40+ VST3 + built-ins incl. Amplitude)
 - Session: 40 audio tracks with 1 VST3 each + 10 instrument tracks + 6 buses, AmpliTube / Waves on 10 tracks, HumHouse Amplitude on 4.

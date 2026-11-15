@@ -749,6 +749,8 @@ public:
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
+        engine.lowLatency = studio.settings->getBoolValue ("lowLatency", false);
+        engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
@@ -1529,6 +1531,8 @@ if (phoneUI)
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
+                pm.addItem (473, "Low Latency Mode (armed tracks skip plug-ins with over ~5 ms delay, like Logic)", true, engine.lowLatency.load());
+                pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
                 m.addItem (480, "OBS / Discord capture-friendly drawing (untick = faster GPU drawing)", true, captureFriendlyDrawing());
@@ -1596,6 +1600,16 @@ if (phoneUI)
             engine.pluginSandbox = ! engine.pluginSandbox.load();
             studio.settings->setValue ("pluginSandbox", engine.pluginSandbox.load());
             flash (engine.pluginSandbox.load() ? "Crash protection on for plug-ins loaded from now" : "Plug-ins load directly (fastest) from now");
+            return;
+        }
+        if (id == 473 || id == 474)
+        {
+            auto& flag = id == 473 ? engine.lowLatency : engine.ramCache;
+            flag = ! flag.load();
+            studio.settings->setValue (id == 473 ? "lowLatency" : "ramCache", flag.load());
+            if (id == 474) engine.sync();
+            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: armed tracks skip plug-ins with long delay" : "Low Latency Mode off")
+                             : (flag.load() ? "RAM disk cache on: clips play from memory" : "RAM disk cache off: clips stream from disk"));
             return;
         }
         if (id >= 460 && id <= 471)
@@ -1717,6 +1731,7 @@ private:
     } pianoSplit;
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
+    int coreTick = 0;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
     // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
@@ -2090,6 +2105,32 @@ private:
         cpuLabel.setText ("CPU " + juce::String (cpu) + "%" + (drops > 0 ? "  " + juce::String (drops) + " late" : juce::String()), juce::dontSendNotification);
         const auto cc = cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good;
         if (cpuLabel.findColour (juce::Label::textColourId) != cc) cpuLabel.setColour (juce::Label::textColourId, cc);
+        if (++coreTick >= 20)   // per-core + per-insert CPU in the CPU tooltip
+        {
+            coreTick = 0;
+            juce::String tip ("CPU load of the audio engine. Freeze heavy tracks in the Mixer to save CPU");
+            const auto cores = engine.coreLoads();
+            if (! cores.empty())
+            {
+                tip << "\nPer thread:";
+                for (size_t i = 0; i < cores.size(); ++i)
+                    tip << (i % 4 == 0 ? "\n" : "   ") << (i + 1 == cores.size() ? juce::String ("Audio") : "Core " + juce::String ((int) i + 1))
+                        << " " << juce::roundToInt (cores[i] * 100.0f) << "%";
+            }
+            std::vector<std::pair<float, int>> hv;
+            const auto& mx = engine.project().mixer;
+            for (int t = 0; t < (int) mx.size(); ++t) if (const float l = engine.trackLoad (t); l > 0.005f) hv.push_back ({ l, t });
+            std::sort (hv.rbegin(), hv.rend());
+            if (! hv.empty())
+            {
+                tip << "\nHeaviest inserts:";
+                for (size_t i = 0; i < hv.size() && i < 4; ++i)
+                    tip << "\n" << (hv[i].second == 0 ? juce::String ("Master") : juce::String (hv[i].second) + " " + mx[(size_t) hv[i].second].name)
+                        << "  " << juce::roundToInt (hv[i].first * 100.0f) << "%";
+            }
+            if (engine.lowLatency.load()) tip << "\nLow Latency Mode on";
+            cpuLabel.setTooltip (tip);
+        }
         recBtn.setToggleState (engine.isRecording(), juce::dontSendNotification);
         playBtn.setToggleState (engine.isPlaying(), juce::dontSendNotification);
         playBtn.setColour (juce::TextButton::buttonOnColourId, engine.isCountingIn() ? col::accent : col::good);

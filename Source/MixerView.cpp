@@ -99,6 +99,12 @@ struct Strip : public juce::Component
         {
             g.setColour (col::accent2); fitText (g, "FROZEN", 0, 18, getWidth(), 12, juce::Justification::centred);
         }
+        else if (index < (int) p.mixer.size())
+            if (const float ld = s.engine.trackLoad (index); ld > 0.01f)   // per-insert CPU (Logic-style)
+            {
+                g.setColour (ld > 0.3f ? col::rec : col::dim); g.setFont (juce::FontOptions (9.0f));
+                fitText (g, "CPU " + juce::String (juce::roundToInt (ld * 100.0f)) + "%", 0, 18, getWidth(), 12, juce::Justification::centred);
+            }
         paintScope (g);
         // meter
         auto m = meterArea();
