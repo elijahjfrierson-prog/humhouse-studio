@@ -1501,14 +1501,19 @@ public:
             { "snap", "Retune (0 to -3 = harder snap)", -3, 0, 0 },
             { "body", "Body", 0, 1, 0.0f }, { "character", "Character", 0, 1, 0.0f },   // off by default: just the tune, no tone change
             { "glow", "Glow", 0, 1, 0.0f }, { "canvas", "Canvas", 0, 1, 0.0f },
-            { "coat", "Coat (vocal compression)", 0, 1, 0.6f } };   // hard, fast compression that sits the tune on top of the vocal
+            { "coat", "Coat (vocal compression)", 0, 1, 0.6f },   // hard, fast compression that sits the tune on top of the vocal
+            { "flex", "Flex-Tune (0 = tune everything)", 0, 1, 0 },   // Antares Flex-Tune: only notes sung close to the key note get tuned
+            { "harmony", "Harmony", 0, 5, 0, { "Off", "3rd Up", "5th Up", "Octave Up", "3rd Down", "Octave Down" } },   // MetaTune-style, in key
+            { "harmMix", "Harmony Level", 0, 1, 0.5f },
+            { "double", "Double (stereo)", 0, 1, 0 } };   // MetaTune-style double: two detuned copies left / right
         return ps;
     }
     int latencySamples() const override { return 0; }
     void prepare (double s, int) override
     {
         sr = s;
-        shifter.prepare (s); psola.prepare (s); period = (float) (0.008 * s);
+        shifter.prepare (s); psola.prepare (s); harmPsola.prepare (s); period = (float) (0.008 * s);
+        dblL.assign (8192, 0.0f); dblR.assign (8192, 0.0f); dblW = 0; dblPh = 0; harmSemis = 0; harmG = 0;
         dsFactor = s > 60000 ? 4 : 2;
         analysis.assign (2048, 0.0f); aw = 0; hopCount = 0;
         for (auto& f : tone) f.clear();
@@ -1573,9 +1578,14 @@ public:
             }
             return x;
         };
+        const float flex = p (18);
+        const int harmony = (int) p (19);
+        const float harmMix = p (20), dbl = p (21);
+        const float dblInc = juce::MathConstants<float>::twoPi / (float) sr;
         auto* l = b.getWritePointer (0); auto* r = b.getWritePointer (1);
         for (int i = 0; i < n; ++i)
         {
+            const float inL = l[i], inR = r[i];
             const float mono = 0.5f * (l[i] + r[i]);
             if ((dsCount++ % dsFactor) == 0)
             {
@@ -1705,6 +1715,13 @@ public:
                         heldNote = target;
                         float semis = juce::jlimit (-1.5f, 1.5f, (float) target - nowC + natVib * (nowC - centre));
                         if (style == 0 && std::abs (semis) < humanize * 0.25f) semis *= (1.0f - humanize);   // Natural only: let tiny drift through
+                        if (flex > 0.001f)
+                        {
+                            // Flex-Tune: a note sung near the key note is tuned, scoops / slides / runs far from it stay as sung
+                            const float hi = 0.5f - 0.4f * flex, lo = 0.4f * hi, dist = std::abs ((float) target - centre);
+                            semis *= juce::jlimit (0.0f, 1.0f, 1.0f - (dist - lo) / (hi - lo));
+                        }
+                        if (harmony > 0) harmSemis = (float) (harmonyNote (target, harmony, root, scale) - target);
                         targetRatio = std::pow (2.0f, semis / 12.0f);
                         if (onset && (hard || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
@@ -1752,6 +1769,27 @@ public:
                 l[i] = psola.dryL; r[i] = psola.dryR;
                 wl = l[i] + wetG * (pl - l[i]); wr = r[i] + wetG * (pr - r[i]);
             }
+            if (harmony > 0)
+            {
+                // harmony voice: the same tuned note moved by an in-key interval (on sung notes only)
+                float hl = inL, hr = inR;
+                harmPsola.process (hl, hr, ratio * std::exp2 (harmSemis / 12.0f), period);
+                const float want = heldNote > 0 ? harmMix * wetG : 0.0f;
+                harmG += (want - harmG) * 0.002f;
+                wl += harmG * hl; wr += harmG * hr;
+            }
+            if (dbl > 0.001f)
+            {
+                // double: two short, slowly drifting delays (a few cents apart) panned left / right
+                dblL[(size_t) (dblW & 8191)] = wl; dblR[(size_t) (dblW & 8191)] = wr;
+                dblPh = std::fmod (dblPh + dblInc, juce::MathConstants<float>::twoPi * 100.0f);
+                auto tap = [&] (const std::vector<float>& bf, float ms) {
+                    const double rp = (double) dblW - 0.001 * ms * sr; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
+                    return bf[(size_t) (i0 & 8191)] * (1 - t) + bf[(size_t) ((i0 + 1) & 8191)] * t; };
+                const float a = tap (dblL, 13.0f + 1.5f * std::sin (0.9f * dblPh)), c = tap (dblR, 21.0f + 1.8f * std::sin (1.3f * dblPh));
+                ++dblW;
+                wl += 0.7f * dbl * a; wr += 0.7f * dbl * c;
+            }
             if (colourOn) { const float cl = colour (wl, 0), cr = colour (wr, 1); wl += wetG * (cl - wl); wr += wetG * (cr - wr); }   // sung vowels only: consonants stay crisp
             if (glowOn) { const float gl = glowF.tick (canvasF.tick (wl, 0), 0), gr = glowF.tick (canvasF.tick (wr, 1), 1); wl += wetG * (gl - wl); wr += wetG * (gr - wr); }
             if (coat > 0.001f)
@@ -1767,6 +1805,17 @@ public:
         }
     }
 private:
+    static int harmonyNote (int note, int mode, int root, int scale)
+    {
+        if (mode == 3) return note + 12;
+        if (mode == 5) return note - 12;
+        const int dir = mode == 4 ? -1 : 1, steps = mode == 2 ? 4 : 2;   // 3rd = 2 scale steps, 5th = 4
+        if (scale == 15) return note + dir * (mode == 2 ? 7 : 4);        // chromatic: major 3rd / perfect 5th
+        int k = note;
+        for (int s = 0; s < steps; ++s) { do k += dir; while (! hhs::inScale (k, root, scale) && std::abs (k - note) < 12); }
+        return k;
+    }
+    PsolaShifter harmPsola; std::vector<float> dblL, dblR; int dblW = 0; float dblPh = 0, harmSemis = 0, harmG = 0;
     double sr = 44100; int dsFactor = 2, dsCount = 0, aw = 0, hopCount = 0;
     std::vector<float> analysis; SpliceShifter shifter; PsolaShifter psola;
     std::vector<float> cbL = std::vector<float> (4096, 0.0f), cbR = std::vector<float> (4096, 0.0f); int cbW = 0; double poS = 0.0; float combG = 0.0f; bool breathy = false;
