@@ -254,7 +254,7 @@ juce::ValueTree projectToTree (const Project& p)
             auto& at = c.autoTarget;
             t.setProperty ("ak", at.kind, nullptr); t.setProperty ("at", at.track, nullptr); t.setProperty ("afx", at.fxUid, nullptr);
             t.setProperty ("ach", at.channel, nullptr); t.setProperty ("ap", at.param, nullptr); t.setProperty ("an", at.name, nullptr);
-            for (auto& pt : c.autoPts) { juce::ValueTree q ("PT"); q.setProperty ("b", pt.beat, nullptr); q.setProperty ("v", pt.value, nullptr); t.appendChild (q, nullptr); }
+            for (auto& pt : c.autoPts) { juce::ValueTree q ("PT"); q.setProperty ("b", pt.beat, nullptr); q.setProperty ("v", pt.value, nullptr); if (pt.curve != 0.0f) q.setProperty ("c", pt.curve, nullptr); t.appendChild (q, nullptr); }
         }
         t.setProperty ("hidden", c.hidden, nullptr);
         if (! c.colour.isTransparent()) t.setProperty ("colour", (juce::int64) c.colour.getARGB(), nullptr);
@@ -436,7 +436,7 @@ Project projectFromTree (const juce::ValueTree& root)
         {
             auto& at = c.autoTarget;
             at.kind = t["ak"]; at.track = t["at"]; at.fxUid = t["afx"]; at.channel = t["ach"]; at.param = t["ap"].toString(); at.name = t["an"].toString();
-            for (auto q : t) if (q.hasType ("PT")) c.autoPts.push_back ({ (double) q["b"], (float) q["v"] });
+            for (auto q : t) if (q.hasType ("PT")) c.autoPts.push_back ({ (double) q["b"], (float) q["v"], (float) q.getProperty ("c", 0.0f) });
         }
         p.clips.push_back (c);
     }

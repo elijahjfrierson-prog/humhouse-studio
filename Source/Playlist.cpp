@@ -1575,6 +1575,17 @@ public:
         if (i >= 0 && p.clips[(size_t) i].isAuto() && tool != PTool::Delete && tool != PTool::Slice && tool != PTool::Mute)
         {
             const int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (const int sg = k < 0 ? hitAutoCurve (p.clips[(size_t) i], e.position) : -1; sg >= 0)
+            {
+                const int uid = p.clips[(size_t) i].uid;
+                if (e.getNumberOfClicks() >= 2 || e.mods.isPopupMenu())   // straight line again
+                {
+                    s.edit ("Straighten automation curve", [uid, sg] (Project& pr) { for (auto& c : pr.clips) if (c.uid == uid && sg + 1 < (int) c.autoPts.size()) c.autoPts[(size_t) sg].curve = 0.0f; });
+                    repaint(); return;
+                }
+                drag = Drag::AutoCurve; dragClip = i; dragPt = sg; dragStart = e.position; curve0 = p.clips[(size_t) i].autoPts[(size_t) sg].curve;
+                return;
+            }
             if (k >= 0 && e.mods.isPopupMenu())   // right-click a point: delete it (FL)
             {
                 const int uid = p.clips[(size_t) i].uid;
@@ -1715,6 +1726,17 @@ public:
             s.engine.setPositionBeats (juce::jmax (0.0, e.mods.isAltDown() ? b : placeSnap (b)));
             repaint(); return;
         }
+        if (drag == Drag::AutoCurve)
+        {
+            if (dragClip < 0 || dragClip >= (int) p.clips.size()) return;
+            s.live ([&] (Project&) {
+                auto& c = p.clips[(size_t) dragClip];
+                if (dragPt < 0 || dragPt + 1 >= (int) c.autoPts.size()) return;
+                const float dir = c.autoPts[(size_t) dragPt + 1].value >= c.autoPts[(size_t) dragPt].value ? 1.0f : -1.0f;
+                c.autoPts[(size_t) dragPt].curve = juce::jlimit (-0.98f, 0.98f, curve0 - dir * (e.position.y - dragStart.y) / (phoneUI ? 90.0f : 60.0f));
+            });
+            changed = true; repaint(); return;
+        }
         if (drag == Drag::AutoPt)
         {
             if (dragClip < 0 || dragClip >= (int) p.clips.size() || dragOrig.size() != p.clips.size()) return;
@@ -1825,6 +1847,11 @@ public:
             { s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); repaint(); return; }
             if (tap) { tapReplay = true; mouseDown (e); mouseUp (e); tapReplay = false; }
             return;
+        }
+        if (drag == Drag::AutoCurve)
+        {
+            if (changed) s.edit ("Bend automation curve", [] (Project&) {});
+            drag = Drag::None; dragClip = dragPt = -1; repaint(); return;
         }
         if (drag == Drag::AutoPt)
         {
@@ -2144,7 +2171,8 @@ public:
     }
 
 private:
-    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, Pan, Gain };
+    enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, AutoCurve, Pan, Gain };
+    float curve0 = 0.0f;
     juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
@@ -2176,7 +2204,7 @@ private:
     juce::Point<float> fadeHandle (const Clip& c, juce::Rectangle<float> r, bool in) const
     {
         const float len = (float) ((in ? c.fadeIn : c.fadeOut) * pxPerBeat);
-        const float gn = std::pow (0.5f, std::exp (c.fadeCurve));
+        const float gn = bezierBend (0.5f, fadeBend (c.fadeCurve));
         return { in ? r.getX() + len * 0.5f : r.getRight() - len * 0.5f, r.getBottom() - gn * r.getHeight() };
     }
     Studio& s;
@@ -2331,6 +2359,24 @@ private:
         }
         return best;
     }
+    // the Bezier handle sits on the curve halfway along each segment
+    juce::Point<float> autoCurveHandle (const Clip& c, int k) const
+    {
+        const auto& a = c.autoPts[(size_t) k]; const auto& b = c.autoPts[(size_t) k + 1];
+        return { autoBeatToX (c, 0.5 * (a.beat + b.beat)), autoValueToY (c, a.value + (b.value - a.value) * bezierBend (0.5f, a.curve)) };
+    }
+    bool autoCurveHandleShown (const Clip& c, int k) const
+    {
+        const auto& a = c.autoPts[(size_t) k]; const auto& b = c.autoPts[(size_t) k + 1];
+        return std::abs (b.value - a.value) > 0.01f && autoBeatToX (c, b.beat) - autoBeatToX (c, a.beat) > (phoneUI ? 34.0f : 22.0f);
+    }
+    int hitAutoCurve (const Clip& c, juce::Point<float> pt) const
+    {
+        const float rad = phoneUI ? 14.0f : 7.0f;
+        for (int k = 0; k + 1 < (int) c.autoPts.size(); ++k)
+            if (autoCurveHandleShown (c, k) && pt.getDistanceFrom (autoCurveHandle (c, k)) < rad) return k;
+        return -1;
+    }
     void drawAutomation (juce::Graphics& g, const Clip& c, juce::Rectangle<float> r, juce::Colour colour)
     {
         if (c.autoPts.empty()) return;
@@ -2352,6 +2398,17 @@ private:
             if (x >= x1) break;
             if (x < v0) { before = &q; continue; }
             if (before != nullptr) { line.lineTo (autoBeatToX (c, before->beat), autoValueToY (c, before->value)); before = nullptr; }
+            const size_t qi = (size_t) (&q - pts.data());
+            if (qi > 0 && pts[qi - 1].curve != 0.0f)   // Bezier segment: trace it
+            {
+                const auto& a = pts[qi - 1];
+                const float xa = autoBeatToX (c, a.beat), steps = juce::jlimit (4.0f, 48.0f, (x - xa) / 4.0f);
+                for (int j = 1; j < (int) steps; ++j)
+                {
+                    const float t = (float) j / steps, xx = xa + t * (x - xa);
+                    if (xx > x0) line.lineTo (xx, autoValueToY (c, a.value + (q.value - a.value) * bezierBend (t, a.curve)));
+                }
+            }
             line.lineTo (x, autoValueToY (c, q.value));
             if (x >= v1) break;   // first point past the visible part closes the segment
         }
@@ -2367,9 +2424,28 @@ private:
             if (x < v0 - 4.0f) continue;
             if (x > v1 + 4.0f) break;
             if (x - lastDot < 6.0f) continue;   // dots closer than 6 px overlap anyway: draw one
+            const size_t qi = (size_t) (&q - pts.data());
+            const bool roomy = qi + 1 >= pts.size() || autoBeatToX (c, pts[qi + 1].beat) - x > 24.0f;
+            const bool held = (drag == Drag::AutoPt || drag == Drag::AutoCurve) && dragPt == (int) qi && dragClip >= 0 && dragClip < (int) s.p().clips.size() && s.p().clips[(size_t) dragClip].uid == c.uid;
             lastDot = x;
             g.setColour (juce::Colours::white); g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
             g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
+            if ((roomy && body.getHeight() >= 22.0f) || held)   // Logic-style 0-127 value next to every point
+            {
+                g.setColour (held ? juce::Colours::white : colour.brighter (0.7f).withAlpha (0.9f));
+                g.setFont (juce::FontOptions (phoneUI ? 11.0f : 9.5f, juce::Font::bold));
+                const float ty = y - 15.0f < body.getY() ? y + 4.0f : y - 15.0f;
+                g.drawText (juce::String (juce::roundToInt (q.value * 127.0f)), juce::Rectangle<float> (x + 3.0f, ty, 28.0f, 11.0f), juce::Justification::centredLeft, false);
+            }
+        }
+        for (int k = 0; k + 1 < (int) pts.size(); ++k)   // hollow Bezier handles: drag up / down to bend, double-click = straight
+        {
+            if (! autoCurveHandleShown (c, k)) continue;
+            const auto h = autoCurveHandle (c, k);
+            if (h.x < v0 - 6.0f || h.x > v1 + 6.0f) continue;
+            const float rr = phoneUI ? 5.0f : 3.5f;
+            g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillEllipse (h.x - rr, h.y - rr, rr * 2, rr * 2);
+            g.setColour (pts[(size_t) k].curve != 0.0f ? juce::Colours::white : colour.brighter (0.6f)); g.drawEllipse (h.x - rr, h.y - rr, rr * 2, rr * 2, 1.4f);
         }
     }
     // FL-style clip level: the little dot at the bottom of each pattern / audio clip, drag up or down for dB
@@ -2432,13 +2508,13 @@ private:
             // fades
             const float fi = (float) (c.fadeIn * pxPerBeat), fo = (float) (c.fadeOut * pxPerBeat);
             g.setColour (juce::Colours::black.withAlpha (0.45f));
-            const float ex = std::exp (c.fadeCurve);
+            const float fb = fadeBend (c.fadeCurve);
             auto fadeShape = [&] (bool in, float len, juce::Path& line) {
                 juce::Path pth; const float x0 = in ? r.getX() : r.getRight();
                 pth.startNewSubPath (x0, r.getY());
                 for (int k = 0; k <= 24; ++k)
                 {
-                    const float t = (float) k / 24.0f, x = in ? x0 + t * len : x0 - t * len, y = r.getBottom() - std::pow (t, ex) * r.getHeight();
+                    const float t = (float) k / 24.0f, x = in ? x0 + t * len : x0 - t * len, y = r.getBottom() - bezierBend (t, fb) * r.getHeight();
                     pth.lineTo (x, y);
                     if (k == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
                 }

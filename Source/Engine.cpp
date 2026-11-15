@@ -1840,9 +1840,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
                 float g = clip.gain * laneGain;
-                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= (float) std::pow (beatInClip / clip.fadeIn, std::exp (clip.fadeCurve));
+                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
                 const double toEnd = clip.length - beatInClip;
-                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= (float) std::pow (std::max (0.0, toEnd / clip.fadeOut), std::exp (clip.fadeCurve));
+                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);

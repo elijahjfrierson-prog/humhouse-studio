@@ -228,7 +228,18 @@ struct AutoTarget
     juce::String param;                      // built-in param id, "#n" = plugin parameter n, or send target bus (AutoSendLevel)
     juce::String name;                       // label, e.g. "Room Verb - Mix"
 };
-struct AutoPoint { double beat = 0.0; float value = 0.5f; };   // beat into the clip's content, value 0..1
+struct AutoPoint { double beat = 0.0; float value = 0.5f; float curve = 0.0f; };   // beat into the clip's content, value 0..1, curve = Bezier bend (-1..1) of the segment to the next point
+// quadratic Bezier from (0,0) to (1,1) with its handle at (0.5 - c/2, 0.5 + c/2): c > 0 rises fast then eases, c < 0 starts slow
+inline float bezierBend (float t, float c)
+{
+    c = c < -0.98f ? -0.98f : c > 0.98f ? 0.98f : c;
+    if (c > -1.0e-4f && c < 1.0e-4f) return t;
+    const float cx = 0.5f - 0.5f * c, cy = 0.5f + 0.5f * c, A = 1.0f - 2.0f * cx;
+    const float d = 4.0f * cx * cx + 4.0f * A * t;
+    const float u = (-2.0f * cx + std::sqrt (d > 0.0f ? d : 0.0f)) / (2.0f * A);
+    return 2.0f * (1.0f - u) * u * cy + u * u;
+}
+inline float fadeBend (float fadeCurve) { return -0.49f * fadeCurve; }   // clip fade curve knob (-2..2) as a Bezier bend
 float autoValueAt (const std::vector<AutoPoint>& pts, double beat);
 float autoToValue (int kind, float v);      // 0..1 -> channel / insert value (FX params map on their own range)
 float autoFromValue (int kind, float x);

@@ -18,7 +18,8 @@ struct Strip : public juce::Component
         fader.setDoubleClickReturnValue (true, 0.8);
         fader.setTooltip ("Volume (double-click = default)");
         fader.setPopupDisplayEnabled (true, true, nullptr, 1500);
-        fader.textFromValueFunction = [] (double v) { return v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels ((v / 0.8) * (v / 0.8)), 1) + " dB"; };
+        fader.textFromValueFunction = [this] (double v) { return (v <= 0.0001 ? juce::String ("-inf dB") : juce::String (juce::Decibels::gainToDecibels ((v / 0.8) * (v / 0.8)), 1) + " dB")
+                                                       + "  " + juce::String (juce::roundToInt (127.0 * v / juce::jmax (1.0e-6, fader.getMaximum()))); };   // Logic-style 0-127 too
         fader.setName ("Volume");
         fader.onValueChange = [this] { liveSet ([this] (MixerTrack& t) { t.volume = (float) fader.getValue(); }); if (! touchHeld()) s.commit ("Volume"); };
         fader.onDragEnd = [this] { s.commit ("Volume"); };

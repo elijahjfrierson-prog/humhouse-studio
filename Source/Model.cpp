@@ -328,7 +328,7 @@ float autoValueAt (const std::vector<AutoPoint>& pts, double beat)
         {
             const auto& a = pts[i - 1]; const auto& b = pts[i];
             const double w = b.beat - a.beat;
-            return w > 1.0e-9 ? a.value + (b.value - a.value) * (float) ((beat - a.beat) / w) : b.value;
+            return w > 1.0e-9 ? a.value + (b.value - a.value) * bezierBend ((float) ((beat - a.beat) / w), a.curve) : b.value;
         }
     return pts.back().value;
 }
