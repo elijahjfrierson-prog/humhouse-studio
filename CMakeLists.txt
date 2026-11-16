@@ -186,6 +186,7 @@ function(hhs_add_app target product bundle licensed)
         ${HHS_CORE_SOURCES}
         Source/Main.cpp
         Source/MainComponent.cpp
+        Source/PaintPump.cpp
         Source/ChannelRack.cpp
         Source/PianoRoll.cpp
         Source/Playlist.cpp

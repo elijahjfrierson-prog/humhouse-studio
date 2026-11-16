@@ -29,6 +29,7 @@ inline juce::Component* fitToScreen (juce::Component* c)
     return v;
 }
 // a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
+void pumpPendingPaints();   // paints held-back windows every screen refresh (PaintPump.cpp)
 inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;

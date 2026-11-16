@@ -1732,6 +1732,7 @@ private:
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     int coreTick = 0;
+    juce::VBlankAttachment paintPump { this, [] { pumpPendingPaints(); } };   // visuals never wait behind mouse moves
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
     // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
