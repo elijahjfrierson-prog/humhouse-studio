@@ -634,6 +634,7 @@ Engine::Engine()
 Engine::~Engine()
 {
     alive->store (false);
+    alive->store (false);
     deviceManager.removeAudioCallback (this);
     antForceRealtime();
     antThread->signalThreadShouldExit(); antWake.signal(); antThread->stopThread (2000);
@@ -804,22 +805,24 @@ void Engine::sync()
                 if (pluginSandbox.load())   // no-wait: the helper process loads it; audio passes through until it's ready
                 {
                     auto& L = pluginLoads[slot.uid];
+                    if (L != nullptr && L->id != slot.pluginId) L = nullptr;   // the slot was reused for another plug-in: never install the old one
                     if (L != nullptr && L->done.load())
                     {
                         f->plugin = std::move (L->inst); pluginLoads.erase (slot.uid);
                         if (f->plugin) f->plugin->setPlayHead (this);
+                        else f->plugin = createPlugin (slot.pluginId, err);   // helper failed: load it directly instead of leaving it bypassed
                     }
                     else if (L == nullptr)
                     {
                         if (auto desc = knownPlugins.getTypeForIdentifierString (slot.pluginId); desc != nullptr && ! knownPlugins.getBlacklistedFiles().contains (desc->fileOrIdentifier))
                         {
-                            L = std::make_shared<PluginLoad>();
-                            std::thread ([this, L, d = *desc, sr = sampleRate, mb = maxBlock]
+                            L = std::make_shared<PluginLoad>(); L->id = slot.pluginId;
+                            std::thread ([this, L, al = alive, d = *desc, sr = sampleRate, mb = maxBlock]
                             {
                                 juce::String e;
                                 L->inst = createSandboxedPlugin (d, sr, mb, e);
                                 L->done = true;
-                                juce::MessageManager::callAsync ([this] { sync(); });
+                                juce::MessageManager::callAsync ([this, al] { if (al->load()) sync(); });
                             }).detach();
                             f->signature = "loading|" + sig;
                         }
