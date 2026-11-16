@@ -1151,7 +1151,7 @@ if (phoneUI)
             for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
                 if (auto* it = find (id); it != nullptr && placed.insert (id).second) (h == 0 ? leftItems : rightItems).push_back ({ it, id });
         if (placed.count ("mixpop") == 0) rightItems.insert (rightItems.begin(), { find ("mixpop"), "mixpop" });   // the Mixer pop-out never disappears
-        if (placed.count ("vidpop") == 0) rightItems.insert (rightItems.begin() + juce::jmin<std::ptrdiff_t> (1, (std::ptrdiff_t) rightItems.size()), { find ("vidpop"), "vidpop" });   // VID POP too (older saved layouts)
+        if (placed.count ("vidpop") == 0) rightItems.insert (rightItems.begin() + std::min<std::ptrdiff_t> (1, (std::ptrdiff_t) rightItems.size()), { find ("vidpop"), "vidpop" });   // VID POP too (older saved layouts)
         auto place = [this] (const std::pair<juce::Component*, int>& it, juce::Rectangle<int> cell)
         {
             if (it.first == nullptr) logoArea = cell; else { it.first->setBounds (cell); it.first->setVisible (true); }
