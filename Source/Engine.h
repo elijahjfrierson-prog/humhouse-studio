@@ -124,7 +124,6 @@ public:
     // plugins
     std::unique_ptr<juce::AudioPluginInstance> createPlugin (const juce::String& identifier, juce::String& error);
     struct PluginLoad { juce::String id; std::unique_ptr<juce::AudioPluginInstance> inst; std::atomic<bool> done { false }; };
-    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);   // background loads only call back while the engine exists
     std::map<int, std::shared_ptr<PluginLoad>> pluginLoads;   // FX slot uid -> no-wait load in the crash-protection process (message thread only)
     juce::AudioPluginInstance* channelPlugin (int channelId);
     juce::AudioPluginInstance* fxPlugin (int track, int slotUid);

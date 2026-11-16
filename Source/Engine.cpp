@@ -634,7 +634,6 @@ Engine::Engine()
 Engine::~Engine()
 {
     alive->store (false);
-    alive->store (false);
     deviceManager.removeAudioCallback (this);
     antForceRealtime();
     antThread->signalThreadShouldExit(); antWake.signal(); antThread->stopThread (2000);
