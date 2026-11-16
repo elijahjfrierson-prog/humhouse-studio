@@ -123,6 +123,8 @@ public:
 
     // plugins
     std::unique_ptr<juce::AudioPluginInstance> createPlugin (const juce::String& identifier, juce::String& error);
+    struct PluginLoad { std::unique_ptr<juce::AudioPluginInstance> inst; std::atomic<bool> done { false }; };
+    std::map<int, std::shared_ptr<PluginLoad>> pluginLoads;   // FX slot uid -> no-wait load in the crash-protection process (message thread only)
     juce::AudioPluginInstance* channelPlugin (int channelId);
     juce::AudioPluginInstance* fxPlugin (int track, int slotUid);
     BuiltinEffect* builtinFx (int track, int slotUid);

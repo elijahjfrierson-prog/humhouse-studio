@@ -800,6 +800,35 @@ void Engine::sync()
             if (slot.type == "plugin")
             {
                 juce::String err;
+               #if ! JUCE_IOS
+                if (pluginSandbox.load())   // no-wait: the helper process loads it; audio passes through until it's ready
+                {
+                    auto& L = pluginLoads[slot.uid];
+                    if (L != nullptr && L->done.load())
+                    {
+                        f->plugin = std::move (L->inst); pluginLoads.erase (slot.uid);
+                        if (f->plugin) f->plugin->setPlayHead (this);
+                    }
+                    else if (L == nullptr)
+                    {
+                        if (auto desc = knownPlugins.getTypeForIdentifierString (slot.pluginId); desc != nullptr && ! knownPlugins.getBlacklistedFiles().contains (desc->fileOrIdentifier))
+                        {
+                            L = std::make_shared<PluginLoad>();
+                            std::thread ([this, L, d = *desc, sr = sampleRate, mb = maxBlock]
+                            {
+                                juce::String e;
+                                L->inst = createSandboxedPlugin (d, sr, mb, e);
+                                L->done = true;
+                                juce::MessageManager::callAsync ([this] { sync(); });
+                            }).detach();
+                            f->signature = "loading|" + sig;
+                        }
+                        else { pluginLoads.erase (slot.uid); f->plugin = createPlugin (slot.pluginId, err); }
+                    }
+                    else f->signature = "loading|" + sig;
+                }
+                else
+               #endif
                 f->plugin = createPlugin (slot.pluginId, err);
                 if (f->plugin && slot.pluginState.getSize() > 0)
                 {
