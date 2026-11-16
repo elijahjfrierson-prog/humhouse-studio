@@ -1279,6 +1279,7 @@ public:
     {
         heads = juce::ImageCache::getFromMemory (AmpData::amp_heads_jpg, AmpData::amp_heads_jpgSize);
         room = juce::ImageCache::getFromMemory (AmpData::amp_studio_jpg, AmpData::amp_studio_jpgSize);
+        cabImg = juce::ImageCache::getFromMemory (AmpData::amp_cab_jpg, AmpData::amp_cab_jpgSize);
         stand = juce::ImageCache::getFromMemory (AmpData::amp_stand_png, AmpData::amp_stand_pngSize);
         boom = juce::ImageCache::getFromMemory (AmpData::amp_boom_png, AmpData::amp_boom_pngSize);
         const auto sheet = juce::ImageCache::getFromMemory (AmpData::amp_mics_png, AmpData::amp_mics_pngSize);
@@ -1424,17 +1425,34 @@ private:
     juce::Rectangle<float> topButton (int b) const { const auto s = sceneArea(); return { s.getRight() - 3.0f * 170.0f + (float) b * 170.0f, s.getY() + 6.0f, 164.0f, 22.0f }; }
     static constexpr float cabX = 457.0f, cabY = 200.0f, cabW = 376.0f, cabH = 360.0f;   // the cab inside the rendered studio (1280x720)
     float headAspect() const { const auto src = headSrc (model()); return (float) src.getHeight() / (float) src.getWidth(); }
+    juce::Point<float> cabScale() const   // the CAB picker sizes the rendered cab: 1x12 small, 2x12 wide + short, 4x12 full, 8x10 tall
+    {
+        switch (juce::roundToInt (grid.liveValueOf ("cab")))
+        {
+            case 0: case 5: return { 0.56f, 0.56f };
+            case 1: return { 0.96f, 0.6f };
+            case 4: return { 0.9f, 1.28f };
+            default: return { 1.0f, 1.0f };
+        }
+    }
+    float headW (float fullCabW) const { return juce::jmax (fullCabW * cabScale().x * 0.96f, fullCabW * 0.72f); }
     juce::Rectangle<float> plateRect() const   // the 3D studio render, scaled so the amp stands up close and fills the view
     {
         const auto s = sceneArea();
-        const float fit = s.getHeight() * 0.86f / (cabH + cabW * 0.96f * headAspect());
-        const float sc = juce::jmax (fit, s.getWidth() / 1280.0f);
+        const float fit = s.getHeight() * 0.86f / (cabH * cabScale().y + headW (cabW) * headAspect());
+        const float sc = fit;   // the whole amp always fits; a wider view just shows more of the room's walls
         return { s.getCentreX() - (cabX + cabW * 0.5f) * sc, s.getBottom() - s.getHeight() * 0.05f - (cabY + cabH) * sc, 1280.0f * sc, 720.0f * sc };
     }
-    juce::Rectangle<float> cabRect() const { const auto r = plateRect(); const float k = r.getWidth() / 1280.0f; return { r.getX() + cabX * k, r.getY() + cabY * k, cabW * k, cabH * k }; }
+    juce::Rectangle<float> cabFull() const { const auto r = plateRect(); const float k = r.getWidth() / 1280.0f; return { r.getX() + cabX * k, r.getY() + cabY * k, cabW * k, cabH * k }; }
+    juce::Rectangle<float> cabRect() const
+    {
+        const auto f = cabFull(); const auto sc = cabScale();
+        const float w = f.getWidth() * sc.x, h = f.getHeight() * sc.y;
+        return { f.getCentreX() - w * 0.5f, f.getBottom() - h, w, h };
+    }
     juce::Rectangle<float> headRect() const
     {
-        const auto c = cabRect(); const float w = c.getWidth() * 0.96f, h = w * headAspect();
+        const auto c = cabRect(); const float w = headW (cabFull().getWidth()), h = w * headAspect();
         return { c.getCentreX() - w * 0.5f, c.getY() - h + 2.0f, w, h };
     }
     juce::Point<float> knobCentre (int k) const
@@ -1458,11 +1476,13 @@ private:
         MicGeo m; const auto c = cabRect(); const auto s = sceneArea();
         const float dn = juce::jlimit (0.0f, 1.0f, (grid.liveValueOf ("micdist") - 0.1f) / 5.9f);
         m.side = grid.liveValueOf ("micx") < 0.5f ? -1.0f : 1.0f;
-        m.len = c.getWidth() * (0.24f + 0.16f * dn);
+        m.len = c.getWidth() * (0.28f + 0.16f * dn);
         m.cap = micPoint() + juce::Point<float> (0.0f, c.getHeight() * 0.10f * dn);
         m.tilt = m.side * juce::degreesToRadians (grid.liveValueOf ("micangle")) * 0.6f;
         m.tail = m.cap + juce::Point<float> (m.side * std::cos (m.tilt), std::sin (m.tilt) * m.side) * m.len;
         m.poleX = m.tail.x + m.side * c.getWidth() * (0.16f + 0.12f * dn);
+        const float beside = c.getWidth() * (0.12f + 0.10f * dn);   // the stand stands beside the cab (black on black would vanish)
+        m.poleX = m.side > 0 ? juce::jmax (m.poleX, c.getRight() + beside) : juce::jmin (m.poleX, c.getX() - beside);
         m.floorY = c.getBottom() + (s.getBottom() - c.getBottom()) * (0.12f + 0.8f * dn);
         m.topY = juce::jmin (m.tail.y - c.getHeight() * 0.14f, m.floorY - 60.0f);
         m.ps = (m.floorY - m.topY) / 700.0f;
@@ -1557,7 +1577,7 @@ private:
         {
             const auto r = juce::Rectangle<float> (a.getX(), a.getY() + rowH() * (float) i, a.getWidth(), rowH()).reduced (3, 1.5f);
             if (i == model()) { g.setColour (col::accent.withAlpha (0.85f)); g.fillRoundedRectangle (r, 3.0f); }
-            g.setColour (i == model() ? juce::Colours::white : col::text.withAlpha (0.8f));
+            g.setColour (i == model() ? juce::Colours::white : juce::Colour (0xffe6e6ea).withAlpha (0.8f));
             g.setFont (juce::FontOptions (juce::jmin (13.0f, rowH() * 0.6f), juce::Font::bold));
             g.drawFittedText (d != nullptr && i < (int) d->choices.size() ? juce::String (d->choices[(size_t) i]) : juce::String (i + 1), r.reduced (6, 0).toNearestInt(), juce::Justification::centredLeft, 1);
         }
@@ -1570,7 +1590,12 @@ private:
         if (room.isValid())
         {
             g.saveState(); g.reduceClipRegion (s.toNearestInt());
-            g.drawImage (room, plateRect(), juce::RectanglePlacement::stretchToFit);
+            const auto pr = plateRect();
+            if (pr.getX() > s.getX())   // wider than the render: continue its side walls
+                g.drawImage (room, (int) s.getX(), (int) pr.getY(), (int) std::ceil (pr.getX() - s.getX()) + 1, (int) pr.getHeight(), 0, 0, 90, 720);
+            if (pr.getRight() < s.getRight())
+                g.drawImage (room, (int) pr.getRight() - 1, (int) pr.getY(), (int) std::ceil (s.getRight() - pr.getRight()) + 1, (int) pr.getHeight(), 1190, 0, 90, 720);
+            g.drawImage (room, pr, juce::RectanglePlacement::stretchToFit);
             g.setColour (juce::Colour (tint[juce::jlimit (0, 4, rm)])); g.fillRect (s);
             if (rm == 2)   // vocal booth: foam wedges on the walls
             {
@@ -1589,6 +1614,12 @@ private:
     {
         auto s = sceneArea(); const int m = model(); const auto& L = looks[m];
         paintRoom (g, s);
+        {   // the rendered cab, sized by the CAB picker, with its contact shadow on the rug
+            const auto c = cabRect();
+            g.setColour (juce::Colour (0x70000000)); g.fillEllipse (c.getX() - c.getWidth() * 0.06f, c.getBottom() - c.getHeight() * 0.04f, c.getWidth() * 1.12f, c.getHeight() * 0.09f);
+            g.setOpacity (1.0f);   // drawImage takes the colour's alpha: the shadow's 0x70 made the cab see-through
+            if (cabImg.isValid()) g.drawImage (cabImg, c, juce::RectanglePlacement::stretchToFit);
+        }
         // head from the reference picture, our badge over the logo, our knobs on the panel
         const auto h = headRect();
         if (heads.isValid()) g.drawImage (heads, h.getX(), h.getY(), h.getWidth(), h.getHeight(), headSrc (m).getX(), headSrc (m).getY(), headSrc (m).getWidth(), headSrc (m).getHeight());
@@ -1647,6 +1678,7 @@ private:
         const auto m = micGeo();
         g.setColour (juce::Colour (0x50000000));   // contact shadow under the tripod
         g.fillEllipse (juce::Rectangle<float> (300.0f * m.ps, 34.0f * m.ps).withCentre ({ m.poleX, m.floorY - 6.0f * m.ps }));
+        g.setOpacity (1.0f);
         if (stand.isValid()) g.drawImageTransformed (stand, juce::AffineTransform::translation (-208.0f, -700.0f).scaled (m.ps).translated (m.poleX, m.floorY));
         if (boom.isValid())
         {
@@ -1691,7 +1723,7 @@ private:
                 if (type == 0) { g.setColour (c); g.drawRoundedRectangle (r.reduced (2), 5.0f, 1.2f); }
                 else { g.setColour (on ? c : c.withMultipliedSaturation (0.3f).withMultipliedBrightness (0.5f)); g.fillRoundedRectangle (r.reduced (2), 5.0f); }
                 const auto txt = c.getPerceivedBrightness() > 0.6f ? juce::Colours::black : juce::Colours::white;
-                g.setColour (type == 0 ? col::dim : txt); g.setFont (juce::FontOptions (type == 0 ? 18.0f : 12.0f, juce::Font::bold));
+                g.setColour (type == 0 ? juce::Colour (0xff9a9aa2) : txt); g.setFont (juce::FontOptions (type == 0 ? 18.0f : 12.0f, juce::Font::bold));
                 g.drawFittedText (pedalTag[type], r.withHeight (r.getHeight() * 0.55f).toNearestInt(), juce::Justification::centred, 1);
                 if (type > 0)
                 {
@@ -1702,7 +1734,7 @@ private:
             else
             {
                 g.setColour (juce::Colour (0xff23262d)); g.fillRoundedRectangle (r.reduced (2), 5.0f);
-                g.setColour (col::text); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+                g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
                 g.drawFittedText (fixedTag[n], r.toNearestInt(), juce::Justification::centred, 1);
             }
             if (n == selected) { g.setColour (col::accent); g.drawRoundedRectangle (r.reduced (1), 6.0f, 2.0f); }
@@ -1726,14 +1758,14 @@ private:
             juce::String nm = d->name.fromFirstOccurrenceOf (" ", false, false);
             if (d->id.length() == 3 && (d->id[0] == 's' || d->id[0] == 'p')) nm = d->id.endsWithChar ('a') ? "DRIVE" : d->id.endsWithChar ('b') ? "TONE" : "LEVEL";
             else nm = d->name;
-            g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.setColour (juce::Colour (0xff9a9aa2)); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
             g.drawFittedText (nm.toUpperCase(), c.removeFromBottom (14).toNearestInt(), juce::Justification::centred, 1);
             if (! d->choices.empty() || d->id.endsWith ("on"))
             {
                 const auto b = c.withSizeKeepingCentre (c.getWidth(), 24.0f);
                 const bool tog = d->choices.empty();
                 g.setColour (tog && v > 0.5f ? col::accent : juce::Colour (0xff23262d)); g.fillRoundedRectangle (b, 4.0f);
-                g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+                g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
                 g.drawFittedText (tog ? juce::String (v > 0.5f ? "ON" : "OFF") : grid.choiceOf (d->id), b.reduced (3, 0).toNearestInt(), juce::Justification::centred, 2);
                 continue;
             }
@@ -1743,12 +1775,12 @@ private:
             g.setColour (juce::Colour (0xff2c3038)); g.strokePath (bg, juce::PathStrokeType (3.0f));
             juce::Path fg; fg.addCentredArc (kc.x, kc.y, kr, kr, 0, a0, a1, true);
             g.setColour (i == insKnob ? juce::Colours::white : col::accent); g.strokePath (fg, juce::PathStrokeType (3.0f));
-            g.setColour (col::text); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
             g.drawFittedText (juce::String (v, std::abs (d->mx - d->mn) > 20 ? 0 : 1), juce::Rectangle<float> (kr * 2, 12).withCentre (kc).toNearestInt(), juce::Justification::centred, 1);
         }
     }
     void timerCallback() override { const auto k = grid.stateKey(); if (k != last) { last = k; repaint(); } }
-    ParamGrid& grid; juce::Image heads, room, stand, boom, mics[6]; juce::String last;
+    ParamGrid& grid; juce::Image heads, room, cabImg, stand, boom, mics[6]; juce::String last;
     int dragKnob = -1, dragNode = -1, insKnob = -1, selected = 7; float dragFrom = 0.0f; bool micDrag = false, standDrag = false; juce::Point<float> dropAt;
 };
 

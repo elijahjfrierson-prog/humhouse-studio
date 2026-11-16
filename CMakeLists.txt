@@ -106,7 +106,7 @@ list(APPEND HHS_LIBS HHSDrummerData)
 # fingerprints of every sold key (scripts/hhs_keyprints.py): a real key unlocks even with the license server down
 juce_add_binary_data(HHSKeyprints HEADER_NAME KeyprintData.h NAMESPACE KeyprintData SOURCES Resources/License/keyprints.bin)
 list(APPEND HHS_LIBS HHSKeyprints)
-juce_add_binary_data(HHSAmpData HEADER_NAME AmpData.h NAMESPACE AmpData SOURCES Resources/Amp/amp_studio.jpg Resources/Amp/amp_heads.jpg Resources/Amp/amp_mics.png Resources/Amp/amp_stand.png Resources/Amp/amp_boom.png)
+juce_add_binary_data(HHSAmpData HEADER_NAME AmpData.h NAMESPACE AmpData SOURCES Resources/Amp/amp_studio.jpg Resources/Amp/amp_cab.jpg Resources/Amp/amp_heads.jpg Resources/Amp/amp_mics.png Resources/Amp/amp_stand.png Resources/Amp/amp_boom.png)
 list(APPEND HHS_LIBS HHSAmpData)
 if(APPLE OR WIN32)
     list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
