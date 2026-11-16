@@ -192,6 +192,7 @@ function(hhs_add_app target product bundle licensed)
         Source/Main.cpp
         Source/MainComponent.cpp
         Source/PaintPump.cpp
+        $<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:Source/MacWindows.mm>
         Source/ChannelRack.cpp
         Source/PianoRoll.cpp
         Source/Playlist.cpp
