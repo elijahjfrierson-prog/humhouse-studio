@@ -648,10 +648,12 @@ bool saveProject (const Project& p, const juce::File& f)
     {   // the song is zlib-compressed XML: patterns, automation and glued audio shrink to KB/MB instead of tens of MB
         juce::FileOutputStream fo (tmp);
         if (! fo.openedOk()) return false;
-        juce::GZIPCompressorOutputStream z (fo, 6);
-        if (! z.writeString (xml->toString())) return false;   // writeString adds a trailing 0; stripped on load
-        z.flush();
-        if (fo.getStatus().failed()) return false;
+        {
+            juce::GZIPCompressorOutputStream z (fo, 6);
+            if (! z.writeString (xml->toString())) { tmp.deleteFile(); return false; }   // writeString adds a trailing 0; stripped on load
+        }   // compressor finishes the stream here, before the disk check
+        fo.flush();
+        if (fo.getStatus().failed()) { tmp.deleteFile(); return false; }
     }
     return tmp.moveFileTo (f);
 }
@@ -667,7 +669,16 @@ bool loadProject (Project& p, const juce::File& f)
         {
             juce::MemoryInputStream mi (raw, false);
             juce::GZIPDecompressorInputStream z (mi);
-            juce::MemoryOutputStream mo; mo.writeFromInputStream (z, -1);
+            juce::MemoryOutputStream mo;
+            constexpr juce::int64 maxSong = (juce::int64) 1536 * 1024 * 1024;   // glue caps raw audio at 512 MB; anything far past that is not a real song
+            juce::HeapBlock<char> chunk (1 << 16);
+            for (;;)
+            {
+                const int got = z.read (chunk.get(), 1 << 16);
+                if (got <= 0) break;
+                if ((juce::int64) mo.getDataSize() + got > maxSong) return false;
+                mo.write (chunk.get(), (size_t) got);
+            }
             xml = juce::XmlDocument::parse (juce::String::fromUTF8 (static_cast<const char*> (mo.getData()), (int) strnlen (static_cast<const char*> (mo.getData()), mo.getDataSize())));
         }
         else xml = juce::XmlDocument::parse (f);
