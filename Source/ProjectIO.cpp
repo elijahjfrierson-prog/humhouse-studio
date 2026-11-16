@@ -635,8 +635,9 @@ static void gatherAudio (Project& p, const juce::File& song)
         auto it = done.find (f.getFullPathName());
         if (it == done.end())
         {
-            auto dst = files.getChildFile (f.getFileName());
-            if (dst.existsAsFile() && dst.getSize() != f.getSize()) dst = files.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+            // one copy per source file: same-named takes from different folders never share a copy
+            const auto dst = files.getChildFile (f.getFileNameWithoutExtension() + "-" + juce::String::toHexString (f.getFullPathName().hashCode64()).substring (0, 8) + f.getFileExtension());
+            if (dst.existsAsFile() && dst.getSize() != f.getSize()) dst.deleteFile();   // the source changed since it was copied
             if (! dst.existsAsFile() && ! (files.createDirectory().wasOk() && f.copyFileTo (dst))) return;   // copy failed: keep the original path
             it = done.emplace (f.getFullPathName(), dst).first;
         }
