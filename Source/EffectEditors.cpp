@@ -254,6 +254,7 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
 
 class ParamGrid : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     struct P { juce::String id, name; float mn, mx, def, value; std::vector<const char*> choices; };
     ParamGrid (const juce::String& title, std::vector<P> ps, std::function<void (const juce::String&, float)> setLive, std::function<void()> commit,
@@ -312,7 +313,7 @@ public:
         }
         visibleCount = (int) params.size();
         layoutSize();
-        startTimerHz (15);
+
     }
     // automation clips on this effect: their knobs move with the lane and their names turn red, same as the LANE mini plug-in
     std::function<int (const juce::String&, float&)> autoValue;   // 0 = not automated, 1 = automated (not playing here), 2 = v is live 0..1
@@ -567,6 +568,7 @@ static void drawPanelBg (juce::Graphics& g, juce::Rectangle<float> a)
 
 class EqGraph : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     EqGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, std::function<ScopeTap*()> src)
         : grid (g), live (std::move (liveFx)), tap (std::move (src))
@@ -606,7 +608,7 @@ public:
         for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) addAndMakeVisible (c);
         syncBar();
         setTooltip ("Double-click empty space = add a band (up to 12). Drag a dot = frequency + gain. Wheel = width (Q). Double-click a dot = reset gain. Right-click a dot = type, Dynamic EQ, delete. Click NATURAL / LINEAR to switch phase.");
-        startTimerHz (30);
+
     }
     void paint (juce::Graphics& g) override
     {
@@ -916,6 +918,7 @@ private:
 // ANALYZE listens to the playing mix; APPLY sets band gains + output toward the target.
 class CurvesGraph : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     CurvesGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, std::function<ScopeTap*()> src)
         : grid (g), live (std::move (liveFx)), tap (std::move (src))
@@ -926,7 +929,7 @@ public:
         addAndMakeVisible (analyze);
         analyze.setTooltip ("Play your song, press ANALYZE, let it listen 10+ s, then press APPLY");
         analyze.onClick = [this] { if (grid.valueOf ("analyze") < 0.5f) start(); else apply(); };
-        startTimerHz (30);
+
     }
     static float targetDb (int t, int k)
     {
@@ -1075,9 +1078,10 @@ public:
 
 class DynGraph : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     DynGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, juce::String th, juce::String ratio, juce::String knee)
-        : grid (g), live (std::move (liveFx)), thId (std::move (th)), ratioId (std::move (ratio)), kneeId (std::move (knee)) { startTimerHz (30); }
+        : grid (g), live (std::move (liveFx)), thId (std::move (th)), ratioId (std::move (ratio)), kneeId (std::move (knee)) { }
     void paint (juce::Graphics& g) override
     {
         drawPanelBg (g, getLocalBounds().toFloat());
@@ -1131,8 +1135,9 @@ private:
 // simple pictures of what an effect does (reverb tail, echo taps, filter curve)
 class FxPicture : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
-    FxPicture (ParamGrid& g, juce::String t) : grid (g), type (std::move (t)) { startTimerHz (15); }
+    FxPicture (ParamGrid& g, juce::String t) : grid (g), type (std::move (t)) { }
     void paint (juce::Graphics& g) override
     {
         drawPanelBg (g, getLocalBounds().toFloat());
@@ -1274,6 +1279,7 @@ private:
 // Click a node to edit it below; drag a pedal onto another to swap them; right-click a pedal to change / bypass / remove it.
 class AmpStage : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     explicit AmpStage (ParamGrid& g) : grid (g)
     {
@@ -1285,7 +1291,7 @@ public:
         const auto sheet = juce::ImageCache::getFromMemory (AmpData::amp_mics_png, AmpData::amp_mics_pngSize);
         static constexpr int micH[6] { 124, 116, 126, 139, 148, 181 };   // rendered mics, one per 200 px row of the sheet
         if (sheet.isValid()) for (int i = 0; i < 6; ++i) mics[i] = sheet.getClippedImage ({ 0, i * 200 + (200 - micH[i]) / 2, 360, micH[i] });
-        setOpaque (true); startTimerHz (20);
+        setOpaque (true);
     }
     void paint (juce::Graphics& g) override
     {

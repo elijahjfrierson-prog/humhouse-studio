@@ -747,6 +747,7 @@ private:
 
 class MixerView : public juce::Component, private juce::ChangeListener, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     explicit MixerView (Studio& st) : s (st), fx (st)
     {
@@ -763,7 +764,7 @@ public:
         wiresBtn.onClick = [this] { wires.showAll = wiresBtn.getToggleState(); wires.repaint(); };
         addAndMakeVisible (wiresBtn);
         refresh();
-        startTimerHz (25);
+
     }
     ~MixerView() override { s.removeChangeListener (this); }
     void paint (juce::Graphics& g) override { g.fillAll (col::bg); }
