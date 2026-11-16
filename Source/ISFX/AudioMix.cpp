@@ -16,7 +16,7 @@ bool AudioCache::has (const juce::String& id) const
     std::lock_guard<std::mutex> g (lock); return data.count (id) > 0;
 }
 
-static void mixClip (const Clip& c, const AudioCache& cache, juce::int64 start, int n, float* L, float* R)
+static void mixClip (const Clip& c, const AudioCache& cache, juce::int64 start, int n, float* L, float* R, float duck = 1.0f)
 {
     const double toSamp = (double) kMixRate / (double) kFlicks;
     juce::int64 c0 = (juce::int64) std::llround ((double) c.start * toSamp), c1 = (juce::int64) std::llround ((double) c.end() * toSamp);
@@ -28,13 +28,22 @@ static void mixClip (const Clip& c, const AudioCache& cache, juce::int64 start, 
     const double srcBase = (double) c.srcIn * toSamp;
     // 5 ms fades at clip edges avoid clicks on cuts
     const int fade = kMixRate / 200;
+    // speed ramp: exact source position at the block ends, linear in between (blocks are a few ms)
+    const bool ramp = c.ramped();
+    const double tps = (double) kFlicks / (double) kMixRate;
+    const double rA = ramp ? c.srcPos ((Ticks) std::llround ((double) a * tps)) * toSamp : 0.0;
+    const double rB = ramp ? c.srcPos ((Ticks) std::llround ((double) b * tps)) * toSamp : 0.0;
+    // fades + volume line: exact at the block ends, linear in between
+    const float gA = volumeGain (c, (Ticks) std::llround ((double) (a - c0) * tps)) * duck;
+    const float gB = volumeGain (c, (Ticks) std::llround ((double) (b - c0) * tps)) * duck;
     for (juce::int64 i = a; i < b; ++i)
     {
-        double sp = srcBase + (double) (c.reverse ? c1 - 1 - i : i - c0) * c.speed;
+        double sp = ramp ? rA + (rB - rA) * (double) (i - a) / (double) (b - a)
+                         : srcBase + (double) (c.reverse ? c1 - 1 - i : i - c0) * c.speed;
         juce::int64 si = (juce::int64) sp;
         if (si < 0 || si + 1 >= frames) continue;
         float fr = (float) (sp - (double) si);
-        float g = c.volume;
+        float g = gA + (gB - gA) * (float) (i - a) / (float) (b - a);
         if (i - c0 < fade) g *= (float) (i - c0) / fade;
         if (c1 - i < fade) g *= (float) (c1 - i) / fade;
         auto* p = buf->data() + si * 2;
@@ -53,11 +62,19 @@ void mixSequence (const Sequence& s, const AudioCache& cache, juce::int64 start,
     if (fx != nullptr)
         for (size_t t = 0; t < s.tracks.size(); ++t)
             inserts[t] = s.tracks[t].id.isNotEmpty() && audible (s.tracks[t]) && fx->has (s.tracks[t].id);
+    float duck = 1.0f;
+    if (s.duckDb < 0.0f && s.duckKey.isNotEmpty())
+    {   // auto-duck: everything except the song drops while the song plays
+        const Ticks t0 = (Ticks) std::llround ((double) start * (double) kFlicks / (double) kMixRate);
+        for (auto& c : s.clips)
+            if (c.mediaId == s.duckKey && c.enabled && t0 >= c.start && t0 < c.end()) duck = std::pow (10.0f, s.duckDb / 20.0f);
+    }
+    auto dk = [&] (const Clip& c) { return c.mediaId == s.duckKey ? 1.0f : duck; };
     for (auto& c : s.clips)
     {
         if (c.track < 0 || c.track >= (int) s.tracks.size() || inserts[(size_t) c.track]) continue;
-        if (! audible (s.tracks[(size_t) c.track]) || ! c.enabled || c.volume <= 0.0f) continue;
-        mixClip (c, cache, start, n, L, R);
+        if (! audible (s.tracks[(size_t) c.track]) || ! c.enabled || (c.volume <= 0.0f && c.keys.count ("volume") == 0)) continue;
+        mixClip (c, cache, start, n, L, R, dk (c));
     }
     thread_local std::vector<float> tL, tR;
     for (size_t t = 0; t < inserts.size(); ++t)
@@ -65,7 +82,7 @@ void mixSequence (const Sequence& s, const AudioCache& cache, juce::int64 start,
         if (! inserts[t]) continue;
         tL.assign ((size_t) n, 0.0f); tR.assign ((size_t) n, 0.0f);
         for (auto& c : s.clips)
-            if (c.track == (int) t && c.enabled && c.volume > 0.0f) mixClip (c, cache, start, n, tL.data(), tR.data());
+            if (c.track == (int) t && c.enabled && c.volume > 0.0f) mixClip (c, cache, start, n, tL.data(), tR.data(), dk (c));
         fx->process (s.tracks[t].id, tL.data(), tR.data(), n);   // runs even on silence so reverb/delay tails ring out
         for (int i = 0; i < n; ++i) { L[i] += tL[(size_t) i]; R[i] += tR[(size_t) i]; }
     }

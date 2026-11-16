@@ -328,7 +328,7 @@ float autoValueAt (const std::vector<AutoPoint>& pts, double beat)
         {
             const auto& a = pts[i - 1]; const auto& b = pts[i];
             const double w = b.beat - a.beat;
-            return w > 1.0e-9 ? a.value + (b.value - a.value) * (float) ((beat - a.beat) / w) : b.value;
+            return w > 1.0e-9 ? a.value + (b.value - a.value) * bezierBend ((float) ((beat - a.beat) / w), a.curve) : b.value;
         }
     return pts.back().value;
 }
@@ -504,5 +504,21 @@ int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double
     }
     p.clips.insert (p.clips.end(), made.begin(), made.end());
     return rolled;
+}
+}
+
+namespace hhs
+{
+int Project::pushLane (int from, double start, double end, const juce::String& name)
+{
+    for (int i = juce::jmax (0, from); i < (int) lanes.size(); ++i)
+    {
+        if (lanes[(size_t) i].compLane >= 0) continue;
+        const bool busy = std::any_of (clips.begin(), clips.end(), [&] (const Clip& c) { return c.lane == i && c.start < end && c.start + c.length > start; });
+        if (! busy) return i;
+    }
+    Lane l; l.name = name; l.mixerTrack = addMixerTrack (name);
+    lanes.push_back (l);
+    return (int) lanes.size() - 1;
 }
 }

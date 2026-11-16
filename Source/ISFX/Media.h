@@ -47,7 +47,9 @@ public:
     bool isOpen() const { return fmt != nullptr; }
     // returns the frame showing at source time t (the last frame with pts <= t)
     bool frameAt (Ticks t, Frame& out);
+    bool seekTo (Ticks t);
     const Frame* frameRef (Ticks t);  // valid until the next call
+    const Frame* peekNext();          // the frame after the last frameRef (no seek), for slow-motion interpolation
     bool readNext (Frame& out) { return isOpen() && ! eof && decodeNext (out); }
     int width() const { return outW; }
     int height() const { return outH; }
@@ -57,7 +59,6 @@ private:
     bool decodeNext (Frame& out);
     bool receive (AVFrame* into, Ticks& pts);
     void convert (const AVFrame* src, Frame& out);
-    bool seekTo (Ticks t);
     AVFormatContext* fmt = nullptr;
     AVCodecContext* dec = nullptr;
     AVFrame* frame = nullptr;
@@ -90,6 +91,7 @@ public:
     void prime (Ticks t);                                   // start decoding at t, don't wait
     // newest decoded frame at or before t (or just after, after a pre-roll); waits up to waitMs if none is ready
     std::shared_ptr<const Frame> get (Ticks t, int waitMs);
+    std::shared_ptr<const Frame> after (Ticks pts);          // first queued frame later than pts, never waits
 private:
     void run() override;
     VideoDecoder dec;
@@ -102,6 +104,12 @@ private:
     Ticks target = -1;
     bool atEnd = false;
     size_t maxAhead = 6;     // shrinks for big frames so RAM stays bounded (~48 MB per source)
+    size_t frameBytes = 0;
+    void runReverse (Ticks t);
+public:
+    // Reversed clips: decode in short forward chunks just below the playhead and serve them backwards, so a long-GOP
+    // file costs one seek per chunk instead of one seek + GOP re-decode per frame.
+    bool reverse = false;
 };
 
 juce::Image frameToImage (const Frame& f, int rotation);
@@ -118,4 +126,9 @@ struct Waveform
     double bucketsPerSec = 200.0;
 };
 Waveform buildWaveform (const std::vector<float>& mono, int rate, double bucketsPerSec = 200.0);
+// Warp Stabilizer analysis: per analysed frame, the correction to apply (dx/dy = image shift as a fraction of the frame,
+// positive = right/down; rot = degrees, positive = clockwise) at clip-relative timeline ticks. Background thread only.
+struct ShakeFix { std::vector<Ticks> t; std::vector<float> dx, dy, rot; float zoom = 1.0f; };
+bool analyzeShake (const juce::File& file, Ticks srcIn, Ticks srcLen, double speed, float smoothSec, ShakeFix& out,
+                   std::function<bool()> cancel = {}, std::function<void (double)> progress = {});
 }

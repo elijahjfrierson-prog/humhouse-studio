@@ -24,8 +24,8 @@ public:
     {
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
-        if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
-        if (! mono && slide && glide > 0.0f)
+        if (cutItself && glide <= 0.0f) choke();
+        if (! mono && glide > 0.0f)   // Poly + Glide: chords glide into the next chord (FL porta), SLIDE notes not needed
         {
             // poly portamento / sliding chords (FL): every note of the chord glides the nearest held voice that no
             // other note of this chord took yet - a chord slides as a chord instead of collapsing onto one voice
@@ -36,7 +36,7 @@ public:
             if (best != nullptr)
             {
                 auto& v = *best;
-                v.releasing = false; v.rel = 1.0f; v.claim = clock;
+                v.releasing = false; v.rel = 1.0f; v.claim = clock; v.gain = vel;
                 v.targetSemis = target; v.key = key; v.holdFrom = v.age;
                 v.glideStep = glideStepFor (target - v.semis);
                 if (! v.slid) { v.slid = true; v.headA = v.headB = v.pos; v.phase = 0; if (v.pos > sustainPos) v.pos = sustainPos; }
@@ -78,7 +78,7 @@ public:
         v->targetSemis = target;
         v->glideStep = glideStepFor (target - v->semis);
         if (v->semis != target) v->slid = true;   // a fresh voice that glides in sustains like a legato slide (no dying 808 chains)
-        if (! mono && slide) v->claim = clock;
+        if (! mono && (slide || glide > 0.0f)) v->claim = clock;   // fresh chord voices aren't stolen by the rest of the chord
         lastSemis = target;
     }
     // Glide = the time the slide takes, whatever the interval (FL): a 1 s glide reaches the note after 1 s
@@ -284,7 +284,7 @@ public:
     void noteOn (int key, float vel, bool slide) override
     {
         const double k = key + pitch;
-        if (! mono && slide && glide > 0.0f)
+        if (! mono && glide > 0.0f)   // Poly + Glide: chords glide into the next chord (FL porta), SLIDE notes not needed
         {
             // poly portamento / sliding chords: each chord note glides the nearest held voice not taken yet (see sampler)
             Voice* best = nullptr; double bestD = 1.0e9;
@@ -315,7 +315,7 @@ public:
         v->current = (glide > 0.0f && lastKey > 0 && (mono || slide)) ? lastKey : k;
         v->glideStep = glideStepFor (k - v->current);
         v->slid = v->current != k;
-        if (! mono && slide) v->claim = clock;
+        if (! mono && (slide || glide > 0.0f)) v->claim = clock;   // fresh chord voices aren't stolen by the rest of the chord
         lastKey = k;
     }
     double clock = 0.0;

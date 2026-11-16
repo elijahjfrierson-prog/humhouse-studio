@@ -1,6 +1,8 @@
+#include <mutex>
 #include <set>
 #include <tuple>
 #include "UI.h"
+#include "StemSplit.h"
 #include <juce_dsp/juce_dsp.h>
 
 namespace hhs
@@ -41,6 +43,68 @@ struct KeyLock
 };
 
 // Hum Verse (HumHouse DJ): two decks + crossfader on their own audio callback beside the engine (never inside the engine's block)
+// full mix on channels 0-1 and its vocal stem on 2-3, read at the same position (stays sample-locked through
+// the read-ahead and the tempo resampler), so the mixer can rebalance vocal vs beat live: beat = mix - vocal
+struct StemPairSource : public juce::PositionableAudioSource
+{
+    explicit StemPairSource (juce::AudioFormatReader* r) : full (r, true) {}
+    void setVocal (juce::AudioFormatReader* r)
+    {
+        auto v = std::make_unique<juce::AudioFormatReaderSource> (r, true);
+        v->prepareToPlay (blockSize, rate); v->setNextReadPosition (full.getNextReadPosition());
+        const juce::SpinLock::ScopedLockType l (lock); voc.swap (v);
+    }
+    bool hasVocal() const { return voc != nullptr; }
+    void prepareToPlay (int n, double sr) override { blockSize = n; rate = sr; full.prepareToPlay (n, sr); if (voc) voc->prepareToPlay (n, sr); }
+    void releaseResources() override { full.releaseResources(); }
+    void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override
+    {
+        auto* const* ch = info.buffer->getArrayOfWritePointers();
+        const int nc = info.buffer->getNumChannels();
+        juce::AudioBuffer<float> mix (ch, juce::jmin (2, nc), info.startSample, info.numSamples);
+        full.getNextAudioBlock (juce::AudioSourceChannelInfo (&mix, 0, info.numSamples));
+        if (nc < 4) return;
+        juce::AudioBuffer<float> v (ch + 2, 2, info.startSample, info.numSamples);
+        const juce::SpinLock::ScopedLockType l (lock);
+        if (voc != nullptr) { voc->setNextReadPosition (full.getNextReadPosition() - info.numSamples); voc->getNextAudioBlock (juce::AudioSourceChannelInfo (&v, 0, info.numSamples)); }
+        else v.clear();
+    }
+    void setNextReadPosition (juce::int64 p) override { full.setNextReadPosition (p); }
+    juce::int64 getNextReadPosition() const override { return full.getNextReadPosition(); }
+    juce::int64 getTotalLength() const override { return full.getTotalLength(); }
+    bool isLooping() const override { return false; }
+    juce::AudioFormatReaderSource full;
+    std::unique_ptr<juce::AudioFormatReaderSource> voc;
+    juce::SpinLock lock;
+    int blockSize = 512; double rate = 44100.0;
+};
+
+// VOCAL / BEAT / FILTER / ECHO knob under each deck
+struct DeckKnob : public juce::Slider
+{
+    DeckKnob (const char* n, double lo, double hi, double def) : name (n)
+    {
+        setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        setRange (lo, hi, 0.001); setValue (def); setDoubleClickReturnValue (true, def);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        auto lab = r.removeFromBottom (13.0f);
+        const float d = juce::jmin (r.getWidth(), r.getHeight()) - 4.0f;
+        const auto k = r.withSizeKeepingCentre (d, d);
+        const float v = (float) valueToProportionOfLength (getValue()), a0 = -2.35f, a1 = 2.35f, a = a0 + (a1 - a0) * v;
+        g.setColour (col::bg); g.fillEllipse (k);
+        juce::Path arc; arc.addCentredArc (k.getCentreX(), k.getCentreY(), d * 0.5f - 2, d * 0.5f - 2, 0.0f, centreZero ? 0.0f : a0, a, true);
+        g.setColour (isEnabled() ? col::accent : col::dim); g.strokePath (arc, juce::PathStrokeType (3.0f));
+        g.setColour (col::text);
+        g.drawLine (k.getCentreX(), k.getCentreY(), k.getCentreX() + std::sin (a) * d * 0.4f, k.getCentreY() - std::cos (a) * d * 0.4f, 2.0f);
+        g.setColour (isEnabled() ? col::text : col::dim); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        fitText (g, label.isEmpty() ? juce::String (name) : label, lab.toNearestInt(), juce::Justification::centred);
+    }
+    const char* name; juce::String label; bool centreZero = false;
+};
+
 struct Deck : public juce::Component, private juce::Timer
 {
     Deck (juce::AudioFormatManager& f, juce::TimeSliceThread& t, juce::AudioThumbnailCache& tc, juce::String nm, bool right)
@@ -79,9 +143,98 @@ struct Deck : public juce::Component, private juce::Timer
         pitch.setDoubleClickReturnValue (true, 0.0);
         pitch.onValueChange = [this] { rate = 1.0 + pitch.getValue() / 100.0; rs.setResamplingRatio (rate); if (onBpm) onBpm(); };
         addAndMakeVisible (pitch);
+        for (auto* k : { &vocK, &beatK, &filtK, &echoK }) addAndMakeVisible (k);
+        vocK.setTooltip ("VOCAL: this song's vocal level (split from the mix when the song loads). Bring B's vocal in over A's beat");
+        beatK.setTooltip ("BEAT: this song's instrumental level (everything but the vocal)");
+        filtK.setTooltip ("FILTER: left = low-pass, right = high-pass, centre = off");
+        echoK.setTooltip ("ECHO: 3/4-beat echo send at this deck's BPM; turn down and it rings out");
+        filtK.centreZero = true;
+        vocK.onValueChange = [this] { vocG = (float) vocK.getValue(); };
+        beatK.onValueChange = [this] { beatG = (float) beatK.getValue(); };
+        filtK.onValueChange = [this] { filt = (float) filtK.getValue(); };
+        echoK.onValueChange = [this] { echo = (float) echoK.getValue(); };
+        vocK.setEnabled (false); beatK.setEnabled (false);
         startTimerHz (60);
     }
-    ~Deck() override { tp.setSource (nullptr); }
+    ~Deck() override { splitCancel = true; splitPool.removeAllJobs (true, 20000); tp.setSource (nullptr); }
+    // vocal / beat split: runs once per song on its own thread, cached next to the app's other stems
+    void startSplit (const juce::File& f)
+    {
+        splitCancel = true; splitPool.removeAllJobs (true, 20000); splitCancel = false; splitProgress = 0.0f;
+        vocK.setEnabled (false); beatK.setEnabled (false);
+        const auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio")
+                             .getChildFile ("Hum Verse Stems").getChildFile (f.getFileNameWithoutExtension() + "_" + juce::String::toHexString (f.hashCode64()) + juce::String::toHexString (f.getSize())
+                             + "_" + juce::String::toHexString (f.getLastModificationTime().toMilliseconds()));   // re-exported song = new split
+        const auto cached = dir.getChildFile (f.getFileNameWithoutExtension() + " - " + juce::String (hhs::stemName (hhs::StemSetMain, hhs::StemVocals)) + ".wav");
+        juce::Component::SafePointer<Deck> self (this);
+        const auto gen = ++splitGen;
+        splitPool.addJob ([self, f, dir, cached, gen, this]
+        {
+            juce::File voc = cached;
+            if (! voc.existsAsFile())
+            {
+                dir.createDirectory();
+                if (! splitVocal (f, cached, splitProgress, splitCancel)) return;
+            }
+            if (splitCancel || ! voc.existsAsFile()) return;
+            juce::MessageManager::callAsync ([self, voc, gen]
+            {
+                if (self == nullptr || gen != self->splitGen.load() || self->src == nullptr) return;
+                juce::AudioFormatManager fm2; fm2.registerBasicFormats();
+                if (auto* r = fm2.createReaderFor (voc)) { self->src->setVocal (r); self->vocReady = true; self->vocK.setEnabled (true); self->beatK.setEnabled (true); self->repaint(); }
+            });
+        });
+    }
+    // vocal stem in 20 s windows (0.5 s crossfaded overlap): ~100 MB at a time instead of the whole song, any length;
+    // one split at a time across both decks
+    static bool splitVocal (const juce::File& in, const juce::File& out, std::atomic<float>& progress, std::atomic<bool>& cancel)
+    {
+        static std::timed_mutex one;
+        std::unique_lock<std::timed_mutex> held (one, std::defer_lock);
+        while (! held.try_lock_for (std::chrono::milliseconds (100))) if (cancel) return false;
+        if (out.existsAsFile()) return true;   // the other deck just split this song
+        const auto part = out.withFileExtension (".part");   // only a finished split ever has the cached name
+        part.deleteFile();
+        const bool ok = splitVocalTo (in, part, progress, cancel) && part.moveFileTo (out);
+        if (! ok) part.deleteFile();
+        return ok;
+    }
+    static bool splitVocalTo (const juce::File& in, const juce::File& out, std::atomic<float>& progress, std::atomic<bool>& cancel)
+    {
+        juce::AudioFormatManager fm2; fm2.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r (fm2.createReaderFor (in));
+        if (r == nullptr || r->lengthInSamples <= 0 || r->sampleRate <= 0) return false;
+        const int nch = (int) juce::jlimit (1u, 2u, r->numChannels);
+        const juce::int64 total = r->lengthInSamples, L = (juce::int64) (r->sampleRate * 20.0), ov = (juce::int64) (r->sampleRate * 0.5);
+        std::unique_ptr<juce::OutputStream> os (out.createOutputStream());
+        if (os == nullptr) return false;
+        std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (os.get(), r->sampleRate, (unsigned) nch, 32, {}, 0));
+        if (w == nullptr) return false;
+        os.release();
+        juce::AudioBuffer<float> tail (nch, (int) ov); tail.clear();
+        for (juce::int64 s0 = 0; s0 < total; s0 += L)
+        {
+            if (cancel) return false;
+            const int n = (int) juce::jmin (L + ov, total - s0), keep = (int) juce::jmin (L, total - s0);
+            juce::AudioBuffer<float> src (nch, n);
+            r->read (&src, 0, n, s0, true, true);
+            std::vector<juce::AudioBuffer<float>> st;
+            if (! hhs::splitStems (src, r->sampleRate, hhs::StemSetMain, st, nullptr, &cancel) || st.size() <= (size_t) hhs::StemVocals) return false;
+            auto& v = st[(size_t) hhs::StemVocals];
+            if (s0 > 0)   // fade the previous window's overlap into this one's start: no seam
+                for (int c = 0; c < nch; ++c)
+                    for (int i = 0; i < juce::jmin ((int) ov, keep); ++i)
+                    {
+                        const float g = (float) i / (float) ov;
+                        v.setSample (c, i, v.getSample (c, i) * g + tail.getSample (c, i) * (1.0f - g));
+                    }
+            if (! w->writeFromAudioSampleBuffer (v, 0, keep)) return false;
+            tail.clear();
+            for (int c = 0; c < nch; ++c) if (n > keep) tail.copyFrom (c, 0, v, c, keep, n - keep);
+            progress = (float) juce::jmin (1.0, (double) (s0 + keep) / (double) total);
+        }
+        return true;
+    }
     static juce::Colour padColour (int i) { const juce::Colour c[] { juce::Colours::red, juce::Colours::orange, juce::Colours::yellow, juce::Colours::limegreen }; return c[i & 3]; }
     void hotCue (int i)
     {
@@ -103,9 +256,10 @@ struct Deck : public juce::Component, private juce::Timer
         const double sr = r->sampleRate;
         bpm = guessBpm (*r, f.getFileNameWithoutExtension());
         analyse (*r);
-        tp.stop(); tp.setSource (nullptr);
-        src = std::make_unique<juce::AudioFormatReaderSource> (r.release(), true);
-        tp.setSource (src.get(), 32768, &io, sr, 2);   // read-ahead on its own thread: the audio callback never touches the disk
+        tp.stop(); vocReady = false; tp.setSource (nullptr);
+        src = std::make_unique<StemPairSource> (r.release());
+        tp.setSource (src.get(), 32768, &io, sr, 4);   // read-ahead on its own thread: the audio callback never touches the disk
+        startSplit (f);
         thumb.setSource (new juce::FileInputSource (f));   // waveform builds on the thumbnail thread
         name = f.getFileNameWithoutExtension(); cuePos = 0.0; file = f;
         for (int i = 0; i < 4; ++i) { cues[(size_t) i] = -1.0; pads[i]->setColour (juce::TextButton::buttonColourId, padColour (i).withAlpha (0.25f)); }
@@ -221,7 +375,7 @@ struct Deck : public juce::Component, private juce::Timer
     static juce::String clock (double s) { s = juce::jmax (0.0, s); return juce::String::formatted ("%02d:%04.1f", (int) s / 60, std::fmod (s, 60.0)); }
     juce::Rectangle<int> platter() const
     {
-        auto r = getLocalBounds().reduced (8); r.removeFromTop (40); r.removeFromBottom (78);
+        auto r = getLocalBounds().reduced (8); r.removeFromTop (40); r.removeFromBottom (154);
         r.removeFromLeft (mirror ? 0 : 30); r.removeFromRight (mirror ? 30 : 0);
         const int d = juce::jmin (r.getWidth(), r.getHeight());
         return r.withSizeKeepingCentre (d, d);
@@ -264,6 +418,9 @@ struct Deck : public juce::Component, private juce::Timer
     {
         auto r = getLocalBounds().reduced (8);
         auto bottom = r.removeFromBottom (102);
+        auto knobs = r.removeFromBottom (52);
+        const int kw = knobs.getWidth() / 4;
+        for (auto* k : { &vocK, &beatK, &filtK, &echoK }) k->setBounds (knobs.removeFromLeft (kw).reduced (4, 1));
         auto padRow = bottom.removeFromTop (34);
         const int pw = padRow.getWidth() / 4;
         for (auto* p : pads) p->setBounds (padRow.removeFromLeft (pw).reduced (2));
@@ -296,6 +453,13 @@ struct Deck : public juce::Component, private juce::Timer
     void timerCallback() override
     {
         play.setButtonText (tp.isPlaying() ? "PAUSE" : "PLAY");
+        if (const bool ready = vocReady.load(); ! ready && file.existsAsFile())
+        {
+            const auto t = "SPLIT " + juce::String ((int) (splitProgress.load() * 100.0f)) + "%";
+            if (vocK.label != t) { vocK.label = t; vocK.repaint(); }
+        }
+        else if (vocK.label.isNotEmpty()) { vocK.label.clear(); vocK.repaint(); }
+        echoSec = bpm > 0 ? 0.75 * 60.0 / liveBpm() : 0.375;
         if (loopLen > 0.0 && tp.getCurrentPosition() >= loopStart + loopLen)
             tp.setPosition (loopStart + std::fmod (tp.getCurrentPosition() - loopStart, loopLen));
         if (isShowing()) repaint (platter());
@@ -306,9 +470,17 @@ struct Deck : public juce::Component, private juce::Timer
     bool mirror = false;
     juce::AudioThumbnail thumb;
     juce::AudioTransportSource tp;
-    juce::ResamplingAudioSource rs { &tp, false, 2 };
-    std::unique_ptr<juce::AudioFormatReaderSource> src;
+    juce::ResamplingAudioSource rs { &tp, false, 4 };
+    std::unique_ptr<StemPairSource> src;
     std::unique_ptr<juce::FileChooser> chooser;
+    DeckKnob vocK { "VOCAL", 0.0, 1.5, 1.0 }, beatK { "BEAT", 0.0, 1.5, 1.0 }, filtK { "FILTER", -1.0, 1.0, 0.0 }, echoK { "ECHO", 0.0, 1.0, 0.0 };
+    std::atomic<float> vocG { 1.0f }, beatG { 1.0f }, filt { 0.0f }, echo { 0.0f }, splitProgress { 0.0f };
+    std::atomic<double> echoSec { 0.375 };   // echo time in seconds
+    std::atomic<bool> splitCancel { false }, vocReady { false };   // vocReady: the audio thread's only view of the vocal (never touches src)
+    std::atomic<int> splitGen { 0 };
+    juce::ThreadPool splitPool { 1 };
+    // audio-thread state (DjMix only)
+    juce::IIRFilter fx[2]; float fxLast = 0.0f; bool fxOn = false; std::vector<float> dl[2]; int dlPos = 0;
     double bpm = 0.0, cuePos = 0.0, gridStart = 0.0;
     juce::String key;
     std::array<double, 4> cues { -1.0, -1.0, -1.0, -1.0 };
@@ -441,7 +613,48 @@ struct Library : public juce::Component, private juce::ListBoxModel
 struct DjMix : public juce::AudioSource
 {
     DjMix (Deck& x, Deck& y) : a (x), b (y) {}
-    void prepareToPlay (int n, double rate) override { sr = rate; a.rs.prepareToPlay (n, rate); b.rs.prepareToPlay (n, rate); tmp.setSize (2, n); }
+    void prepareToPlay (int n, double rate) override
+    {
+        sr = rate; a.rs.prepareToPlay (n, rate); b.rs.prepareToPlay (n, rate); tmp.setSize (4, n);
+        for (auto* d : { &a, &b }) { for (auto& v : d->dl) v.assign ((size_t) (rate * 2.0) + 1, 0.0f); d->dlPos = 0; d->fxLast = 0.0f; d->fxOn = false; d->fx[0].reset(); d->fx[1].reset(); }
+    }
+    // VOCAL / BEAT rebalance (beat = mix - vocal), one-knob DJ filter, beat-synced echo send
+    void deckFx (Deck& d, int n)
+    {
+        float* l = tmp.getWritePointer (0); float* r = tmp.getWritePointer (1);
+        const float vg = d.vocG.load(), bg = d.beatG.load();
+        if (d.vocReady.load() && (std::abs (vg - 1.0f) > 1.0e-4f || std::abs (bg - 1.0f) > 1.0e-4f))
+        {
+            const float* vl = tmp.getReadPointer (2); const float* vr = tmp.getReadPointer (3);
+            for (int i = 0; i < n; ++i) { l[i] = bg * (l[i] - vl[i]) + vg * vl[i]; r[i] = bg * (r[i] - vr[i]) + vg * vr[i]; }
+        }
+        const float f = d.filt.load();
+        if (std::abs (f) > 0.02f)
+        {
+            if (std::abs (f - d.fxLast) > 0.002f || ! d.fxOn)
+            {
+                const auto c = f < 0 ? juce::IIRCoefficients::makeLowPass (sr, 20000.0 * std::pow (0.006, (double) -f), 0.9)
+                                     : juce::IIRCoefficients::makeHighPass (sr, 20.0 * std::pow (300.0, (double) f), 0.9);
+                d.fx[0].setCoefficients (c); d.fx[1].setCoefficients (c);
+                d.fxLast = f; d.fxOn = true;
+            }
+            d.fx[0].processSamples (l, n); d.fx[1].processSamples (r, n);
+        }
+        else if (d.fxOn) { d.fx[0].reset(); d.fx[1].reset(); d.fxLast = 0.0f; d.fxOn = false; }
+        const int sz = (int) d.dl[0].size();
+        if (sz < 2) return;
+        const float send = d.echo.load();
+        const int lag = juce::jlimit (1, sz - 1, (int) (d.echoSec.load() * sr));
+        for (int i = 0; i < n; ++i)
+        {
+            const int rd = (d.dlPos - lag + sz) % sz;
+            const float el = d.dl[0][(size_t) rd], er = d.dl[1][(size_t) rd];
+            d.dl[0][(size_t) d.dlPos] = l[i] * send + er * 0.5f;   // ping-pong
+            d.dl[1][(size_t) d.dlPos] = r[i] * send + el * 0.5f;
+            l[i] += el * 0.7f; r[i] += er * 0.7f;
+            d.dlPos = (d.dlPos + 1) % sz;
+        }
+    }
     double sr = 44100.0;
     void releaseResources() override { a.rs.releaseResources(); b.rs.releaseResources(); }
     void getNextAudioBlock (const juce::AudioSourceChannelInfo& info) override
@@ -456,6 +669,7 @@ struct DjMix : public juce::AudioSource
         {
             juce::AudioSourceChannelInfo t (&tmp, 0, info.numSamples);
             d->rs.getNextAudioBlock (t);
+            deckFx (*d, info.numSamples);
             if (d->keyLock.load()) d->lock.process (tmp.getWritePointer (0), tmp.getWritePointer (1), info.numSamples, 1.0 / d->rate.load(), sr);
             else d->lock.process (tmp.getWritePointer (0), tmp.getWritePointer (1), info.numSamples, 1.0, sr);   // keeps its line warm: no click when toggled
             for (int c = 0; c < info.buffer->getNumChannels(); ++c)
@@ -998,10 +1212,9 @@ private:
             const double len = secondsToBeats (secs, p.bpm), xfade = juce::jmin (16.0, len * 0.25);
             double end = 0.0;
             for (auto& c : p.clips) end = juce::jmax (end, c.start + c.length);
-            Lane l; l.name = f.getFileNameWithoutExtension(); l.mixerTrack = p.addMixerTrack (l.name);
-            p.lanes.push_back (l);
-            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1; c.length = len;
+            Clip c; c.uid = p.newUid(); c.audioFile = f; c.patternIndex = -1; c.length = len;
             c.start = atPlayhead ? play : juce::jmax (0.0, end - (end > 0 ? xfade : 0.0));
+            c.lane = p.pushLane (0, c.start, c.start + len, f.getFileNameWithoutExtension());   // Track 1 first, then down
             c.fadeIn = c.start > 0 ? xfade : 0.0; c.fadeOut = xfade;
             p.clips.push_back (c);
         });

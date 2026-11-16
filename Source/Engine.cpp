@@ -14,7 +14,7 @@ WorkerPool::WorkerPool (int n)
 {
     for (int i = 0; i < n; ++i)
     {
-        auto& t = threads.emplace_back (std::make_unique<Worker> (*this));
+        auto& t = threads.emplace_back (std::make_unique<Worker> (*this, i));
         // real-time priority so a busy machine (OBS, browsers, screen capture) can't preempt a worker mid-block
         if (! t->startRealtimeThread (juce::Thread::RealtimeOptions{}.withPriority (10)))
             t->startThread (juce::Thread::Priority::highest);
@@ -32,7 +32,7 @@ WorkerPool::~WorkerPool()
     cv.notify_all();
     for (auto& t : threads) t->stopThread (4000);
 }
-void WorkerPool::workerLoop()
+void WorkerPool::workerLoop (int idx)
 {
     juce::FloatVectorOperations::disableDenormalisedNumberSupport();   // denormals in reverb tails cause CPU spikes
     int seen = generation.load();
@@ -73,6 +73,7 @@ void WorkerPool::workerLoop()
         }
         seen = generation.load();
         if (quit.load()) return;
+        const auto b0 = juce::Time::getHighResolutionTicks();
         for (;;)
         {
             const int i = next.fetch_add (1);
@@ -81,12 +82,14 @@ void WorkerPool::workerLoop()
             workerJobs.fetch_add (1, std::memory_order_relaxed);
             done.fetch_add (1);
         }
+        busy[(size_t) juce::jmin (idx, 63)].fetch_add (juce::Time::getHighResolutionTicks() - b0, std::memory_order_relaxed);
     }
 }
 void WorkerPool::run (int count, Job j, void* c)
 {
     if (count <= 0) return;
-    if (threads.empty() || count == 1) { for (int i = 0; i < count; ++i) j (c, i); return; }
+    const auto b0 = juce::Time::getHighResolutionTicks();
+    if (threads.empty() || count == 1) { for (int i = 0; i < count; ++i) j (c, i); busy[64].fetch_add (juce::Time::getHighResolutionTicks() - b0, std::memory_order_relaxed); return; }
     runs.fetch_add (1, std::memory_order_relaxed);
     job = j; ctx = c; done = 0; total = count; next = 0;
     generation.fetch_add (1, std::memory_order_release);
@@ -98,6 +101,7 @@ void WorkerPool::run (int count, Job j, void* c)
         j (c, i);
         done.fetch_add (1);
     }
+    busy[64].fetch_add (juce::Time::getHighResolutionTicks() - b0, std::memory_order_relaxed);
     while (done.load (std::memory_order_acquire) < count) std::this_thread::yield();
     total = 0;
 }
@@ -121,10 +125,14 @@ struct Engine::ChannelRuntime
     int cutGroup = 0;
     // plug-in instruments: keys we sent a note-on for, so stop / loop / seek / choke can end every one of them
     std::bitset<128> held; bool panic = false, cutTails = false;
-    // CUT note ends: a 10 ms fade at the note end (no click), then all-sound-off once it's silent
-    float cutGain = 1.0f, cutTarget = 1.0f; bool soundOffNext = false;
-    std::array<std::pair<int, float>, 64> gainEv {}; int numGainEv = 0;
-    void gainAt (int at, float g) { if (numGainEv < (int) gainEv.size()) gainEv[(size_t) numGainEv++] = { at, g }; }
+    // CUT note ends: every note that leaves the channel silent fades out over 3 ms ending exactly at its note end
+    // (back-to-back notes included), then all-sound-off; unscheduled ends (choke, preview) fade 5 ms after
+    struct GainEv { int at; float target; int endAt; bool post; };
+    float cutGain = 1.0f, cutTarget = 1.0f, cutRate = 0.0f; bool soundOffNext = false, cutPost = false;
+    std::array<GainEv, 64> gainEv {}; int numGainEv = 0;
+    std::array<int, 32> preFaded {}; int numPreFaded = 0;
+    void gainAt (int at, float g, int endAt, bool post = false) { if (numGainEv < (int) gainEv.size()) gainEv[(size_t) numGainEv++] = { at, g, endAt, post }; }
+    bool preFadedAt (int t) const { for (int k = 0; k < numPreFaded; ++k) if (preFaded[(size_t) k] == t) return true; return false; }
     void addEvent (const Event& e) { if (numEvents < (int) events.size()) events[(size_t) numEvents++] = e; }
     bool holds (int key) const { for (int k = 0; k < numActive; ++k) if (active[(size_t) k].key == key) return true; return false; }
 };
@@ -294,6 +302,9 @@ struct Engine::TrackRuntime
     PdcDelay inDelay; std::vector<PdcDelay> edge;   // per sources[] entry
     int ownLatency = 0, inputAlign = 0, arrival = 0;   // samples: this insert's FX, latest input, output
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
+    std::atomic<float> cpu { 0.0f };     // share of the block this insert took (decaying peak)
+    bool live = false;                   // fed by an armed lane this block (Low Latency Mode, scheduled first)
+    bool unaligned = false;              // Low Latency armed path or Set to master: never delayed to line up with slower inputs
     float duckGain = 1.0f;
     float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
     std::vector<std::shared_ptr<FxRuntime>> fx;
@@ -306,13 +317,16 @@ struct Engine::TrackRuntime
     juce::File frozenFile;
     std::array<Biquad, 5> meq;
     std::array<float, 15> meqKey {};
+    std::array<int, 5> meqTy { -1, -1, -1, -1, -1 };
 };
 
 // short takes/clips live in RAM: punch-in and jumps play them instantly (no disk buffering wait)
 #if JUCE_IOS
-static constexpr int maxRamTakeSeconds = 300, maxRamTakes = 3;   // phones: a full session of takes in RAM got the app killed
+static constexpr int maxRamTakeSeconds = 300, maxRamTakes = 3;
+static constexpr juce::int64 ramBudget = 0;   // phones: no RAM disk cache   // phones: a full session of takes in RAM got the app killed
 #else
 static constexpr int maxRamTakeSeconds = 1200, maxRamTakes = 64;
+static constexpr juce::int64 ramBudget = (juce::int64) 1536 * 1024 * 1024;   // RAM disk cache for clips
 #endif
 
 struct MemoryClipReader : juce::AudioFormatReader
@@ -786,6 +800,37 @@ void Engine::sync()
             if (slot.type == "plugin")
             {
                 juce::String err;
+               #if ! JUCE_IOS
+                if (pluginSandbox.load())   // no-wait: the helper process loads it; audio passes through until it's ready
+                {
+                    auto& L = pluginLoads[slot.uid];
+                    if (L != nullptr && L->id != slot.pluginId) L = nullptr;   // the slot was reused for another plug-in: never install the old one
+                    if (L != nullptr && L->done.load())
+                    {
+                        f->plugin = std::move (L->inst); pluginLoads.erase (slot.uid);
+                        if (f->plugin) f->plugin->setPlayHead (this);
+                        else f->plugin = createPlugin (slot.pluginId, err);   // helper failed: load it directly instead of leaving it bypassed
+                    }
+                    else if (L == nullptr)
+                    {
+                        if (auto desc = knownPlugins.getTypeForIdentifierString (slot.pluginId); desc != nullptr && ! knownPlugins.getBlacklistedFiles().contains (desc->fileOrIdentifier))
+                        {
+                            L = std::make_shared<PluginLoad>(); L->id = slot.pluginId;
+                            std::thread ([this, L, al = alive, d = *desc, sr = sampleRate, mb = maxBlock]
+                            {
+                                juce::String e;
+                                L->inst = createSandboxedPlugin (d, sr, mb, e);
+                                L->done = true;
+                                juce::MessageManager::callAsync ([this, al] { if (al->load()) sync(); });
+                            }).detach();
+                            f->signature = "loading|" + sig;
+                        }
+                        else { pluginLoads.erase (slot.uid); f->plugin = createPlugin (slot.pluginId, err); }
+                    }
+                    else f->signature = "loading|" + sig;
+                }
+                else
+               #endif
                 f->plugin = createPlugin (slot.pluginId, err);
                 if (f->plugin && slot.pluginState.getSize() > 0)
                 {
@@ -812,19 +857,30 @@ void Engine::sync()
 
     std::map<int, std::shared_ptr<ClipRuntime>> newClips;
     juce::AudioFormatManager fm; fm.registerBasicFormats();
+    juce::int64 ramUsed = 0;
     for (auto& c : proj.clips)
     {
         if (! c.isAudio()) continue;
         auto it = uiClipRt.find (c.uid);
-        // a RAM take that is no longer "fresh" (phone memory cap / low-memory warning) goes back to streaming from disk
-        if (it != uiClipRt.end() && it->second->file == c.audioFile
-            && (freshTakes.count (c.audioFile.getFullPathName()) > 0 || dynamic_cast<MemoryClipReader*> (it->second->reader.get()) == nullptr)) continue;
+        const bool fresh = freshTakes.count (c.audioFile.getFullPathName()) > 0;
+        if (it != uiClipRt.end() && it->second->file == c.audioFile)
+        {
+            const bool inRam = dynamic_cast<MemoryClipReader*> (it->second->reader.get()) != nullptr;
+            const juce::int64 bytes = it->second->length * 4 * (juce::int64) juce::jmax (1u, it->second->reader ? it->second->reader->numChannels : 2u);
+            if (fresh) { if (inRam) ramUsed += bytes; continue; }
+            // RAM disk cache: clips that fit the budget play from memory; a RAM take that no longer fits (or the
+            // cache is off / low-memory warning) goes back to streaming from disk
+            const bool cacheIt = ramCache.load() && ramUsed + bytes <= ramBudget && it->second->length < (juce::int64) (it->second->fileRate * maxRamTakeSeconds);
+            if (inRam == cacheIt) { if (inRam) ramUsed += bytes; continue; }
+        }
         auto rt = std::make_shared<ClipRuntime>();
         rt->uid = c.uid; rt->file = c.audioFile;
         // a take you just recorded (punch / loop) is loaded into RAM, so it plays the moment the loop comes back round
-        if (freshTakes.count (c.audioFile.getFullPathName()) > 0)
-            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * maxRamTakeSeconds))
+        if (fresh || (ramCache.load() && ramUsed < ramBudget))
+            if (std::unique_ptr<juce::AudioFormatReader> r { fm.createReaderFor (c.audioFile) }; r != nullptr && r->lengthInSamples < (juce::int64) (r->sampleRate * maxRamTakeSeconds)
+                && (fresh || ramUsed + r->lengthInSamples * 4 * (juce::int64) juce::jmax (1u, r->numChannels) <= ramBudget))
             {
+                if (! fresh) ramUsed += r->lengthInSamples * 4 * (juce::int64) juce::jmax (1u, r->numChannels);   // MemoryClipReader keeps every channel as float
                 rt->fileRate = r->sampleRate; rt->length = r->lengthInSamples;
                 rt->reader = std::make_unique<MemoryClipReader> (*r);
                 rt->tmp.setSize (2, maxBlock * 4 + 8);
@@ -1083,6 +1139,11 @@ void Engine::prepareRuntimes()
     for (auto& [id, rt] : uiChannelRt) if (rt->inst) rt->signature = {};
 }
 
+int Engine::takeLatency() const
+{
+    return recordLatency.load() + playbackDelay.load() + juce::roundToInt (recordOffsetMs.load() * 0.001 * sampleRate);   // a negative offset may make it < 0: the take moves later
+}
+
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     antForceRealtime();
@@ -1133,6 +1194,28 @@ float Engine::fxLoad (int track, int uid) const
     if (track < 0 || track >= (int) uiFx.size()) return 0.0f;
     for (auto& f : uiFx[(size_t) track]) if (f->uid == uid) return f->load.load();
     return 0.0f;
+}
+
+float Engine::trackLoad (int t) const
+{
+    if (t < 0 || t >= (int) uiTrackRt.size() || ! uiTrackRt[(size_t) t]) return 0.0f;
+    return uiTrackRt[(size_t) t]->cpu.load (std::memory_order_relaxed);
+}
+
+std::vector<float> Engine::coreLoads()
+{
+    std::vector<float> out;
+    if (! pool) return out;
+    const int nw = juce::jmin (64, pool->size());
+    const auto now = juce::Time::getHighResolutionTicks();
+    std::vector<juce::int64> cur ((size_t) nw + 1);
+    for (int i = 0; i < nw; ++i) cur[(size_t) i] = pool->busy[(size_t) juce::jmin (i, 63)].load (std::memory_order_relaxed);
+    cur[(size_t) nw] = pool->busy[64].load (std::memory_order_relaxed);
+    if (coreSeenPool == pool.get() && coreSeen.size() == cur.size() && now > coreSeenAt)
+        for (size_t i = 0; i < cur.size(); ++i)
+            out.push_back (juce::jlimit (0.0f, 1.0f, (float) ((double) (cur[i] - coreSeen[i]) / (double) (now - coreSeenAt))));
+    coreSeen = cur; coreSeenAt = now; coreSeenPool = pool.get();
+    return out;
 }
 
 float Engine::trackPeak (int t) const
@@ -1362,7 +1445,7 @@ bool Engine::retroRecord()
     // played along: line it up where it was heard (minus the device latency); stopped: put it at the playhead
     // (only when it was heard in one straight run: a take that crosses a loop jump or a stop goes at the playhead)
     const bool oneRun = endBeat >= 0.0 && total - len + a >= runFrom;
-    c.start = oneRun ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
+    c.start = oneRun ? endBeat - (double) (len - a + takeLatency()) / spb : position.load();
     if (c.start < 0.0) { c.sourceOffset = -c.start * 60.0 / proj.bpm; c.length += c.start; c.start = 0.0; }
     if (c.length < 0.05) { file.deleteFile(); return false; }
     {
@@ -1404,7 +1487,7 @@ void Engine::finishRecordingWriters()
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
             // latency compensation: what you sang at beat b reaches the file `lat` samples later
-            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) recordLatency.load());
+            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, written / 2, (juce::int64) t->latency);   // < 0: a negative Recording offset reads from earlier in the file
             const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
             double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
@@ -1835,9 +1918,9 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
                 float g = clip.gain * laneGain;
-                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= (float) std::pow (beatInClip / clip.fadeIn, std::exp (clip.fadeCurve));
+                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
                 const double toEnd = clip.length - beatInClip;
-                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= (float) std::pow (std::max (0.0, toEnd / clip.fadeOut), std::exp (clip.fadeCurve));
+                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);
@@ -1869,20 +1952,62 @@ struct EngineJobs
         channelJob (e, ci);
         if (ci < (int) e->chanCost.size()) e->chanCost[(size_t) ci] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->chanCost[(size_t) ci] * 0.9f);
     }
-    static void applyCutFade (Engine::ChannelRuntime& rt, juce::AudioBuffer<float>& b, int n, double sr)
+    // plan the 3 ms fade-outs that must end exactly where a scheduled note end leaves the channel silent
+    static void planCutFades (Engine::ChannelRuntime& rt, int n, double sr)
     {
-        const float down = 1.0f / (float) (0.010 * sr), up = 1.0f / (float) (0.002 * sr);
+        rt.numPreFaded = 0;
+        const int F = juce::jmax (1, (int) (0.003 * sr));
+        std::bitset<128> sched;
+        for (int k = 0; k < rt.numActive; ++k) sched.set ((size_t) juce::jlimit (0, 127, rt.active[(size_t) k].key));
+        for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (! ev.on && ev.key >= 0 && ev.key < 128) sched.set ((size_t) ev.key); }
+        if ((rt.held & ~sched).any()) return;   // a live / preview note is held: nothing to plan against
+        auto onFrom = [&rt] (int key, int from, int to) {   // a note-on for key in [from, to)
+            for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (ev.on && ev.key == key && ev.offset >= from && ev.offset < to) return true; }
+            return false;
+        };
+        auto silentAt = [&] (int T) {   // no other note is still sounding just after T
+            for (int k = 0; k < rt.numActive; ++k)
+            {
+                const auto& a = rt.active[(size_t) k];
+                if ((double) n + a.remaining > (double) T && ! onFrom (a.key, T, std::numeric_limits<int>::max())) return false;
+            }
+            for (int k = 0; k < rt.numEvents; ++k)
+            {
+                const auto& ev = rt.events[(size_t) k];
+                if (ev.key < 0 || ev.key > 127) continue;
+                if (! ev.on && ev.offset > T && ! onFrom (ev.key, T, ev.offset)) return false;
+                if (ev.on && ev.offset < T && ! sched[(size_t) ev.key]) return false;   // preview note-on
+            }
+            return true;
+        };
+        auto plan = [&] (int T) {
+            if (T <= 0 || rt.preFadedAt (T) || rt.numPreFaded >= (int) rt.preFaded.size() || ! silentAt (T)) return;
+            rt.preFaded[(size_t) rt.numPreFaded++] = T;
+            rt.gainAt (juce::jmax (0, T - F), 0.0f, T);
+        };
+        for (int k = 0; k < rt.numEvents; ++k) { const auto& ev = rt.events[(size_t) k]; if (! ev.on && ev.key >= 0 && ev.key < 128) plan (ev.offset); }
+        for (int k = 0; k < rt.numActive; ++k) if (rt.active[(size_t) k].remaining < (double) F) plan (n + (int) rt.active[(size_t) k].remaining);
+    }
+    static void applyCutFade (Engine::ChannelRuntime& rt, juce::AudioBuffer<float>& b, int n)
+    {
+        std::stable_sort (rt.gainEv.begin(), rt.gainEv.begin() + rt.numGainEv, [] (auto& x, auto& y) { return x.at < y.at; });
         auto* L = b.getWritePointer (0); auto* R = b.getWritePointer (1);
         int ge = 0;
+        float& g = rt.cutGain;
         for (int i = 0; i < n; ++i)
         {
-            while (ge < rt.numGainEv && rt.gainEv[(size_t) ge].first <= i) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
-            float& g = rt.cutGain;
-            if (g > rt.cutTarget) { g = std::max (rt.cutTarget, g - down); if (g <= 0.0f) rt.soundOffNext = true; }
-            else if (g < rt.cutTarget) g = std::min (rt.cutTarget, g + up);
+            while (ge < rt.numGainEv && rt.gainEv[(size_t) ge].at <= i)
+            {
+                const auto& ev = rt.gainEv[(size_t) ge++];
+                rt.cutTarget = ev.target; rt.cutPost = ev.post;
+                rt.cutRate = std::abs (ev.target - g) / (float) juce::jmax (1, ev.endAt - i);
+                if (ev.target > 0.0f) rt.soundOffNext = false;   // a new note: never cut it next block
+            }
+            if (g > rt.cutTarget) { g = std::max (rt.cutTarget, g - rt.cutRate); if (g <= 0.0f && rt.cutPost) { rt.soundOffNext = true; rt.cutPost = false; } }
+            else if (g < rt.cutTarget) g = std::min (rt.cutTarget, g + rt.cutRate);
             L[i] *= g; R[i] *= g;
         }
-        while (ge < rt.numGainEv) rt.cutTarget = rt.gainEv[(size_t) ge++].second;
+        for (; ge < rt.numGainEv; ++ge) { const auto& ev = rt.gainEv[(size_t) ge]; rt.cutTarget = ev.target; rt.cutPost = ev.post; rt.cutRate = std::abs (ev.target - g) / (float) juce::jmax (1, ev.endAt - n); }
         rt.numGainEv = 0;
     }
     static void channelJob (Engine* e, int i)
@@ -1905,19 +2030,25 @@ struct EngineJobs
                 rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0);
                 rt->panic = false;
             }
-            if (! rt->cutTails) { rt->cutGain = rt->cutTarget = 1.0f; rt->soundOffNext = false; }
+            if (! rt->cutTails) { rt->cutGain = rt->cutTarget = 1.0f; rt->soundOffNext = rt->cutPost = false; }
             if (rt->soundOffNext) { rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), 0); rt->soundOffNext = false; }
             rt->numGainEv = 0;
             std::sort (rt->events.begin(), rt->events.begin() + rt->numEvents, [] (auto& a, auto& b) { return a.offset != b.offset ? a.offset < b.offset : ! a.on && b.on; });
+            const int postLen = (int) (0.005 * e->sampleRate), upLen = (int) (0.001 * e->sampleRate);
+            if (rt->cutTails) planCutFades (*rt, n, e->sampleRate);
             for (int k = 0; k < rt->numEvents; ++k)
             {
                 auto& ev = rt->events[(size_t) k];
-                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->gainAt (ev.offset, 0.0f); sentOff = true; continue; }
+                if (ev.key < 0) { endAll (ev.offset); if (rt->cutTails) rt->gainAt (ev.offset, 0.0f, ev.offset + postLen, true); sentOff = true; continue; }
                 if (ev.key > 127) continue;
-                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); if (rt->cutTails) rt->gainAt (ev.offset, 1.0f); continue; }
+                if (ev.on) { rt->midi.addEvent (juce::MidiMessage::noteOn (1, ev.key, juce::jlimit (0.0f, 1.0f, ev.vel)), ev.offset); rt->held.set ((size_t) ev.key); if (rt->cutTails) rt->gainAt (ev.offset, 1.0f, ev.offset + upLen); continue; }
                 rt->midi.addEvent (juce::MidiMessage::noteOff (1, ev.key), ev.offset);
                 rt->held.reset ((size_t) ev.key); sentOff = true;
-                if (rt->cutTails && rt->held.none()) rt->gainAt (ev.offset, 0.0f);   // CUT: fade out the release tail
+                if (rt->cutTails && rt->held.none())
+                {
+                    if (rt->preFadedAt (ev.offset) || (ev.offset == 0 && rt->cutGain <= 0.0f && rt->cutTarget <= 0.0f)) { rt->midi.addEvent (juce::MidiMessage::allSoundOff (1), ev.offset); rt->gainAt (ev.offset, 0.0f, ev.offset); }   // faded to 0 right here: cut
+                    else rt->gainAt (ev.offset, 0.0f, ev.offset + postLen, true);   // CUT: fade out the release tail
+                }
             }
             if (rt->numEvents == 0 && rt->numActive == 0 && rt->held.none() && ++rt->silentBlocks > e->idleThresholdBlocks * 4 && e->smartOn.load()) { rt->numEvents = 0; return; }
             if (rt->numEvents > 0) rt->silentBlocks = 0;
@@ -1929,7 +2060,7 @@ struct EngineJobs
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
-            if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f)) applyCutFade (*rt, view, n, e->sampleRate);
+            if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f || rt->numPreFaded > 0)) applyCutFade (*rt, view, n);
         }
         else if (rt->inst)
         {
@@ -1955,6 +2086,13 @@ struct EngineJobs
         const auto t0 = juce::Time::getHighResolutionTicks();
         e->processTrack (t);
         if (t < (int) e->trackCost.size()) e->trackCost[(size_t) t] = std::max ((float) (juce::Time::getHighResolutionTicks() - t0), e->trackCost[(size_t) t] * 0.9f);
+        if (t < (int) e->trackRt.size() && e->trackRt[(size_t) t])
+        {
+            auto& tr = *e->trackRt[(size_t) t];
+            const double block = juce::jmax (1.0, (double) e->currentBlock / e->sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond());
+            const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / block);
+            tr.cpu.store (std::max (v, tr.cpu.load (std::memory_order_relaxed) * 0.95f), std::memory_order_relaxed);
+        }
     }
 };
 
@@ -1963,13 +2101,15 @@ void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
     bool on[5]; bool any = false;
     for (size_t b = 0; b < 5; ++b)
     {
-        on[b] = std::abs (mt.meqGain[b]) > 0.01f;
+        const int ty = juce::jlimit (0, 5, mt.meqType[b]);
+        on[b] = meqNeedsGain (ty) ? std::abs (mt.meqGain[b]) > 0.01f : true;
         any |= on[b];
         const float f = juce::jlimit (20.0f, (float) (sampleRate * 0.45), mt.meqFreq[b]), g = mt.meqGain[b], q = juce::jlimit (0.1f, 18.0f, mt.meqQ[b]);
-        if (on[b] && (tr.meqKey[b * 3] != f || tr.meqKey[b * 3 + 1] != g || tr.meqKey[b * 3 + 2] != q))
+        if (on[b] && (tr.meqKey[b * 3] != f || tr.meqKey[b * 3 + 1] != g || tr.meqKey[b * 3 + 2] != q || tr.meqTy[b] != ty))
         {
-            tr.meq[b].set (b == 0 ? Biquad::LowShelf : b == 4 ? Biquad::HighShelf : Biquad::Peak, sampleRate, f, q, g);
-            tr.meqKey[b * 3] = f; tr.meqKey[b * 3 + 1] = g; tr.meqKey[b * 3 + 2] = q;
+            if (tr.meqTy[b] != ty) tr.meq[b].clear();
+            tr.meq[b].set (meqShape (ty), sampleRate, f, q, g);
+            tr.meqKey[b * 3] = f; tr.meqKey[b * 3 + 1] = g; tr.meqKey[b * 3 + 2] = q; tr.meqTy[b] = ty;
         }
         else if (! on[b] && tr.meqKey[b * 3 + 1] != 0.0f) { tr.meq[b].clear(); tr.meqKey[b * 3 + 1] = 0.0f; }
     }
@@ -1979,6 +2119,8 @@ void Engine::applyMiniEq (TrackRuntime& tr, const MixerTrack& mt, int n)
         {
             float v = *x;
             for (size_t b = 0; b < 5; ++b) if (on[b]) v = tr.meq[b].tick (v, ch);
+            // a bad sample (NaN/inf from the input) would stick in the filter and silence the track for good
+            if (! std::isfinite (v)) { for (auto& q : tr.meq) q.clear(); v = 0.0f; }
             *x = v;
         }
 }
@@ -2026,7 +2168,7 @@ void Engine::processTrack (int t)
         {
             auto& srt = *trackRt[(size_t) S[k].first];
             const int dl = tr.inputAlign - srt.arrival;
-            if (dl > 0 && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
+            if (dl > 0 && ! srt.unaligned && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
             else if (wide)
                 for (int ch = 0; ch < 2; ++ch)
                 {
@@ -2345,7 +2487,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 for (auto& tk : takes)
                     if (tk->lane == (int) l)
                     {
-                        if (! tk->started) { tk->started = true; tk->startBeat = ctx.beatPos; tk->passes[0] = { 0, ctx.beatPos }; tk->numPasses = 1; }
+                        if (! tk->started) { tk->started = true; tk->latency = takeLatency(); tk->startBeat = ctx.beatPos; tk->passes[0] = { 0, ctx.beatPos }; tk->numPasses = 1; }
                         const float* chans[2] { il, ir };
                         tk->writer->write (chans, n);
                         tk->samplesWritten += n;
@@ -2522,6 +2664,14 @@ void Engine::applyAutomation (double beat)
 void Engine::mixTracks (const float* const*, int, int)
 {
     // plugin delay compensation (like FL): each insert's latency = its active FX; inputs wait for the slowest path
+    for (auto& t : trackRt) if (t) t->live = false;
+    for (auto& ln : aproj.lanes)
+        if (ln.armed && ln.mixerTrack > 0 && ln.mixerTrack < (int) trackRt.size() && trackRt[(size_t) ln.mixerTrack]) trackRt[(size_t) ln.mixerTrack]->live = true;
+    const bool ll = lowLatency.load (std::memory_order_relaxed) && ! offline.load (std::memory_order_relaxed);   // exports / freeze keep every plug-in
+    llNow = ll && std::any_of (trackRt.begin(), trackRt.end(), [] (const auto& t) { return t && t->live; });
+    const bool off = offline.load (std::memory_order_relaxed);
+    for (size_t i = 0; i < trackRt.size(); ++i)
+        if (trackRt[i]) trackRt[i]->unaligned = (llNow && trackRt[i]->live) || (! off && i > 0 && i < aproj.mixer.size() && aproj.mixer[i].direct);
     for (auto& L : levels)
         for (int t : L)
         {
@@ -2534,19 +2684,26 @@ void Engine::mixTracks (const float* const*, int, int)
                 {
                     if (mt.fx[k].bypass || mt.fx[k].mix <= 0.0f) continue;
                     auto& f = *tr.fx[k];
-                    own += f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+                    const int lat = f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
+                    own += lat;
                 }
             int in = 0;
-            for (auto& sg : sources[(size_t) t]) if (sg.first < (int) trackRt.size()) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
+            // Low Latency Mode: a monitored (armed) path joins unaligned, so its FX stay on but never hold the rest back
+            for (auto& sg : sources[(size_t) t])
+                if (sg.first < (int) trackRt.size() && ! trackRt[(size_t) sg.first]->unaligned) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
             tr.ownLatency = own; tr.inputAlign = std::min (in, kPdcSize - 1);
             tr.arrival = std::min (tr.inputAlign + std::max (0, own), kPdcSize - 1);
         }
+    playbackDelay.store (! trackRt.empty() && trackRt[0] ? trackRt[0]->arrival : 0, std::memory_order_relaxed);
     for (size_t lv = 0; lv < levels.size(); ++lv)
     {
         currentLevel = (int) lv;
         const int count = (int) levels[lv].size();
         auto& L = levels[lv];
-        if (count > 2) std::sort (L.begin(), L.end(), [this] (int a, int b) {
+        if (count >= 2) std::sort (L.begin(), L.end(), [this] (int a, int b) {
+            const bool la = a < (int) trackRt.size() && trackRt[(size_t) a] && trackRt[(size_t) a]->live;
+            const bool lb = b < (int) trackRt.size() && trackRt[(size_t) b] && trackRt[(size_t) b]->live;
+            if (la != lb) return la;   // armed (live) tracks first: the first job goes to the audio thread itself
             const float ca = a < (int) trackCost.size() ? trackCost[(size_t) a] : 0.0f, cb = b < (int) trackCost.size() ? trackCost[(size_t) b] : 0.0f;
             return ca > cb; });
         if (count >= 2 && mtOn.load() && pool && pool->size() > 0) pool->run (count, &EngineJobs::track, this);
@@ -2733,6 +2890,7 @@ void Engine::rememberTake (const juce::String& path)
 void Engine::releaseMemory()
 {
     freshTakes.clear();
+    ramCache = false;
     for (auto it = sampleCache.begin(); it != sampleCache.end();)
         it = it->second.use_count() <= 1 ? sampleCache.erase (it) : std::next (it);
     sync();

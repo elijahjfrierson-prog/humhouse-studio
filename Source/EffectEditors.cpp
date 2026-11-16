@@ -1,3 +1,4 @@
+#include <AmpData.h>
 #include "UI.h"
 #include "Instruments.h"
 #include "Drummer/DrummerCore.h"
@@ -52,22 +53,26 @@ class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
     EditorWindow (const juce::String& title, juce::Component* content, juce::String k, std::function<bool()> stillValid,
-                  juce::AudioProcessor* p = nullptr)
+                  juce::AudioProcessor* p = nullptr, bool resizable = false)
         : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), proc (p), valid (std::move (stillValid))
     {
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
         setContentOwned (content, true);
-        setResizable (false, false);
+        // decided before the window is on screen: changing it later rebuilds the native window, and hosted plug-in
+        // views (Analog Lab, ZENOLOGY, Surge XT on macOS) lose their window and collapse to an empty box
+        setResizable (resizable, false);
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         if (phoneUI) centreWithSize (juce::jmin (getWidth(), area.getWidth()), juce::jmin (getHeight(), area.getHeight()));
         else centreWithSize (getWidth(), getHeight());
+        // set before the window exists so it is never rebuilt around a hosted plug-in view
+        if (floatWithTopmost) setOnTopSafely (*this, true);
         setVisible (true);
         makeCaptureFriendly (*this);
         markFloating (*this);
         // FX windows open in front of the Mixer pop-out (also always-on-top on macOS while HumHouse is in front)
-        if (floatWithTopmost || juce::Process::isForegroundProcess()) setAlwaysOnTop (true);
+        if (! floatWithTopmost && juce::Process::isForegroundProcess()) setOnTopSafely (*this, true);
         toFront (true);
         startTimer (300);
     }
@@ -88,13 +93,13 @@ private:
         // a dialog that needs an answer is open: never float over it (it would sit hidden under this window and lock the app)
         if (auto* mc = juce::Component::getCurrentlyModalComponent())
         {
-            if (isAlwaysOnTop()) setAlwaysOnTop (false);
+            setOnTopSafely (*this, false);
             if (auto* top = mc->getTopLevelComponent(); top != nullptr && ! modalRaised && juce::Process::isForegroundProcess()) { top->toFront (true); modalRaised = true; }
             return;
         }
         modalRaised = false;
         updateFloating (*this);
-        if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); if (front != isAlwaysOnTop()) setAlwaysOnTop (front); }
+        if (! floatWithTopmost) { const bool front = juce::Process::isForegroundProcess(); setOnTopSafely (*this, front); }
     }
 };
 
@@ -109,13 +114,10 @@ public:
         toggle.onClick = [this] { show (toggle.getToggleState()); };
         addAndMakeVisible (toggle);
         addAndMakeVisible (native.get());
-        if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
         fit();
         startTimer (250);
     }
-    ~PluginFrame() override { ours.reset(); native.reset(); }
-    // the plug-in's own UI can be dragged bigger / smaller
-    bool canResize() const { auto* ed = dynamic_cast<juce::AudioProcessorEditor*> (native.get()); return ed != nullptr && ed->isResizable(); }
+    ~PluginFrame() override { stopTimer(); ours.reset(); native.reset(); }
     void show (bool humhouse)
     {
         if (humhouse && ours == nullptr)
@@ -129,51 +131,38 @@ public:
         if (ours != nullptr) ours->setVisible (humhouse);
         fit();
     }
-    void childBoundsChanged (juce::Component* c) override
-    {
-        if (c == nullptr || c == &toggle || ! c->isVisible() || fitting) return;   // the plug-in resized its own UI
-        if (c == native.get() && tiny (*c) && repairs < 6) { startTimer (60); return; }   // collapsed (Analog Lab, ZENOLOGY): put it back, don't shrink the window
-        fit();
-    }
+    void childBoundsChanged (juce::Component* c) override { if (c != nullptr && c != &toggle && c->isVisible() && ! fitting) fit(); }   // the plug-in resized its own UI
     void paint (juce::Graphics& g) override { g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
     void resized() override
     {
         toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
-        auto* c = current();
-        if (c == nullptr) return;
-        c->setTopLeftPosition (0, bar);
-        if (! fitting && (c != native.get() || canResize()))   // the window was dragged: the UI follows it
-        {
-            const juce::ScopedValueSetter<bool> sv (fitting, true);
-            c->setSize (getWidth(), juce::jmax (40, getHeight() - bar));
-        }
+        if (auto* c = current()) c->setTopLeftPosition (0, bar);
     }
 private:
-    static bool tiny (const juce::Component& c) { return c.getWidth() < 200 && c.getHeight() < 150; }
-    static std::map<juce::String, juce::Point<int>>& goodSizes() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
+    static std::map<juce::String, juce::Point<int>>& lastGood() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    bool collapsed() const { return native->getWidth() < 160 || native->getHeight() < 100; }
+    // ZENOLOGY (and some others) report a 0-size view when first attached: once the window is on screen,
+    // a collapsed native UI is pushed out to its last good size (or 1000x640) so it draws full size
     void timerCallback() override
     {
-        // some plug-ins report their real size only after their view is attached, or collapse to a stub after a
-        // window / screen change: re-ask the plug-in for its size, else restore the last good size
-        if (native->isVisible() && tiny (*native) && repairs < 6)
+        if (++ticks > 16) { stopTimer(); return; }
+        if (! native->isVisible()) return;
+        if (collapsed())
         {
-            ++repairs;
-            const juce::ScopedValueSetter<bool> sv (fitting, true);
-            native->setVisible (false); native->setVisible (true);
-            if (tiny (*native)) if (auto it = goodSizes().find (proc.getName()); it != goodSizes().end()) native->setSize (it->second.x, it->second.y);
+            auto it = lastGood().find (proc.getName());
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
+            native->setSize (want.x, want.y);   // collapsed rescue
         }
-        fit();
-        if (++ticks >= 8) stopTimer(); else startTimer (250);
+        else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
     }
-    juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
+        if (! collapsed()) lastGood()[proc.getName()] = { native->getWidth(), native->getHeight() };
         auto* c = current();
-        if (c == native.get() && ! tiny (*c)) goodSizes()[proc.getName()] = { c->getWidth(), c->getHeight() };
         setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
-        toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
-        c->setTopLeftPosition (0, bar);
+        resized();
     }
     static constexpr int bar = 28;
     juce::AudioProcessor& proc;
@@ -181,7 +170,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
-    int repairs = 0, ticks = 0;
+    int ticks = 0;
 };
 
 bool focusExisting (const juce::String& key)
@@ -226,7 +215,9 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
         { "satur", { { "Tape Warmth", { { "drive", 6.0f }, { "char", 0.0f } } }, { "Tube Push", { { "drive", 10.0f }, { "char", 1.0f } } }, { "Transformer Grit", { { "drive", 14.0f }, { "char", 2.0f }, { "mix", 0.7f } } } } },
         { "strip", { { "Rap Vocal", { { "gateTh", -55.0f }, { "compTh", -20.0f }, { "compRatio", 4.0f }, { "makeup", 5.0f }, { "hpf", 100.0f }, { "mid", -2.0f }, { "midF", 400.0f }, { "high", 3.0f } } }, { "Singer", { { "compTh", -18.0f }, { "compRatio", 3.0f }, { "hpf", 80.0f }, { "high", 2.0f } } }, { "Podcast", { { "gateTh", -50.0f }, { "compTh", -22.0f }, { "compRatio", 3.0f }, { "hpf", 90.0f }, { "low", -2.0f }, { "high", 2.0f } } } } },
         { "purify", { { "A  Warm Glue", { { "mode", 0.0f }, { "amount", 0.5f } } }, { "B  Bright Air", { { "mode", 1.0f }, { "amount", 0.5f } } }, { "C  Punch", { { "mode", 2.0f }, { "amount", 0.55f } } }, { "D  Wide Polish", { { "mode", 3.0f }, { "amount", 0.5f } } }, { "E  Loud Master", { { "mode", 4.0f }, { "amount", 0.6f } } } } },
-        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "retune", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "retune", 0.2f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "retune", 0.0f } } }, { "Robot", { { "style", 3.0f }, { "retune", 0.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } } } },
+        { "autopitch", { { "Natural Tune", { { "style", 0.0f }, { "retune", 0.5f }, { "humanize", 0.4f } } }, { "Modern Pop", { { "style", 2.0f }, { "retune", 0.2f }, { "humanize", 0.15f } } }, { "Hard Tune", { { "style", 3.0f }, { "retune", 0.0f } } }, { "Robot", { { "style", 3.0f }, { "retune", 0.0f }, { "humanize", 0.0f }, { "snap", -3.0f } } }, { "Chipmunk", { { "pitch", 7.0f } } }, { "Deep Voice", { { "pitch", -5.0f } } }, { "A = 432 Hz", { { "tuning", 432.0f } } },
+                         { "Flex Natural", { { "style", 1.0f }, { "retune", 0.1f }, { "flex", 0.5f } } }, { "Harmony 3rd", { { "harmony", 1.0f }, { "harmMix", 0.5f } } },
+                         { "Hard Double", { { "style", 3.0f }, { "retune", 0.0f }, { "double", 0.6f } } }, { "Choir 5th", { { "harmony", 2.0f }, { "harmMix", 0.4f }, { "double", 0.5f } } } } },
         { "deess", { { "Gentle", { { "threshold", -28.0f }, { "range", 6.0f } } }, { "Strong", { { "threshold", -35.0f }, { "range", 12.0f } } }, { "Bright Vocal", { { "freq", 7500.0f } } } } },
         { "eq", { { "Vocal", { { "hpf", 90.0f }, { "midGain", -2.0f }, { "midFreq", 400.0f }, { "highGain", 3.0f } } }, { "Kick", { { "lowGain", 4.0f }, { "lowFreq", 60.0f }, { "midGain", -4.0f }, { "midFreq", 350.0f } } }, { "Telephone", { { "hpf", 400.0f }, { "lpf", 3500.0f } } } } },
         { "filter", { { "Low Pass Sweep", { { "mode", 0.0f }, { "cutoff", 800.0f }, { "res", 0.4f }, { "lfo", 0.6f }, { "rate", 1.0f } } }, { "High Pass Build", { { "mode", 1.0f }, { "cutoff", 600.0f } } }, { "Wah", { { "mode", 2.0f }, { "cutoff", 1200.0f }, { "res", 0.7f }, { "lfo", 0.8f }, { "rate", 3.0f } } } } },
@@ -263,6 +254,7 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
 
 class ParamGrid : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     struct P { juce::String id, name; float mn, mx, def, value; std::vector<const char*> choices; };
     ParamGrid (const juce::String& title, std::vector<P> ps, std::function<void (const juce::String&, float)> setLive, std::function<void()> commit,
@@ -321,7 +313,7 @@ public:
         }
         visibleCount = (int) params.size();
         layoutSize();
-        startTimerHz (15);
+
     }
     // automation clips on this effect: their knobs move with the lane and their names turn red, same as the LANE mini plug-in
     std::function<int (const juce::String&, float&)> autoValue;   // 0 = not automated, 1 = automated (not playing here), 2 = v is live 0..1
@@ -366,7 +358,23 @@ public:
         }
     }
     float valueOf (const juce::String& id) const { for (auto& p : params) if (p.id == id) return p.value; return 0.0f; }
+    // what the knob shows right now (follows playing automation, which moves sliders without touching params)
+    float liveValueOf (const juce::String& id) const
+    {
+        for (size_t i = 0; i < params.size(); ++i)
+            if (params[i].id == id)
+                if (auto* k = dynamic_cast<juce::Slider*> (controls[(int) i])) return (float) k->getValue();
+        return valueOf (id);
+    }
+    juce::String choiceOf (const juce::String& id) const
+    {
+        for (auto& p : params)
+            if (p.id == id && ! p.choices.empty()) return p.choices[(size_t) juce::jlimit (0, (int) p.choices.size() - 1, (int) std::round (p.value - p.mn))];
+        return {};
+    }
     void commitNow() { onCommit(); }
+    const P* paramDef (const juce::String& id) const { for (auto& p : params) if (p.id == id) return &p; return nullptr; }
+    juce::String stateKey() const { juce::String k; for (auto& p : params) k << liveValueOf (p.id) << ','; return k; }
     void hideWhere (const std::function<bool (const juce::String&)>& hide)
     {
         visibleCount = 0;
@@ -560,6 +568,7 @@ static void drawPanelBg (juce::Graphics& g, juce::Rectangle<float> a)
 
 class EqGraph : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     EqGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, std::function<ScopeTap*()> src)
         : grid (g), live (std::move (liveFx)), tap (std::move (src))
@@ -599,7 +608,7 @@ public:
         for (juce::Component* c : { (juce::Component*) &typeBox, (juce::Component*) &dynB, (juce::Component*) &listenB, (juce::Component*) &delB }) addAndMakeVisible (c);
         syncBar();
         setTooltip ("Double-click empty space = add a band (up to 12). Drag a dot = frequency + gain. Wheel = width (Q). Double-click a dot = reset gain. Right-click a dot = type, Dynamic EQ, delete. Click NATURAL / LINEAR to switch phase.");
-        startTimerHz (30);
+
     }
     void paint (juce::Graphics& g) override
     {
@@ -909,6 +918,7 @@ private:
 // ANALYZE listens to the playing mix; APPLY sets band gains + output toward the target.
 class CurvesGraph : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     CurvesGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, std::function<ScopeTap*()> src)
         : grid (g), live (std::move (liveFx)), tap (std::move (src))
@@ -919,7 +929,7 @@ public:
         addAndMakeVisible (analyze);
         analyze.setTooltip ("Play your song, press ANALYZE, let it listen 10+ s, then press APPLY");
         analyze.onClick = [this] { if (grid.valueOf ("analyze") < 0.5f) start(); else apply(); };
-        startTimerHz (30);
+
     }
     static float targetDb (int t, int k)
     {
@@ -1068,9 +1078,10 @@ public:
 
 class DynGraph : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
     DynGraph (ParamGrid& g, std::function<BuiltinEffect*()> liveFx, juce::String th, juce::String ratio, juce::String knee)
-        : grid (g), live (std::move (liveFx)), thId (std::move (th)), ratioId (std::move (ratio)), kneeId (std::move (knee)) { startTimerHz (30); }
+        : grid (g), live (std::move (liveFx)), thId (std::move (th)), ratioId (std::move (ratio)), kneeId (std::move (knee)) { }
     void paint (juce::Graphics& g) override
     {
         drawPanelBg (g, getLocalBounds().toFloat());
@@ -1124,8 +1135,9 @@ private:
 // simple pictures of what an effect does (reverb tail, echo taps, filter curve)
 class FxPicture : public juce::Component, private juce::Timer
 {
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
 public:
-    FxPicture (ParamGrid& g, juce::String t) : grid (g), type (std::move (t)) { startTimerHz (15); }
+    FxPicture (ParamGrid& g, juce::String t) : grid (g), type (std::move (t)) { }
     void paint (juce::Graphics& g) override
     {
         drawPanelBg (g, getLocalBounds().toFloat());
@@ -1262,20 +1274,546 @@ private:
     juce::OwnedArray<juce::TextButton> pads;
 };
 
+// Amp House: close-up amp on its cab in the chosen room, the chosen mic on a stand you drag across the speaker,
+// and an AmpliTube-style signal chain (IN > 6 pedals > AMP > CAB > MIC > ROOM > EQ > 2 post pedals > OUT).
+// Click a node to edit it below; drag a pedal onto another to swap them; right-click a pedal to change / bypass / remove it.
+class AmpStage : public juce::Component, private juce::Timer
+{
+    juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
+public:
+    explicit AmpStage (ParamGrid& g) : grid (g)
+    {
+        heads = juce::ImageCache::getFromMemory (AmpData::amp_heads_jpg, AmpData::amp_heads_jpgSize);
+        room = juce::ImageCache::getFromMemory (AmpData::amp_studio_jpg, AmpData::amp_studio_jpgSize);
+        cabImg = juce::ImageCache::getFromMemory (AmpData::amp_cab_jpg, AmpData::amp_cab_jpgSize);
+        stand = juce::ImageCache::getFromMemory (AmpData::amp_stand_png, AmpData::amp_stand_pngSize);
+        boom = juce::ImageCache::getFromMemory (AmpData::amp_boom_png, AmpData::amp_boom_pngSize);
+        const auto sheet = juce::ImageCache::getFromMemory (AmpData::amp_mics_png, AmpData::amp_mics_pngSize);
+        static constexpr int micH[6] { 124, 116, 126, 139, 148, 181 };   // rendered mics, one per 200 px row of the sheet
+        if (sheet.isValid()) for (int i = 0; i < 6; ++i) mics[i] = sheet.getClippedImage ({ 0, i * 200 + (200 - micH[i]) / 2, 360, micH[i] });
+        setOpaque (true);
+    }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (juce::Colour (0xff0d0d10));
+        paintList (g); paintScene (g); paintChain (g); paintInspector (g);
+    }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        dragKnob = -1; dragNode = -1; insKnob = -1; micDrag = false; standDrag = false;
+        const auto p = e.position;
+        if (listArea().contains (p))
+        {
+            const int i = (int) ((p.y - listArea().getY()) / rowH());
+            if (i >= 0 && i < numAmps) { grid.setExternal ("model", (float) i); grid.commitNow(); repaint(); }
+            return;
+        }
+        for (int b = 0; b < 3; ++b) if (topButton (b).contains (p)) { choiceMenu (b == 0 ? "room" : b == 1 ? "mic" : "cab"); return; }
+        if (e.mods.isPopupMenu() && grid.onParamMenu)   // right-click a knob: Link to controller / automate, like the plain knobs
+        {
+            if (sceneArea().contains (p))
+                for (int k = 0; k < numKnobs; ++k) if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { grid.onParamMenu (knobIds[k]); return; }
+            const auto it = inspectorItems();
+            for (int i = 0; i < (int) it.size(); ++i) if (inspectorCell (i).contains (p)) { grid.onParamMenu (it[(size_t) i]); return; }
+        }
+        if (sceneArea().contains (p))
+        {
+            for (int k = 0; k < numKnobs; ++k)
+                if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { dragKnob = k; dragFrom = grid.liveValueOf (knobIds[k]); repaint(); return; }
+            const auto mg = micGeo();
+            const juce::Line<float> body (mg.cap, mg.tail), pole (juce::Point<float> (mg.poleX, mg.topY), juce::Point<float> (mg.poleX, mg.floorY));
+            juce::Point<float> near;
+            if (body.getDistanceFromPoint (p, near) < juce::jmax (10.0f, mg.len * 0.18f)) { micDrag = true; return; }   // grab the mic itself
+            if (pole.getDistanceFromPoint (p, near) < 14.0f || juce::Rectangle<float> (300.0f * mg.ps, 60.0f * mg.ps + 20.0f).withCentre ({ mg.poleX, mg.floorY - 20.0f * mg.ps }).contains (p))
+            { standDrag = true; return; }                                                                         // or the stand by its base / pole
+            if (speakerBox().expanded (40).contains (p)) { micDrag = true; moveMic (p); }
+            return;
+        }
+        for (int n = 0; n < numNodes; ++n)
+            if (nodeRect (n).contains (p))
+            {
+                selected = n;
+                if (pedalSlot (n) >= 0 && e.mods.isPopupMenu()) { pedalMenu (pedalSlot (n)); return; }
+                if (pedalSlot (n) >= 0) dragNode = n;
+                repaint(); return;
+            }
+        const auto items = inspectorItems();
+        for (int i = 0; i < (int) items.size(); ++i)
+            if (inspectorCell (i).contains (p))
+            {
+                const auto* d = grid.paramDef (items[(size_t) i]);
+                if (d == nullptr) return;
+                if (! d->choices.empty()) { choiceMenu (d->id); return; }
+                if (d->id.endsWith ("on")) { grid.setExternal (d->id, grid.liveValueOf (d->id) > 0.5f ? 0.0f : 1.0f); grid.commitNow(); repaint(); return; }
+                insKnob = i; dragFrom = grid.liveValueOf (d->id); repaint(); return;
+            }
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        const float dv = (float) (e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY()) * (e.mods.isShiftDown() ? 0.002f : 0.008f);
+        if (dragKnob >= 0) { grid.setExternal (knobIds[dragKnob], juce::jlimit (0.0f, 10.0f, dragFrom + dv * 10.0f)); repaint(); return; }
+        if (insKnob >= 0)
+        {
+            const auto items = inspectorItems();
+            if (const auto* d = grid.paramDef (items[(size_t) insKnob])) grid.setExternal (d->id, dragFrom + dv * (d->mx - d->mn));
+            repaint(); return;
+        }
+        if (micDrag) { moveMic (e.position); return; }
+        if (standDrag) { moveStand (e.position); return; }
+        if (dragNode >= 0) { dropAt = e.position; repaint(); }
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (dragNode >= 0 && e.getDistanceFromDragStart() > 6)
+            for (int n = 0; n < numNodes; ++n)
+                if (n != dragNode && nodeRect (n).contains (e.position) && pedalSlot (n) >= 0
+                    && (pedalSlot (n) < 6) == (pedalSlot (dragNode) < 6)) { swapPedals (pedalSlot (dragNode), pedalSlot (n)); selected = n; break; }
+        if (dragKnob >= 0 || insKnob >= 0 || micDrag || standDrag) grid.commitNow();
+        dragKnob = -1; insKnob = -1; dragNode = -1; micDrag = false; standDrag = false; repaint();
+    }
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        for (int k = 0; k < numKnobs; ++k)
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { resetParam (knobIds[k]); return; }
+        for (int n = 0; n < numNodes; ++n)
+            if (nodeRect (n).contains (e.position) && pedalSlot (n) >= 0) { const auto id = slotId (pedalSlot (n)) + "on"; grid.setExternal (id, grid.liveValueOf (id) > 0.5f ? 0.0f : 1.0f); grid.commitNow(); repaint(); return; }
+        const auto items = inspectorItems();
+        for (int i = 0; i < (int) items.size(); ++i) if (inspectorCell (i).contains (e.position)) { resetParam (items[(size_t) i]); return; }
+    }
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const float d = (w.deltaY != 0 ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
+        for (int k = 0; k < numKnobs; ++k)
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f)
+            { grid.setExternal (knobIds[k], juce::jlimit (0.0f, 10.0f, grid.liveValueOf (knobIds[k]) + d * 2.0f)); grid.commitNow(); repaint(); return; }
+        const auto items = inspectorItems();
+        for (int i = 0; i < (int) items.size(); ++i)
+            if (inspectorCell (i).contains (e.position))
+                if (const auto* p = grid.paramDef (items[(size_t) i]); p != nullptr && p->choices.empty())
+                { grid.setExternal (p->id, grid.liveValueOf (p->id) + d * 0.2f * (p->mx - p->mn)); grid.commitNow(); repaint(); return; }
+        if (! sceneArea().contains (e.position)) return;
+        if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.liveValueOf ("micangle") + d * 30.0f);
+        else grid.setExternal ("micdist", grid.liveValueOf ("micdist") - d * 1.5f);
+        grid.commitNow(); repaint();
+    }
+private:
+    static constexpr int numAmps = 15, numKnobs = 8, numNodes = 15;
+    static constexpr const char* knobIds[numKnobs] { "gain", "bass", "mid", "treble", "presence", "master", "bias", "sag" };
+    static constexpr const char* knobNames[numKnobs] { "GAIN", "BASS", "MID", "TREBLE", "PRES", "MASTER", "BIAS", "SAG" };
+    // per amp, fractions of its head picture: knob row centre / half height, panel colour, label colour, knob style
+    // (0 chrome, 1 black, 2 gold, 3 chicken-head), badge centre x/y + height, badge colour, script badge
+    struct Look { float rowY, rowH; juce::uint32 panel, label; int knob; float tx, ty, th; juce::uint32 tag; bool script; };
+    static constexpr Look looks[numAmps] {
+        { 0.22f, 0.11f, 0xff141414, 0xffe8e8e8, 1, 0.28f, 0.66f, 0.17f, 0xfff4f4f4, true  },   // FDR DLX
+        { 0.82f, 0.13f, 0xffc9a24a, 0xff1a1406, 2, 0.50f, 0.42f, 0.22f, 0xffe2c36a, true  },   // MSHL 800
+        { 0.82f, 0.13f, 0xffb4b4b8, 0xff141414, 1, 0.50f, 0.42f, 0.22f, 0xffdcdcdc, false },   // PVY 5150
+        { 0.80f, 0.14f, 0xff151515, 0xffd8d8d8, 1, 0.50f, 0.37f, 0.15f, 0xffe6e6e6, false },   // MSA REC
+        { 0.73f, 0.11f, 0xffe9e4d8, 0xff1a1a1a, 1, 0.53f, 0.42f, 0.24f, 0xffe0702a, false },   // ORNG 50
+        { 0.30f, 0.12f, 0xff3a2318, 0xffe9dcc0, 3, 0.21f, 0.30f, 0.15f, 0xffe9dcc0, false },   // VX 30
+        { 0.82f, 0.13f, 0xffbcbcc0, 0xff141414, 0, 0.50f, 0.42f, 0.19f, 0xfff0f0f0, true  },   // SLDN 100
+        { 0.82f, 0.13f, 0xffb8b8bc, 0xff141414, 1, 0.50f, 0.45f, 0.19f, 0xfff0f0f0, false },   // DZL HRB
+        { 0.82f, 0.11f, 0xff121212, 0xffd8b45a, 2, 0.50f, 0.42f, 0.19f, 0xffd8b45a, false },   // BGNR UBR
+        { 0.20f, 0.11f, 0xff141414, 0xffe8e8e8, 1, 0.28f, 0.66f, 0.17f, 0xfff4f4f4, true  },   // FDR TWN
+        { 0.85f, 0.11f, 0xffb8b8bc, 0xff141414, 1, 0.50f, 0.52f, 0.21f, 0xfff0f0f0, false },   // RNDL 100
+        { 0.85f, 0.11f, 0xffbcbcc0, 0xff141414, 1, 0.50f, 0.52f, 0.21f, 0xfff0f0f0, false },   // ENGL PWR
+        { 0.22f, 0.11f, 0xff101012, 0xffcfcfcf, 0, 0.45f, 0.23f, 0.15f, 0xffd4d4d4, false },   // AMPG SVT
+        { 0.22f, 0.11f, 0xffc8a96a, 0xff2a1a08, 3, 0.84f, 0.22f, 0.13f, 0xff4a2e14, true  },   // TK IMP
+        { 0.85f, 0.11f, 0xffb8b8bc, 0xff141414, 1, 0.47f, 0.55f, 0.21f, 0xfff0f0f0, false } }; // PVY 5150-III
+    int model() const { return juce::jlimit (0, numAmps - 1, juce::roundToInt (grid.liveValueOf ("model"))); }
+    juce::Rectangle<int> headSrc (int m) const { static const int w[5] { 288, 282, 280, 283, 288 }, h[3] { 154, 140, 115 }; return { (m % 5) * 300, (m / 5) * 160, w[m % 5], h[m / 5] }; }
+
+    // ---- layout
+    juce::Rectangle<float> listArea() const { return getLocalBounds().toFloat().removeFromLeft (118).withTrimmedBottom (chainH() + insH()); }
+    float rowH() const { return listArea().getHeight() / (float) numAmps; }
+    float chainH() const { return 74.0f; }
+    float insH() const { return 92.0f; }
+    juce::Rectangle<float> sceneArea() const { return getLocalBounds().toFloat().withTrimmedLeft (122).withTrimmedBottom (chainH() + insH() + 4); }
+    juce::Rectangle<float> topButton (int b) const { const auto s = sceneArea(); return { s.getRight() - 3.0f * 170.0f + (float) b * 170.0f, s.getY() + 6.0f, 164.0f, 22.0f }; }
+    static constexpr float cabX = 457.0f, cabY = 200.0f, cabW = 376.0f, cabH = 360.0f;   // the cab inside the rendered studio (1280x720)
+    float headAspect() const { const auto src = headSrc (model()); return (float) src.getHeight() / (float) src.getWidth(); }
+    juce::Point<float> cabScale() const   // the CAB picker sizes the rendered cab: 1x12 small, 2x12 wide + short, 4x12 full, 8x10 tall
+    {
+        switch (juce::roundToInt (grid.liveValueOf ("cab")))
+        {
+            case 0: case 5: return { 0.56f, 0.56f };
+            case 1: return { 0.96f, 0.6f };
+            case 4: return { 0.9f, 1.28f };
+            default: return { 1.0f, 1.0f };
+        }
+    }
+    float headW (float fullCabW) const { return juce::jmax (fullCabW * cabScale().x * 0.96f, fullCabW * 0.72f); }
+    juce::Rectangle<float> plateRect() const   // the 3D studio render, scaled so the amp stands up close and fills the view
+    {
+        const auto s = sceneArea();
+        const float fit = s.getHeight() * 0.86f / (cabH * cabScale().y + headW (cabW) * headAspect());
+        const float sc = fit;   // the whole amp always fits; a wider view just shows more of the room's walls
+        return { s.getCentreX() - (cabX + cabW * 0.5f) * sc, s.getBottom() - s.getHeight() * 0.05f - (cabY + cabH) * sc, 1280.0f * sc, 720.0f * sc };
+    }
+    juce::Rectangle<float> cabFull() const { const auto r = plateRect(); const float k = r.getWidth() / 1280.0f; return { r.getX() + cabX * k, r.getY() + cabY * k, cabW * k, cabH * k }; }
+    juce::Rectangle<float> cabRect() const
+    {
+        const auto f = cabFull(); const auto sc = cabScale();
+        const float w = f.getWidth() * sc.x, h = f.getHeight() * sc.y;
+        return { f.getCentreX() - w * 0.5f, f.getBottom() - h, w, h };
+    }
+    juce::Rectangle<float> headRect() const
+    {
+        const auto c = cabRect(); const float w = headW (cabFull().getWidth()), h = w * headAspect();
+        return { c.getCentreX() - w * 0.5f, c.getY() - h + 2.0f, w, h };
+    }
+    juce::Point<float> knobCentre (int k) const
+    {
+        const auto h = headRect(); const auto& L = looks[model()];
+        return { h.getX() + h.getWidth() * (0.10f + 0.80f * (float) k / (float) (numKnobs - 1)), h.getY() + h.getHeight() * L.rowY };
+    }
+    float knobRadius() const { const auto h = headRect(); return juce::jmin (h.getWidth() * 0.034f, h.getHeight() * looks[model()].rowH * 0.78f); }
+    juce::Point<int> cabGrid() const { const int c = juce::roundToInt (grid.liveValueOf ("cab")); return c == 1 ? juce::Point<int> (2, 1) : c == 2 || c == 3 ? juce::Point<int> (2, 2) : c == 4 ? juce::Point<int> (2, 4) : juce::Point<int> (1, 1); }
+    juce::Rectangle<float> speakerCell (int cx, int cy) const
+    {
+        const auto c = cabRect().reduced (cabRect().getWidth() * 0.06f, cabRect().getHeight() * 0.08f); const auto n = cabGrid();
+        const float cw = c.getWidth() / (float) n.x, ch = c.getHeight() / (float) n.y, d = juce::jmin (cw, ch) * 0.9f;
+        return juce::Rectangle<float> (d, d).withCentre ({ c.getX() + cw * ((float) cx + 0.5f), c.getY() + ch * ((float) cy + 0.5f) });
+    }
+    juce::Rectangle<float> speakerBox() const { const auto c = cabRect(); return c.reduced (c.getWidth() * 0.08f, c.getHeight() * 0.08f); }   // the grille: where the mic can aim
+    // the rendered mic stand: tripod + pole stand on the floor, the boom reaches the mic; Distance brings it toward you
+    struct MicGeo { juce::Point<float> cap, tail, clutch; float len = 0, tilt = 0, side = 1, poleX = 0, floorY = 0, topY = 0, ps = 1; };
+    MicGeo micGeo() const
+    {
+        MicGeo m; const auto c = cabRect(); const auto s = sceneArea();
+        const float dn = juce::jlimit (0.0f, 1.0f, (grid.liveValueOf ("micdist") - 0.1f) / 5.9f);
+        m.side = grid.liveValueOf ("micx") < 0.5f ? -1.0f : 1.0f;
+        m.len = c.getWidth() * (0.28f + 0.16f * dn);
+        m.cap = micPoint() + juce::Point<float> (0.0f, c.getHeight() * 0.10f * dn);
+        m.tilt = m.side * juce::degreesToRadians (grid.liveValueOf ("micangle")) * 0.6f;
+        m.tail = m.cap + juce::Point<float> (m.side * std::cos (m.tilt), std::sin (m.tilt) * m.side) * m.len;
+        m.poleX = m.tail.x + m.side * c.getWidth() * (0.16f + 0.12f * dn);
+        const float beside = c.getWidth() * (0.12f + 0.10f * dn);   // the stand stands beside the cab (black on black would vanish)
+        m.poleX = m.side > 0 ? juce::jmax (m.poleX, c.getRight() + beside) : juce::jmin (m.poleX, c.getX() - beside);
+        m.floorY = c.getBottom() + (s.getBottom() - c.getBottom()) * (0.12f + 0.8f * dn);
+        m.topY = juce::jmin (m.tail.y - c.getHeight() * 0.14f, m.floorY - 60.0f);
+        m.ps = (m.floorY - m.topY) / 700.0f;
+        m.clutch = { m.poleX, m.topY + 85.0f * m.ps };
+        return m;
+    }
+    void moveStand (juce::Point<float> p)   // drag the stand by its base: left/right = position, toward you / away = distance
+    {
+        const auto c = cabRect(); const auto s = sceneArea(); const auto m = micGeo();
+        const float off = m.poleX - micPoint().x;
+        grid.setExternal ("micx", juce::jlimit (0.0f, 1.0f, (p.x - off - speakerBox().getX()) / speakerBox().getWidth()));
+        const float dn = juce::jlimit (0.0f, 1.0f, ((p.y - c.getBottom()) / juce::jmax (1.0f, s.getBottom() - c.getBottom()) - 0.12f) / 0.8f);
+        grid.setExternal ("micdist", 0.1f + dn * 5.9f);
+        repaint();
+    }
+    juce::Point<float> micPoint() const { const auto c = speakerBox(); return { c.getX() + grid.liveValueOf ("micx") * c.getWidth(), c.getY() + (1.0f - grid.liveValueOf ("micy")) * c.getHeight() }; }
+    void moveMic (juce::Point<float> p)
+    {
+        const auto c = speakerBox();
+        grid.setExternal ("micx", juce::jlimit (0.0f, 1.0f, (p.x - c.getX()) / c.getWidth()));
+        grid.setExternal ("micy", juce::jlimit (0.0f, 1.0f, 1.0f - (p.y - c.getY()) / c.getHeight()));
+        repaint();
+    }
+    juce::Rectangle<float> chainArea() const { return getLocalBounds().toFloat().withTrimmedTop ((float) getHeight() - chainH() - insH()).withHeight (chainH()); }
+    juce::Rectangle<float> nodeRect (int n) const { const auto a = chainArea().reduced (6, 8); const float w = a.getWidth() / (float) numNodes; return { a.getX() + w * (float) n + 3.0f, a.getY(), w - 6.0f, a.getHeight() }; }
+    static int pedalSlot (int n) { return n >= 1 && n <= 6 ? n - 1 : n == 12 || n == 13 ? n - 6 : -1; }
+    static juce::String slotId (int s) { return s < 6 ? "s" + juce::String (s + 1) : "p" + juce::String (s - 5); }
+    juce::Rectangle<float> insArea() const { return getLocalBounds().toFloat().removeFromBottom (insH()).reduced (6, 4); }
+    juce::Rectangle<float> inspectorCell (int i) const { const auto a = insArea().withTrimmedLeft (110); const float w = juce::jmin (96.0f, a.getWidth() / 12.0f); return { a.getX() + w * (float) i, a.getY(), w - 4.0f, a.getHeight() }; }
+    std::vector<juce::String> inspectorItems() const
+    {
+        const int ps = pedalSlot (selected);
+        if (ps >= 0) { const auto s = slotId (ps); return { s, s + "on", s + "a", s + "b", s + "c" }; }
+        switch (selected)
+        {
+            case 0: return { "input" };
+            case 7: return { "model", "channel", "power", "gain", "bass", "mid", "treble", "presence", "master", "bias", "sag", "response" };
+            case 8: return { "cab", "cabmix" };
+            case 9: return { "mic", "micx", "micy", "micdist", "micangle" };
+            case 10: return { "room", "roomsize", "reflect", "damping", "roomwet" };
+            case 11: return { "eq1", "eq2", "eq3", "eq4", "eq5" };
+            default: return { "output" };
+        }
+    }
+    void resetParam (const juce::String& id) { if (const auto* d = grid.paramDef (id)) { grid.setExternal (id, d->def); grid.commitNow(); repaint(); } }
+    void choiceMenu (const juce::String& id)
+    {
+        const auto* d = grid.paramDef (id);
+        if (d == nullptr) return;
+        juce::PopupMenu m; const int cur = juce::roundToInt (grid.liveValueOf (id) - d->mn);
+        for (int i = 0; i < (int) d->choices.size(); ++i) m.addItem (i + 1, d->choices[(size_t) i], true, i == cur);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
+                         [safe = juce::Component::SafePointer<AmpStage> (this), id, mn = d->mn] (int r) {
+                             if (r > 0 && safe != nullptr) { safe->grid.setExternal (id, mn + (float) (r - 1)); safe->grid.commitNow(); safe->repaint(); } });
+    }
+    void pedalMenu (int s)
+    {
+        const auto id = slotId (s); const auto* d = grid.paramDef (id);
+        if (d == nullptr) return;
+        juce::PopupMenu m; const int cur = juce::roundToInt (grid.liveValueOf (id));
+        for (int i = 1; i < (int) d->choices.size(); ++i) m.addItem (i + 1, d->choices[(size_t) i], true, i == cur);
+        m.addSeparator();
+        m.addItem (1000, grid.liveValueOf (id + "on") > 0.5f ? "Bypass" : "Turn on", cur > 0);
+        m.addItem (1001, "Remove pedal", cur > 0);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
+                         [safe = juce::Component::SafePointer<AmpStage> (this), id] (int r) {
+                             if (safe == nullptr || r <= 0) return;
+                             auto& gr = safe->grid;
+                             if (r == 1000) gr.setExternal (id + "on", gr.liveValueOf (id + "on") > 0.5f ? 0.0f : 1.0f);
+                             else if (r == 1001) gr.setExternal (id, 0.0f);
+                             else { gr.setExternal (id, (float) (r - 1)); gr.setExternal (id + "on", 1.0f); }
+                             gr.commitNow(); safe->repaint(); });
+    }
+    void swapPedals (int a, int b)
+    {
+        static const char* suf[] { "", "a", "b", "c", "on" };
+        for (auto* sfx : suf)
+        {
+            const auto ia = slotId (a) + sfx, ib = slotId (b) + sfx;
+            const float va = grid.liveValueOf (ia), vb = grid.liveValueOf (ib);
+            grid.setExternal (ia, vb); grid.setExternal (ib, va);
+        }
+        grid.commitNow();
+    }
+
+    // ---- drawing
+    void paintList (juce::Graphics& g)
+    {
+        const auto a = listArea(); const auto* d = grid.paramDef ("model");
+        g.setColour (juce::Colour (0xff15161a)); g.fillRect (a);
+        for (int i = 0; i < numAmps; ++i)
+        {
+            const auto r = juce::Rectangle<float> (a.getX(), a.getY() + rowH() * (float) i, a.getWidth(), rowH()).reduced (3, 1.5f);
+            if (i == model()) { g.setColour (col::accent.withAlpha (0.85f)); g.fillRoundedRectangle (r, 3.0f); }
+            g.setColour (i == model() ? juce::Colours::white : juce::Colour (0xffe6e6ea).withAlpha (0.8f));
+            g.setFont (juce::FontOptions (juce::jmin (13.0f, rowH() * 0.6f), juce::Font::bold));
+            g.drawFittedText (d != nullptr && i < (int) d->choices.size() ? juce::String (d->choices[(size_t) i]) : juce::String (i + 1), r.reduced (6, 0).toNearestInt(), juce::Justification::centredLeft, 1);
+        }
+    }
+    void paintRoom (juce::Graphics& g, juce::Rectangle<float> s)
+    {
+        const int rm = juce::roundToInt (grid.liveValueOf ("room"));
+        static constexpr juce::uint32 tint[5] { 0x00000000, 0x38ffb060, 0x70201812, 0x50405878, 0x60102040 };
+        g.setColour (juce::Colour (0xff15120f)); g.fillRect (s);
+        if (room.isValid())
+        {
+            g.saveState(); g.reduceClipRegion (s.toNearestInt());
+            const auto pr = plateRect();
+            if (pr.getX() > s.getX())   // wider than the render: continue its side walls
+                g.drawImage (room, (int) s.getX(), (int) pr.getY(), (int) std::ceil (pr.getX() - s.getX()) + 1, (int) pr.getHeight(), 0, 0, 90, 720);
+            if (pr.getRight() < s.getRight())
+                g.drawImage (room, (int) pr.getRight() - 1, (int) pr.getY(), (int) std::ceil (s.getRight() - pr.getRight()) + 1, (int) pr.getHeight(), 1190, 0, 90, 720);
+            g.drawImage (room, pr, juce::RectanglePlacement::stretchToFit);
+            g.setColour (juce::Colour (tint[juce::jlimit (0, 4, rm)])); g.fillRect (s);
+            if (rm == 2)   // vocal booth: foam wedges on the walls
+            {
+                g.setColour (juce::Colour (0x50000000));
+                for (float x = s.getX(); x < s.getRight(); x += 22.0f) for (float y = s.getY(); y < s.getY() + s.getHeight() * 0.62f; y += 22.0f)
+                { juce::Path p; p.addTriangle (x, y + 22, x + 11, y, x + 22, y + 22); g.fillPath (p); }
+            }
+            if (rm == 3) { g.setColour (juce::Colour (0x30ffffff)); for (float y = s.getY() + 30; y < s.getBottom() * 0.7f; y += 34.0f) g.drawHorizontalLine ((int) y, s.getX(), s.getRight()); }
+            if (rm == 4) { g.setColour (juce::Colour (0x40ffffff)); for (int i = 0; i < 4; ++i) { const float x = s.getX() + s.getWidth() * (0.12f + 0.25f * (float) i); juce::Path p; p.addCentredArc (x, s.getY() + s.getHeight() * 0.42f, s.getWidth() * 0.09f, s.getHeight() * 0.3f, 0, -juce::MathConstants<float>::halfPi, juce::MathConstants<float>::halfPi, true); g.strokePath (p, juce::PathStrokeType (2.0f)); } }
+            g.restoreState();
+        }
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0x00000000), s.getCentreX(), s.getY() + s.getHeight() * 0.7f, juce::Colour (0xa0000000), s.getCentreX(), s.getBottom(), false));
+        g.fillRect (s);
+    }
+    void paintScene (juce::Graphics& g)
+    {
+        auto s = sceneArea(); const int m = model(); const auto& L = looks[m];
+        paintRoom (g, s);
+        {   // the rendered cab, sized by the CAB picker, with its contact shadow on the rug
+            const auto c = cabRect();
+            g.setColour (juce::Colour (0x70000000)); g.fillEllipse (c.getX() - c.getWidth() * 0.06f, c.getBottom() - c.getHeight() * 0.04f, c.getWidth() * 1.12f, c.getHeight() * 0.09f);
+            g.setOpacity (1.0f);   // drawImage takes the colour's alpha: the shadow's 0x70 made the cab see-through
+            if (cabImg.isValid()) g.drawImage (cabImg, c, juce::RectanglePlacement::stretchToFit);
+        }
+        // head from the reference picture, our badge over the logo, our knobs on the panel
+        const auto h = headRect();
+        if (heads.isValid()) g.drawImage (heads, h.getX(), h.getY(), h.getWidth(), h.getHeight(), headSrc (m).getX(), headSrc (m).getY(), headSrc (m).getWidth(), headSrc (m).getHeight());
+        const auto* md = grid.paramDef ("model");
+        const juce::String tag = md != nullptr && m < (int) md->choices.size() ? juce::String (md->choices[(size_t) m]) : juce::String();
+        g.setColour (juce::Colour (L.tag));
+        g.setFont (juce::FontOptions (h.getHeight() * L.th, L.script ? juce::Font::bold | juce::Font::italic : juce::Font::bold));
+        g.drawFittedText (tag, juce::Rectangle<float> (h.getWidth() * 0.5f, h.getHeight() * L.th * 1.2f).withCentre ({ h.getX() + h.getWidth() * L.tx, h.getY() + h.getHeight() * L.ty }).toNearestInt(), juce::Justification::centred, 1);
+        const auto row = juce::Rectangle<float> (h.getX() + h.getWidth() * 0.04f, h.getY() + h.getHeight() * (L.rowY - L.rowH), h.getWidth() * 0.92f, h.getHeight() * L.rowH * 2.0f);
+        g.setColour (juce::Colour (L.panel)); g.fillRoundedRectangle (row, 2.0f);
+        const float kr = knobRadius();
+        for (int k = 0; k < numKnobs; ++k)
+        {
+            const auto kc = knobCentre (k);
+            const float v = juce::jlimit (0.0f, 1.0f, grid.liveValueOf (knobIds[k]) / 10.0f), a = juce::degreesToRadians (-135.0f + 270.0f * v);
+            if (L.knob == 3)   // chicken head
+            {
+                g.setColour (juce::Colour (0xffeee6d2)); g.fillEllipse (kc.x - kr * 0.7f, kc.y - kr * 0.7f, kr * 1.4f, kr * 1.4f);
+                juce::Path p; p.addTriangle (-kr * 0.35f, 0, kr * 0.35f, 0, 0, -kr * 1.15f); g.fillPath (p, juce::AffineTransform::rotation (a).translated (kc));
+                g.setColour (juce::Colour (0xff2a1a08)); g.drawLine (kc.x, kc.y, kc.x + std::sin (a) * kr, kc.y - std::cos (a) * kr, 1.4f);
+            }
+            else
+            {
+                const juce::Colour top = L.knob == 0 ? juce::Colour (0xfff2f2f4) : L.knob == 2 ? juce::Colour (0xfff0d68a) : juce::Colour (0xff3a3a3e);
+                const juce::Colour bot = L.knob == 0 ? juce::Colour (0xff6c6c72) : L.knob == 2 ? juce::Colour (0xff8a6a20) : juce::Colour (0xff050506);
+                g.setColour (juce::Colour (0xff050506)); g.fillEllipse (kc.x - kr, kc.y - kr, kr * 2, kr * 2);
+                const float cr = kr * 0.78f;
+                g.setGradientFill (juce::ColourGradient (top, kc.x - cr * 0.4f, kc.y - cr * 0.6f, bot, kc.x + cr * 0.5f, kc.y + cr, true));
+                g.fillEllipse (kc.x - cr, kc.y - cr, cr * 2, cr * 2);
+                g.setColour (k == dragKnob ? col::accent : (L.knob == 1 ? juce::Colours::white : juce::Colours::black));
+                g.drawLine (kc.x + std::sin (a) * cr * 0.2f, kc.y - std::cos (a) * cr * 0.2f, kc.x + std::sin (a) * kr * 0.95f, kc.y - std::cos (a) * kr * 0.95f, juce::jmax (1.4f, kr * 0.16f));
+            }
+            g.setColour (juce::Colour (L.label)); g.setFont (juce::FontOptions (juce::jmax (7.0f, kr * 0.62f), juce::Font::bold));
+            g.drawFittedText (knobNames[k], juce::Rectangle<float> (kr * 3.2f, kr * 0.8f).withCentre ({ kc.x, kc.y + kr * 1.35f }).toNearestInt(), juce::Justification::centred, 1);
+        }
+        paintMic (g, s);
+        // room / mic / cab pickers
+        static const char* lab[3] { "ROOM", "MIC", "CAB" }; static const char* ids[3] { "room", "mic", "cab" };
+        for (int b = 0; b < 3; ++b)
+        {
+            const auto r = topButton (b);
+            g.setColour (juce::Colour (0xd0101014)); g.fillRoundedRectangle (r, 4.0f);
+            g.setColour (col::accent.withAlpha (0.8f)); g.drawRoundedRectangle (r, 4.0f, 1.0f);
+            g.setColour (juce::Colours::white); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+            g.drawFittedText (juce::String (lab[b]) + ": " + grid.choiceOf (ids[b]) + juce::String (juce::CharPointer_UTF8 ("  \xe2\x96\xbe")), r.reduced (6, 0).toNearestInt(), juce::Justification::centredLeft, 1);
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.75f)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        juce::String info = dragKnob >= 0 ? juce::String (knobNames[dragKnob]) + "  " + juce::String (grid.liveValueOf (knobIds[dragKnob]), 1)
+                                          : grid.choiceOf ("mic") + "  X " + juce::String (grid.liveValueOf ("micx"), 2) + "  Y " + juce::String (grid.liveValueOf ("micy"), 2) + "  "
+                                            + juce::String (grid.liveValueOf ("micdist"), 1) + " ft  " + juce::String (juce::roundToInt (grid.liveValueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
+                                            + "   (drag the mic to aim, drag its stand to move it closer / farther, wheel = distance, shift+wheel = angle)";
+        g.drawFittedText (info, s.removeFromBottom (18).reduced (8, 0).toNearestInt(), juce::Justification::centredLeft, 1);
+    }
+    void paintMic (juce::Graphics& g, juce::Rectangle<float>)
+    {
+        const auto m = micGeo();
+        g.setColour (juce::Colour (0x50000000));   // contact shadow under the tripod
+        g.fillEllipse (juce::Rectangle<float> (300.0f * m.ps, 34.0f * m.ps).withCentre ({ m.poleX, m.floorY - 6.0f * m.ps }));
+        g.setOpacity (1.0f);
+        if (stand.isValid()) g.drawImageTransformed (stand, juce::AffineTransform::translation (-208.0f, -700.0f).scaled (m.ps).translated (m.poleX, m.floorY));
+        if (boom.isValid())
+        {
+            const auto d = m.clutch - m.tail; const float L = d.getDistanceFromOrigin(), bs = L / 370.0f;
+            auto t = juce::AffineTransform::translation (-30.0f, -48.0f);
+            if (d.x < 0) t = t.scaled (1.0f, -1.0f);   // boom reaching left: keep the clip on top
+            g.drawImageTransformed (boom, t.scaled (bs).rotated (std::atan2 (d.y, d.x)).translated (m.tail));
+        }
+        const int mi = juce::jlimit (0, 5, juce::roundToInt (grid.liveValueOf ("mic")));
+        if (const auto& img = mics[mi]; img.isValid())
+        {
+            const float k = m.len / (float) img.getWidth();
+            auto t = juce::AffineTransform::translation (0.0f, -(float) img.getHeight() * 0.5f);
+            if (m.side < 0) t = t.scaled (-1.0f, 1.0f);   // stand on the left: the mic points right, into the speaker
+            g.drawImageTransformed (img, t.scaled (k).rotated (m.tilt).translated (m.cap));
+        }
+        if (micDrag || standDrag) { g.setColour (col::accent); g.drawEllipse (m.cap.x - 4, m.cap.y - 4, 8, 8, 1.5f); }
+    }
+    void paintChain (juce::Graphics& g)
+    {
+        const auto a = chainArea();
+        g.setColour (juce::Colour (0xff121317)); g.fillRect (a);
+        static const char* pedalTag[] { "+", "TS", "RAT", "FUZZ", "MUFF", "KLN", "BD", "DS", "COMP", "WAH", "PH90", "CE", "DM", "TREM", "VERB", "GATE" };
+        static const juce::uint32 pedalCol[] { 0xff2a2c32, 0xff3fae49, 0xff1a1a1a, 0xffc23b2b, 0xffd8d8d8, 0xffd4af37, 0xff2a5bd7, 0xffff8c1a,
+                                               0xffd7263d, 0xff222222, 0xffff7a00, 0xff4fb3e8, 0xffe8e8e8, 0xff6a4fb3, 0xff8a6a3a, 0xff505a64 };
+        static const char* fixedTag[] { "IN", "", "", "", "", "", "", "AMP", "CAB", "MIC", "ROOM", "EQ", "", "", "OUT" };
+        for (int n = 0; n + 1 < numNodes; ++n)
+        {
+            const auto r0 = nodeRect (n), r1 = nodeRect (n + 1);
+            g.setColour (col::accent.withAlpha (0.6f)); g.drawLine (r0.getRight(), r0.getCentreY(), r1.getX(), r1.getCentreY(), 2.0f);
+        }
+        for (int n = 0; n < numNodes; ++n)
+        {
+            auto r = nodeRect (n);
+            if (n == dragNode && dropAt.x > 0) r = r.withCentre (dropAt);
+            const int ps = pedalSlot (n);
+            if (ps >= 0)
+            {
+                const int type = juce::jlimit (0, 15, juce::roundToInt (grid.liveValueOf (slotId (ps))));
+                const bool on = type > 0 && grid.liveValueOf (slotId (ps) + "on") > 0.5f;
+                const auto c = juce::Colour (pedalCol[type]);
+                if (type == 0) { g.setColour (c); g.drawRoundedRectangle (r.reduced (2), 5.0f, 1.2f); }
+                else { g.setColour (on ? c : c.withMultipliedSaturation (0.3f).withMultipliedBrightness (0.5f)); g.fillRoundedRectangle (r.reduced (2), 5.0f); }
+                const auto txt = c.getPerceivedBrightness() > 0.6f ? juce::Colours::black : juce::Colours::white;
+                g.setColour (type == 0 ? juce::Colour (0xff9a9aa2) : txt); g.setFont (juce::FontOptions (type == 0 ? 18.0f : 12.0f, juce::Font::bold));
+                g.drawFittedText (pedalTag[type], r.withHeight (r.getHeight() * 0.55f).toNearestInt(), juce::Justification::centred, 1);
+                if (type > 0)
+                {
+                    g.setColour (on ? juce::Colour (0xffff3030) : juce::Colour (0xff401010)); g.fillEllipse (r.getCentreX() - 3, r.getY() + 6, 6, 6);
+                    g.setColour (juce::Colour (0xffc8c8cc)); g.fillEllipse (r.getCentreX() - 6, r.getBottom() - 18, 12, 12);
+                }
+            }
+            else
+            {
+                g.setColour (juce::Colour (0xff23262d)); g.fillRoundedRectangle (r.reduced (2), 5.0f);
+                g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+                g.drawFittedText (fixedTag[n], r.toNearestInt(), juce::Justification::centred, 1);
+            }
+            if (n == selected) { g.setColour (col::accent); g.drawRoundedRectangle (r.reduced (1), 6.0f, 2.0f); }
+        }
+    }
+    void paintInspector (juce::Graphics& g)
+    {
+        const auto a = insArea();
+        g.setColour (juce::Colour (0xff17181d)); g.fillRoundedRectangle (a, 4.0f);
+        const int ps = pedalSlot (selected);
+        static const char* title[] { "INPUT", "", "", "", "", "", "", "AMP", "CABINET", "MIC", "ROOM", "EQ", "", "", "OUTPUT" };
+        g.setColour (col::accent); g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        g.drawFittedText (ps >= 0 ? (ps < 6 ? "PEDAL " + juce::String (ps + 1) : "POST FX " + juce::String (ps - 5)) : juce::String (title[selected]),
+                          a.withWidth (104).reduced (8, 0).toNearestInt(), juce::Justification::centredLeft, 2);
+        const auto items = inspectorItems();
+        for (int i = 0; i < (int) items.size(); ++i)
+        {
+            const auto* d = grid.paramDef (items[(size_t) i]);
+            if (d == nullptr) continue;
+            auto c = inspectorCell (i); const float v = grid.liveValueOf (d->id);
+            juce::String nm = d->name.fromFirstOccurrenceOf (" ", false, false);
+            if (d->id.length() == 3 && (d->id[0] == 's' || d->id[0] == 'p')) nm = d->id.endsWithChar ('a') ? "DRIVE" : d->id.endsWithChar ('b') ? "TONE" : "LEVEL";
+            else nm = d->name;
+            g.setColour (juce::Colour (0xff9a9aa2)); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawFittedText (nm.toUpperCase(), c.removeFromBottom (14).toNearestInt(), juce::Justification::centred, 1);
+            if (! d->choices.empty() || d->id.endsWith ("on"))
+            {
+                const auto b = c.withSizeKeepingCentre (c.getWidth(), 24.0f);
+                const bool tog = d->choices.empty();
+                g.setColour (tog && v > 0.5f ? col::accent : juce::Colour (0xff23262d)); g.fillRoundedRectangle (b, 4.0f);
+                g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+                g.drawFittedText (tog ? juce::String (v > 0.5f ? "ON" : "OFF") : grid.choiceOf (d->id), b.reduced (3, 0).toNearestInt(), juce::Justification::centred, 2);
+                continue;
+            }
+            const float kr = juce::jmin (c.getWidth(), c.getHeight() - 14.0f) * 0.36f; const auto kc = c.getCentre().translated (0, -4);
+            const float t = (v - d->mn) / juce::jmax (1e-6f, d->mx - d->mn), a0 = juce::degreesToRadians (-135.0f), a1 = a0 + juce::degreesToRadians (270.0f) * t;
+            juce::Path bg; bg.addCentredArc (kc.x, kc.y, kr, kr, 0, a0, juce::degreesToRadians (135.0f), true);
+            g.setColour (juce::Colour (0xff2c3038)); g.strokePath (bg, juce::PathStrokeType (3.0f));
+            juce::Path fg; fg.addCentredArc (kc.x, kc.y, kr, kr, 0, a0, a1, true);
+            g.setColour (i == insKnob ? juce::Colours::white : col::accent); g.strokePath (fg, juce::PathStrokeType (3.0f));
+            g.setColour (juce::Colour (0xffe6e6ea)); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+            g.drawFittedText (juce::String (v, std::abs (d->mx - d->mn) > 20 ? 0 : 1), juce::Rectangle<float> (kr * 2, 12).withCentre (kc).toNearestInt(), juce::Justification::centred, 1);
+        }
+    }
+    void timerCallback() override { const auto k = grid.stateKey(); if (k != last) { last = k; repaint(); } }
+    ParamGrid& grid; juce::Image heads, room, cabImg, stand, boom, mics[6]; juce::String last;
+    int dragKnob = -1, dragNode = -1, insKnob = -1, selected = 7; float dragFrom = 0.0f; bool micDrag = false, standDrag = false; juce::Point<float> dropAt;
+};
+
 class FxEditor : public juce::Component
 {
 public:
-    FxEditor (ParamGrid* g, juce::Component* v, int visualH) : grid (g), visual (v), vh (visualH)
+    FxEditor (ParamGrid* g, juce::Component* v, int visualH) : grid (g), visual (v), vh (visualH), gridH (g->getHeight())
     {
-        addAndMakeVisible (*grid); addAndMakeVisible (*visual);
-        setSize (juce::jmax (640, grid->getWidth()), vh + grid->getHeight());
+        vp.setViewedComponent (grid.get(), false); vp.setScrollBarsShown (true, false);
+        addAndMakeVisible (vp); addAndMakeVisible (*visual);
+        int maxH = 900;   // tall knob grids (Amp House) scroll instead of running off the screen
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) maxH = juce::jmax (400, d->userArea.getHeight() - 120);
+        const bool scroll = vh + gridH > maxH;
+        setSize (juce::jmax (640, grid->getWidth() + (scroll ? vp.getScrollBarThickness() : 0)), juce::jmin (maxH, vh + gridH));
     }
     void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
-    void resized() override { auto r = getLocalBounds(); visual->setBounds (r.removeFromTop (vh).reduced (10, 8)); grid->setBounds (r); }
+    void resized() override
+    {
+        auto r = getLocalBounds(); visual->setBounds (r.removeFromTop (vh).reduced (10, 8)); vp.setBounds (r);
+        const bool scroll = gridH > r.getHeight();
+        grid->setSize (r.getWidth() - (scroll ? vp.getScrollBarThickness() : 0), juce::jmax (r.getHeight(), gridH));
+    }
 private:
     std::unique_ptr<ParamGrid> grid;
     std::unique_ptr<juce::Component> visual;
-    int vh;
+    juce::Viewport vp;
+    int vh, gridH;
 };
 }
 
@@ -1342,12 +1880,11 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         s.engine.beginRiskyPluginCall (plugin->getPluginDescription());
         juce::Component* ed = plugin->hasEditor() ? plugin->createEditorIfNeeded() : nullptr;
         s.engine.endRiskyPluginCall();
+        // HUMHOUSE VIEW frame exactly as in 1.5.3: fixed-size window, the frame follows the plug-in's own size
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        auto* w = new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
-                                    [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin);
-        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
-        EditorWindow::windows().add (w);
+        EditorWindow::windows().add (new EditorWindow (plugin->getName() + " - " + trackName, ed, key,
+                                                       [&s, track, slotUid, plugin] { return s.engine.fxPlugin (track, slotUid) == plugin; }, plugin));
         return;
     }
 
@@ -1406,6 +1943,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
+    else if (ty == "hhamp") { grid->hideWhere ([] (const juce::String&) { return true; }); grid->setSize (1100, grid->getHeight()); visual = new AmpStage (*grid); vh = 640;
+                              if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) vh = juce::jlimit (420, 640, d->userArea.getHeight() - 120 - grid->getHeight()); }
     else if (ty == "glitch")
     {
         grid->hideWhere ([] (const juce::String& id) { return id == "fx" || id == "steplen" || (id.startsWithChar ('s') && id != "smooth"); });
@@ -1980,9 +2519,7 @@ void openChannelEditor (Studio& s, int channelId)
         s.engine.endRiskyPluginCall();
         if (ed == nullptr) ed = new juce::GenericAudioProcessorEditor (*plugin);
         else ed = new PluginFrame (*plugin, ed);
-        auto* w = new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin);
-        if (auto* pf = dynamic_cast<PluginFrame*> (ed); pf != nullptr && pf->canResize() && ! phoneUI) w->setResizable (true, false);
-        EditorWindow::windows().add (w);
+        EditorWindow::windows().add (new EditorWindow (ch->name, ed, key, [&s, channelId, plugin] { return s.engine.channelPlugin (channelId) == plugin; }, plugin));
         return;
     }
     if (ch->type == ChannelType::Drummer)

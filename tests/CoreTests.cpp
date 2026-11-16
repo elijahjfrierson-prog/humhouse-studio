@@ -1885,7 +1885,9 @@ int main (int argc, char** argv)
         if (! fx) continue;
         fx->prepare (48000, 128);
         if (fx->latencySamples() != 0) std::printf ("latency %s: %d samples\n", info.id, fx->latencySamples());
-        CHECK (fx->latencySamples() == 0);
+        // the Amplitude rig oversamples 4x (a few samples of delay); the engine's PDC lines it up
+        if (juce::String (info.id) == "hhamp") CHECK (fx->latencySamples() > 0 && fx->latencySamples() < 64);
+        else CHECK (fx->latencySamples() == 0);
     }
     // Consolidate: only the chosen clips render, from the first one's start, and every clip's mute comes back
     {
@@ -2798,6 +2800,7 @@ int main (int argc, char** argv)
         CHECK (share (kick, StemDrums) > 0.4 && share (bass, StemBass) > 0.7 && share (voc, StemVocals) > 0.5 && share (pad, StemMelodies) > 0.5);
     }
 
+    packAudioInSong() = true;   // the glue tests below pack audio inside the song (off by default: KB songs)
     // audio is glued to the song: a backup opened after the song folder moved still finds its vocal, and a same-named take of another size is never picked up
     {
         const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-glue-test");
@@ -3149,11 +3152,25 @@ int main (int argc, char** argv)
         Project p; Channel c; c.id = 77; c.name = "Shot"; c.sampleFile = wav; p.channels.push_back (c);
         auto song = dir.getChildFile ("Songs").getChildFile ("glue.hhs"); song.getParentDirectory().createDirectory();
         CHECK (saveProject (p, song));
+        juce::MemoryBlock wavBytes; wav.loadFileAsData (wavBytes);
+        {   // compressed song: zlib container, glued WAV as lossless FLAC, smaller than the WAV it carries
+            juce::MemoryBlock sb; song.loadFileAsData (sb);
+            CHECK (sb.getSize() > 2 && (juce::uint8) sb[0] == 0x78);
+            CHECK (song.getSize() < wav.getSize());
+            std::printf ("compressed song: %lld bytes (wav %lld)\n", (long long) song.getSize(), (long long) wav.getSize());
+        }
         const auto size = wav.getSize(); wav.deleteFile();
         Project q; CHECK (loadProject (q, song));
         CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.getSize() == size
                && q.channels.back().sampleFile.getFileName() == "myshot.wav");
+        {   // byte-for-byte identical after FLAC round trip
+            juce::MemoryBlock back; if (! q.channels.empty()) q.channels.back().sampleFile.loadFileAsData (back);
+            CHECK (back == wavBytes);
+        }
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
+        packAudioInSong() = false;   // default: the song only points at its audio, so it stays KB
+        CHECK (saveProject (q, song) && song.getSize() < 16 * 1024);
+        std::printf ("KB song: %lld bytes\n", (long long) song.getSize());
         dir.deleteRecursively();
     }
 

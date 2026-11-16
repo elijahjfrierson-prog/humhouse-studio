@@ -27,6 +27,7 @@ set(HHS_CORE_SOURCES
     Source/Instruments.cpp
     Source/Effects.cpp
     Source/StudioEffects.cpp
+    Source/AmpSim.cpp
     Source/Engine.cpp
     Source/PluginSandbox.cpp
     Source/ProjectIO.cpp
@@ -59,6 +60,11 @@ set(HHS_DEFS
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
     HHS_LICENSE_URL="${HHS_LICENSE_URL}"
 )
+# macOS: paint each dirty area on its own through a Metal layer instead of repainting their whole union with CoreGraphics
+# (a scope in one corner + a playhead in another used to redraw the full window on the CPU every frame)
+if(APPLE AND NOT IOS)
+    list(APPEND HHS_DEFS JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1)
+endif()
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
 if(IOS)
     list(APPEND HHS_DEFS JUCE_PLUGINHOST_VST3=0)
@@ -100,6 +106,8 @@ list(APPEND HHS_LIBS HHSDrummerData)
 # fingerprints of every sold key (scripts/hhs_keyprints.py): a real key unlocks even with the license server down
 juce_add_binary_data(HHSKeyprints HEADER_NAME KeyprintData.h NAMESPACE KeyprintData SOURCES Resources/License/keyprints.bin)
 list(APPEND HHS_LIBS HHSKeyprints)
+juce_add_binary_data(HHSAmpData HEADER_NAME AmpData.h NAMESPACE AmpData SOURCES Resources/Amp/amp_studio.jpg Resources/Amp/amp_cab.jpg Resources/Amp/amp_heads.jpg Resources/Amp/amp_mics.png Resources/Amp/amp_stand.png Resources/Amp/amp_boom.png)
+list(APPEND HHS_LIBS HHSAmpData)
 if(APPLE OR WIN32)
     list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
 endif()
@@ -183,6 +191,8 @@ function(hhs_add_app target product bundle licensed)
         ${HHS_CORE_SOURCES}
         Source/Main.cpp
         Source/MainComponent.cpp
+        Source/PaintPump.cpp
+        $<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:Source/MacWindows.mm>
         Source/ChannelRack.cpp
         Source/PianoRoll.cpp
         Source/Playlist.cpp
@@ -218,6 +228,7 @@ target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_ST
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)
+add_test(NAME PluginWindowGuard COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_plugin_windows.cmake)
 endif()
 
 if(TARGET HHSTests AND MSVC)

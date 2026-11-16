@@ -65,7 +65,9 @@ void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
     juce::PopupMenu m, builtins, hum;
     std::map<juce::String, juce::PopupMenu> cats, makers;
     const auto& fx = builtinEffects();
-    for (size_t i = 0; i < fx.size(); ++i) cats[fx[i].category].addItem ((int) i + 1, fx[i].name);
+    for (size_t i = 0; i < fx.size(); ++i)
+        if (! (phoneUI && juce::String (fx[i].id) == "hhamp"))   // amp rig is desktop only: the phone stays light on CPU
+            cats[fx[i].category].addItem ((int) i + 1, fx[i].name);
     for (auto& [c, sub] : cats) builtins.addSubMenu (c, sub);
     auto types = s.engine.knownPlugins.getTypes();
     for (int i = 0; i < types.size(); ++i)

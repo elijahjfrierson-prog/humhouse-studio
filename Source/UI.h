@@ -29,6 +29,7 @@ inline juce::Component* fitToScreen (juce::Component* c)
     return v;
 }
 // a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
+void pumpPendingPaints();   // paints held-back windows every screen refresh (PaintPump.cpp)
 inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
@@ -218,20 +219,36 @@ struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
         setCurrentRange (start, visible, juce::dontSendNotification);
     }
 };
+// Float / un-float a window without ever rebuilding it. JUCE rebuilds the native window when the platform can't change
+// "always on top" live (X11); a rebuilt window drops hosted VST3 views (Analog Lab, ZENOLOGY, Surge XT) to an empty box.
+// Before the window is on screen the flag is free to set everywhere.
+inline void setOnTopSafely (juce::Component& c, bool onTop)
+{
+    if (onTop == c.isAlwaysOnTop()) return;
+   #if JUCE_LINUX || JUCE_BSD
+    if (c.isOnDesktop()) return;
+   #endif
+    c.setAlwaysOnTop (onTop);
+}
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
+#if JUCE_MAC
+void joinFullScreen (juce::Component&);   // MacWindows.mm: pop-outs / plug-in windows live inside the app's full-screen space
+#else
+inline void joinFullScreen (juce::Component&) {}
+#endif
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
     auto& d = juce::Desktop::getInstance();
     for (int i = 0; i < d.getNumComponents(); ++i)
         if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
-            c->toFront (false);
+        { joinFullScreen (*c); c->toFront (false); }
 }
 inline void updateFloating (juce::Component& c)
 {
     if (! floatWithTopmost) return;
     const bool front = juce::Process::isForegroundProcess();
-    if (front != c.isAlwaysOnTop()) c.setAlwaysOnTop (front);
+    setOnTopSafely (c, front);
 }
 
 // settings / tool windows that never lock the app: not modal, float like plug-in windows, X or Esc always closes them
@@ -450,6 +467,8 @@ juce::PopupMenu patchBayRouteMenu (Studio&, std::function<void (Project&, int in
 std::unique_ptr<juce::Component> createPatchBayView (Studio&);
 struct BayInfo { juce::String name; std::vector<int> chans; int insert = 0; std::vector<int> stacks; };
 std::vector<BayInfo> bayInfo (Studio&);   // the Patch Bays (loaded from settings), for LANE's BAY filter   // PATCH tab
+std::function<void()>& videoExportAllHook();                     // EXPORT ALL: video + the whole Record mix as one file (set while the VIDEO editor exists)
+std::function<void()>& videoPopHook();                           // VID POP: pops the VIDEO window out (set while the VIDEO editor exists)
 std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
 inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll
 const juce::StringArray& languageNames();   // Options > Layout > Language
@@ -507,12 +526,12 @@ void applySavedLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
 {
-    inline const char* const defaultToolbar = "logo,beat,record,mix,patch,video,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,scope,theme,browser,save";
+    inline const char* const defaultToolbar = "logo,beat,record,mix,patch,video,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,vidpop,scope,theme,browser,save";
     inline const std::pair<const char*, const char*> toolbarItems[] {
         { "logo", "HumHouse logo" }, { "beat", "BEAT page" }, { "record", "RECORD page" }, { "mix", "MIX page" }, { "song", "PAT / SONG" },
         { "start", "Go to start" }, { "play", "Play" }, { "stop", "Stop" }, { "rec", "Record" }, { "bpm", "BPM" }, { "pos", "Position" },
         { "metro", "Metronome" }, { "count", "Count-in" }, { "retro", "RETRO" }, { "piano", "PIANO keys" }, { "cpu", "CPU meter" },
-        { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
+        { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "vidpop", "Video pop-out (VID POP)" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
     inline juce::String toolbar = defaultToolbar;
     inline bool browserRight = false, rackBelow = false, toolbarBottom = false, mixDock = false, hint = true;
     inline int browserW = 260, mixH = 260, toolbarH = 48, lanesH = 240;

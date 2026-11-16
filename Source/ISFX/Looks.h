@@ -21,6 +21,7 @@ struct Look
     std::vector<std::pair<juce::String, float>> p;
 };
 const std::vector<Look>& lookLibrary();
+juce::File contentDir();                                // bundled LUTs/ and SFX/ shipped next to the app
 void applyLook (FxStack&, const Look&, float amount);   // blends from defaults
 
 juce::StringArray styleModes();                         // Classic, Gothic, VHS, Y2K, Underground, Abstract

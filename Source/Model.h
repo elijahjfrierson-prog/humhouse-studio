@@ -228,7 +228,18 @@ struct AutoTarget
     juce::String param;                      // built-in param id, "#n" = plugin parameter n, or send target bus (AutoSendLevel)
     juce::String name;                       // label, e.g. "Room Verb - Mix"
 };
-struct AutoPoint { double beat = 0.0; float value = 0.5f; };   // beat into the clip's content, value 0..1
+struct AutoPoint { double beat = 0.0; float value = 0.5f; float curve = 0.0f; };   // beat into the clip's content, value 0..1, curve = Bezier bend (-1..1) of the segment to the next point
+// quadratic Bezier from (0,0) to (1,1) with its handle at (0.5 - c/2, 0.5 + c/2): c > 0 rises fast then eases, c < 0 starts slow
+inline float bezierBend (float t, float c)
+{
+    c = c < -0.98f ? -0.98f : c > 0.98f ? 0.98f : c;
+    if (c > -1.0e-4f && c < 1.0e-4f) return t;
+    const float cx = 0.5f - 0.5f * c, cy = 0.5f + 0.5f * c, A = 1.0f - 2.0f * cx;
+    const float d = 4.0f * cx * cx + 4.0f * A * t;
+    const float u = (-2.0f * cx + std::sqrt (d > 0.0f ? d : 0.0f)) / (2.0f * A);
+    return 2.0f * (1.0f - u) * u * cy + u * u;
+}
+inline float fadeBend (float fadeCurve) { return -0.49f * fadeCurve; }   // clip fade curve knob (-2..2) as a Bezier bend
 float autoValueAt (const std::vector<AutoPoint>& pts, double beat);
 float autoToValue (int kind, float v);      // 0..1 -> channel / insert value (FX params map on their own range)
 float autoFromValue (int kind, float x);
@@ -306,12 +317,14 @@ struct MixerTrack
     std::vector<Send> sends;       // master is implicit if sends empty and track != 0
     juce::Colour colour { 0xff2a2f36 };
     bool routesToMaster = true;
+    bool direct = false;           // Set to master: straight to the master, never waits for delay compensation (FL no-latency)
     // sidechain duck (one knob): dips this insert under the SC source track
     float duck = 0.0f;             // 0 = off .. 1 = full
     int   duckSource = -1;         // -1 = auto (first armed vocal track)
     float duckThreshold = -40.0f, duckRatio = 4.0f, duckAttack = 5.0f, duckRelease = 150.0f;
     // FL-style mini EQ under the FX slots: low shelf, 3 peaks, high shelf; each band has freq / gain / Q
     std::array<float, 5> meqFreq { 80.0f, 300.0f, 1000.0f, 3500.0f, 10000.0f }, meqGain { 0, 0, 0, 0, 0 }, meqQ { 0.7f, 1.0f, 1.0f, 1.0f, 0.7f };
+    std::array<int, 5> meqType { 1, 0, 0, 0, 2 };   // band shape: 0 bell, 1 low shelf, 2 high shelf, 3 low cut, 4 high cut, 5 notch
 };
 
 // Link to controller: a controller effect (Peak Controller) drives one knob of another effect
@@ -365,6 +378,7 @@ struct Project
     const Channel* findChannel (int id) const;
     int  addChannel (Channel c);       // returns id, creates mixer track if mixerTrack<0
     int  addMixerTrack (const juce::String& name);
+    int  pushLane (int from, double start, double end, const juce::String& name);   // PUSH: first track from `from` (Track 1 = 0) going down that's free over start..end; adds one if none
     double songLengthBeats() const;
     juce::File recordingsFolder() const;
 

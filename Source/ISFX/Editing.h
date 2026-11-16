@@ -10,7 +10,9 @@ juce::StringArray snapModeNames();
 int snapPerBeat (SnapMode m);                 // grid lines per beat (0 = bar/frame/off)
 Ticks snapTime (Ticks t, const Project& p, SnapMode m);
 
-enum class ChopMode { Grid8 = 0, Grid16, Grid32, Kick, Snare, HiHat };
+enum class ChopMode { Grid8 = 0, Grid16, Grid32, Kick, Snare, HiHat, HatRoll };
+// cut points on hi-hat rolls: runs of 4+ hats closer than a triplet 8th, thinned to >= 1/15 s apart
+std::vector<Ticks> hatRolls (const SongAnalysis& s, Ticks a, Ticks b);
 juce::StringArray chopModeNames();
 
 // cut times inside [a, b) for a chop mode (grid modes: exact musical times; event modes: detected hits)
@@ -20,7 +22,7 @@ std::vector<Ticks> chopPoints (const SongAnalysis& s, Ticks a, Ticks b, ChopMode
 std::vector<const MediaItem*> takesCovering (const Project& p, Ticks t, Ticks len);
 
 // ---- edit operations (all on the active sequence; caller records undo) --------------------
-bool splitAt (Sequence& s, Ticks t, const juce::StringArray& onlyClips = {});
+bool splitAt (Sequence& s, Ticks t, const juce::StringArray& onlyClips = {}, const juce::String& songId = {});   // songId: the song clip can be cut too
 void deleteClips (Sequence& s, const juce::StringArray& ids, bool ripple);
 void deleteRange (Sequence& s, Ticks a, Ticks b, bool ripple, int track = -1);
 void keepRange (Sequence& s, Ticks a, Ticks b);   // removes everything outside [a, b)
@@ -30,7 +32,8 @@ juce::String paintClip (Sequence& s, const juce::String& templateId, Ticks at, i
 juce::String addMediaClip (Project& p, const juce::String& mediaId, int track, Ticks at, Ticks maxLen = 0);
 int insertVideoTrack (Sequence&);
 // effect layer: a clip with no media whose FX apply to everything under it while it plays (trim/move like any clip)
-juce::String addEffectClip (Sequence&, const FxStack& fx, const juce::String& name, Ticks at, Ticks len);
+juce::String addEffectClip (Sequence&, const FxStack& fx, const juce::String& name, Ticks at, Ticks len, int preferTrack = -1);
+int freeVideoTrack (const Sequence&, int prefer, Ticks a, Ticks b);   // -1 = no room, caller adds a track
 // same, on `track` when it's a free unlocked video track over [at, at+len), else on a new layer on top
 juce::String addEffectClipOn (Sequence&, int track, const FxStack& fx, const juce::String& name, Ticks at, Ticks len);
 // drops a transition on the cut nearest `at` on a track (it belongs to the incoming clip, so it stays locked to that cut)
@@ -45,6 +48,11 @@ juce::StringArray pasteClips (Sequence&, const std::vector<Clip>&, Ticks at);   
 juce::StringArray duplicateClips (Sequence&, const juce::StringArray& ids);         // copies placed right after the selection
 void pasteAttributes (Sequence&, const Clip& from, const juce::StringArray& ids);   // effects, opacity, volume, transition
 juce::String freezeFrame (Sequence&, const juce::String& id, Ticks at, Ticks len);  // frame hold segment, returns its id
+// rearrange: two clips trade timeline slots (track, start, length), each keeps its own shot; cut points stay put
+bool swapClipSlots (Sequence&, const Project&, const juce::String& a, const juce::String& b);
+juce::StringArray speedRampNames();
+// speed ramp preset as eased "speed" keyframes (index -1 removes the ramp); shortens the clip if the ramp runs out of source
+bool applySpeedRamp (Sequence&, const Project&, const juce::String& id, int preset);
 bool setClipSpeed (Sequence&, const Project&, const juce::String& id, double speed); // Speed/Duration: keeps the start, stops at the next clip   // overwrite helper
 
 // sync-preserving angle switch: replaces V1 content in [a,b) with cuts between synced takes
@@ -63,10 +71,15 @@ int liftClips (const Project& p, Sequence& s, const juce::StringArray& ids, bool
 // Every synced take as one full clip on its own hidden, muted video track (raw material under the edit).
 int addTakeLayers (const Project& p, Sequence& s);
 std::vector<int> generateEdits (Project& p, juce::uint32 seed, const juce::String& styleMode = {});
+bool regenerateActive (Project& p, juce::uint32 seed, const juce::String& styleMode = {});   // Randomize: rebuild the active generated edit
+// SEQ (Triller-style): random videos with unrelated audio cut to the song beat in a new "SEQ n" sequence; returns its index or -1
+int buildSeqEdit (Project& p, juce::uint32 seed);
+// stack a fresh generated pass on new video tracks of the current sequence (keeps everything already there); returns clips added
+int stackGenerated (Project& p, juce::uint32 seed, const juce::String& styleMode = {});
 // Right-click Auto Cut: slices one clip on the grid / detected hits, or a hi-hat-style roll
 // (1/8 -> 1/16 -> 1/32 into the next bar, every slice repeating the roll's first slice = stutter).
 // switchAngles: video slices cycle through the other synced takes covering each slice.
-enum class AutoCut { Quarter = 0, Eighth, Sixteenth, ThirtySecond, Triplet, HiHat, Kick, Snare, Roll };
+enum class AutoCut { Quarter = 0, Eighth, Sixteenth, ThirtySecond, Triplet, HiHat, Kick, Snare, Roll, HatRoll, Crazy, Stutter, Smooth, HalfBar, Offbeat, Build, Dotted };
 juce::StringArray autoCutNames();
 int autoCutClip (Project& p, const juce::String& clipId, AutoCut mode, bool switchAngles, juce::uint32 seed = 1);
 }

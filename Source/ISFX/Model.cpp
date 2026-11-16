@@ -126,6 +126,7 @@ juce::var toVar (const Project& p)
         o->setProperty ("fps", m.fps); o->setProperty ("w", m.width); o->setProperty ("h", m.height);
         o->setProperty ("rot", m.rotation); o->setProperty ("proxy", m.proxyPath); o->setProperty ("audio", m.hasAudio); o->setProperty ("fav", m.favorite);
         o->setProperty ("quality", m.quality);
+        if (! m.moments.empty()) { juce::String mo; for (auto v : m.moments) mo << juce::String (v, 2) << ","; o->setProperty ("moments", mo); }
         o->setProperty ("syncStatus", (int) m.sync.status); o->setProperty ("syncOffset", t2s (m.sync.offset));
         o->setProperty ("syncConf", m.sync.confidence); o->setProperty ("syncNote", m.sync.note);
         media.add (juce::var (o));
@@ -154,6 +155,7 @@ juce::var toVar (const Project& p)
     {
         auto* o = new juce::DynamicObject();
         o->setProperty ("id", s.id); o->setProperty ("name", s.name); o->setProperty ("style", s.style);
+        if (s.duckDb < 0) { o->setProperty ("duckDb", s.duckDb); o->setProperty ("duckKey", s.duckKey); }
         o->setProperty ("seed", (int) s.seed); o->setProperty ("fx", fxToVar (s.fx));
         juce::Array<juce::var> tr;
         for (auto& t : s.tracks)
@@ -176,11 +178,26 @@ juce::var toVar (const Project& p)
             co->setProperty ("opacity", c.opacity); co->setProperty ("volume", c.volume);
             co->setProperty ("trans", (int) c.transIn); co->setProperty ("transLen", t2s (c.transLen));
             co->setProperty ("fx", fxToVar (c.fx));
+            if (! c.keys.empty())
+            {
+                auto* ko = new juce::DynamicObject();
+                for (auto& [id, ks] : c.keys)
+                {
+                    juce::Array<juce::var> a;
+                    for (auto& k : ks) a.add (juce::Array<juce::var> { t2s (k.t), k.v, k.interp });
+                    ko->setProperty (id, a);
+                }
+                co->setProperty ("keys", juce::var (ko));
+            }
             if (c.name.isNotEmpty()) co->setProperty ("name", c.name);
             if (! c.enabled) co->setProperty ("enabled", false);
             if (c.reverse) co->setProperty ("reverse", true);
             if (c.label != 0) co->setProperty ("label", c.label);
             if (c.keep) co->setProperty ("keep", true);
+            if (c.frameInterp != 1) co->setProperty ("frameInterp", c.frameInterp);
+            if (c.fadeIn > 0) co->setProperty ("fadeIn", t2s (c.fadeIn));
+            if (c.fadeOut > 0) co->setProperty ("fadeOut", t2s (c.fadeOut));
+            if (c.text.isNotEmpty()) { co->setProperty ("text", c.text); co->setProperty ("font", c.font); }
             cl.add (juce::var (co));
         }
         o->setProperty ("clips", cl);
@@ -214,6 +231,7 @@ bool fromVar (const juce::var& v, Project& p, juce::String& error)
             mi.kind = (MediaKind) (int) m["kind"]; mi.duration = s2t (m["duration"]); mi.fps = (double) m["fps"];
             mi.width = (int) m["w"]; mi.height = (int) m["h"]; mi.rotation = (int) m["rot"]; mi.proxyPath = m["proxy"].toString(); mi.hasAudio = (bool) m["audio"];
             mi.favorite = (bool) m["fav"]; mi.quality = (float) (double) m["quality"];
+            for (auto& tk : juce::StringArray::fromTokens (m["moments"].toString(), ",", "")) if (tk.isNotEmpty()) mi.moments.push_back (tk.getFloatValue());
             mi.sync.status = (SyncInfo::Status) (int) m["syncStatus"]; mi.sync.offset = s2t (m["syncOffset"]);
             mi.sync.confidence = (float) (double) m["syncConf"]; mi.sync.note = m["syncNote"].toString();
             r.media.push_back (mi);
@@ -233,6 +251,7 @@ bool fromVar (const juce::var& v, Project& p, juce::String& error)
         {
             Sequence s;
             s.id = sv["id"].toString(); s.name = sv["name"].toString(); s.style = sv["style"].toString();
+            s.duckDb = (float) (double) sv["duckDb"]; s.duckKey = sv["duckKey"].toString();
             s.seed = (juce::uint32) (int) sv["seed"]; fxFromVar (sv["fx"], s.fx);
             if (auto* tr = sv["tracks"].getArray())
                 for (auto& tv : *tr)
@@ -253,7 +272,16 @@ bool fromVar (const juce::var& v, Project& p, juce::String& error)
                     c.volume = cv.hasProperty ("volume") ? (float) (double) cv["volume"] : 1.0f;
                     c.transIn = (TransitionType) (int) cv["trans"]; c.transLen = s2t (cv["transLen"]);
                     fxFromVar (cv["fx"], c.fx);
+                    if (auto* ko = cv["keys"].getDynamicObject())
+                        for (auto& pr : ko->getProperties())
+                            if (auto* a = pr.value.getArray())
+                                for (auto& k : *a)
+                                    if (k.size() >= 2) setKey (c, pr.name.toString(), s2t (k[0]), (float) (double) k[1], k.size() > 2 ? (int) k[2] : 0);
                     c.name = cv["name"].toString(); c.enabled = cv.hasProperty ("enabled") ? (bool) cv["enabled"] : true; c.reverse = (bool) cv["reverse"]; c.label = (int) cv["label"]; c.keep = (bool) cv["keep"];
+                    c.frameInterp = cv.hasProperty ("frameInterp") ? (int) cv["frameInterp"] : 1;
+                    c.fadeIn = cv.hasProperty ("fadeIn") ? s2t (cv["fadeIn"]) : 0;
+                    c.fadeOut = cv.hasProperty ("fadeOut") ? s2t (cv["fadeOut"]) : 0;
+                    c.text = cv["text"].toString(); c.font = cv["font"].toString();
                     if (c.track >= 0 && c.track < (int) s.tracks.size()) s.clips.push_back (c);
                 }
             r.sequences.push_back (s);
@@ -318,5 +346,75 @@ bool History::redo (Project& p)
     undoStack.emplace_back (p, redoStack.back().second);
     p = std::move (redoStack.back().first); redoStack.pop_back();
     return true;
+}
+float volumeGain (const Clip& c, Ticks rel)
+{
+    float g = c.volume;
+    if (auto it = c.keys.find ("volume"); it != c.keys.end() && ! it->second.empty()) g = keyValue (it->second, rel);
+    if (c.fadeIn > 0 && rel < c.fadeIn) g *= (float) std::max<Ticks> (0, rel) / (float) c.fadeIn;
+    if (c.fadeOut > 0 && c.length - rel < c.fadeOut) g *= (float) std::max<Ticks> (0, c.length - rel) / (float) c.fadeOut;
+    return g;
+}
+
+float keyValue (const std::vector<Clip::Key>& k, Ticks rel)
+{
+    if (k.empty()) return 0;
+    if (rel <= k.front().t) return k.front().v;
+    if (rel >= k.back().t) return k.back().v;
+    auto it = std::upper_bound (k.begin(), k.end(), rel, [] (Ticks x, const Clip::Key& y) { return x < y.t; });
+    const auto& b = *it; const auto& a = *(it - 1);
+    if (a.interp == 1 || b.t <= a.t) return a.v;
+    double u = (double) (rel - a.t) / (double) (b.t - a.t);
+    if (a.interp == 2) u = u * u * (3 - 2 * u);
+    return (float) (a.v + (b.v - a.v) * u);
+}
+
+void applyKeyframes (Clip& c, Ticks t)
+{
+    for (auto& [id, ks] : c.keys) if (! ks.empty()) c.fx.set (id, keyValue (ks, t - c.start));
+}
+
+static double rampSeg (const Clip::Key& a, const Clip::Key& b, double x)
+{
+    const double d = (double) (b.t - a.t);
+    if (d <= 0 || a.interp == 1) return std::max (0.0f, a.v) * x;
+    const double v0 = std::max (0.0f, a.v), dv = std::max (0.0f, b.v) - v0, u = x / d;
+    if (a.interp == 2) return v0 * x + dv * d * (u * u * u - u * u * u * u / 2);
+    return v0 * x + dv * x * u / 2;
+}
+
+static double rampedRaw (const Clip& c, Ticks rel);
+double rampedOffset (const Clip& c, Ticks rel)
+{
+    // keys can sit before 0 after a split; integrate speed from the clip start only
+    return rampedRaw (c, rel) - rampedRaw (c, 0);
+}
+
+static double rampedRaw (const Clip& c, Ticks rel)
+{
+    auto it = c.keys.find ("speed");
+    if (it == c.keys.end() || it->second.empty()) return (double) rel * c.speed;
+    const auto& k = it->second;
+    if (rel <= k.front().t) return (double) rel * std::max (0.0f, k.front().v);
+    double acc = (double) k.front().t * std::max (0.0f, k.front().v);
+    for (size_t i = 0; i + 1 < k.size(); ++i)
+    {
+        if (rel <= k[i + 1].t) return acc + rampSeg (k[i], k[i + 1], (double) (rel - k[i].t));
+        acc += rampSeg (k[i], k[i + 1], (double) (k[i + 1].t - k[i].t));
+    }
+    return acc + (double) (rel - k.back().t) * std::max (0.0f, k.back().v);
+}
+
+void shiftKeys (Clip& c, Ticks delta)
+{
+    for (auto& [id, ks] : c.keys) for (auto& k : ks) k.t -= delta;
+}
+
+void setKey (Clip& c, const juce::String& param, Ticks rel, float v, int interp)
+{
+    auto& ks = c.keys[param];
+    for (auto& k : ks) if (k.t == rel) { k.v = v; k.interp = interp; return; }
+    ks.push_back ({ rel, v, interp });
+    std::sort (ks.begin(), ks.end(), [] (const Clip::Key& a, const Clip::Key& b) { return a.t < b.t; });
 }
 }

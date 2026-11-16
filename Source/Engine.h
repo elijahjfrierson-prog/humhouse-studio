@@ -1,5 +1,6 @@
 #pragma once
 #include <set>
+#include <array>
 #include <condition_variable>
 #include <mutex>
 #include "Model.h"
@@ -25,14 +26,15 @@ public:
     // (other apps such as OBS can't starve them mid-block)
     void setWorkgroup (const juce::AudioWorkgroup& wg);
     std::atomic<long> workerJobs { 0 }, runs { 0 };
+    std::array<std::atomic<juce::int64>, 65> busy {};   // ticks spent on jobs per worker; [64] = the calling audio / render thread
 private:
     struct Worker : juce::Thread
     {
-        explicit Worker (WorkerPool& p) : juce::Thread ("HHS audio worker"), pool (p) {}
-        void run() override { pool.workerLoop(); }
-        WorkerPool& pool;
+        Worker (WorkerPool& p, int i) : juce::Thread ("HHS audio worker"), pool (p), idx (i) {}
+        void run() override { pool.workerLoop (idx); }
+        WorkerPool& pool; int idx;
     };
-    void workerLoop();
+    void workerLoop (int idx);
     std::vector<std::unique_ptr<Worker>> threads;
     std::atomic<bool> quit { false };
     std::atomic<int> generation { 0 }, next { 0 }, done { 0 }, total { 0 }, wgGeneration { 0 };
@@ -62,6 +64,10 @@ public:
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
+    std::atomic<bool> lowLatency { false };      // Low Latency Mode: armed tracks go straight to the master (no delay-compensation wait), FX stay on
+    std::atomic<bool> ramCache { true };         // Pro Tools-style disk cache: clips play from RAM (up to the budget) instead of streaming
+    float trackLoad (int track) const;           // share of the audio block this insert used (0..1)
+    std::vector<float> coreLoads();              // busy share per processing thread since the last call; last = audio / render thread
     std::atomic<bool> anticipativeOn { true };   // render playback ahead (like Reaper's anticipative FX) while nothing is live
     std::atomic<int> antUnderruns { 0 };   // hand the audio thread a fresh copy of the song (after value edits that need no rebuild)
     juce::CriticalSection& getLock() { return lock; }
@@ -79,13 +85,19 @@ public:
     bool isRecording() const { return recording.load(); }
     // Retro Record: the last 60 s of mic input is always kept (armed or not); this drops it on REC as a clip
     bool retroRecord();
-    double positionBeats() const { return std::max (0.0, position.load() - antAheadBeats.load()); }   // what you hear (render-ahead aware)
+    // what you hear (render-ahead aware). Stopped = exactly the marker: a stale render-ahead count left from the last play
+    // used to pull it (and Paste / drops at the playhead) up to 250 ms before where the marker was put
+    double positionBeats() const { return std::max (0.0, playing.load() ? position.load() - antAheadBeats.load() : position.load()); }
     void setPositionBeats (double b);
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
     std::atomic<float> blockLoadFrac { 0.3f };   // recent peak share of the block deadline the audio callback used
     std::atomic<float> swapUsLast { 0 }, swapUsMax { 0 };   // how long the last / longest edit held the audio lock (microseconds)   // Options > Dual outputs: the master plays on 1-2 AND 3-4, the very same samples (no phasing)
     void setDualOutput (bool on);
+    std::atomic<float> recordOffsetMs { 0.0f };   // user nudge for drivers that report the wrong latency (older laptops): + moves takes earlier
+    static constexpr float recordOffsetChoices[9] { -30.0f, -20.0f, -10.0f, -5.0f, 0.0f, 5.0f, 10.0f, 20.0f, 30.0f };
+    std::atomic<int> playbackDelay { 0 };          // samples the master is held back by delay compensation right now (what you hear is this late)
+    int takeLatency() const;                       // device in+out + playbackDelay + recordOffsetMs: how late a take lands in the file
     std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time
     std::atomic<int> duckAutoSrc { -1 };   // vocal insert the one-knob duck follows when no SC source is set
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
@@ -111,6 +123,8 @@ public:
 
     // plugins
     std::unique_ptr<juce::AudioPluginInstance> createPlugin (const juce::String& identifier, juce::String& error);
+    struct PluginLoad { juce::String id; std::unique_ptr<juce::AudioPluginInstance> inst; std::atomic<bool> done { false }; };
+    std::map<int, std::shared_ptr<PluginLoad>> pluginLoads;   // FX slot uid -> no-wait load in the crash-protection process (message thread only)
     juce::AudioPluginInstance* channelPlugin (int channelId);
     juce::AudioPluginInstance* fxPlugin (int track, int slotUid);
     BuiltinEffect* builtinFx (int track, int slotUid);
@@ -244,6 +258,7 @@ private:
     juce::AudioWorkgroup deviceWorkgroup;
     std::atomic<bool> mtOn { true }, smartOn { true };
     std::vector<float> trackCost, chanCost;
+    std::vector<juce::int64> coreSeen; juce::int64 coreSeenAt = 0; const void* coreSeenPool = nullptr;
     std::vector<int> chanJobOrder;
     juce::TimeSliceThread diskThread { "HHS disk" };
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>> (true);
@@ -263,7 +278,7 @@ private:
     {
         int lane = 0; juce::File file; double startBeat = 0;
         std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> writer;
-        bool started = false, surprise = false;   // surprise: armed + playing with record off (kept as a hidden take)
+        bool started = false, surprise = false; int latency = 0;   // latency: fixed when the take starts, so the clip never moves after stop   // surprise: armed + playing with record off (kept as a hidden take)
         juce::int64 samplesWritten = 0;
         std::array<std::pair<juce::int64, double>, 256> passes {}; int numPasses = 0; // loop-record pass boundaries
         std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform
@@ -283,6 +298,7 @@ private:
     int idleThresholdBlocks = 0;
     std::vector<double> patLen;
     int currentBlock = 0, currentLevel = 0;
+    bool llNow = false;   // Low Latency Mode active this block (on, a track is armed, not offline)
     PlayContext ctx;
     std::atomic<bool> offline { false };
     int renderTrackOnly = -1;

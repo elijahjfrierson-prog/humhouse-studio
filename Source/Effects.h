@@ -55,6 +55,7 @@ protected:
 struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
+std::unique_ptr<BuiltinEffect> createAmpRig();   // Amp House amp rig (desktop only)
 void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 
 std::atomic<int>& scopeLag();   // samples rendered ahead but not heard yet: visuals hold back by this much
@@ -104,7 +105,7 @@ struct Biquad
 {
     float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
     float z1[2] {}, z2[2] {};
-    enum Type { LowPass, HighPass, Peak, LowShelf, HighShelf, BandPass };
+    enum Type { LowPass, HighPass, Peak, LowShelf, HighShelf, BandPass, Notch };
     void set (Type t, double sr, double freq, double q, double gainDb);
     inline float tick (float x, int ch)
     {
@@ -115,6 +116,10 @@ struct Biquad
     }
     void clear() { z1[0] = z1[1] = z2[0] = z2[1] = 0; }
 };
+
+// Mixer EQ band shape (MixerTrack::meqType) -> filter; cuts and notch work without gain
+inline Biquad::Type meqShape (int t) { return t == 1 ? Biquad::LowShelf : t == 2 ? Biquad::HighShelf : t == 3 ? Biquad::HighPass : t == 4 ? Biquad::LowPass : t == 5 ? Biquad::Notch : Biquad::Peak; }
+inline bool meqNeedsGain (int t) { return t <= 2; }
 
 // YIN pitch detector + granular shifter, shared by AutoPitch
 // Auto-Tune style shifter: one resampling read head (full sound, no phasing), re-spliced by whole

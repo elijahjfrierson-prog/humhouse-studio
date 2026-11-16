@@ -1,3 +1,4 @@
+#include <array>
 #include "Editing.h"
 #include "Looks.h"
 #include <algorithm>
@@ -42,10 +43,33 @@ Ticks snapTime (Ticks t, const Project& p, SnapMode m)
 
 juce::StringArray chopModeNames() { return { "CHOP 1/8", "CHOP 1/16", "CHOP 1/32", "KICK", "SNARE", "HI-HAT" }; }
 
+std::vector<Ticks> hatRolls (const SongAnalysis& s, Ticks a, Ticks b)
+{
+    std::vector<Ticks> hats, out;
+    // detect rolls over the whole song so a roll straddling a clip boundary still counts, then keep the hits inside [a, b)
+    for (auto& e : s.events) if (e.type == EventType::HiHat) hats.push_back (e.time);
+    std::sort (hats.begin(), hats.end());
+    const Ticks gap = secToTicks (s.beatSec() / 3.0 + 0.01), minLen = secToTicks (1.0 / 15.0);
+    for (size_t i = 0; i < hats.size();)
+    {
+        size_t j = i;
+        while (j + 1 < hats.size() && hats[j + 1] - hats[j] <= gap) ++j;
+        if (j - i + 1 >= 4)
+        {
+            Ticks last = hats[i] - minLen * 2;
+            for (size_t k = i; k <= j; ++k)
+                if (hats[k] - last >= minLen) { if (hats[k] >= a && hats[k] < b) out.push_back (hats[k]); last = hats[k]; }
+        }
+        i = j + 1;
+    }
+    return out;
+}
+
 std::vector<Ticks> chopPoints (const SongAnalysis& s, Ticks a, Ticks b, ChopMode m)
 {
     std::vector<Ticks> out;
     if (b <= a) return out;
+    if (m == ChopMode::HatRoll) return hatRolls (s, a, b);
     if (m == ChopMode::Grid8 || m == ChopMode::Grid16 || m == ChopMode::Grid32)
     {
         int per = m == ChopMode::Grid8 ? 2 : (m == ChopMode::Grid16 ? 4 : 8);
@@ -76,19 +100,21 @@ std::vector<const MediaItem*> takesCovering (const Project& p, Ticks t, Ticks le
 }
 
 // ------------------------------------------------------------------ basic edits
-bool splitAt (Sequence& s, Ticks t, const juce::StringArray& only)
+bool splitAt (Sequence& s, Ticks t, const juce::StringArray& only, const juce::String& songId)
 {
     bool any = false;
     std::vector<Clip> added;
     for (auto& c : s.clips)
     {
-        if (c.locked || s.tracks[(size_t) c.track].locked) continue;
+        const bool song = songId.isNotEmpty() && c.mediaId == songId;
+        if ((c.locked && ! song) || s.tracks[(size_t) c.track].locked) continue;
         if (! only.isEmpty() && ! only.contains (c.id)) continue;
         if (t <= c.start || t >= c.end()) continue;
         Clip r = c;
         r.id = newId();
         if (c.reverse) { r.srcIn = c.srcIn; c.srcIn = c.srcAt (t) + 1; }   // reversed: the left half holds the later source
         else r.srcIn = c.srcAt (t);
+        shiftKeys (r, t - c.start);
         r.start = t; r.length = c.end() - t;
         r.transIn = TransitionType::Cut; r.transLen = 0;
         c.length = t - c.start;
@@ -168,10 +194,29 @@ int insertVideoTrack (Sequence& s)
     return at;
 }
 
-juce::String addEffectClip (Sequence& s, const FxStack& fx, const juce::String& name, Ticks at, Ticks len)
+int freeVideoTrack (const Sequence& s, int prefer, Ticks a, Ticks b)
+{
+    const int n = (int) s.tracks.size();
+    auto freeOn = [&] (int k)
+    {
+        if (k < 0 || k >= n || s.tracks[(size_t) k].kind != TrackKind::Video || s.tracks[(size_t) k].locked) return false;
+        for (auto& c : s.clips) if (c.track == k && c.start < b && c.end() > a) return false;
+        return true;
+    };
+    if (prefer < 0 || prefer >= n || s.tracks[(size_t) prefer].kind != TrackKind::Video)
+    {   // no target: the top video layer if it has room
+        int top = -1; for (int k = 0; k < n; ++k) if (s.tracks[(size_t) k].kind == TrackKind::Video) top = k;
+        return freeOn (top) ? top : -1;
+    }
+    for (int k = prefer; k < n; ++k) if (freeOn (k)) return k;   // where it was dropped, else the nearest room above it
+    return -1;
+}
+
+juce::String addEffectClip (Sequence& s, const FxStack& fx, const juce::String& name, Ticks at, Ticks len, int preferTrack)
 {
     if (len <= 0) return {};
-    int tr = insertVideoTrack (s);
+    int tr = freeVideoTrack (s, preferTrack, std::max<Ticks> (0, at), std::max<Ticks> (0, at) + len);
+    if (tr < 0) tr = insertVideoTrack (s);
     Clip c; c.id = newId(); c.track = tr; c.start = std::max<Ticks> (0, at); c.length = len; c.fx = fx; c.name = name;
     s.clips.push_back (c); s.sortClips();
     return c.id;
@@ -263,7 +308,7 @@ void fillGaps (Sequence& s, const Project& p, int track)
         if (gap > 0 && ! b.locked)
         {
             Ticks e2 = b.speed <= 0 ? gap : std::min (gap, std::max<Ticks> (0, (Ticks) ((double) b.srcIn / b.speed)));
-            b.start -= e2; b.length += e2; b.srcIn -= (Ticks) ((double) e2 * b.speed);
+            shiftKeys (b, -e2); b.start -= e2; b.length += e2; b.srcIn -= (Ticks) ((double) e2 * b.speed);
         }
     }
 }
@@ -286,7 +331,7 @@ bool moveClips (Sequence& s, const juce::StringArray& ids, Ticks delta, int trac
 bool trimClip (Sequence& s, const Project& p, const juce::String& id, bool left, Ticks e)
 {
     auto* c = s.findClip (id);
-    if (c == nullptr || c->locked) return false;
+    if (c == nullptr || (c->locked && (p.songId.isEmpty() || c->mediaId != p.songId))) return false;   // the song is trimmable
     auto* m = p.findMedia (c->mediaId);
     Ticks mediaLen = m ? m->duration : std::numeric_limits<Ticks>::max() / 4;
     Ticks minLen = secToTicks (1.0 / p.fps);
@@ -295,6 +340,7 @@ bool trimClip (Sequence& s, const Project& p, const juce::String& id, bool left,
         Ticks newSrc = c->srcIn + (Ticks) ((double) (e - c->start) * c->speed);
         if (newSrc < 0) { e -= (Ticks) ((double) newSrc / c->speed); newSrc = 0; }
         if (c->end() - e < minLen) return false;
+        shiftKeys (*c, e - c->start);
         c->length = c->end() - e; c->srcIn = newSrc; c->start = e;
     }
     else
@@ -442,6 +488,14 @@ static const StyleRules kStyles[3] = {
     { "Performance", "Performance Punch",{ 4, 2, 1 }, ChopMode::Kick,  0.25, TransitionType::Flash,    0.6, { 0.6f, 0.45f, 0.35f, 0.0f } },
 };
 
+static std::vector<TransitionType> stylePalette (const juce::String& n)
+{
+    using T = TransitionType;
+    if (n == "Cinematic") return { T::Dissolve, T::DipBlack, T::Blur, T::Flash };
+    if (n == "Underground") return { T::Whip, T::Blur, T::Shake, T::Mirror, T::DipBlack };
+    return { T::Flash, T::Zoom, T::Whip, T::Shake, T::Spin };
+}
+
 static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint32 seed, const juce::String& styleMode)
 {
     Sequence s = Project::makeDefaultSequence (juce::String (st.name) + " Cut");
@@ -449,6 +503,11 @@ static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint3
     juce::Random rng ((juce::int64) seed);
     const auto& a = p.song;
     Ticks songLen = std::min (a.duration, secToTicks (kMaxSongSeconds));
+    // per-generation variation so every press feels different
+    const double paceMul = std::array<double, 4> { 1.0, 0.5, 2.0, 1.0 }[(size_t) rng.nextInt (4)];
+    const double burstMul = 0.5 + rng.nextDouble() * 1.2, transMul = 0.6 + rng.nextDouble() * 0.9, punchMul = 0.5 + rng.nextDouble();
+    const ChopMode burstModes[] = { st.burst, ChopMode::HiHat, ChopMode::Kick, ChopMode::Grid8, ChopMode::Snare };
+    const double flashP = juce::String (st.name) == "Cinematic" ? 0.05 : 0.12;
     int audioTrack = (int) s.tracks.size() - 1;
     if (auto* song = p.song_())
     {
@@ -463,6 +522,7 @@ static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint3
 
     const double beat = a.beatSec();
     int prevSection = -1;
+    std::vector<std::pair<Ticks, Ticks>> flashHits;   // Black Flash 2 is a sequence-level beat effect, so it rides on an effect layer
     juce::String prev;
     // walk the song in musical segments from 0 (pickup before first downbeat is its own segment)
     Ticks t = 0;
@@ -474,7 +534,7 @@ static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint3
     while (t < songLen)
     {
         int sec = a.sectionAt (t + 1);
-        double segBeats = st.beats[juce::jlimit (0, 2, sec)];
+        double segBeats = std::max (1.0, st.beats[juce::jlimit (0, 2, sec)] * paceMul);
         // align segment to the grid
         double bt = a.beatAt (t);
         double nextBeat = std::floor (bt / segBeats + 1e-6) * segBeats + segBeats;
@@ -482,10 +542,13 @@ static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint3
         if (t1 - t < secToTicks (beat * 0.5)) t1 = std::min (songLen, a.gridTime (nextBeat + segBeats));
 
         std::vector<Ticks> cuts { t, t1 };
-        if (sec == 2 && st.burstChance > 0 && rng.nextDouble() < st.burstChance)
+        // active sequencer: hat rolls always cut, hooks burst often, verses sometimes
+        const double burstP = (sec == 2 ? std::max (st.burstChance, 0.55) : sec == 1 ? std::max (st.burstChance, 0.2) * 0.8 : st.burstChance * 0.25) * burstMul;
+        if (st.burstChance > 0 && rng.nextDouble() < burstP)
+            for (auto e : chopPoints (a, t, t1, burstModes[(size_t) rng.nextInt (5)])) cuts.push_back (e);
+        if (st.burstChance > 0 || sec == 2)
+            for (auto e : hatRolls (a, t, t1)) cuts.push_back (e);
         {
-            auto extra = chopPoints (a, t, t1, st.burst);
-            for (auto e : extra) cuts.push_back (e);
             std::sort (cuts.begin(), cuts.end());
             cuts.erase (std::unique (cuts.begin(), cuts.end()), cuts.end());
         }
@@ -513,16 +576,55 @@ static Sequence generateOne (const Project& p, const StyleRules& st, juce::uint3
             }
             else continue;
             auto& placed = s.clips.back();
+            const double len = ticksToSec (placed.length);
             if (sec != prevSection && prevSection >= 0 && i == 0)
             {
                 placed.transIn = st.sectionTrans;
-                placed.transLen = secToTicks (std::min (beat, ticksToSec (placed.length) * 0.5));
+                placed.transLen = secToTicks (std::min (beat, len * 0.5));
             }
-            if (juce::String (st.name) == "Performance" && sec == 2 && rng.nextDouble() < 0.3)
-                placed.fx.set ("scale", 1.15f + 0.15f * (float) rng.nextDouble());
+            else if (c0 > 0 && rng.nextDouble() < flashP * (sec + 1))
+            {   // quick 0.2 s white flash on the cut
+                placed.transIn = TransitionType::Flash;
+                placed.transLen = std::min (placed.length / 2, secToTicks (0.2));
+            }
+            else if (c0 > 0 && len >= beat && rng.nextDouble() < 0.04)
+            {   // the odd dissolve
+                placed.transIn = TransitionType::Dissolve;
+                placed.transLen = secToTicks (std::min (beat * 0.5, len * 0.4));
+            }
+            else if (c0 > 0 && len >= beat * 0.75)
+            {
+                // transitions on a share of ordinary cuts, short and on-grid
+                const double trP = (juce::String (st.name) == "Cinematic" ? 0.12 : 0.25) * (sec + 1) * transMul;
+                if (rng.nextDouble() < trP)
+                {
+                    auto pal = stylePalette (st.name);
+                    placed.transIn = pal[(size_t) rng.nextInt ((int) pal.size())];
+                    placed.transLen = secToTicks (std::min (beat * 0.5, len * 0.4));
+                }
+            }
+            // punch-in on hits: an eased scale keyframe from 1.1x back to 1x over a quarter beat-ish
+            const bool punchy = juce::String (st.name) != "Cinematic";
+            if (punchy && sec >= 1 && len >= 0.2 && rng.nextDouble() < (sec == 2 ? 0.45 : 0.2) * punchMul)
+            {
+                setKey (placed, "scale", 0, 1.08f + 0.08f * (float) rng.nextDouble(), 2);
+                setKey (placed, "scale", secToTicks (std::min (0.3, len * 0.6)), 1.0f);
+            }
+            if (juce::String (st.name) == "Underground" && sec == 2 && len >= beat && rng.nextDouble() < 0.2)
+                flashHits.push_back ({ placed.start, placed.length });
         }
         prevSection = sec;
         t = t1;
+    }
+    if (! flashHits.empty())
+    {
+        const int ftr = insertVideoTrack (s);
+        for (auto& [fa, fl] : flashHits)
+        {
+            Clip fc; fc.id = newId(); fc.track = ftr; fc.start = fa; fc.length = fl; fc.name = "Black Flash 2";
+            fc.fx.set ("blackFlash2", 0.6f);
+            s.clips.push_back (fc);
+        }
     }
     for (auto& l : lookLibrary()) if (l.name == st.look) applyLook (s.fx, l, 1.0f);
     if (styleMode.isNotEmpty()) applyStyleMode (s.fx, styleMode);
@@ -576,7 +678,7 @@ int addTakeLayers (const Project& p, Sequence& s)
         if (m.kind != MediaKind::Video || m.missing || (m.sync.status != SyncInfo::Synced && m.sync.status != SyncInfo::Manual)) continue;
         const int tk = insertVideoTrack (s);
         auto& tr = s.tracks[(size_t) tk];
-        tr.name = m.name; tr.hidden = true; tr.mute = true;
+        tr.name = m.name; tr.mute = true;   // visible: fills any gap in the edit and shows in the timeline; occluded frames are never decoded
         Clip c; c.id = newId(); c.mediaId = m.id; c.track = tk;
         c.start = std::max ((Ticks) 0, m.sync.offset); c.srcIn = c.start - m.sync.offset;
         c.length = m.duration - c.srcIn; c.volume = 0.0f;
@@ -584,6 +686,23 @@ int addTakeLayers (const Project& p, Sequence& s)
     }
     s.sortClips();
     return n;
+}
+
+bool regenerateActive (Project& p, juce::uint32 seed, const juce::String& styleMode)
+{
+    if (! p.song.valid) return false;
+    auto& cur = p.seq();
+    for (auto& rules : kStyles)
+        if (cur.style == rules.name)
+        {
+            auto nm = cur.name;
+            auto s = generateOne (p, rules, seed, styleMode);
+            s.name = nm;
+            cur = s;
+            addTakeLayers (p, cur);
+            return true;
+        }
+    return false;
 }
 
 std::vector<int> generateEdits (Project& p, juce::uint32 seed, const juce::String& styleMode)
@@ -598,11 +717,133 @@ std::vector<int> generateEdits (Project& p, juce::uint32 seed, const juce::Strin
     }
     return idx;
 }
+
+int buildSeqEdit (Project& p, juce::uint32 seed)
+{
+    const auto& a = p.song;
+    if (! a.valid) return -1;
+    std::vector<const MediaItem*> vids;
+    for (auto& m : p.media)
+        if (m.kind == MediaKind::Video && ! m.missing && m.id != p.songId && m.duration > 0) vids.push_back (&m);
+    if (vids.empty()) return -1;
+    int n = 1;
+    for (auto& q : p.sequences) if (q.name.startsWith ("SEQ ")) ++n;
+    Sequence s = Project::makeDefaultSequence ("SEQ " + juce::String (n));
+    s.style = "SEQ"; s.seed = seed;
+    juce::Random rng ((juce::int64) seed);
+    const Ticks songLen = std::min (a.duration, secToTicks (kMaxSongSeconds));
+    if (auto* song = p.song_())
+    {
+        Clip c; c.id = newId(); c.mediaId = song->id; c.track = (int) s.tracks.size() - 1; c.start = 0; c.length = std::min (song->duration, songLen);
+        c.locked = p.musicLock; c.volume = 1.0f;
+        s.clips.push_back (c);
+    }
+    // cut points: a bar in verses, 2 beats in pre-hooks, every beat + hat rolls in hooks/drops
+    std::vector<Ticks> cuts { 0 };
+    for (Ticks t = 0; t < songLen;)
+    {
+        const int sec = juce::jlimit (0, 2, a.sectionAt (t + 1));
+        const double per = sec == 2 ? 1.0 : sec == 1 ? 2.0 : 4.0;
+        const double bt = a.beatAt (t);
+        Ticks t1 = a.gridTime (std::floor (bt / per + 1e-6) * per + per);
+        if (t1 - t < secToTicks (a.beatSec() * 0.5)) t1 = a.gridTime (std::floor (bt / per + 1e-6) * per + 2 * per);
+        t1 = std::min (songLen, std::max (t1, t + secToTicks (1.0 / p.fps)));
+        if (sec == 2) for (auto e : hatRolls (a, t, t1)) cuts.push_back (e);
+        cuts.push_back (t1);
+        t = t1;
+    }
+    for (auto& c : cuts) c = quantizeToFrame (c, p.fps);
+    std::sort (cuts.begin(), cuts.end());
+    cuts.erase (std::unique (cuts.begin(), cuts.end()), cuts.end());
+    // deal the videos like cards: each used evenly, never twice in a row, each one plays forward through its own footage
+    std::vector<const MediaItem*> deck;
+    std::map<juce::String, Ticks> cursor;
+    for (auto* m : vids) cursor[m->id] = (Ticks) (rng.nextDouble() * 0.3 * (double) m->duration);
+    juce::String prev;
+    // smart pick from each video's moments curve: hooks put the biggest motion hit right on the cut,
+    // verses take steady sharp shots; footage already used is avoided
+    std::map<juce::String, std::vector<std::pair<Ticks, Ticks>>> used;
+    auto pick = [&] (const MediaItem& m, Ticks len, int sec) -> Ticks
+    {
+        const auto& mo = m.moments; const double hz = 4.0;
+        const int n = (int) mo.size(), w = std::max (1, (int) std::ceil (ticksToSec (len) * hz));
+        auto& u = used[m.id];
+        double best = -1e9; int bi = -1;
+        for (int i = 0; i + w <= n; ++i)
+        {
+            const Ticks s0 = secToTicks (i / hz);
+            if (s0 + len > m.duration) break;
+            double sc = 0; for (int k = i; k < i + w; ++k) sc += mo[(size_t) k]; sc /= w;
+            if (sec == 2) sc = 0.4 * sc + 0.6 * mo[(size_t) i];
+            else if (sec == 0) sc = 1.0 - std::abs (sc - 0.45);
+            for (auto& [a0, a1] : u) if (s0 < a1 && s0 + len > a0) sc -= 0.6;
+            sc += rng.nextDouble() * 0.15;
+            if (sc > best) { best = sc; bi = i; }
+        }
+        if (bi < 0) return -1;
+        const Ticks s0 = secToTicks (bi / hz);
+        u.push_back ({ s0, s0 + len });
+        return s0;
+    };
+    for (size_t i = 0; i + 1 < cuts.size(); ++i)
+    {
+        const Ticks c0 = cuts[i], c1 = cuts[i + 1];
+        if (c1 - c0 < secToTicks (1.0 / p.fps)) continue;
+        if (deck.empty())
+        {
+            deck = vids;
+            for (size_t k = deck.size(); k > 1; --k) std::swap (deck[k - 1], deck[(size_t) rng.nextInt ((int) k)]);
+            if (deck.size() > 1 && deck.back()->id == prev) std::swap (deck.front(), deck.back());
+        }
+        const MediaItem* m = deck.back(); deck.pop_back();
+        Clip c; c.id = newId(); c.mediaId = m->id; c.track = 0; c.start = c0; c.length = std::min (c1 - c0, m->duration); c.volume = 0.0f;
+        Ticks& cur = cursor[m->id];
+        if (const Ticks sp = m->moments.empty() ? -1 : pick (*m, c.length, juce::jlimit (0, 2, a.sectionAt (c0 + 1))); sp >= 0)
+            c.srcIn = sp;
+        else
+        {
+            if (cur + c.length > m->duration) cur = 0;
+            c.srcIn = cur; cur += c.length;
+        }
+        s.clips.push_back (c);
+        prev = m->id;
+    }
+    s.sortClips();
+    p.sequences.push_back (s);
+    return (int) p.sequences.size() - 1;
+}
+
+int stackGenerated (Project& p, juce::uint32 seed, const juce::String& styleMode)
+{
+    if (! p.song.valid) return 0;
+    const Sequence g = generateOne (p, kStyles[seed % 3], seed * 7919u + 31337u, styleMode);
+    auto& s = p.seq();
+    int layer = 1;
+    for (auto& t : s.tracks) if (t.name.startsWith ("VX")) ++layer;
+    std::map<int, int> tmap;
+    int n = 0;
+    for (auto& c : g.clips)
+    {
+        if (c.track < 0 || c.track >= (int) g.tracks.size() || c.mediaId == p.songId || g.tracks[(size_t) c.track].kind != TrackKind::Video) continue;
+        if (! tmap.count (c.track))
+            tmap[c.track] = s.addTrack (TrackKind::Video, "VX" + juce::String (layer++));
+        Clip k = c;
+        k.track = tmap[c.track];
+        k.id = juce::Uuid().toString();
+        k.group = 0;
+        s.clips.push_back (k);
+        ++n;
+    }
+    s.sortClips();
+    return n;
+}
 }
 
 namespace isfx
 {
-juce::StringArray autoCutNames() { return { "1/4", "1/8", "1/16", "1/32", "Triplets", "Hi-hats", "Kicks", "Snares", "Roll (1/8 > 1/16 > 1/32)" }; }
+juce::StringArray autoCutNames() { return { "1/4", "1/8", "1/16", "1/32", "Triplets", "Hi-hats", "Kicks", "Snares", "Roll (1/8 > 1/16 > 1/32)", "Hi-hat rolls only",
+                                                     "Crazy: spray takes on every hat + roll", "Stutter: repeat the shot on hats", "Smooth: bars only",
+                                                     "Half-bar (every 2 beats)", "Off-beat (the 'and')", "Build-up (speeds up into the drop)", "Dotted 1/8 (bounce)" }; }
 
 int autoCutClip (Project& p, const juce::String& clipId, AutoCut mode, bool switchAngles, juce::uint32 seed)
 {
@@ -636,6 +877,61 @@ int autoCutClip (Project& p, const juce::String& clipId, AutoCut mode, bool swit
             Ticks minGap = secToTicks (video ? 1.0 / p.fps : 0.01);
             for (auto& e : p.song.events)
                 if (e.type == ty && e.time > a + minGap && e.time < b - minGap && (pts.empty() || e.time - pts.back() >= minGap)) pts.push_back (q (e.time));
+            break;
+        }
+        case AutoCut::Crazy: case AutoCut::Stutter:
+        {
+            // every hat, every hat-roll hit, and 1/8 fill where the hats go quiet
+            Ticks minGap = secToTicks (video ? 1.0 / p.fps : 0.01);
+            std::vector<Ticks> c;
+            for (auto& e : p.song.events) if (e.type == EventType::HiHat && e.time > a && e.time < b) c.push_back (e.time);
+            for (auto e : hatRolls (p.song, a, b)) c.push_back (e);
+            const size_t nHat = c.size();
+            grid (2, a, b);
+            if (nHat > 0) { c.insert (c.end(), pts.begin(), pts.end()); pts.clear(); }
+            else { c = pts; pts.clear(); }
+            std::sort (c.begin(), c.end());
+            for (auto t : c) if (t > a + minGap && t < b - minGap && (pts.empty() || q (t) - pts.back() >= minGap)) pts.push_back (q (t));
+            if (mode == AutoCut::Stutter) rollStart = a;
+            break;
+        }
+        case AutoCut::Smooth:   // bar lines straight from the grid, then frame-quantized
+        {
+            const int bpb = std::max (1, g.beatsPerBar);
+            auto n0 = (juce::int64) std::ceil (g.beatAt (a) / bpb - 1e-9), n1 = (juce::int64) std::floor (g.beatAt (b) / bpb + 1e-9);
+            for (auto n = n0; n <= n1; ++n) { Ticks t = q (g.subdivTime (n * bpb, 1)); if (t > a && t < b) pts.push_back (t); }
+            break;
+        }
+        case AutoCut::HalfBar:
+            grid (1, a, b);
+            pts.erase (std::remove_if (pts.begin(), pts.end(), [&] (Ticks t) { return (juce::int64) std::llround (g.beatAt (t)) % 2 != 0; }), pts.end());
+            break;
+        case AutoCut::Offbeat:
+            grid (2, a, b);
+            pts.erase (std::remove_if (pts.begin(), pts.end(), [&] (Ticks t) { return std::llround (g.beatAt (t) * 2) % 2 == 0; }), pts.end());
+            break;
+        case AutoCut::Dotted:
+        {
+            const double b0 = g.beatAt (a), b1 = g.beatAt (b);
+            for (double x = std::ceil (b0 / 0.75) * 0.75; x < b1; x += 0.75) { Ticks t = q (g.gridTime (x)); if (t > a && t < b) pts.push_back (t); }
+            break;
+        }
+        case AutoCut::Build:   // bars -> beats -> 1/8 -> 1/16 across the clip
+        {
+            const double b0 = g.beatAt (a), b1 = g.beatAt (b), span = b1 - b0;
+            const double steps[] = { (double) std::max (1, g.beatsPerBar), 1.0, 0.5, 0.25 };
+            for (int seg = 0; seg < 4; ++seg)
+            {
+                const double f = b0 + span * seg / 4.0, to = b0 + span * (seg + 1) / 4.0, st = steps[seg];
+                for (double x = std::ceil (f / st - 1e-9) * st; x < to - 1e-6; x += st) { Ticks t = q (g.gridTime (x)); if (t > a && t < b) pts.push_back (t); }
+            }
+            break;
+        }
+        case AutoCut::HatRoll:
+        {
+            Ticks minGap = secToTicks (video ? 1.0 / p.fps : 0.01);
+            for (auto e : hatRolls (p.song, a, b))
+                if (e > a + minGap && e < b - minGap && (pts.empty() || e - pts.back() >= minGap)) pts.push_back (q (e));
             break;
         }
         case AutoCut::Roll:
@@ -674,8 +970,8 @@ int autoCutClip (Project& p, const juce::String& clipId, AutoCut mode, bool swit
         if (k.length <= 0) continue;
         k.srcIn = orig.srcAt (k.start);
         if (i > 0) { k.transIn = TransitionType::Cut; k.transLen = 0; }
-        if (mode == AutoCut::Roll && rollStart >= 0 && k.start >= rollStart) k.srcIn = rollSrc;   // stutter
-        if (switchAngles && video && i > 0 && mode != AutoCut::Roll)
+        if ((mode == AutoCut::Roll || mode == AutoCut::Stutter) && rollStart >= 0 && k.start >= rollStart) k.srcIn = rollSrc;   // stutter
+        if ((switchAngles || mode == AutoCut::Crazy) && video && i > 0 && mode != AutoCut::Roll && mode != AutoCut::Stutter)
         {
             auto takes = takesCovering (p, k.start, k.length);
             std::vector<const MediaItem*> other;
@@ -751,16 +1047,65 @@ juce::String freezeFrame (Sequence& s, const juce::String& id, Ticks at, Ticks l
     return mid_id;
 }
 
+bool swapClipSlots (Sequence& s, const Project& p, const juce::String& ida, const juce::String& idb)
+{
+    auto* a = s.findClip (ida); auto* b = s.findClip (idb);
+    if (a == nullptr || b == nullptr || a == b || a->locked || b->locked) return false;
+    std::swap (a->track, b->track); std::swap (a->start, b->start); std::swap (a->length, b->length);
+    for (auto* c : { a, b })
+        if (auto* m = p.findMedia (c->mediaId); m != nullptr && m->kind != MediaKind::Image && m->duration > 0 && ! c->ramped() && c->speed > 0)
+        {
+            const Ticks need = (Ticks) ((double) c->length * c->speed);
+            if (c->srcIn + need > m->duration) c->srcIn = std::max<Ticks> (0, m->duration - need);
+            if (c->srcIn + need > m->duration) c->speed = (double) (m->duration - c->srcIn) / (double) std::max<Ticks> (1, c->length);   // short shot: slow it to fill the slot
+        }
+    s.sortClips();
+    return true;
+}
+
+juce::StringArray speedRampNames()
+{
+    return { "Ramp into slow-mo (100% > 25%)", "Slow-mo into fast (25% > 200%)", "Speed dip (100% > 20% > 100%)",
+             "Fast in, slow out (300% > 50%)", "Bullet time (150% > 10% > 150%)" };
+}
+
+bool applySpeedRamp (Sequence& s, const Project& p, const juce::String& id, int preset)
+{
+    auto* c = s.findClip (id);
+    if (c == nullptr || c->locked || c->mediaId.isEmpty()) return false;
+    c->keys.erase ("speed");
+    if (preset < 0) return true;
+    static const std::vector<std::vector<std::pair<float, float>>> R {
+        { { .35f, 1 }, { .6f, .25f } }, { { .4f, .25f }, { .7f, 2 } }, { { .25f, 1 }, { .45f, .2f }, { .55f, .2f }, { .75f, 1 } },
+        { { .2f, 3 }, { .5f, .5f } }, { { .2f, 1.5f }, { .4f, .1f }, { .6f, .1f }, { .8f, 1.5f } } };
+    if (preset >= (int) R.size()) return false;
+    for (auto& [u, v] : R[(size_t) preset]) setKey (*c, "speed", (Ticks) ((double) c->length * u), v, 2);
+    if (auto* m = p.findMedia (c->mediaId); m != nullptr && m->kind != MediaKind::Image && m->duration > 0)
+    {
+        const double avail = (double) (m->duration - c->srcIn);
+        if (rampedOffset (*c, c->length) > avail)
+        {
+            Ticks lo = 1, hi = c->length;
+            while (hi - lo > 1) { Ticks mid = (lo + hi) / 2; (rampedOffset (*c, mid) <= avail ? lo : hi) = mid; }
+            c->length = lo;
+        }
+    }
+    return true;
+}
+
 bool setClipSpeed (Sequence& s, const Project& p, const juce::String& id, double speed)
 {
     auto* c = s.findClip (id);
     if (c == nullptr || c->locked || speed <= 0) return false;
-    Ticks len = (Ticks) std::llround ((double) c->length * (c->speed > 0 ? c->speed : 1.0) / speed);
+    const double was = c->ramped() ? rampedOffset (*c, c->length) / std::max<Ticks> (1, c->length) : (c->speed > 0 ? c->speed : 1.0);
+    c->keys.erase ("speed");
+    Ticks len = (Ticks) std::llround ((double) c->length * was / speed);
     if (auto* m = p.findMedia (c->mediaId); m != nullptr && m->kind != MediaKind::Image)
         len = std::min (len, (Ticks) ((double) (m->duration - c->srcIn) / speed));
     for (auto& o : s.clips)
         if (o.track == c->track && &o != c && o.start >= c->end()) len = std::min (len, o.start - c->start);
     c->speed = speed; c->length = std::max<Ticks> (1, len);
+    if (speed < 1.0 && c->frameInterp == 1) c->frameInterp = 2;   // slow-mo defaults to optical flow (export + paused preview)
     return true;
 }
 }

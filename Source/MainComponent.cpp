@@ -62,16 +62,7 @@ juce::Typeface::Ptr HHLookAndFeel::getTypefaceForFont (const juce::Font& f)
 {
     static auto pro = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowRegular_ttf, (size_t) BinaryData::BarlowRegular_ttfSize);
     static auto proBold = juce::Typeface::createSystemTypefaceFor (BinaryData::BarlowSemiBold_ttf, (size_t) BinaryData::BarlowSemiBold_ttfSize);
-    if (build::font == "Barlow" && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
-    if (build::font.isNotEmpty() && build::font != "Barlow")   // Layout > BUILD font
-    {
-        static juce::String last; static juce::Typeface::Ptr plain, bold;
-        if (last != build::font) { last = build::font; plain = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::plain)));
-                                   bold = juce::Typeface::createSystemTypefaceFor (juce::Font (juce::FontOptions (last, 14.0f, juce::Font::bold))); }
-        if (plain != nullptr && plain->getName() != last) plain = bold = nullptr;   // font not on this device: the OS stand-in draws boxes, keep ours
-        if (auto t = f.isBold() && bold != nullptr ? bold : plain) return t;
-    }
-    if (fontStyle() == 3 && pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;
+    if (pro != nullptr) return f.isBold() && proBold != nullptr ? proBold : pro;   // HumHouse font (Barlow) everywhere
     return juce::LookAndFeel_V4::getTypefaceForFont (f);
 }
 void showWhatsNewIfUpdated()
@@ -758,6 +749,10 @@ public:
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
+        engine.lowLatency = studio.settings->getBoolValue ("lowLatency", false);
+        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
+        engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
+        engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
         if (! studio.settings->getBoolValue ("purpleDefault", false))   // once: an orange saved by older builds becomes the purple default
@@ -888,6 +883,13 @@ public:
         themeBtn.onClick = [this] { showThemeDialog (studio); };
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
+        setupButton (vidPopBtn, "VID POP", "VID POP: pop out the video so you see the picture while you record or add audio to it", false);
+        vidPopBtn.onClick = [this]
+        {
+            if (videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
+            if (videoPopHook()) videoPopHook()(); else setView (4);
+        };
+        addChildComponent (vidPopBtn);
         addAndMakeVisible (scopeBtn);
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
         mixPopBtn.onClick = [this] { if (phoneUI) { phoneMixToggle(); return; } if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
@@ -1088,7 +1090,7 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        if (phoneMenu != nullptr) phoneMenu->setBounds (r);   // phone turned while the menu is open
+        if (phoneMenu != nullptr) phoneMenu->setBounds (phoneSafe (r));   // phone turned while the menu is open
 if (phoneUI)
         {
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
@@ -1137,7 +1139,7 @@ if (phoneUI)
             { "logo", { nullptr, 150 } }, { "beat", { &beatTab, 84 } }, { "record", { &recordTab, 84 } }, { "mix", { &mixTab, 84 } }, { "patch", { &patchTab, 84 } }, { "video", { &videoTab, 84 } }, { "song", { &songBtn, 48 } },
             { "start", { &startBtn, 40 } }, { "play", { &playBtn, 40 } }, { "stop", { &stopBtn, 40 } }, { "rec", { &recBtn, 40 } }, { "bpm", { &bpm, 110 } },
             { "pos", { &posLabel, 110 } }, { "metro", { &metroBtn, 62 } }, { "count", { &countBtn, 80 } }, { "retro", { &retroBtn, 62 } }, { "piano", { &pianoBtn, 62 } },
-            { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "scope", { &scopeBtn, 64 } },
+            { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "vidpop", { &vidPopBtn, 70 } }, { "scope", { &scopeBtn, 64 } },
             { "theme", { &themeBtn, 64 } }, { "browser", { &browserBtn, 120 } }, { "save", { &saveBtn, 70 } } };
         auto find = [&tbItems] (const juce::String& id) -> const std::pair<juce::Component*, int>* { for (auto& it : tbItems) if (id == it.first) return &it.second; return nullptr; };
         for (auto& it : tbItems) if (it.second.first != nullptr) it.second.first->setVisible (false);
@@ -1149,6 +1151,7 @@ if (phoneUI)
             for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
                 if (auto* it = find (id); it != nullptr && placed.insert (id).second) (h == 0 ? leftItems : rightItems).push_back ({ it, id });
         if (placed.count ("mixpop") == 0) rightItems.insert (rightItems.begin(), { find ("mixpop"), "mixpop" });   // the Mixer pop-out never disappears
+        if (placed.count ("vidpop") == 0) rightItems.insert (rightItems.begin() + std::min<std::ptrdiff_t> (1, (std::ptrdiff_t) rightItems.size()), { find ("vidpop"), "vidpop" });   // VID POP too (older saved layouts)
         auto place = [this] (const std::pair<juce::Component*, int>& it, juce::Rectangle<int> cell)
         {
             if (it.first == nullptr) logoArea = cell; else { it.first->setBounds (cell); it.first->setVisible (true); }
@@ -1256,8 +1259,56 @@ if (phoneUI)
         o.dialogTitle = "Key commands"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
         o.launchAsync();
     }
+    // quick-added shortcuts: "menu:<menu text>" -> key, run like clicking that menu item
+    static int findMenuId (const juce::PopupMenu& m, const juce::String& text)
+    {
+        for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+        {
+            const auto& i = it.getItem();
+            if (i.subMenu != nullptr) { if (const int r = findMenuId (*i.subMenu, text)) return r; continue; }
+            if (i.itemID != 0 && i.isEnabled && i.text == text) return i.itemID;
+        }
+        return 0;
+    }
+    static juce::String findMenuText (const juce::PopupMenu& m, int id)
+    {
+        for (juce::PopupMenu::MenuItemIterator it (m); it.next();)
+        {
+            const auto& i = it.getItem();
+            if (i.subMenu != nullptr) { const auto r = findMenuText (*i.subMenu, id); if (r.isNotEmpty()) return r; continue; }
+            if (i.itemID == id) return i.text;
+        }
+        return {};
+    }
+    juce::String menuTextFor (int id)
+    {
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i) { const auto t = findMenuText (getMenuForIndex (i, names[i]), id); if (t.isNotEmpty()) return t; }
+        return {};
+    }
+    bool runMenuText (const juce::String& text)
+    {
+        const auto names = getMenuBarNames();
+        for (int i = 0; i < names.size(); ++i)
+            if (const int id = findMenuId (getMenuForIndex (i, names[i]), text)) { menuItemSelected (id, 0); return true; }
+        return false;
+    }
+    juce::String commandUsing (const juce::KeyPress& k, const juce::String& except)   // which command already has this key ("" = free)
+    {
+        for (auto& [id, key] : userKeys) if (id != except && id.startsWith ("menu:") && key == k) return "\"" + id.fromFirstOccurrenceOf ("menu:", false, false) + "\"";
+        for (auto& a : keyActions()) { const auto it = userKeys.find (a.id); if ((it != userKeys.end() ? it->second : a.def) == k) return a.name; }
+        return {};
+    }
     bool keyPressed (const juce::KeyPress& k) override
     {
+        if (! remapping)
+            for (auto& [id, key] : userKeys)
+                if (id.startsWith ("menu:") && key.isValid() && k == key)
+                {
+                    const auto text = id.fromFirstOccurrenceOf ("menu:", false, false);
+                    juce::MessageManager::callAsync ([sp = juce::Component::SafePointer<MainComponent> (this), text] { if (sp != nullptr) sp->runMenuText (text); });
+                    return true;
+                }
         if (! remapping && ! userKeys.empty())
         {
             for (auto& a : keyActions())
@@ -1393,6 +1444,9 @@ if (phoneUI)
         {
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
+            m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
+            m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
+            m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
             {
@@ -1478,9 +1532,6 @@ if (phoneUI)
                 const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
                 for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
-                juce::PopupMenu fm;
-                fm.addItem (253, "Pro (sleek, default)", true, true);
-                m.addSubMenu ("Font", fm);
             }
             {
                 juce::PopupMenu pm;
@@ -1493,6 +1544,18 @@ if (phoneUI)
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
+                pm.addItem (473, "Low Latency Mode (armed track goes straight to the master, FX stay on; takes still land on time)", true, engine.lowLatency.load());
+                {
+                    juce::PopupMenu om;
+                    om.addSectionHeader ("Takes land late? Pick a + value. Early? Pick a - value.");
+                    for (int i = 0; i < 9; ++i)
+                    {
+                        const float v = Engine::recordOffsetChoices[i];
+                        om.addItem (490 + i, v == 0.0f ? juce::String ("0 ms (driver latency only)") : (v > 0 ? "+" : "") + juce::String ((int) v) + " ms", true, std::abs (engine.recordOffsetMs.load() - v) < 0.01f);
+                    }
+                    pm.addSubMenu ("Recording offset (" + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms)", om);
+                }
+                pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
                 m.addItem (480, "OBS / Discord capture-friendly drawing (untick = faster GPU drawing)", true, captureFriendlyDrawing());
@@ -1560,6 +1623,23 @@ if (phoneUI)
             engine.pluginSandbox = ! engine.pluginSandbox.load();
             studio.settings->setValue ("pluginSandbox", engine.pluginSandbox.load());
             flash (engine.pluginSandbox.load() ? "Crash protection on for plug-ins loaded from now" : "Plug-ins load directly (fastest) from now");
+            return;
+        }
+        if (id >= 490 && id <= 498)
+        {
+            engine.recordOffsetMs = Engine::recordOffsetChoices[id - 490];
+            studio.settings->setValue ("recordOffsetMs", (double) engine.recordOffsetMs.load());
+            flash ("Recording offset " + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms: new takes move by this much");
+            return;
+        }
+        if (id == 473 || id == 474)
+        {
+            auto& flag = id == 473 ? engine.lowLatency : engine.ramCache;
+            flag = ! flag.load();
+            studio.settings->setValue (id == 473 ? "lowLatency" : "ramCache", flag.load());
+            if (id == 474) engine.sync();
+            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: the armed track skips delay compensation, FX stay on" : "Low Latency Mode off")
+                             : (flag.load() ? "RAM disk cache on: clips play from memory" : "RAM disk cache off: clips stream from disk"));
             return;
         }
         if (id >= 460 && id <= 471)
@@ -1637,6 +1717,24 @@ if (phoneUI)
                 break;
             }
             case 4715: convertStems(); break;
+            case 4716:
+                chooser = std::make_unique<juce::FileChooser> ("Folder with your .hhs songs (subfolders too)", hhsHome());
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+                    const auto dir = fc.getResult();
+                    if (! dir.isDirectory()) return;
+                    const int n = shrinkSongs (dir);
+                    flash (juce::String (n) + " song(s) shrunk to KB: their audio stays next to them on disk");
+                });
+                break;
+            case 4718:
+                if (videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
+                if (videoExportAllHook()) videoExportAllHook()(); else flash ("EXPORT ALL needs the VIDEO editor (desktop build with video)");
+                break;
+            case 4717:
+                packAudioInSong() = ! packAudioInSong().load();
+                studio.settings->setValue ("packAudioInSong", packAudioInSong().load());
+                flash (packAudioInSong().load() ? "Songs pack their audio inside (MB)" : "Songs stay KB and point at their audio files");
+                break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;
@@ -1681,6 +1779,8 @@ private:
     } pianoSplit;
     float rackFrac = 0.55f; bool pianoMin = false; int splitTop = 0, splitTotal = 0;
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
+    int coreTick = 0;
+    juce::VBlankAttachment paintPump { this, [] { pumpPendingPaints(); } };   // visuals never wait behind mouse moves
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
     // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
@@ -1743,7 +1843,7 @@ private:
         void handleNoteOff (juce::MidiKeyboardState*, int, int note, float) override { m.liveNote (note, 0.0f, false); }
         MainComponent& m;
     } kbListen { *this };
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {
@@ -1820,6 +1920,12 @@ private:
         else hintBar.setText ("Pasted at the playhead", juce::dontSendNotification);
     }
     std::unique_ptr<PhoneMenuList> phoneMenu;
+    // below the notch / status bar and above the home bar, so the menu's X CLOSE can be tapped
+    juce::Rectangle<int> phoneSafe (juce::Rectangle<int> r) const
+    {
+        if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) r = d->safeAreaInsets.subtractedFrom (r);
+        return r;
+    }
     void showMenuOrList (juce::PopupMenu m, const juce::PopupMenu::Options& o, std::function<void (int)> cb)
     {
         if (! phoneUI) { m.showMenuAsync (o, std::move (cb)); return; }
@@ -1828,7 +1934,7 @@ private:
         phoneMenu->done = [safe, cb] (int r) {
             juce::MessageManager::callAsync ([safe, cb, r] { if (safe == nullptr) return; safe->phoneMenu.reset(); if (cb) cb (r); });
         };
-        addAndMakeVisible (*phoneMenu); phoneMenu->setBounds (getLocalBounds()); phoneMenu->toFront (true);
+        addAndMakeVisible (*phoneMenu); phoneMenu->setBounds (phoneSafe (getLocalBounds())); phoneMenu->toFront (true);
     }
     void showAllMenus()
     {
@@ -1952,7 +2058,7 @@ private:
         {
             updateFloating (*this);
             if (! floatWithTopmost)   // Mac: a pop-out (full screen or not) stays over the Beat / Rec screens while the app is in front, so it never drops behind
-                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setAlwaysOnTop (want);
+                if (const bool want = juce::Process::isForegroundProcess(); want != isAlwaysOnTop()) setOnTopSafely (*this, want);
             fsBtn.setButtonText (isFull() ? "EXIT FULL" : "FULL SCREEN");
         }
     };
@@ -2048,6 +2154,32 @@ private:
         cpuLabel.setText ("CPU " + juce::String (cpu) + "%" + (drops > 0 ? "  " + juce::String (drops) + " late" : juce::String()), juce::dontSendNotification);
         const auto cc = cpu > 80 ? col::rec : cpu > 50 ? col::accent : col::good;
         if (cpuLabel.findColour (juce::Label::textColourId) != cc) cpuLabel.setColour (juce::Label::textColourId, cc);
+        if (++coreTick >= 20)   // per-core + per-insert CPU in the CPU tooltip
+        {
+            coreTick = 0;
+            juce::String tip ("CPU load of the audio engine. Freeze heavy tracks in the Mixer to save CPU");
+            const auto cores = engine.coreLoads();
+            if (! cores.empty())
+            {
+                tip << "\nPer thread:";
+                for (size_t i = 0; i < cores.size(); ++i)
+                    tip << (i % 4 == 0 ? "\n" : "   ") << (i + 1 == cores.size() ? juce::String ("Audio") : "Core " + juce::String ((int) i + 1))
+                        << " " << juce::roundToInt (cores[i] * 100.0f) << "%";
+            }
+            std::vector<std::pair<float, int>> hv;
+            const auto& mx = engine.project().mixer;
+            for (int t = 0; t < (int) mx.size(); ++t) if (const float l = engine.trackLoad (t); l > 0.005f) hv.push_back ({ l, t });
+            std::sort (hv.rbegin(), hv.rend());
+            if (! hv.empty())
+            {
+                tip << "\nHeaviest inserts:";
+                for (size_t i = 0; i < hv.size() && i < 4; ++i)
+                    tip << "\n" << (hv[i].second == 0 ? juce::String ("Master") : juce::String (hv[i].second) + " " + mx[(size_t) hv[i].second].name)
+                        << "  " << juce::roundToInt (hv[i].first * 100.0f) << "%";
+            }
+            if (engine.lowLatency.load()) tip << "\nLow Latency Mode on";
+            cpuLabel.setTooltip (tip);
+        }
         recBtn.setToggleState (engine.isRecording(), juce::dontSendNotification);
         playBtn.setToggleState (engine.isPlaying(), juce::dontSendNotification);
         playBtn.setColour (juce::TextButton::buttonOnColourId, engine.isCountingIn() ? col::accent : col::good);
@@ -2722,7 +2854,68 @@ private:
 
     struct ShortcutsWindow : juce::DocumentWindow
     {
-        ShortcutsWindow (const juce::String& text, std::function<void()> close)
+        // top bar: + ADD SHORTCUT (any menu command, press a key) and EDIT KEYS (change / clear / reset any key)
+        struct Pane : juce::Component
+        {
+            Pane (juce::TextEditor* t, MainComponent& m) : text (t), main (m)
+            {
+                setWantsKeyboardFocus (true);
+                for (auto* b : { &add, &edit }) { b->setWantsKeyboardFocus (false); b->setColour (juce::TextButton::buttonColourId, col::accent.withAlpha (0.85f)); addAndMakeVisible (b); }
+                add.setTooltip ("Pick any menu command, then press the key you want for it");
+                edit.setTooltip ("Change, clear or reset the key of any command");
+                add.onClick = [this] { pickCommand(); };
+                edit.onClick = [this] { main.showKeyCommands(); };
+                status.setColour (juce::Label::textColourId, col::accent2); addAndMakeVisible (status);
+                addAndMakeVisible (text.get());
+                showMine();
+            }
+            void resized() override
+            {
+                auto r = getLocalBounds();
+                auto bar = r.removeFromTop (38).reduced (6, 4);
+                add.setBounds (bar.removeFromLeft (150)); bar.removeFromLeft (6); edit.setBounds (bar.removeFromLeft (110)); bar.removeFromLeft (8);
+                status.setBounds (bar);
+                text->setBounds (r);
+            }
+            void showMine()
+            {
+                juce::String mine;
+                for (auto& [id, k] : main.userKeys)
+                    if (id.startsWith ("menu:") && k.isValid()) mine << k.getTextDescriptionWithIcons() << " = " << id.fromFirstOccurrenceOf ("menu:", false, false) << "\n";
+                status.setText (waitingFor.isNotEmpty() ? "Press the key for \"" + waitingFor + "\"  (Esc = cancel)"
+                                : mine.isEmpty() ? juce::String ("+ ADD SHORTCUT puts a key on any menu command") : juce::String ("Your added shortcuts are listed at the top"), juce::dontSendNotification);
+                auto t = base.isEmpty() ? (base = text->getText()) : base;
+                text->setText (mine.isEmpty() ? t : "YOUR SHORTCUTS (Edit keys to change or clear)\n" + mine + "\n" + t, false);
+            }
+            void pickCommand()
+            {
+                juce::PopupMenu m;
+                const auto names = main.getMenuBarNames();
+                for (int i = 0; i < names.size(); ++i) m.addSubMenu (names[i], main.getMenuForIndex (i, names[i]));
+                juce::Component::SafePointer<Pane> safe (this);
+                main.showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&add).withStandardItemHeight (30), [safe] (int r)
+                {
+                    if (safe == nullptr || r == 0) return;
+                    safe->waitingFor = safe->main.menuTextFor (r);
+                    safe->showMine(); safe->grabKeyboardFocus();
+                });
+            }
+            bool keyPressed (const juce::KeyPress& k) override
+            {
+                if (waitingFor.isEmpty()) return false;
+                if (k != juce::KeyPress (juce::KeyPress::escapeKey))
+                {
+                    const auto clash = main.commandUsing (k, "menu:" + waitingFor);
+                    if (clash.isNotEmpty()) { status.setText (k.getTextDescriptionWithIcons() + " is already " + clash + ". Pick another key or change that one in Edit keys.", juce::dontSendNotification); return true; }
+                    if (waitingFor.containsAnyOf ("=;")) { status.setText ("That command can't take a shortcut.", juce::dontSendNotification); waitingFor = {}; return true; }
+                    main.userKeys["menu:" + waitingFor] = k; main.saveKeys();
+                }
+                waitingFor = {}; showMine(); return true;
+            }
+            std::unique_ptr<juce::TextEditor> text; MainComponent& main;
+            juce::TextButton add { "+ ADD SHORTCUT" }, edit { "EDIT KEYS" }; juce::Label status; juce::String waitingFor, base;
+        };
+        ShortcutsWindow (const juce::String& text, std::function<void()> close, MainComponent& main)
             : juce::DocumentWindow ("Shortcuts  (Cmd/Ctrl+U to close)", col::panel, juce::DocumentWindow::closeButton), onClose (std::move (close))
         {
             auto* ed = new juce::TextEditor();
@@ -2730,12 +2923,13 @@ private:
             ed->setFont (juce::FontOptions (14.0f)); ed->setText (text, false);
             ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
             ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
-            setContentOwned (ed, false);
+            setContentOwned (new Pane (ed, main), false);
             setUsingNativeTitleBar (! phoneUI); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
         }
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override
         {
+            if (auto* p = dynamic_cast<Pane*> (getContentComponent()); p != nullptr && p->waitingFor.isNotEmpty()) return p->keyPressed (k);
             if (k == juce::KeyPress ('u', juce::ModifierKeys::commandModifier, 0) || k == juce::KeyPress::escapeKey) { if (onClose) onClose(); return true; }
             return false;
         }
@@ -2760,7 +2954,7 @@ private:
           << "Alt+A roll audio clips | E select | P/B paint | D delete | T mute | C slice | Alt+wheel = track heights\n\n"
           << "HELP\nHover anything for 1 second to see what it does | Cmd/Ctrl+U = this Shortcuts window\n\n"
           << "Ctrl = Cmd and Alt = Option on macOS.";
-        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); });
+        shortcutsWin = std::make_unique<ShortcutsWindow> (t, [this] { juce::MessageManager::callAsync ([this] { shortcutsWin.reset(); }); }, *this);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
