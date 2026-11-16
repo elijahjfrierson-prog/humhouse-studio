@@ -395,4 +395,90 @@ float scoreShotQuality (const juce::File& video)
     if (n == 0) return 0.5f;
     return (float) juce::jlimit (0.0, 1.0, 0.6 * juce::jlimit (0.0, 1.0, sharp / n / 12.0) + 0.4 * expo / n);
 }
+
+std::vector<Ticks> detectCuts (const juce::File& video, Ticks from, Ticks to, std::function<bool()> cancel, std::function<void (double)> progress)
+{
+    std::vector<Ticks> cuts;
+    VideoDecoder d; juce::String err;
+    if (! d.open (video, 144, err)) return cuts;
+    const int AW = 48, AH = 27;
+    const Ticks minGap = secToTicks (3.0 / std::max (1.0, d.fps()));
+    if (from > 0) d.seekTo (from);
+    std::vector<float> prev, cur; float hp[48] {}, hc[48] {};
+    std::vector<float> recent;
+    Frame f; Ticks last = -1, lastCut = -minGap * 2;
+    while (! (cancel && cancel()) && d.readNext (f))
+    {
+        if (! f.valid() || f.pts < from - secToTicks (0.001)) continue;
+        if (f.pts > to) break;
+        cur.assign ((size_t) AW * AH * 3, 0); std::fill (hc, hc + 48, 0.0f);
+        for (int y = 0; y < AH; ++y)
+            for (int x = 0; x < AW; ++x)
+            {
+                const auto* p = &f.rgba[((size_t) ((y * 2 + 1) * f.h / (AH * 2)) * f.w + (size_t) ((x * 2 + 1) * f.w / (AW * 2))) * 4];
+                for (int k = 0; k < 3; ++k) { cur[((size_t) y * AW + x) * 3 + k] = p[k]; hc[k * 16 + p[k] / 16] += 1.0f; }
+            }
+        if (! prev.empty())
+        {
+            double px = 0, hd = 0;
+            for (size_t i = 0; i < cur.size(); ++i) px += std::abs (cur[i] - prev[i]);
+            for (int i = 0; i < 48; ++i) hd += std::abs (hc[i] - hp[i]);
+            const float score = (float) (0.5 * px / (cur.size() * 255.0) + 0.5 * hd / (2.0 * 3 * AW * AH));
+            float base = 0; for (auto v : recent) base += v; base = recent.empty() ? 0.02f : base / (float) recent.size();
+            if (score > 0.12f && score > base * 3.0f + 0.04f && f.pts - lastCut >= minGap)
+            {
+                cuts.push_back (f.pts); lastCut = f.pts;
+                recent.clear();
+            }
+            else { recent.push_back (score); if (recent.size() > 8) recent.erase (recent.begin()); }
+        }
+        std::swap (prev, cur); std::copy (hc, hc + 48, hp);
+        last = f.pts;
+        if (progress && to > from) progress (juce::jlimit (0.0, 1.0, (double) (f.pts - from) / (double) (to - from)));
+    }
+    juce::ignoreUnused (last);
+    return cuts;
+}
+
+std::vector<float> scoreMoments (const juce::File& video, std::function<bool()> cancel)
+{
+    VideoDecoder d; juce::String err;
+    if (! d.open (video, 180, err)) return {};
+    const int AW = 64, AH = 36; const double hz = 4.0;
+    std::vector<float> prev, cur, motion, sharp;
+    Frame f; Ticks next = 0;
+    while (! (cancel && cancel()) && d.readNext (f))
+    {
+        if (f.pts < next || ! f.valid()) continue;
+        next = secToTicks ((double) (motion.size() + 1) / hz);
+        cur.assign ((size_t) AW * AH, 0);
+        for (int y = 0; y < AH; ++y)
+            for (int x = 0; x < AW; ++x)
+            {
+                const auto* p = &f.rgba[((size_t) (y * f.h / AH) * f.w + (size_t) (x * f.w / AW)) * 4];
+                cur[(size_t) y * AW + x] = 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2];
+            }
+        double mo = 0, la = 0;
+        for (int y = 1; y < AH - 1; ++y)
+            for (int x = 1; x < AW - 1; ++x)
+            {
+                const size_t k = (size_t) y * AW + x;
+                if (! prev.empty()) mo += std::abs (cur[k] - prev[k]);
+                la += std::abs (4 * cur[k] - cur[k - 1] - cur[k + 1] - cur[k - AW] - cur[k + AW]);
+            }
+        motion.push_back ((float) mo); sharp.push_back ((float) la);
+        std::swap (prev, cur);
+    }
+    if (motion.size() > 1) motion[0] = motion[1];
+    auto norm = [] (std::vector<float>& v)
+    {
+        auto s = v; std::sort (s.begin(), s.end());
+        const float hi = s.empty() ? 1.0f : std::max (1e-3f, s[(size_t) (0.95 * (s.size() - 1))]);
+        for (auto& x : v) x = juce::jlimit (0.0f, 1.0f, x / hi);
+    };
+    norm (motion); norm (sharp);
+    std::vector<float> out (motion.size());
+    for (size_t i = 0; i < out.size(); ++i) out[i] = 0.6f * motion[i] + 0.4f * sharp[i];
+    return out;
+}
 }

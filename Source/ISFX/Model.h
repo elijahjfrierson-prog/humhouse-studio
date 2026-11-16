@@ -58,7 +58,7 @@ struct FxStack
 };
 
 enum class TransitionType { Cut = 0, Dissolve, DipBlack, DipWhite, Flash, Zoom, Whip, Glitch,
-                            Spin, RgbSplit, Blur, LumaWipe, InkBurn, Shake, Stretch, Mirror, Prism, LightLeak };
+                            Spin, RgbSplit, Blur, LumaWipe, InkBurn, Shake, Stretch, Mirror, Prism, LightLeak, BlackFlash };
 
 // ---- media ------------------------------------------------------------------------
 enum class MediaKind { Video = 0, Audio, Image };
@@ -85,9 +85,14 @@ struct MediaItem
     float quality = 0.5f;      // shot score 0..1 (sharpness/exposure)
     SyncInfo sync;
     bool missing = false;
+    std::vector<float> moments;   // 4 per second: how good each moment is (motion + sharpness, 0..1); SEQ picks the best ones
 };
 
 // ---- timeline -----------------------------------------------------------------------
+struct Clip;
+// source ticks consumed from clip start to clip-relative time rel: rel * speed, or the integral of the "speed" keyframes (speed ramp)
+double rampedOffset (const Clip& c, Ticks rel);
+
 struct Clip
 {
     juce::String id, mediaId;
@@ -101,18 +106,39 @@ struct Clip
     TransitionType transIn = TransitionType::Cut;
     Ticks transLen = 0;
     juce::String name;       // display name override (Rename)
+    // keyframes per fx param: (time from clip start, value), sorted; interp 0 = linear, 1 = hold, 2 = ease in/out
+    struct Key { Ticks t = 0; float v = 0; int interp = 0; };
+    std::map<juce::String, std::vector<Key>> keys;
     bool enabled = true;     // Enable/Disable: a disabled clip stays on the timeline but is not seen or heard
     int label = 0;           // label colour index (0 = default)
     FxStack fx;              // per-clip: exposure, contrast, saturation, scale, posX, posY, rotation, flash
     Ticks end() const { return start + length; }
     bool reverse = false;    // plays the same source range backwards
     bool keep = false;       // pinned: Randomize shot leaves it alone
-    Ticks srcAt (Ticks t) const
+    Ticks fadeIn = 0, fadeOut = 0;   // audio fades at the clip edges
+    juce::String text, font; // text clip (no media): rendered as a layer, so transforms, effects and keyframes apply
+    int frameInterp = 1;     // slow motion between source frames: 0 = nearest frame, 1 = frame blending, 2 = optical flow
+    bool ramped() const { auto it = keys.find ("speed"); return it != keys.end() && ! it->second.empty(); }
+    double srcPos (Ticks t) const
     {
-        if (reverse) return srcIn + (Ticks) std::llround ((double) (end() - t) * speed) - 1;
-        return srcIn + (Ticks) std::llround ((double) (t - start) * speed);
+        if (! ramped())
+            return reverse ? (double) srcIn + (double) (end() - t) * speed - 1 : (double) srcIn + (double) (t - start) * speed;
+        if (reverse) return (double) srcIn + rampedOffset (*this, length) - rampedOffset (*this, t - start) - 1;
+        return (double) srcIn + rampedOffset (*this, t - start);
     }
+    Ticks srcAt (Ticks t) const { return (Ticks) std::llround (srcPos (t)); }
 };
+
+// value of a keyframed param at clip-relative time rel (clamped to first/last key)
+float keyValue (const std::vector<Clip::Key>& k, Ticks rel);
+// clip gain at rel: volume (or its "volume" keyframe line) times the edge fades
+float volumeGain (const Clip& c, Ticks rel);
+// writes every keyframed param of c into c.fx at timeline time t
+void applyKeyframes (Clip& c, Ticks t);
+void setKey (Clip& c, const juce::String& param, Ticks rel, float v, int interp = 0);
+// keep keyframes pinned to timeline time when the clip's start moves by delta (split, left trim)
+void shiftKeys (Clip& c, Ticks delta);
+
 
 enum class TrackKind { Video = 0, Audio };
 
@@ -134,6 +160,8 @@ struct Sequence
     FxStack fx;              // sequence-wide grade / FX (adjustment layer)
     juce::String style;      // generator style that produced it ("" = manual)
     juce::uint32 seed = 1;
+    float duckDb = 0.0f;      // < 0: every other clip's sound drops by this while a duckKey (song) clip plays
+    juce::String duckKey;
 
     Ticks duration() const;
     Clip* findClip (const juce::String& id);

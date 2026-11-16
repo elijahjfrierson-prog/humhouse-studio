@@ -342,10 +342,19 @@ void applyLayout (const Project& p, Clip& c, int slot)
                                 { 0, 0, 1, 1 / 3.f }, { 0, 1 / 3.f, 1, 1 / 3.f }, { 0, 2 / 3.f, 1, 1 / 3.f },
                                 { 0, 0, .5f, .5f }, { .5f, 0, .5f, .5f }, { 0, .5f, .5f, .5f }, { .5f, .5f, .5f, .5f } };
     slot = juce::jlimit (0, 11, slot);
+    if (slot == 0)
+    {
+        for (auto* id : { "scale", "scaleX", "scaleY", "posX", "posY", "rotation", "cropL", "cropR", "cropT", "cropB", "maskShape", "maskW", "maskH", "maskFeather", "maskInvert" })
+            c.fx.p.erase (id);
+        c.fx.set ("reframe", 0); return;
+    }
+    applyLayoutRect (p, c, r[slot][0], r[slot][1], r[slot][2], r[slot][3]);
+}
+
+void applyLayoutRect (const Project& p, Clip& c, float x, float y, float w, float h)
+{
     for (auto* id : { "scale", "scaleX", "scaleY", "posX", "posY", "rotation", "cropL", "cropR", "cropT", "cropB", "maskShape", "maskW", "maskH", "maskFeather", "maskInvert" })
         c.fx.p.erase (id);
-    if (slot == 0) { c.fx.set ("reframe", 0); return; }
-    float x = r[slot][0], y = r[slot][1], w = r[slot][2], h = r[slot][3];
     int W = 1920, H = 1080; outputSize (p, 1080, W, H);
     float mw = 16, mh = 9;
     if (auto* m = p.findMedia (c.mediaId); m != nullptr && m->width > 0 && m->height > 0)
@@ -364,11 +373,13 @@ void applyLayout (const Project& p, Clip& c, int slot)
 bool clipGeometry (const Project& p, const Clip& c, float W, float H, ClipGeom& g)
 {
     auto* m = p.findMedia (c.mediaId);
-    if (m == nullptr || m->kind == MediaKind::Audio || m->width <= 0 || m->height <= 0 || W <= 0 || H <= 0) return false;
+    const bool isText = c.text.isNotEmpty();   // text is rasterised at frame size: geometry as a full-frame layer
+    if (W <= 0 || H <= 0) return false;
+    if (! isText && (m == nullptr || m->kind == MediaKind::Audio || m->width <= 0 || m->height <= 0)) return false;
     const auto& CP = clipParams();
     auto cv = [&] (const char* id) { return fxValue (c.fx, CP, id); };
-    const bool sw = m->rotation == 90 || m->rotation == 270;
-    const float rw = (float) (sw ? m->height : m->width), rh = (float) (sw ? m->width : m->height);
+    const bool sw = ! isText && (m->rotation == 90 || m->rotation == 270);
+    const float rw = isText ? W : (float) (sw ? m->height : m->width), rh = isText ? H : (float) (sw ? m->width : m->height);
     const int reframe = (int) std::lround (cv ("reframe"));
     const float base = reframe == 0 ? std::max (W / rw, H / rh) : std::min (W / rw, H / rh);
     const float s = base * cv ("scale");
@@ -383,22 +394,179 @@ bool clipGeometry (const Project& p, const Clip& c, float W, float H, ClipGeom& 
     return true;
 }
 
+void applyCollage (const Project& p, std::vector<Clip*> v, int kind)
+{
+    const int n = (int) v.size();
+    if (n == 0) return;
+    const float gap = 0.008f;
+    auto cell = [&] (Clip& c, float x, float y, float w, float h) { applyLayoutRect (p, c, x + gap, y + gap, std::max (0.02f, w - 2 * gap), std::max (0.02f, h - 2 * gap)); };
+    if (kind == 0 || kind == 1)
+    {   // 0: 3x3 grid, 1: auto grid sized to the clip count
+        const int cols = kind == 0 ? 3 : (int) std::ceil (std::sqrt ((double) n));
+        const int rows = kind == 0 ? 3 : (int) std::ceil ((double) n / cols);
+        for (int i = 0; i < n && i < cols * rows; ++i)
+            cell (*v[(size_t) i], (float) (i % cols) / cols, (float) (i / cols) / rows, 1.0f / cols, 1.0f / rows);
+    }
+    else if (kind == 2)
+    {   // picture-in-picture: the top clip small in the bottom-right corner, the rest full frame underneath
+        applyLayoutRect (p, *v[0], 0.63f, 0.63f, 0.33f, 0.33f);
+        for (int i = 1; i < n; ++i) applyLayout (p, *v[(size_t) i], 0);
+    }
+    else
+    {   // film strip: one row across the middle
+        const float w = 1.0f / n, h = std::min (1.0f, w * 1.6f);
+        for (int i = 0; i < n; ++i) cell (*v[(size_t) i], i * w, 0.5f - h * 0.5f, w, h);
+    }
+}
+
 juce::StringArray layoutNames()
 {
     return { "Full frame", "Top half", "Bottom half", "Left half", "Right half", "Top third", "Middle third", "Bottom third",
              "Grid top-left", "Grid top-right", "Grid bottom-left", "Grid bottom-right" };
 }
 
+bool needsRender (const Project& p, const Sequence& s, const Clip& c)
+{
+    juce::ignoreUnused (p);
+    if (! c.enabled || c.track < 0 || c.track >= (int) s.tracks.size()) return false;
+    auto& tr = s.tracks[(size_t) c.track];
+    if (tr.kind != TrackKind::Video || tr.hidden) return false;
+    if (c.reverse) return true;
+    if (c.frameInterp == 2 && (c.speed < 1.0 || c.ramped())) return true;
+    const bool layer = c.mediaId.isEmpty() && c.text.isEmpty();
+    if (layer && c.fx.lutPath.isNotEmpty()) return true;
+    for (auto& [id, v] : c.fx.p)
+    {
+        if (layer)
+        {
+            if (auto* d = findParam (sequenceParams(), id); d != nullptr && std::abs (v - d->def) > 1e-4f) return true;
+            continue;
+        }
+        auto* d = findParam (clipParams(), id);
+        if (d == nullptr || std::abs (v - d->def) <= 1e-4f) continue;
+        const juce::String g (d->group);
+        if (g == "Stylize" || g == "Transformer" || id == "blur") return true;
+    }
+    return false;
+}
+
 void Renderer::clearSources() { sources.clear(); luts.clear(); trailT = -1; }
 
-const Frame* Renderer::frameFor (const Project& p, const juce::String& mediaId, Ticks srcT, int decodeH, int& rotation, bool* opaque, bool primeOnly)
+// separable box blur (3 passes ~ gaussian) on RGBA, in place
+static void blurFrame (Frame& f, int r)
 {
+    const int W = f.w, H = f.h; if (r < 1 || W < 2 || H < 2) return;
+    std::vector<juce::uint8> tmp (f.rgba.size());
+    for (int pass = 0; pass < 3; ++pass)
+    {
+        parallelRows (H, [&] (int y) {
+            const auto* s = &f.rgba[(size_t) y * W * 4]; auto* d = &tmp[(size_t) y * W * 4];
+            int acc[4] { 0, 0, 0, 0 };
+            for (int x = -r; x <= r; ++x) for (int k = 0; k < 4; ++k) acc[k] += s[juce::jlimit (0, W - 1, x) * 4 + k];
+            for (int x = 0; x < W; ++x)
+            {
+                for (int k = 0; k < 4; ++k) d[x * 4 + k] = (juce::uint8) (acc[k] / (2 * r + 1));
+                const int a = juce::jlimit (0, W - 1, x - r), b = juce::jlimit (0, W - 1, x + r + 1);
+                for (int k = 0; k < 4; ++k) acc[k] += s[b * 4 + k] - s[a * 4 + k];
+            }
+        });
+        parallelRows (W, [&] (int x) {
+            int acc[4] { 0, 0, 0, 0 };
+            auto at = [&] (int y) { return &tmp[((size_t) juce::jlimit (0, H - 1, y) * W + x) * 4]; };
+            for (int y = -r; y <= r; ++y) for (int k = 0; k < 4; ++k) acc[k] += at (y)[k];
+            for (int y = 0; y < H; ++y)
+            {
+                auto* d = &f.rgba[((size_t) y * W + x) * 4];
+                for (int k = 0; k < 4; ++k) d[k] = (juce::uint8) (acc[k] / (2 * r + 1));
+                const auto* a = at (y - r); const auto* b = at (y + r + 1);
+                for (int k = 0; k < 4; ++k) acc[k] += b[k] - a[k];
+            }
+        });
+    }
+}
+
+void interpolateFrames (const Frame& a, const Frame& b, float f, bool flow, Frame& out)
+{
+    const int W = a.w, H = a.h;
+    out.w = W; out.h = H; out.pts = a.pts;
+    out.rgba.resize ((size_t) W * H * 4);
+    if (! flow || W < 32 || H < 32)
+    {
+        const int wb = juce::jlimit (0, 256, (int) std::lround (f * 256)), wa = 256 - wb;
+        const size_t n = out.rgba.size();
+        for (size_t i = 0; i < n; ++i) out.rgba[i] = (juce::uint8) ((a.rgba[i] * wa + b.rgba[i] * wb + 128) >> 8);
+        return;
+    }
+    // motion: 8x8 blocks on a quarter-res luma, +-6 px search (= +-24 full-res px), then warp both frames halfway
+    const int qw = W / 4, qh = H / 4;
+    std::vector<float> la ((size_t) qw * qh), lb ((size_t) qw * qh);
+    auto lum = [&] (const Frame& fr, std::vector<float>& d)
+    {
+        for (int y = 0; y < qh; ++y)
+            for (int x = 0; x < qw; ++x)
+            {
+                const auto* px = &fr.rgba[((size_t) (y * 4) * W + x * 4) * 4];
+                d[(size_t) y * qw + x] = 0.3f * px[0] + 0.59f * px[1] + 0.11f * px[2];
+            }
+    };
+    lum (a, la); lum (b, lb);
+    const int B = 8, R = 6, bw = (qw + B - 1) / B, bh = (qh + B - 1) / B;
+    std::vector<float> vx ((size_t) bw * bh, 0.0f), vy ((size_t) bw * bh, 0.0f);
+    parallelRows (bh, [&] (int by)
+    {
+        for (int bx = 0; bx < bw; ++bx)
+        {
+            float best = 1e30f; int bdx = 0, bdy = 0;
+            for (int dy = -R; dy <= R; ++dy)
+                for (int dx = -R; dx <= R; ++dx)
+                {
+                    float sad = 0; int cnt = 0;
+                    for (int y = by * B; y < std::min (qh, by * B + B); ++y)
+                        for (int x = bx * B; x < std::min (qw, bx * B + B); ++x)
+                        {
+                            const int x2 = juce::jlimit (0, qw - 1, x + dx), y2 = juce::jlimit (0, qh - 1, y + dy);
+                            sad += std::abs (la[(size_t) y * qw + x] - lb[(size_t) y2 * qw + x2]); ++cnt;
+                        }
+                    sad = sad / std::max (1, cnt) + 0.02f * (float) (dx * dx + dy * dy);
+                    if (sad < best) { best = sad; bdx = dx; bdy = dy; }
+                }
+            vx[(size_t) by * bw + bx] = bdx * 4.0f; vy[(size_t) by * bw + bx] = bdy * 4.0f;
+        }
+    });
+    const float bs = (float) B * 4;
+    parallelRows (H, [&] (int y)
+    {
+        for (int x = 0; x < W; ++x)
+        {
+            const float gx = juce::jlimit (0.0f, (float) bw - 1.001f, x / bs - 0.5f), gy = juce::jlimit (0.0f, (float) bh - 1.001f, y / bs - 0.5f);
+            const int x0 = (int) gx, y0 = (int) gy, x1 = std::min (bw - 1, x0 + 1), y1 = std::min (bh - 1, y0 + 1);
+            const float fx = gx - x0, fy = gy - y0;
+            auto bil = [&] (const std::vector<float>& v)
+            {
+                return mixf (mixf (v[(size_t) y0 * bw + x0], v[(size_t) y0 * bw + x1], fx), mixf (v[(size_t) y1 * bw + x0], v[(size_t) y1 * bw + x1], fx), fy);
+            };
+            const float mx = bil (vx), my = bil (vy);
+            const int ax = juce::jlimit (0, W - 1, (int) std::lround (x - f * mx)), ay = juce::jlimit (0, H - 1, (int) std::lround (y - f * my));
+            const int cx = juce::jlimit (0, W - 1, (int) std::lround (x + (1 - f) * mx)), cy = juce::jlimit (0, H - 1, (int) std::lround (y + (1 - f) * my));
+            const auto* pa = &a.rgba[((size_t) ay * W + ax) * 4];
+            const auto* pb = &b.rgba[((size_t) cy * W + cx) * 4];
+            auto* o = &out.rgba[((size_t) y * W + x) * 4];
+            for (int q = 0; q < 4; ++q) o[q] = (juce::uint8) std::lround (pa[q] * (1 - f) + pb[q] * f);
+        }
+    });
+}
+
+const Frame* Renderer::frameFor (const Project& p, const juce::String& mediaId, Ticks srcT, int decodeH, int& rotation, bool* opaque, bool primeOnly,
+                                 const Frame** after, bool reverse)
+{
+    if (after) *after = nullptr;
     auto* m = p.findMedia (mediaId);
     if (m == nullptr || m->missing || m->kind == MediaKind::Audio) return nullptr;
     const bool useProxy = m->kind == MediaKind::Video && decodeH > 0 && decodeH <= kProxyHeight
                           && m->proxyPath.isNotEmpty() && juce::File (m->proxyPath).existsAsFile();
     const bool async = live && m->kind == MediaKind::Video;
-    auto key = mediaId + "@" + juce::String (decodeH) + (useProxy ? "p" : "") + (async ? "L" : "");
+    reverse = reverse && async;
+    auto key = mediaId + "@" + juce::String (decodeH) + (useProxy ? "p" : "") + (async ? "L" : "") + (reverse ? "R" : "");
     // Free decoders that haven't been on screen for a while (RAM), and keep the open count bounded. Never evict a
     // source used during this render: its frame may still be waiting to be composited.
     if ((useClock & 63) == 0)
@@ -440,12 +608,14 @@ const Frame* Renderer::frameFor (const Project& p, const juce::String& mediaId, 
         else if (async)
         {
             src->pre = std::make_unique<PrefetchDecoder>();
+            src->pre->reverse = reverse;
             src->fps = m->fps > 0 ? m->fps : 30.0;
             juce::String err;
             if (useProxy && src->pre->open (juce::File (m->proxyPath), decodeH, err)) src->rotation = m->rotation;
             else
             {
                 src->pre = std::make_unique<PrefetchDecoder>();
+                src->pre->reverse = reverse;
                 if (! src->pre->open (f, decodeH, err)) src->failed = true;
                 else src->rotation = src->pre->rotation();
             }
@@ -478,11 +648,16 @@ const Frame* Renderer::frameFor (const Project& p, const juce::String& mediaId, 
         if (primeOnly) { src->pre->prime (srcT); return nullptr; }
         // only the very first frame of a source may wait (briefly); after that a late frame repeats the last one
         if (auto f = src->pre->get (juce::jmax ((Ticks) 0, srcT), src->shown ? 0 : 80)) src->shown = std::move (f);
+        if (after && src->shown) { src->shownNext = src->pre->after (src->shown->pts); *after = src->shownNext.get(); }
         if (opaque == nullptr && src->shown != nullptr && srcT - src->shown->pts > secToTicks (2.5 / src->fps)) ++late;
         return src->shown.get();
     }
     if (primeOnly) return nullptr;
-    if (auto* fr = src->dec->frameRef (juce::jmax ((Ticks) 0, srcT))) return fr;
+    if (auto* fr = src->dec->frameRef (juce::jmax ((Ticks) 0, srcT)))
+    {
+        if (after) *after = src->dec->peekNext();
+        return fr;
+    }
     return nullptr;
 }
 
@@ -498,9 +673,73 @@ std::shared_ptr<Lut3D> Renderer::lutFor (const juce::String& path)
     return l;
 }
 
+// text clips rasterize once per look (cached), then composite like any layer
+static const Frame* textFrame (const Clip& c, int W, int H)
+{
+    const auto& CP = clipParams();
+    auto cv = [&] (const char* id) { return fxValue (c.fx, CP, id); };
+    const float size = cv ("textSize"), cr = cv ("textR"), cg = cv ("textG"), cb = cv ("textB"), outline = cv ("textOutline");
+    const bool bold = cv ("textBold") > 0.5f;
+    auto txt = c.text;
+    if (const float rv = juce::jlimit (0.0f, 1.0f, cv ("textReveal")); rv < 0.999f) txt = txt.substring (0, juce::roundToInt (txt.length() * rv));
+    const juce::String key = txt + "|" + c.font + "|" + juce::String (size, 4) + "|" + juce::String (cr, 3) + juce::String (cg, 3) + juce::String (cb, 3)
+                           + "|" + juce::String ((int) bold) + juce::String (outline, 3) + "|" + juce::String (W) + "x" + juce::String (H);
+    thread_local std::map<juce::String, Frame> cache;
+    if (auto it = cache.find (key); it != cache.end()) return &it->second;
+    if (cache.size() > 48) cache.clear();
+    juce::Image im (juce::Image::ARGB, W, H, true);
+    if (txt.isNotEmpty())
+    {
+        juce::Graphics g (im);
+        juce::Font f (juce::FontOptions (c.font.isEmpty() ? juce::Font::getDefaultSansSerifFontName() : c.font, std::max (4.0f, size * H),
+                                         bold ? juce::Font::bold : juce::Font::plain));
+        juce::GlyphArrangement ga;
+        ga.addFittedText (f, txt, 0.05f * W, 0, 0.9f * W, (float) H, juce::Justification::centred, 8);
+        juce::Path path; ga.createPath (path);
+        if (outline > 0.001f)
+        {
+            g.setColour (juce::Colours::black);
+            g.strokePath (path, juce::PathStrokeType (outline * size * H * 0.12f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        g.setColour (juce::Colour::fromFloatRGBA (cr, cg, cb, 1.0f));
+        g.fillPath (path);
+    }
+    Frame fr; fr.w = W; fr.h = H; fr.pts = 0; fr.rgba.assign ((size_t) W * H * 4, 0);
+    {
+        juce::Image::BitmapData bd (im, juce::Image::BitmapData::readOnly);
+        for (int y = 0; y < H; ++y)
+            for (int x = 0; x < W; ++x)
+            {
+                auto px = *reinterpret_cast<const juce::PixelARGB*> (bd.getPixelPointer (x, y));
+                px.unpremultiply();
+                auto* d = fr.rgba.data() + ((size_t) y * W + x) * 4;
+                d[0] = px.getRed(); d[1] = px.getGreen(); d[2] = px.getBlue(); d[3] = px.getAlpha();
+            }
+    }
+    return &cache.emplace (key, std::move (fr)).first->second;
+}
+
 // ---------------------------------------------------------------- render
 bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int H, std::vector<juce::uint8>& rgba, int decodeH)
 {
+    {
+        static thread_local bool keyed = false;
+        bool anyKeys = false;
+        for (auto& c : s.clips) anyKeys |= ! c.keys.empty();
+        if (anyKeys && ! keyed)
+        {
+            // copy only clips near the playhead: long keyframed timelines don't pay a full copy every frame
+            Sequence ks;
+            ks.id = s.id; ks.name = s.name; ks.tracks = s.tracks; ks.fx = s.fx; ks.style = s.style; ks.seed = s.seed;
+            const Ticks win = secToTicks (12.0);
+            for (auto& c : s.clips)
+                if (c.end() >= t - win && c.start <= t + win) { ks.clips.push_back (c); applyKeyframes (ks.clips.back(), t); }
+            keyed = true;
+            const bool r = render (p, ks, t, W, H, rgba, decodeH);
+            keyed = false;
+            return r;
+        }
+    }
     renderStart = ++useClock;
     if (W <= 0 || H <= 0) return false;
     const size_t NP = (size_t) W * H;
@@ -510,27 +749,52 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
     const auto& SP = sequenceParams();
     // effect clips (no media) on visible layers blend their look into the sequence FX while the playhead is over them
     FxStack postFx = s.fx;
+    float layerZoom = 1.0f, hhAmt = 0.0f;
+    auto motion = [&] (const FxStack& f, double prog, float op)
+    {
+        prog = juce::jlimit (0.0, 1.0, prog);
+        if (float v = f.get ("zoomIn", 0.0f); v != 0) layerZoom *= 1.0f + op * v * 0.4f * (float) prog;
+        if (float v = f.get ("zoomOut", 0.0f); v != 0) layerZoom *= 1.0f + op * v * 0.4f * (float) (1.0 - prog);
+        if (float v = f.get ("shrinkGrow", 0.0f); v != 0) layerZoom *= 1.0f + op * v * 0.3f * (float) std::sin (juce::MathConstants<double>::pi * prog);
+        hhAmt += op * f.get ("handheld", 0.0f);
+    };
+    motion (s.fx, 0.5, 1.0f);
     for (auto& c : s.clips)
-        if (c.mediaId.isEmpty() && c.enabled && t >= c.start && t < c.end() && c.track >= 0 && c.track < (int) s.tracks.size()
+        if (c.mediaId.isEmpty() && c.text.isEmpty() && c.enabled && t >= c.start && t < c.end() && c.track >= 0 && c.track < (int) s.tracks.size()
             && ! s.tracks[(size_t) c.track].hidden)
         {
-            for (auto& [k, v] : c.fx.p)
+            FxStack fx = c.fx;
+            for (auto& [k, ks] : c.keys) if (! ks.empty() && k != "speed") fx.set (k, keyValue (ks, t - c.start));
+            const float op = c.opacity * juce::jlimit (0.0f, 1.0f, fx.get ("opacity", 1.0f));
+            fx.p.erase ("opacity");
+            motion (fx, c.length > 0 ? (double) (t - c.start) / (double) c.length : 0.0, op);
+            for (auto& [k, v] : fx.p)
             {
                 auto* d = findParam (SP, k);
                 float base = postFx.get (k, d ? d->def : 0.0f);
-                postFx.set (k, base + (v - base) * c.opacity);
+                postFx.set (k, base + (v - base) * op);
             }
-            if (c.fx.lutPath.isNotEmpty()) postFx.lutPath = c.fx.lutPath;
+            if (fx.lutPath.isNotEmpty() && op > 0.001f)
+            {
+                postFx.lutPath = fx.lutPath;
+                postFx.set ("lutMix", fx.get ("lutMix", 1.0f) * op);
+            }
         }
     auto sv = [&] (const char* id) { return fxValue (postFx, SP, id); };
     const BeatEnv be = beatEnvAt (p.song, t);
     const float minWH = (float) std::min (W, H);
 
     // global "camera": kick zoom + shake
-    float camZoom = 1.0f + sv ("kickZoom") * 0.07f * be.kick;
+    float camZoom = (1.0f + sv ("kickZoom") * 0.07f * be.kick) * layerZoom;
     float shakeAmt = sv ("shake") * be.kick;
     float camX = (hash3 (be.kickIdx, 1, 3) - 0.5f) * 0.035f * W * shakeAmt;
     float camY = (hash3 (be.kickIdx, 2, 5) - 0.5f) * 0.035f * H * shakeAmt;
+    if (hhAmt > 0)
+    {
+        camX += hhAmt * W * 0.012f * (float) (std::sin (T * 1.3) + 0.5 * std::sin (T * 3.1 + 1.0));
+        camY += hhAmt * H * 0.012f * (float) (std::sin (T * 1.1 + 2.0) + 0.5 * std::sin (T * 2.7));
+        camZoom *= 1.0f + hhAmt * 0.03f;   // cover the drift so no edges show
+    }
     float transGlitch = 0, transSplit = 0, transBlur = 0;
     // per-layer transition state, set just before drawLayer and reset after
     float trRot = 0, trStretch = 1, trShX = 0, trShY = 0, trMirror = 0, trAmt = 1, trPrism = 0, trLeak = 0;
@@ -556,7 +820,7 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
                 soon.push_back (&c);
         std::sort (soon.begin(), soon.end(), [] (const Clip* a, const Clip* b) { return a->start < b->start; });
         int rr = 0;
-        for (size_t i = 0; i < soon.size() && i < 3; ++i) frameFor (p, soon[i]->mediaId, soon[i]->srcAt (soon[i]->start), decodeH, rr, nullptr, true);
+        for (size_t i = 0; i < soon.size() && i < 3; ++i) frameFor (p, soon[i]->mediaId, soon[i]->srcAt (soon[i]->start), soon[i]->reverse ? std::min (decodeH, kProxyHeight) : decodeH, rr, nullptr, true, nullptr, soon[i]->reverse);
     }
     {
         // a full-frame opaque layer hides everything under it: skip decoding/drawing those (keeps deep stacks cheap)
@@ -565,13 +829,14 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
         {
             auto* m = p.findMedia (c.mediaId);
             if (m == nullptr || m->missing || m->kind == MediaKind::Audio || c.opacity < 1.0f) return false;
+            if (fxValue (c.fx, CPo, "opacity") < 1.0f || fxValue (c.fx, CPo, "lensCurve") != 0 || fxValue (c.fx, CPo, "xfRipple") > 0 || fxValue (c.fx, CPo, "xfWarble") > 0 || fxValue (c.fx, CPo, "xfTwist") != 0 || ! c.keys.empty()) return false;
             if (c.transIn != TransitionType::Cut && c.transLen > 0 && t < c.start + c.transLen) return false;
             auto v = [&] (const char* id) { return fxValue (c.fx, CPo, id); };
             int rf = (int) std::lround (v ("reframe"));
             return (rf == 0 || rf == 2) && v ("blend") < 0.5f && v ("chromaKey") <= 0 && v ("lumaKey") <= 0 && v ("maskShape") < 0.5f
                 && v ("scale") >= 1 && v ("scaleX") >= 1 && v ("scaleY") >= 1 && v ("posX") == 0 && v ("posY") == 0 && v ("rotation") == 0
                 && v ("cropL") <= 0 && v ("cropR") <= 0 && v ("cropT") <= 0 && v ("cropB") <= 0
-                && [&] { int rr = 0; bool op = false; return frameFor (p, c.mediaId, c.srcAt (t), decodeH, rr, &op) != nullptr && op; }();
+                && [&] { int rr = 0; bool op = false; return frameFor (p, c.mediaId, c.srcAt (t), c.reverse && live ? std::min (decodeH, kProxyHeight) : decodeH, rr, &op, false, nullptr, c.reverse) != nullptr && op; }();
         };
         for (int i = (int) active.size() - 1; i > 0; --i)
             if (covers (*active[(size_t) i])) { active.erase (active.begin(), active.begin() + i); break; }
@@ -580,15 +845,51 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
     auto drawLayer = [&] (const Clip& c, float alphaMul, float extraScale, float whip, int transKind, float prog)
     {
         int rot = 0;
-        const Frame* fr = frameFor (p, c.mediaId, c.srcAt (t), decodeH, rot);
+        const auto* md = p.findMedia (c.mediaId);
+        const bool slowMo = c.frameInterp > 0 && ! c.reverse && md != nullptr && md->kind == MediaKind::Video
+                            && (c.ramped() || (c.speed > 0.01 && c.speed < 0.99))
+                            && [&] {   // high-frame-rate sources (120/240fps) already have a real frame for every output frame
+                                   const double fr = juce::jmax (1.0, p.fps), dt = (double) kFlicks / fr;
+                                   const double sp = std::abs (c.srcPos ((Ticks) ((double) t + dt)) - c.srcPos (t)) / dt;
+                                   return md->fps * sp < fr * 0.98;
+                               }();
+        const Frame* fB = nullptr;
+        const float postT = fxValue (c.fx, clipParams(), "posterizeTime");
+        const Ticks tq = postT >= 1 ? c.start + (t - c.start) / (Ticks) (kFlicks / postT) * (Ticks) (kFlicks / postT) : t;
+        const double srcPosT = c.srcPos (tq);
+        const Frame* fr = c.text.isNotEmpty() ? textFrame (c, W, H) : frameFor (p, c.mediaId, (Ticks) std::llround (srcPosT), c.reverse && live ? std::min (decodeH, kProxyHeight) : decodeH, rot, nullptr, false, slowMo ? &fB : nullptr, c.reverse);
         if (fr == nullptr) return;
+        Frame tween;
+        if (fB != nullptr && fr->pts >= 0 && fB->pts > fr->pts && fB->w == fr->w && fB->h == fr->h)
+        {
+            const float f = (float) ((srcPosT - (double) fr->pts) / (double) (fB->pts - fr->pts));
+            if (f > 0.02f && f < 0.98f) { interpolateFrames (*fr, *fB, f, c.frameInterp == 2 && ! live, tween); fr = &tween; }
+        }
         const auto& CP = clipParams();
         auto cv = [&] (const char* id) { return fxValue (c.fx, CP, id); };
+        Frame styl;
+        if (const float bl = cv ("blur"), inv = cv ("invert"); bl > 0.001f || inv > 0.001f)
+        {
+            styl = *fr;
+            if (bl > 0.001f) blurFrame (styl, std::max (1, (int) std::lround (bl * 0.02f * styl.h)));
+            if (inv > 0.001f)
+            {
+                const int wi = (int) std::lround (juce::jlimit (0.0f, 1.0f, inv) * 256);
+                for (size_t i = 0; i < styl.rgba.size(); i += 4)
+                    for (int k = 0; k < 3; ++k) { auto& v = styl.rgba[i + (size_t) k]; v = (juce::uint8) ((v * (256 - wi) + (255 - v) * wi) >> 8); }
+            }
+            fr = &styl;
+        }
+        const float lens = cv ("lensCurve"), xRip = cv ("xfRipple"), xWar = cv ("xfWarble"), xTw = cv ("xfTwist");
+        const bool xform = xRip > 0 || xWar > 0 || xTw != 0;
         float rw = (float) (rot == 90 || rot == 270 ? fr->h : fr->w), rh = (float) (rot == 90 || rot == 270 ? fr->w : fr->h);
         int reframe = (int) std::lround (cv ("reframe"));
         float sFill = std::max (W / rw, H / rh), sFit = std::min (W / rw, H / rh);
         float base = reframe == 0 ? sFill : sFit;
-        float scale = base * cv ("scale") * camZoom * extraScale;
+        const double cp = c.length > 0 ? juce::jlimit (0.0, 1.0, (double) (t - c.start) / (double) c.length) : 0.0;
+        const float hh = cv ("handheld");
+        float scale = base * cv ("scale") * camZoom * extraScale * (1.0f + cv ("zoomIn") * 0.4f * (float) cp)
+                      * (1.0f + cv ("zoomOut") * 0.4f * (float) (1.0 - cp)) * (1.0f + hh * 0.03f);
         const float sclX = scale * cv ("scaleX"), sclY = scale * cv ("scaleY");
         const float cL = cv ("cropL"), cR = cv ("cropR"), cT = cv ("cropT"), cB = cv ("cropB");
         const bool cropped = cL > 0 || cR > 0 || cT > 0 || cB > 0;
@@ -597,6 +898,12 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
         bool mirror = cv ("mirror") > 0.5f;
         float offX = cv ("posX") * W * 0.5f + camX + (trDir < 2 ? whip * W : 0.0f) + trShX * W;
         float offY = cv ("posY") * H * 0.5f + camY + (trDir >= 2 ? whip * H : 0.0f) + trShY * H;
+        if (hh > 0)
+        {
+            const double ht = T + (double) (c.id.hashCode() & 255);
+            offX += hh * W * 0.012f * (float) (std::sin (ht * 1.3) + 0.5 * std::sin (ht * 3.1 + 1.0));
+            offY += hh * H * 0.012f * (float) (std::sin (ht * 1.1 + 2.0) + 0.5 * std::sin (ht * 2.7));
+        }
         float cExp = std::pow (2.0f, cv ("exposure")), cCon = cv ("contrast"), cSat = cv ("saturation");
         const float cBri = cv ("brightness"), cHi = cv ("highlights"), cSh = cv ("shadows"), cTemp = cv ("temperature"), cTint = cv ("tint");
         const ToneCurve cCurve = makeCurve (c.fx, CP);
@@ -606,7 +913,7 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
         int maskShape = (int) std::lround (cv ("maskShape"));
         float mW = std::max (0.01f, cv ("maskW")), mH = std::max (0.01f, cv ("maskH")), mF = cv ("maskFeather");
         bool mInv = cv ("maskInvert") > 0.5f;
-        float alpha0 = c.opacity * alphaMul;
+        float alpha0 = c.opacity * alphaMul * juce::jlimit (0.0f, 1.0f, cv ("opacity"));
         int taps = whip != 0 ? 6 : 1;
         float tapLen = (1 - prog) * W * 0.06f;
 
@@ -638,6 +945,26 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
                     float py = y + 0.5f - H * 0.5f - offY;
                     float ux = (px * cr - py * sr) / sclX / trStretch, uy = (px * sr + py * cr) / sclY;
                     if (mirror) ux = -ux;
+                    if (lens != 0)
+                    {
+                        const float nx = ux / (rw * 0.5f), ny = uy / (rh * 0.5f), k = 1.0f - lens * 0.5f * (nx * nx + ny * ny);
+                        ux *= k; uy *= k;
+                    }
+                    if (xform)
+                    {
+                        const float nx = ux / (rh * 0.5f), ny = uy / (rh * 0.5f), rr = std::sqrt (nx * nx + ny * ny);
+                        if (xTw != 0)
+                        {
+                            const float an = xTw * 2.5f * std::max (0.0f, 1.0f - rr * 0.8f), ca = std::cos (an), sa = std::sin (an);
+                            const float tx = ux * ca - uy * sa; uy = ux * sa + uy * ca; ux = tx;
+                        }
+                        if (xRip > 0) { const float d = 1.0f + std::sin (rr * 22.0f - (float) T * 7.0f) * xRip * 0.05f; ux *= d; uy *= d; }
+                        if (xWar > 0)
+                        {
+                            const float wx = std::sin (uy / rh * 28.0f + (float) T * 11.0f) * xWar * 0.02f * rw;
+                            uy += std::cos (ux / rw * 23.0f + (float) T * 9.0f) * xWar * 0.015f * rh; ux += wx;
+                        }
+                    }
                     if (trMirror > 0) { float f = trDir < 2 ? std::abs (ux) : ux; ux = mixf (ux, f, trMirror); if (trDir >= 2) uy = mixf (uy, std::abs (uy), trMirror); }
                     if (cropped)
                     {
@@ -724,6 +1051,7 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
                 }
                 if (transKind == (int) TransitionType::DipBlack) for (int q = 0; q < 3; ++q) col[q] *= prog;
                 if (transKind == (int) TransitionType::DipWhite) for (int q = 0; q < 3; ++q) col[q] = mixf (1, col[q], prog);
+                if (transKind == (int) TransitionType::BlackFlash) for (int q = 0; q < 3; ++q) col[q] *= 1.0f - std::min (1.0f, (1 - prog) * (1 - prog) * trAmt);
                 if (transKind == (int) TransitionType::Flash) for (int q = 0; q < 3; ++q) col[q] = mixf (col[q], 1, std::min (1.0f, (1 - prog) * (1 - prog) * trAmt));
                 float* d = &img[((size_t) y * W + x) * 3];
                 float r[3]; blendPixel (blend, d, col, r);
@@ -791,7 +1119,12 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
 
     // ---- warps: kaleidoscope + liquid
     float kal = sv ("kaleido"), liq = sv ("liquid");
-    if (kal > 0 || liq > 0)
+    float bfw = 0;   // Black Flash 2: ripple + warp punch riding the snare strobe
+    if (const float bf2 = sv ("blackFlash2"); bf2 > 0 && be.sinceSnare < 0.3)
+        bfw = bf2 * (0.3f + 1.4f * sv ("bf2Warp")) * (float) std::exp (-be.sinceSnare / 0.12);
+    const float sRip = sv ("xfRipple"), sWar = sv ("xfWarble"), sTw = sv ("xfTwist"), sLens = sv ("xfLens");
+    const bool sXf = sRip > 0 || sWar > 0 || sTw != 0 || sLens != 0;
+    if (kal > 0 || liq > 0 || bfw > 0.002f || sXf)
     {
         auto src = img;
         float spin = (float) T * 0.25f;
@@ -804,6 +1137,32 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
                     float k = liq * (1 + be.kick);
                     sx += std::sin ((float) y / H * 11 + (float) T * 2.1f) * k * 0.025f * W;
                     sy += std::cos ((float) x / W * 9 + (float) T * 1.7f) * k * 0.02f * H;
+                }
+                if (sXf)
+                {
+                    float dx = sx - W * 0.5f, dy = sy - H * 0.5f;
+                    const float rr = std::sqrt (dx * dx + dy * dy) / (minWH * 0.5f);
+                    if (sTw != 0)
+                    {
+                        const float an = sTw * 2.5f * std::max (0.0f, 1.0f - rr * 0.8f), ca = std::cos (an), sa = std::sin (an);
+                        const float tx = dx * ca - dy * sa; dy = dx * sa + dy * ca; dx = tx;
+                    }
+                    float k = 1.0f - sLens * 0.35f * std::max (0.0f, 1.0f - rr * rr * 0.5f);
+                    if (sRip > 0) k *= 1.0f + std::sin (rr * 22.0f - (float) T * 7.0f) * sRip * 0.05f;
+                    dx *= k; dy *= k;
+                    if (sWar > 0)
+                    {
+                        const float wx = std::sin (dy / H * 28.0f + (float) T * 11.0f) * sWar * 0.02f * W;
+                        dy += std::cos (dx / W * 23.0f + (float) T * 9.0f) * sWar * 0.015f * H; dx += wx;
+                    }
+                    sx = W * 0.5f + dx; sy = H * 0.5f + dy;
+                }
+                if (bfw > 0.002f)
+                {
+                    const float dx = sx - W * 0.5f, dy = sy - H * 0.5f, rr = std::sqrt (dx * dx + dy * dy) / minWH;
+                    const float k = 1.0f - bfw * 0.1f + std::sin (rr * 34.0f - (float) be.sinceSnare * 55.0f) * bfw * 0.035f
+                                    + bfw * 0.06f * rr * rr;
+                    sx = W * 0.5f + dx * k; sy = H * 0.5f + dy * k;
                 }
                 float out[3]; sampleBuf (src, W, H, sx, sy, out);
                 if (kal > 0)
@@ -868,9 +1227,50 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
         });
     }
 
+    // ---- CRT: RGB phosphor triads (staggered columns), gaps between cells, convergence offset, curved glass, glow
+    if (const float crt = sv ("crt"); crt > 0)
+    {
+        auto src = img;
+        const float cell = std::max (2.0f, minWH / 270.0f), conv = crt * W * 0.0015f, curve = crt * 0.08f;
+        parallelRows (H, [&] (int y) {
+            for (int x = 0; x < W; ++x)
+            {
+                float* o = &img[((size_t) y * W + x) * 3];
+                const float u = (x + 0.5f) / W * 2 - 1, v = (y + 0.5f) / H * 2 - 1, k = 1 + curve * (u * u + v * v);
+                const float sx = (u * k * 0.5f + 0.5f) * W - 0.5f, sy = (v * k * 0.5f + 0.5f) * H - 0.5f;
+                if (sx < 0 || sy < 0 || sx > W - 1 || sy > H - 1) { o[0] = o[1] = o[2] = 0; continue; }
+                const float* row = &src[(size_t) (int) sy * W * 3];
+                auto at = [&] (float xx, int c) {
+                    xx = juce::jlimit (0.0f, (float) W - 1.001f, xx); int x0 = (int) xx; float f = xx - x0;
+                    return mixf (row[x0 * 3 + c], row[std::min (W - 1, x0 + 1) * 3 + c], f);
+                };
+                const float cx = x / cell; const int col = (int) cx;
+                const float fy = (y + (col & 1) * cell * 1.5f) / (cell * 3.0f);
+                const float fxr = cx - col, fyr = fy - std::floor (fy);
+                const float gap = (std::abs (fxr - 0.5f) <= 0.4f && std::abs (fyr - 0.5f) <= 0.4f) ? 1.0f : 0.35f;
+                const float vig = 1.0f - crt * 0.35f * std::pow (std::max (std::abs (u), std::abs (v)), 6.0f);
+                const float c[3] { at (sx + conv, 0), at (sx, 1), at (sx - conv, 2) };
+                for (int q = 0; q < 3; ++q)
+                {
+                    const float glow = (at (sx - cell * 1.5f, q) + at (sx + cell * 1.5f, q)) * 0.5f;
+                    const float m = (col % 3 == q ? 1.0f : 0.25f) * gap * 2.6f;
+                    o[q] = (c[q] * mixf (1.0f, m, crt * 0.85f) + glow * 0.25f * crt) * vig;
+                }
+            }
+        });
+    }
+
     // ---- grade + LUT + acid color
     auto lut = lutFor (postFx.lutPath);
-    const float gExp = std::pow (2.0f, sv ("exposure")) * (1 - sv ("hatStrobe") * 0.35f * be.hat);
+    float shutter = 1.0f;
+    if (const float bf2 = sv ("blackFlash2"); bf2 > 0 && be.sinceSnare < 0.3)
+    {
+        const int fi = (int) (be.sinceSnare * (double) p.fps);
+        const float d = (float) std::exp (-be.sinceSnare / 0.12);
+        shutter = fi % 2 == 0 ? 1.0f - 0.92f * bf2 * d : 1.0f + 1.2f * bf2 * d;
+    }
+    shutter *= 1.0f - 0.95f * sv ("flashBlack") * be.kick;
+    const float gExp = std::pow (2.0f, sv ("exposure")) * (1 - sv ("hatStrobe") * 0.35f * be.hat) * shutter;
     const float temp = sv ("temperature"), tint = sv ("tint"), con = sv ("contrast"), sat = sv ("saturation");
     const float fade = sv ("fade"), splitT = sv ("splitTone"), crush = sv ("crush"), lutMix = sv ("lutMix");
     const float hueC = sv ("hueCycle"), post = sv ("posterize"), sol = sv ("solarize"), therm = sv ("thermal");
@@ -1008,7 +1408,7 @@ bool Renderer::render (const Project& p, const Sequence& s, Ticks t, int W, int 
     }
 
     // ---- generated overlays: light leaks, film burn on cuts, dust & scratches, snare flash
-    float leak = sv ("lightLeak"), burn = sv ("filmBurn"), dust = sv ("dust"), flash = sv ("snareFlash") * 0.75f * be.snareFast;
+    float leak = sv ("lightLeak"), burn = sv ("filmBurn"), dust = sv ("dust"), flash = sv ("snareFlash") * 0.75f * be.snareFast + sv ("flashWhite") * 0.9f * be.kick;
     float burnI = 0;
     if (burn > 0)
     {

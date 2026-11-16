@@ -10,6 +10,7 @@ struct ImportResult
     std::map<juce::String, Waveform> waves;
     std::map<juce::String, std::shared_ptr<const std::vector<float>>> stereo;
     std::map<juce::String, juce::String> proxies;
+    std::map<juce::String, std::vector<float>> moments;
     juce::String newSongId;
     SongAnalysis song;
     std::shared_ptr<std::vector<float>> songMono;
@@ -50,13 +51,14 @@ public:
     std::function<void (const juce::String&)> onTitle;
 private:
     void timerCallback() override;
+    int focusSweep = 0;
     void scrollBarMoved (juce::ScrollBar*, double) override;
     void refresh (bool inspectorToo);
     void seek (Ticks t);
     void togglePlay();
     void setTool (Tool t);
     void runTask (const juce::String& title, std::function<void (ProgressCb, std::function<bool()>)> work, std::function<void()> done);
-    void importFiles (const juce::Array<juce::File>&, std::function<void()> then = {});
+    void importFiles (const juce::Array<juce::File>&, std::function<void()> then = {}, bool allowSong = true);
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void filesDropped (const juce::StringArray& paths, int, int) override
     {
@@ -67,7 +69,9 @@ private:
     void placeSongClip();
     void setSong (const juce::String& id);
     void autoSync (const juce::String& onlyId = {});
-    void syncClips (const juce::StringArray& clipIds);   // each clip matched to the song by its own sound
+    void syncClips (const juce::StringArray& clipIds);
+    void sliceAtCuts (const juce::StringArray& clipIds);   // background cut detection -> splits at every edit inside the clip
+    void stabilizeClips (const juce::StringArray& clipIds, float smoothSec);   // background motion analysis -> position keyframes   // each clip matched to the song by its own sound
     void relink (const juce::String& id);
     void removeMedia (const juce::String& id);
     void loadMediaCaches();
@@ -112,7 +116,7 @@ private:
     juce::TextButton fileBtn { "File" }, saveBtn { "Save" }, importBtn { "Import" }, presetsBtn { "Presets" },
         pluginsBtn { "Plug-ins" }, playBtn { "Play" }, exportBtn { "EXPORT" },
         toolBtn[4] { juce::TextButton ("E Select"), juce::TextButton ("P Paint"), juce::TextButton ("D Delete"), juce::TextButton ("C Cut") },
-        snapBtn { "S Snap" }, rippleBtn { "R Ripple" }, magnetBtn { "Magnet" }, gridBtn { "B Grid" }, chopBtn { "CHOP" }, genBtn { "GENERATE 3 EDITS" },
+        snapBtn { "S Snap" }, rippleBtn { "R Ripple" }, magnetBtn { "Magnet" }, gridBtn { "B Grid" }, chopBtn { "CHOP" }, genBtn { "GENERATE 3 EDITS" }, randBtn { "RANDOMIZE" }, seqBtn { "SEQ" },
         keepBtn { "Keep range" }, delRangeBtn { "Delete range" }, zoomIn { "+" }, zoomOut { "-" };
     juce::ComboBox seqBox, aspectBox, snapBox, chopBox, styleBox;
     juce::Label status;
@@ -123,6 +127,9 @@ private:
     bool selfTest = false;
     bool showMedia = true, showInspector = true, maxPreview = false, maxTimeline = false;
     float timelineFrac = 0.38f;
+    std::shared_ptr<std::atomic<bool>> bgAlive = std::make_shared<std::atomic<bool>> (true);
+    void scoreMediaInBackground();
+    int leftW = 290; float fxFrac = 0.42f; int leftSplitX = -100, fxSplitY = -100; int dragPanel = 0;
     int splitY = 0; bool draggingSplit = false;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;
