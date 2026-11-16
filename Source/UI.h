@@ -462,6 +462,7 @@ juce::PopupMenu patchBayRouteMenu (Studio&, std::function<void (Project&, int in
 std::unique_ptr<juce::Component> createPatchBayView (Studio&);
 struct BayInfo { juce::String name; std::vector<int> chans; int insert = 0; std::vector<int> stacks; };
 std::vector<BayInfo> bayInfo (Studio&);   // the Patch Bays (loaded from settings), for LANE's BAY filter   // PATCH tab
+std::function<void()>& videoPopHook();                           // VID POP: pops the VIDEO window out (set while the VIDEO editor exists)
 std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
 inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll
 const juce::StringArray& languageNames();   // Options > Layout > Language
@@ -519,12 +520,12 @@ void applySavedLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
 {
-    inline const char* const defaultToolbar = "logo,beat,record,mix,patch,video,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,scope,theme,browser,save";
+    inline const char* const defaultToolbar = "logo,beat,record,mix,patch,video,song,start,play,stop,rec,bpm,pos,metro,count,retro,piano|cpu,rackpop,mixpop,vidpop,scope,theme,browser,save";
     inline const std::pair<const char*, const char*> toolbarItems[] {
         { "logo", "HumHouse logo" }, { "beat", "BEAT page" }, { "record", "RECORD page" }, { "mix", "MIX page" }, { "song", "PAT / SONG" },
         { "start", "Go to start" }, { "play", "Play" }, { "stop", "Stop" }, { "rec", "Record" }, { "bpm", "BPM" }, { "pos", "Position" },
         { "metro", "Metronome" }, { "count", "Count-in" }, { "retro", "RETRO" }, { "piano", "PIANO keys" }, { "cpu", "CPU meter" },
-        { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
+        { "rackpop", "Rack pop-out" }, { "mixpop", "Mixer pop-out" }, { "vidpop", "Video pop-out (VID POP)" }, { "scope", "Scope" }, { "theme", "Color" }, { "browser", "Browser" }, { "save", "Save" } };
     inline juce::String toolbar = defaultToolbar;
     inline bool browserRight = false, rackBelow = false, toolbarBottom = false, mixDock = false, hint = true;
     inline int browserW = 260, mixH = 260, toolbarH = 48, lanesH = 240;

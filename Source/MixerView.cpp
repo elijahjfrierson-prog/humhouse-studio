@@ -202,6 +202,7 @@ struct Strip : public juce::Component
             m.addItem (1, t.frozen ? "Unfreeze" : "Freeze (render to audio, frees CPU)", index != 0);
             m.addItem (2, "Rename...");
             m.addItem (3, "Export this insert as a stem...");
+            m.addItem (5, t.direct ? "Set to master: ON (click to turn off)" : "Set to master (no latency: straight to the master, FX stay on)", index != 0, t.direct);
             m.addSeparator();
             m.addItem (4, "Clear all FX");
             m.addSubMenu ("Presets", trackPresetMenu (s, index));
@@ -213,6 +214,11 @@ struct Strip : public juce::Component
                     else { s.engine.stop(); if (s.engine.freezeTrack (index)) s.commit ("Freeze"); }
                 }
                 else if (r == 2) name.showEditor();
+                else if (r == 5) s.edit ("Set to master", [this] (Project& p) {
+                    auto& mt = p.mixer[(size_t) index];
+                    mt.direct = ! mt.direct;
+                    if (mt.direct) { mt.sends.clear(); mt.routesToMaster = true; }   // only the master, so no bus can add delay
+                });
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
                 else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
                 else if (r >= 30 && r <= 42) { const auto c = pickedColour (r - 30); s.edit ("Insert color", [this, c] (Project& p) { p.mixer[(size_t) index].colour = c; }); }

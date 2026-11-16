@@ -1212,10 +1212,9 @@ private:
             const double len = secondsToBeats (secs, p.bpm), xfade = juce::jmin (16.0, len * 0.25);
             double end = 0.0;
             for (auto& c : p.clips) end = juce::jmax (end, c.start + c.length);
-            Lane l; l.name = f.getFileNameWithoutExtension(); l.mixerTrack = p.addMixerTrack (l.name);
-            p.lanes.push_back (l);
-            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1; c.length = len;
+            Clip c; c.uid = p.newUid(); c.audioFile = f; c.patternIndex = -1; c.length = len;
             c.start = atPlayhead ? play : juce::jmax (0.0, end - (end > 0 ? xfade : 0.0));
+            c.lane = p.pushLane (0, c.start, c.start + len, f.getFileNameWithoutExtension());   // Track 1 first, then down
             c.fadeIn = c.start > 0 ? xfade : 0.0; c.fadeOut = xfade;
             p.clips.push_back (c);
         });

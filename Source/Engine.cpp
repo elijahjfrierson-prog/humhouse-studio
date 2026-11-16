@@ -1107,6 +1107,11 @@ void Engine::prepareRuntimes()
     for (auto& [id, rt] : uiChannelRt) if (rt->inst) rt->signature = {};
 }
 
+int Engine::takeLatency() const
+{
+    return juce::jmax (0, recordLatency.load() + playbackDelay.load() + juce::roundToInt (recordOffsetMs.load() * 0.001 * sampleRate));
+}
+
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 {
     antForceRealtime();
@@ -1408,7 +1413,7 @@ bool Engine::retroRecord()
     // played along: line it up where it was heard (minus the device latency); stopped: put it at the playhead
     // (only when it was heard in one straight run: a take that crosses a loop jump or a stop goes at the playhead)
     const bool oneRun = endBeat >= 0.0 && total - len + a >= runFrom;
-    c.start = oneRun ? endBeat - (double) (len - a + recordLatency.load()) / spb : position.load();
+    c.start = oneRun ? endBeat - (double) (len - a + takeLatency()) / spb : position.load();
     if (c.start < 0.0) { c.sourceOffset = -c.start * 60.0 / proj.bpm; c.length += c.start; c.start = 0.0; }
     if (c.length < 0.05) { file.deleteFile(); return false; }
     {
@@ -1450,7 +1455,7 @@ void Engine::finishRecordingWriters()
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
             // latency compensation: what you sang at beat b reaches the file `lat` samples later
-            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) recordLatency.load());
+            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) t->latency);
             const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
             double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
@@ -2160,9 +2165,6 @@ void Engine::processTrack (int t)
             auto& f = *tr.fx[k];
             const float mix = juce::jlimit (0.0f, 1.0f, slot.mix);
             if (slot.bypass || mix <= 0.0f) { f.load = 0.0f; continue; }
-            if (llNow   // Low Latency Mode while a track is armed: every path to the master skips high-latency plug-ins, so nothing holds the monitored input back (never in exports / freeze)
-                && (f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0) > lowLatencyLimit.load (std::memory_order_relaxed))
-            { f.load = 0.0f; continue; }
             struct LoadMeter { std::atomic<float>& out; juce::int64 t0; double block;
                 ~LoadMeter() { const float v = (float) ((double) (juce::Time::getHighResolutionTicks() - t0) / block); out = std::max (v, out.load() * 0.95f); } }
                 meterLoad { f.load, juce::Time::getHighResolutionTicks(), juce::jmax (1.0, (double) n / sampleRate * (double) juce::Time::getHighResolutionTicksPerSecond()) };
@@ -2453,7 +2455,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 for (auto& tk : takes)
                     if (tk->lane == (int) l)
                     {
-                        if (! tk->started) { tk->started = true; tk->startBeat = ctx.beatPos; tk->passes[0] = { 0, ctx.beatPos }; tk->numPasses = 1; }
+                        if (! tk->started) { tk->started = true; tk->latency = takeLatency(); tk->startBeat = ctx.beatPos; tk->passes[0] = { 0, ctx.beatPos }; tk->numPasses = 1; }
                         const float* chans[2] { il, ir };
                         tk->writer->write (chans, n);
                         tk->samplesWritten += n;
@@ -2634,7 +2636,6 @@ void Engine::mixTracks (const float* const*, int, int)
     for (auto& ln : aproj.lanes)
         if (ln.armed && ln.mixerTrack > 0 && ln.mixerTrack < (int) trackRt.size() && trackRt[(size_t) ln.mixerTrack]) trackRt[(size_t) ln.mixerTrack]->live = true;
     const bool ll = lowLatency.load (std::memory_order_relaxed) && ! offline.load (std::memory_order_relaxed);   // exports / freeze keep every plug-in
-    const int llLim = lowLatencyLimit.load (std::memory_order_relaxed);
     llNow = ll && std::any_of (trackRt.begin(), trackRt.end(), [] (const auto& t) { return t && t->live; });
     for (auto& L : levels)
         for (int t : L)
@@ -2649,14 +2650,20 @@ void Engine::mixTracks (const float* const*, int, int)
                     if (mt.fx[k].bypass || mt.fx[k].mix <= 0.0f) continue;
                     auto& f = *tr.fx[k];
                     const int lat = f.builtin ? f.builtin->latencySamples() : f.plugin ? f.plugin->getLatencySamples() : 0;
-                    if (llNow && lat > llLim) continue;   // skipped in Low Latency Mode
                     own += lat;
                 }
             int in = 0;
-            for (auto& sg : sources[(size_t) t]) if (sg.first < (int) trackRt.size()) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
+            // Low Latency Mode: a monitored (armed) path joins unaligned, so its FX stay on but never hold the rest back
+            for (auto& sg : sources[(size_t) t])
+            {
+                if (sg.first >= (int) trackRt.size()) continue;
+                const bool direct = t == 0 && sg.first < (int) aproj.mixer.size() && aproj.mixer[(size_t) sg.first].direct && ! offline.load (std::memory_order_relaxed);
+                if (! (llNow && trackRt[(size_t) sg.first]->live) && ! direct) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
+            }
             tr.ownLatency = own; tr.inputAlign = std::min (in, kPdcSize - 1);
             tr.arrival = std::min (tr.inputAlign + std::max (0, own), kPdcSize - 1);
         }
+    playbackDelay.store (! trackRt.empty() && trackRt[0] ? trackRt[0]->arrival : 0, std::memory_order_relaxed);
     for (size_t lv = 0; lv < levels.size(); ++lv)
     {
         currentLevel = (int) lv;

@@ -60,6 +60,11 @@ set(HHS_DEFS
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
     HHS_LICENSE_URL="${HHS_LICENSE_URL}"
 )
+# macOS: paint each dirty area on its own through a Metal layer instead of repainting their whole union with CoreGraphics
+# (a scope in one corner + a playhead in another used to redraw the full window on the CPU every frame)
+if(APPLE AND NOT IOS)
+    list(APPEND HHS_DEFS JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1)
+endif()
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
 if(IOS)
     list(APPEND HHS_DEFS JUCE_PLUGINHOST_VST3=0)

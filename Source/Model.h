@@ -317,6 +317,7 @@ struct MixerTrack
     std::vector<Send> sends;       // master is implicit if sends empty and track != 0
     juce::Colour colour { 0xff2a2f36 };
     bool routesToMaster = true;
+    bool direct = false;           // Set to master: straight to the master, never waits for delay compensation (FL no-latency)
     // sidechain duck (one knob): dips this insert under the SC source track
     float duck = 0.0f;             // 0 = off .. 1 = full
     int   duckSource = -1;         // -1 = auto (first armed vocal track)
@@ -377,6 +378,7 @@ struct Project
     const Channel* findChannel (int id) const;
     int  addChannel (Channel c);       // returns id, creates mixer track if mixerTrack<0
     int  addMixerTrack (const juce::String& name);
+    int  pushLane (int from, double start, double end, const juce::String& name);   // PUSH: first track from `from` (Track 1 = 0) going down that's free over start..end; adds one if none
     double songLengthBeats() const;
     juce::File recordingsFolder() const;
 

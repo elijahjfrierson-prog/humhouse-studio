@@ -750,6 +750,7 @@ public:
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", false);
+        engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
         engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
         if (! studio.settings->containsKey ("themeColour") && (col::lightMode || col::fontColour.getAlpha() > 0)) applyTheme (col::accent, 0.5f, false);
@@ -881,6 +882,13 @@ public:
         themeBtn.onClick = [this] { showThemeDialog (studio); };
         setupButton (scopeBtn, "SCOPE", "Scope: oscilloscope, scrolling waveform and spectrum of the master (pops out, resizable)");
         scopeBtn.onClick = [this] { openScopeWindow (studio); };
+        setupButton (vidPopBtn, "VID POP", "VID POP: pop out the video so you see the picture while you record or add audio to it", false);
+        vidPopBtn.onClick = [this]
+        {
+            if (videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
+            if (videoPopHook()) videoPopHook()(); else setView (4);
+        };
+        addChildComponent (vidPopBtn);
         addAndMakeVisible (scopeBtn);
         setupButton (mixPopBtn, {}, "Mixer: pop it out into its own window so it stays visible on Beat and Rec (click again to dock it)", true); mixPopBtn.kind = 4;
         mixPopBtn.onClick = [this] { if (phoneUI) { phoneMixToggle(); return; } if ((popouts.count (mixer.get()) > 0) != mixPopBtn.getToggleState()) toggleDetach (mixer.get(), "Mixer"); mixPopBtn.setToggleState (popouts.count (mixer.get()) > 0, juce::dontSendNotification); };
@@ -1130,7 +1138,7 @@ if (phoneUI)
             { "logo", { nullptr, 150 } }, { "beat", { &beatTab, 84 } }, { "record", { &recordTab, 84 } }, { "mix", { &mixTab, 84 } }, { "patch", { &patchTab, 84 } }, { "video", { &videoTab, 84 } }, { "song", { &songBtn, 48 } },
             { "start", { &startBtn, 40 } }, { "play", { &playBtn, 40 } }, { "stop", { &stopBtn, 40 } }, { "rec", { &recBtn, 40 } }, { "bpm", { &bpm, 110 } },
             { "pos", { &posLabel, 110 } }, { "metro", { &metroBtn, 62 } }, { "count", { &countBtn, 80 } }, { "retro", { &retroBtn, 62 } }, { "piano", { &pianoBtn, 62 } },
-            { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "scope", { &scopeBtn, 64 } },
+            { "cpu", { &cpuLabel, 86 } }, { "rackpop", { &rackPopBtn, 52 } }, { "mixpop", { &mixPopBtn, 40 } }, { "vidpop", { &vidPopBtn, 70 } }, { "scope", { &scopeBtn, 64 } },
             { "theme", { &themeBtn, 64 } }, { "browser", { &browserBtn, 120 } }, { "save", { &saveBtn, 70 } } };
         auto find = [&tbItems] (const juce::String& id) -> const std::pair<juce::Component*, int>* { for (auto& it : tbItems) if (id == it.first) return &it.second; return nullptr; };
         for (auto& it : tbItems) if (it.second.first != nullptr) it.second.first->setVisible (false);
@@ -1142,6 +1150,7 @@ if (phoneUI)
             for (auto& id : juce::StringArray::fromTokens (halves[h], ",", ""))
                 if (auto* it = find (id); it != nullptr && placed.insert (id).second) (h == 0 ? leftItems : rightItems).push_back ({ it, id });
         if (placed.count ("mixpop") == 0) rightItems.insert (rightItems.begin(), { find ("mixpop"), "mixpop" });   // the Mixer pop-out never disappears
+        if (placed.count ("vidpop") == 0) rightItems.insert (rightItems.begin() + 1, { find ("vidpop"), "vidpop" });   // VID POP too (older saved layouts)
         auto place = [this] (const std::pair<juce::Component*, int>& it, juce::Rectangle<int> cell)
         {
             if (it.first == nullptr) logoArea = cell; else { it.first->setBounds (cell); it.first->setVisible (true); }
@@ -1531,7 +1540,17 @@ if (phoneUI)
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
-                pm.addItem (473, "Low Latency Mode (while a track is armed, plug-ins with over ~5 ms delay are skipped, like Logic)", true, engine.lowLatency.load());
+                pm.addItem (473, "Low Latency Mode (armed track goes straight to the master, FX stay on; takes still land on time)", true, engine.lowLatency.load());
+                {
+                    juce::PopupMenu om;
+                    om.addSectionHeader ("Takes land late? Pick a + value. Early? Pick a - value.");
+                    for (int i = 0; i < 9; ++i)
+                    {
+                        const float v = Engine::recordOffsetChoices[i];
+                        om.addItem (490 + i, v == 0.0f ? juce::String ("0 ms (driver latency only)") : (v > 0 ? "+" : "") + juce::String ((int) v) + " ms", true, std::abs (engine.recordOffsetMs.load() - v) < 0.01f);
+                    }
+                    pm.addSubMenu ("Recording offset (" + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms)", om);
+                }
                 pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
@@ -1602,13 +1621,20 @@ if (phoneUI)
             flash (engine.pluginSandbox.load() ? "Crash protection on for plug-ins loaded from now" : "Plug-ins load directly (fastest) from now");
             return;
         }
+        if (id >= 490 && id <= 498)
+        {
+            engine.recordOffsetMs = Engine::recordOffsetChoices[id - 490];
+            studio.settings->setValue ("recordOffsetMs", (double) engine.recordOffsetMs.load());
+            flash ("Recording offset " + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms: new takes move by this much");
+            return;
+        }
         if (id == 473 || id == 474)
         {
             auto& flag = id == 473 ? engine.lowLatency : engine.ramCache;
             flag = ! flag.load();
             studio.settings->setValue (id == 473 ? "lowLatency" : "ramCache", flag.load());
             if (id == 474) engine.sync();
-            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: while a track is armed, long-delay plug-ins are skipped" : "Low Latency Mode off")
+            flash (id == 473 ? (flag.load() ? "Low Latency Mode on: the armed track skips delay compensation, FX stay on" : "Low Latency Mode off")
                              : (flag.load() ? "RAM disk cache on: clips play from memory" : "RAM disk cache off: clips stream from disk"));
             return;
         }
@@ -1795,7 +1821,7 @@ private:
         void handleNoteOff (juce::MidiKeyboardState*, int, int note, float) override { m.liveNote (note, 0.0f, false); }
         MainComponent& m;
     } kbListen { *this };
-    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, saveBtn;
+    juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
     int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {

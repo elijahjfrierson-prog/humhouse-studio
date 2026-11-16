@@ -506,3 +506,19 @@ int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double
     return rolled;
 }
 }
+
+namespace hhs
+{
+int Project::pushLane (int from, double start, double end, const juce::String& name)
+{
+    for (int i = juce::jmax (0, from); i < (int) lanes.size(); ++i)
+    {
+        if (lanes[(size_t) i].compLane >= 0) continue;
+        const bool busy = std::any_of (clips.begin(), clips.end(), [&] (const Clip& c) { return c.lane == i && c.start < end && c.start + c.length > start; });
+        if (! busy) return i;
+    }
+    Lane l; l.name = name; l.mixerTrack = addMixerTrack (name);
+    lanes.push_back (l);
+    return (int) lanes.size() - 1;
+}
+}

@@ -35,12 +35,13 @@ public:
         info.setMinimumHorizontalScale (0.5f);
         info.setText ("Import a song and takes, AUTO SYNC, GENERATE 3 EDITS - FOLLOW keeps it locked to the playhead", juce::dontSendNotification);
         pop.onClick = [this] { popped() ? dock() : popOut(); };
+        videoPopHook() = [this] { if (! popped()) popOut(); else if (win != nullptr) win->toFront (true); };
         toRecord.onClick = [this] { songToRecord(); };
         toMixer.setTooltip ("Every VIDEO track with sound becomes its own Record clip, routed to a new mixer insert or the insert number you pick");
         toMixer.onClick = [this] { tracksMenu(); };
         startTimerHz (30);
     }
-    ~EditorView() override { stopTimer(); setLookAndFeel (nullptr); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
+    ~EditorView() override { videoPopHook() = nullptr; stopTimer(); setLookAndFeel (nullptr); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
     void paint (juce::Graphics& g) override
     {
         g.fillAll (isfx::theme::bg);
@@ -92,9 +93,9 @@ private:
         if (rd == nullptr || rd->sampleRate <= 0) { info.setText ("Can't read that song's audio here; drag the WAV onto the Record timeline", juce::dontSendNotification); return; }
         const double secs = (double) rd->lengthInSamples / rd->sampleRate;
         s.edit ("Video song to Record", [&] (Project& p) {
-            Lane l; l.name = f.getFileNameWithoutExtension() + " (video)"; l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
-            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1;
+            Clip c; c.uid = p.newUid(); c.audioFile = f; c.patternIndex = -1;
             c.start = 0.0; c.length = secondsToBeats (secs, p.bpm);
+            c.lane = p.pushLane (0, c.start, c.start + c.length, f.getFileNameWithoutExtension() + " (video)");
             p.clips.push_back (c);
         });
         info.setText ("Song is on the Record timeline - edit it there, the video follows the playhead", juce::dontSendNotification);
@@ -115,14 +116,20 @@ private:
         const auto cl = ed->renderClips (dir, selectedOnly);
         if (cl.empty()) { info.setText (selectedOnly ? "None of the selected clips has sound" : "No VIDEO clip has sound yet - import audio or video with sound first", juce::dontSendNotification); return; }
         s.edit (selectedOnly ? "PUSH clips to REC" : "PUSH sequence to REC", [&] (Project& p) {
-            std::map<int, int> laneOf;
+            // video tracks V1, V2... land on Track 1, 2... going down (the first tracks free over their time)
+            std::map<int, std::pair<double, double>> span;
             for (auto& c : cl)
             {
-                if (! laneOf.count (c.track))
-                {
-                    Lane l; l.name = "VIDEO V" + juce::String (c.track + 1); l.mixerTrack = p.addMixerTrack (l.name);
-                    p.lanes.push_back (l); laneOf[c.track] = (int) p.lanes.size() - 1;
-                }
+                const double a = secondsToBeats (c.start, p.bpm), b = a + secondsToBeats (c.seconds, p.bpm);
+                auto it = span.find (c.track);
+                if (it == span.end()) span[c.track] = { a, b };
+                else it->second = { juce::jmin (it->second.first, a), juce::jmax (it->second.second, b) };
+            }
+            std::map<int, int> laneOf;
+            int next = 0;
+            for (auto& [trk, ab] : span) { laneOf[trk] = p.pushLane (next, ab.first, ab.second, "VIDEO V" + juce::String (trk + 1)); next = laneOf[trk] + 1; }
+            for (auto& c : cl)
+            {
                 Clip k; k.uid = p.newUid(); k.lane = laneOf[c.track]; k.audioFile = c.file; k.patternIndex = -1;
                 k.start = secondsToBeats (c.start, p.bpm); k.length = secondsToBeats (c.seconds, p.bpm);
                 p.clips.push_back (k);
@@ -264,9 +271,9 @@ private:
         const double secs = (double) rd->lengthInSamples / rd->sampleRate, at = juce::jmax (0.0, offset.getValue());
         const auto f = file;
         s.edit ("Video audio to Record", [&] (Project& p) {
-            Lane l; l.name = f.getFileNameWithoutExtension() + " (video)"; l.mixerTrack = p.addMixerTrack (l.name); p.lanes.push_back (l);
-            Clip c; c.uid = p.newUid(); c.lane = (int) p.lanes.size() - 1; c.audioFile = f; c.patternIndex = -1;
+            Clip c; c.uid = p.newUid(); c.audioFile = f; c.patternIndex = -1;
             c.start = secondsToBeats (at, p.bpm); c.length = secondsToBeats (secs, p.bpm);
+            c.lane = p.pushLane (0, c.start, c.start + c.length, f.getFileNameWithoutExtension() + " (video)");
             p.clips.push_back (c);
         });
         info.setText ("Video audio is on the Record timeline", juce::dontSendNotification);
@@ -307,3 +314,8 @@ private:
 std::unique_ptr<juce::Component> createVideoView (Studio& s) { return std::make_unique<VideoView> (s); }
 }
 #endif
+
+namespace hhs
+{
+std::function<void()>& videoPopHook() { static std::function<void()> hook; return hook; }
+}

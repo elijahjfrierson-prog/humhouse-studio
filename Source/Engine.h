@@ -64,8 +64,7 @@ public:
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
-    std::atomic<bool> lowLatency { false };      // Logic-style Low Latency Mode: armed tracks skip plug-ins with more delay than lowLatencyLimit
-    std::atomic<int> lowLatencyLimit { 256 };    // samples (about 5 ms)
+    std::atomic<bool> lowLatency { false };      // Low Latency Mode: armed tracks go straight to the master (no delay-compensation wait), FX stay on
     std::atomic<bool> ramCache { true };         // Pro Tools-style disk cache: clips play from RAM (up to the budget) instead of streaming
     float trackLoad (int track) const;           // share of the audio block this insert used (0..1)
     std::vector<float> coreLoads();              // busy share per processing thread since the last call; last = audio / render thread
@@ -95,6 +94,10 @@ public:
     std::atomic<float> blockLoadFrac { 0.3f };   // recent peak share of the block deadline the audio callback used
     std::atomic<float> swapUsLast { 0 }, swapUsMax { 0 };   // how long the last / longest edit held the audio lock (microseconds)   // Options > Dual outputs: the master plays on 1-2 AND 3-4, the very same samples (no phasing)
     void setDualOutput (bool on);
+    std::atomic<float> recordOffsetMs { 0.0f };   // user nudge for drivers that report the wrong latency (older laptops): + moves takes earlier
+    static constexpr float recordOffsetChoices[9] { -30.0f, -20.0f, -10.0f, -5.0f, 0.0f, 5.0f, 10.0f, 20.0f, 30.0f };
+    std::atomic<int> playbackDelay { 0 };          // samples the master is held back by delay compensation right now (what you hear is this late)
+    int takeLatency() const;                       // device in+out + playbackDelay + recordOffsetMs: how late a take lands in the file
     std::atomic<int> recordLatency { 0 };   // device in+out latency (samples): new takes move earlier by this so they sit on time
     std::atomic<int> duckAutoSrc { -1 };   // vocal insert the one-knob duck follows when no SC source is set
     std::atomic<float> masterPeakL { 0 }, masterPeakR { 0 };
@@ -273,7 +276,7 @@ private:
     {
         int lane = 0; juce::File file; double startBeat = 0;
         std::unique_ptr<juce::AudioFormatWriter::ThreadedWriter> writer;
-        bool started = false, surprise = false;   // surprise: armed + playing with record off (kept as a hidden take)
+        bool started = false, surprise = false; int latency = 0;   // latency: fixed when the take starts, so the clip never moves after stop   // surprise: armed + playing with record off (kept as a hidden take)
         juce::int64 samplesWritten = 0;
         std::array<std::pair<juce::int64, double>, 256> passes {}; int numPasses = 0; // loop-record pass boundaries
         std::array<float, 32768> peaks {}; std::atomic<int> numPeaks { 0 }; float peakAcc = 0; int peakN = 0;   // live waveform

@@ -5,7 +5,7 @@ namespace hhs
 namespace
 {
 // Ableton-style scope: oscilloscope, scrolling waveform history, spectrum analyzer
-class ScopeView : public juce::Component, private juce::Timer
+class ScopeView : public juce::Component
 {
 public:
     ScopeView (std::function<ScopeTap*()> src, juce::String t) : source (std::move (src)), title (std::move (t))
@@ -26,7 +26,6 @@ public:
         addAndMakeVisible (freezeBtn);
         setSize (760, 380);
         setOpaque (true);   // fills its own background: repaints never redraw what's underneath
-        startTimerHz (phoneUI ? 30 : 60);  // smooth motion; the FFT only runs on the Spectrum tab
     }
     void resized() override
     {
@@ -68,7 +67,9 @@ private:
     std::vector<float> fftBuf = std::vector<float> ((size_t) (2 * fftSize), 0.0f);
     std::vector<float> spec = std::vector<float> ((size_t) (fftSize / 2), -100.0f);
 
-    void timerCallback() override
+    // drawn on the screen's own refresh (not a timer that beats against it), so motion never stutters
+    juce::VBlankAttachment vblank { this, [this] { timerCallback(); } };
+    void timerCallback()
     {
         if (freezeBtn.getToggleState() || ! isShowing()) return;
         auto* tap = source ? source() : nullptr;

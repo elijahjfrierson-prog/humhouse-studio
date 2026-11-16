@@ -11,7 +11,7 @@ It is a study of architecture, not of their code: none of their code or binaries
 | Multicore | One thread per track/bus graph node ("Processing threads"), per-core meter | Multithreaded mixer; per-insert "Multithreaded processing", generators split by voice | Graph split by **track chain**; one chain = one core | Native: per-track across cores; Dynamic Plug-in Processing skips silent plug-ins | WorkerPool: independent tracks in parallel, buses after their sources |
 | Silent plug-ins | Sleeps instruments with no notes after a tail | Smart disable (manual or auto) | Devices keep running | **Dynamic Plug-in Processing**: idle plug-ins cost 0 | Skips plug-ins that output pure silence; idle UI costs nothing |
 | Freeze / bounce | Freeze (pre-fader or source only) | Consolidate / render to audio clip | Freeze + Flatten | Track Freeze, Commit, Bounce | Pre-render (anticipative); **gap: no one-click Freeze of a track** |
-| Latency (PDC) | Full PDC; "Low Latency Mode" bypasses big-latency plug-ins on the live track | PDC per insert, manual offsets | Full PDC, "Reduced latency when monitoring" | Full ADC up to the engine limit; low-latency monitoring | Full PDC + 64-bit bus sum; **gap: no Low Latency Mode toggle** |
+| Latency (PDC) | Full PDC; "Low Latency Mode" bypasses big-latency plug-ins on the live track (ours keeps them: armed path skips PDC, takes offset) | PDC per insert, manual offsets | Full PDC, "Reduced latency when monitoring" | Full ADC up to the engine limit; low-latency monitoring | Full PDC + 64-bit bus sum; **gap: no Low Latency Mode toggle** |
 | Automation | Sample accurate, curve per segment, 0-127 or dB readouts | Event / envelope clips with tension curves | Breakpoints + curved segments (Alt-drag) | Sample accurate, trims, latch/touch/write | Sample accurate; **now** Bezier curve per segment + 0-127 readouts |
 | Plug-in crash | Audio Unit hosting in separate processes (AUHostingService) | Bridged / sandboxed plug-ins optional | Plug-ins in process | AAX in process | Out-of-process isolation available + risky-call guard |
 | Overload behaviour | "System overload" alert, stops | Underruns counted, keeps playing | CPU meter, keeps playing (clicks) | Error -6101 / -9128 stops | Keeps playing, counts dropouts, grows render-ahead |
@@ -25,7 +25,7 @@ It is a study of architecture, not of their code: none of their code or binaries
 
 ## Gaps closed (this build)
 1. **Track Freeze**: one click in the Mixer (FREEZE button / insert menu) renders the insert to audio and switches its plug-ins off.
-2. **Low Latency Mode** (Options > Performance): while a track is armed, plug-ins with more than ~5 ms delay are skipped on every path, so nothing delays what you hear (Logic). Exports and Freeze keep them all.
+2. **Low Latency Mode** (Options > Performance): the armed track goes straight to the master without waiting for delay compensation, and every plug-in stays on. Takes are placed with device latency + delay compensation + the user's Recording offset (ms), fixed when the take starts, so a clip never jumps back after stop (FL's drift).
 3. **Per-track / per-thread CPU**: each Mixer strip shows its insert's CPU %; the CPU tooltip lists every processing thread and the heaviest inserts.
 4. **Voice-level multithreading**: every instrument already runs on its own core, heaviest first. Splitting one instrument's voices across cores is still open.
 5. **RAM disk cache** (Options > Performance, on by default on desktop): clips up to 1.5 GB total play from memory instead of streaming (Pro Tools Disk Cache).
