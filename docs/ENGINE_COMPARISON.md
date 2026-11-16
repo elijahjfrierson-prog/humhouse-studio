@@ -31,8 +31,8 @@ It is a study of architecture, not of their code: none of their code or binaries
 5. **RAM disk cache** (Options > Performance, on by default on desktop): clips up to 1.5 GB total play from memory instead of streaming (Pro Tools Disk Cache).
 6. **Armed tracks first**: in every mix level the live tracks are scheduled first, so the audio thread itself picks them up (Hybrid Engine idea in software).
 
-## Stress test plan (40+ VST3 + built-ins incl. Amplitude)
-- Session: 40 audio tracks with 1 VST3 each + 10 instrument tracks + 6 buses, AmpliTube / Waves on 10 tracks, HumHouse Amplitude on 4.
+## Stress test plan (40+ VST3 + built-ins incl. Amp House)
+- Session: 40 audio tracks with 1 VST3 each + 10 instrument tracks + 6 buses, AmpliTube / Waves on 10 tracks, Amp House on 4.
 - Log per run: callback load (`blockLoadFrac`), dropout count, render-ahead size, UI frame time per component, edit-lock time (`swapUsMax`).
 - Pass = 0 dropouts at 128 samples with one armed track, UI frame under 16 ms on click.
 - The UI-jump-on-click investigation (AmpliTube / Waves) uses the same log: a jump that matches a long `swapUsMax` is the edit lock; one that matches a long frame is painting.

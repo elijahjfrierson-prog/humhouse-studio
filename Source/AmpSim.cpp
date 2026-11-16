@@ -1,4 +1,4 @@
-// HumHouse Amplitude: guitar/bass amp rig, own DSP (desktop only; phone stays light on CPU).
+// Amp House: guitar/bass amp rig, own DSP (desktop only; phone stays light on CPU).
 // Chain: stomp pedals -> preamp (triode stages) -> component-value tone stack (Yeh/Smith TMB) -> power amp (sag, bias,
 // presence) -> cabinet + mic (position across the cone, distance, angle) -> room -> post FX -> output. Nonlinear parts run 4x oversampled.
 #include "Effects.h"
@@ -13,21 +13,21 @@ namespace amp
 struct Model { const char* name; float R1, R2, R3, R4, C1, C2, C3; int stages; float maxGainDb, bright, asym; int cab, mic, power; };
 // tone-stack parts follow the classic amp families (250k/1M/25k/56k Fender, 220k/1M/22k/33k Brit ...)
 static const Model models[] {
-    { "Velvet Deluxe",   250e3f, 1e6f, 10e3f, 100e3f, 250e-12f, 100e-9f, 47e-9f, 2, 32, 0.6f, 0.10f, 0, 0, 0 },
-    { "Brit 800",        220e3f, 1e6f, 22e3f,  33e3f, 470e-12f,  22e-9f, 22e-9f, 3, 46, 0.5f, 0.25f, 3, 0, 2 },
-    { "Rogue 51",        250e3f, 1e6f, 25e3f,  47e3f, 250e-12f,  22e-9f, 22e-9f, 5, 62, 0.4f, 0.35f, 2, 0, 1 },
-    { "Treadplate Dual", 250e3f, 1e6f, 25e3f,  47e3f, 500e-12f,  22e-9f, 22e-9f, 5, 64, 0.3f, 0.30f, 2, 0, 1 },
-    { "Citrus 50",       220e3f, 1e6f, 22e3f,  39e3f, 470e-12f,  22e-9f, 22e-9f, 4, 52, 0.3f, 0.30f, 3, 1, 2 },
-    { "Crown 30",        1e6f,   1e6f, 10e3f, 100e3f,  50e-12f,  22e-9f, 22e-9f, 2, 38, 0.9f, 0.15f, 1, 4, 3 },
-    { "Solo Hundred",    250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  20e-9f, 20e-9f, 5, 60, 0.5f, 0.30f, 3, 0, 2 },
-    { "Blackforest VH",  250e3f, 1e6f, 25e3f,  47e3f, 330e-12f,  22e-9f, 22e-9f, 5, 64, 0.4f, 0.30f, 2, 0, 1 },
-    { "Uberhaus",        250e3f, 1e6f, 25e3f,  56e3f, 470e-12f,  22e-9f, 22e-9f, 5, 62, 0.4f, 0.32f, 2, 1, 2 },
-    { "Twin Silver",     250e3f, 1e6f, 10e3f, 100e3f, 250e-12f, 100e-9f, 47e-9f, 2, 28, 0.7f, 0.08f, 1, 0, 0 },
-    { "Rando 100",       250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  22e-9f, 22e-9f, 4, 58, 0.3f, 0.20f, 2, 0, 1 },
-    { "Powerline",       250e3f, 1e6f, 25e3f,  47e3f, 330e-12f,  22e-9f, 22e-9f, 5, 62, 0.5f, 0.28f, 2, 0, 1 },
-    { "Low Ton 810",     250e3f, 1e6f, 25e3f,  56e3f, 250e-12f,  47e-9f, 47e-9f, 2, 34, 0.3f, 0.12f, 4, 5, 1 },
-    { "Tweed Empress",   250e3f, 1e6f, 25e3f,  56e3f, 250e-12f,  20e-9f, 20e-9f, 3, 40, 0.5f, 0.15f, 5, 1, 0 },
-    { "Five Tre",        250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  22e-9f, 22e-9f, 5, 64, 0.4f, 0.34f, 2, 0, 1 } };
+    { "FDR DLX",   250e3f, 1e6f, 10e3f, 100e3f, 250e-12f, 100e-9f, 47e-9f, 2, 32, 0.6f, 0.10f, 0, 0, 0 },
+    { "MSHL 800",        220e3f, 1e6f, 22e3f,  33e3f, 470e-12f,  22e-9f, 22e-9f, 3, 46, 0.5f, 0.25f, 3, 0, 2 },
+    { "PVY 5150",        250e3f, 1e6f, 25e3f,  47e3f, 250e-12f,  22e-9f, 22e-9f, 5, 62, 0.4f, 0.35f, 2, 0, 1 },
+    { "MSA REC", 250e3f, 1e6f, 25e3f,  47e3f, 500e-12f,  22e-9f, 22e-9f, 5, 64, 0.3f, 0.30f, 2, 0, 1 },
+    { "ORNG 50",       220e3f, 1e6f, 22e3f,  39e3f, 470e-12f,  22e-9f, 22e-9f, 4, 52, 0.3f, 0.30f, 3, 1, 2 },
+    { "VX 30",        1e6f,   1e6f, 10e3f, 100e3f,  50e-12f,  22e-9f, 22e-9f, 2, 38, 0.9f, 0.15f, 1, 4, 3 },
+    { "SLDN 100",    250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  20e-9f, 20e-9f, 5, 60, 0.5f, 0.30f, 3, 0, 2 },
+    { "DZL HRB",  250e3f, 1e6f, 25e3f,  47e3f, 330e-12f,  22e-9f, 22e-9f, 5, 64, 0.4f, 0.30f, 2, 0, 1 },
+    { "BGNR UBR",        250e3f, 1e6f, 25e3f,  56e3f, 470e-12f,  22e-9f, 22e-9f, 5, 62, 0.4f, 0.32f, 2, 1, 2 },
+    { "FDR TWN",     250e3f, 1e6f, 10e3f, 100e3f, 250e-12f, 100e-9f, 47e-9f, 2, 28, 0.7f, 0.08f, 1, 0, 0 },
+    { "RNDL 100",       250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  22e-9f, 22e-9f, 4, 58, 0.3f, 0.20f, 2, 0, 1 },
+    { "ENGL PWR",       250e3f, 1e6f, 25e3f,  47e3f, 330e-12f,  22e-9f, 22e-9f, 5, 62, 0.5f, 0.28f, 2, 0, 1 },
+    { "AMPG SVT",     250e3f, 1e6f, 25e3f,  56e3f, 250e-12f,  47e-9f, 47e-9f, 2, 34, 0.3f, 0.12f, 4, 5, 1 },
+    { "TK IMP",   250e3f, 1e6f, 25e3f,  56e3f, 250e-12f,  20e-9f, 20e-9f, 3, 40, 0.5f, 0.15f, 5, 1, 0 },
+    { "PVY 5150-III",        250e3f, 1e6f, 25e3f,  47e3f, 470e-12f,  22e-9f, 22e-9f, 5, 64, 0.4f, 0.34f, 2, 0, 1 } };
 constexpr int numModels = (int) (sizeof (models) / sizeof (models[0]));
 
 // cabinet: low cut, low resonance, presence peak, cone breakup, high roll-off
