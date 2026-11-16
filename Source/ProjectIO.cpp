@@ -1,6 +1,7 @@
 #include "ProjectIO.h"
 #include <map>
 #include <set>
+#include <cstring>
 #include "Drummer/DrummerCore.h"
 
 namespace hhs
@@ -21,6 +22,121 @@ struct IOBaseScope
 
 // audio glued inside the .hhs (one-shots, samples, takes): path when saved -> base64 data. Used only if the file isn't found
 static thread_local const std::map<juce::String, juce::String>* gluedIn = nullptr;
+// Glued WAV audio is stored as FLAC (lossless) plus the WAV's own header/trailer bytes, so it unpacks byte-for-byte
+// identical at about half the size. Anything else (mp3, float WAV, odd chunks) stays raw.
+static constexpr const char* flacTag = "FLAC1:";
+struct WavLayout { int ch = 0, bits = 0; double rate = 0; size_t dataAt = 0, dataLen = 0; };
+static bool parseWav (const juce::MemoryBlock& mb, WavLayout& w)
+{
+    auto* d = static_cast<const juce::uint8*> (mb.getData());
+    const size_t n = mb.getSize();
+    if (n < 44 || std::memcmp (d, "RIFF", 4) != 0 || std::memcmp (d + 8, "WAVE", 4) != 0) return false;
+    bool fmt = false;
+    for (size_t at = 12; at + 8 <= n;)
+    {
+        const auto len = (size_t) juce::ByteOrder::littleEndianInt (d + at + 4);
+        if (std::memcmp (d + at, "fmt ", 4) == 0 && len >= 16 && at + 8 + 16 <= n)
+        {
+            const int tag = juce::ByteOrder::littleEndianShort (d + at + 8);
+            w.ch = juce::ByteOrder::littleEndianShort (d + at + 10);
+            w.rate = (double) juce::ByteOrder::littleEndianInt (d + at + 12);
+            w.bits = juce::ByteOrder::littleEndianShort (d + at + 22);
+            fmt = (tag == 1 || tag == (int) 0xfffe) && w.ch >= 1 && w.ch <= 8 && (w.bits == 16 || w.bits == 24) && w.rate >= 8000;
+        }
+        else if (std::memcmp (d + at, "data", 4) == 0)
+        {
+            if (! fmt || at + 8 + len > n) return false;
+            w.dataAt = at + 8; w.dataLen = len;
+            return len % (size_t) (w.ch * w.bits / 8) == 0 && len > 0;
+        }
+        at += 8 + len + (len & 1);
+    }
+    return false;
+}
+static bool flacDecode (const void* flac, size_t size, const WavLayout& w, juce::MemoryOutputStream& pcm)
+{
+    juce::FlacAudioFormat fmt;
+    std::unique_ptr<juce::AudioFormatReader> r (fmt.createReaderFor (new juce::MemoryInputStream (flac, size, false), true));
+    if (! r || (int) r->numChannels != w.ch) return false;
+    const int bps = w.bits / 8, frames = (int) (w.dataLen / (size_t) (w.ch * bps));
+    if (r->lengthInSamples != frames) return false;
+    std::vector<std::vector<int>> buf ((size_t) w.ch, std::vector<int> (8192));
+    std::vector<int*> ptr; for (auto& b : buf) ptr.push_back (b.data()); ptr.push_back (nullptr);
+    for (int at = 0; at < frames;)
+    {
+        const int num = juce::jmin (8192, frames - at);
+        if (! r->read (ptr.data(), w.ch, at, num, false)) return false;
+        for (int i = 0; i < num; ++i)
+            for (int c = 0; c < w.ch; ++c)
+            {
+                const auto v = (juce::uint32) buf[(size_t) c][(size_t) i];   // left-justified 32-bit
+                if (bps == 3) pcm.writeByte ((char) (v >> 8));
+                pcm.writeByte ((char) (v >> 16)); pcm.writeByte ((char) (v >> 24));
+            }
+        at += num;
+    }
+    return true;
+}
+static juce::String packGlued (const juce::MemoryBlock& mb)
+{
+    WavLayout w;
+    if (parseWav (mb, w))
+    {
+        auto* d = static_cast<const juce::uint8*> (mb.getData());
+        const int bps = w.bits / 8, frames = (int) (w.dataLen / (size_t) (w.ch * bps));
+        std::vector<std::vector<int>> chans ((size_t) w.ch, std::vector<int> ((size_t) frames));
+        for (int i = 0; i < frames; ++i)
+            for (int c = 0; c < w.ch; ++c)
+            {
+                const auto* s = d + w.dataAt + ((size_t) i * (size_t) w.ch + (size_t) c) * (size_t) bps;
+                const juce::uint32 v = bps == 3 ? ((juce::uint32) s[0] << 8) | ((juce::uint32) s[1] << 16) | ((juce::uint32) s[2] << 24)
+                                                : ((juce::uint32) s[0] << 16) | ((juce::uint32) s[1] << 24);
+                chans[(size_t) c][(size_t) i] = (int) v;
+            }
+        juce::MemoryBlock flac;
+        bool ok = false;
+        {
+            juce::FlacAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> wr (fmt.createWriterFor (new juce::MemoryOutputStream (flac, false), w.rate, (unsigned) w.ch, w.bits, {}, 5));
+            if (wr)
+            {
+                std::vector<const int*> ptr; for (auto& c : chans) ptr.push_back (c.data()); ptr.push_back (nullptr);
+                ok = wr->write (ptr.data(), frames);
+            }
+        }
+        juce::MemoryOutputStream pcm;
+        if (ok && flac.getSize() < w.dataLen && flacDecode (flac.getData(), flac.getSize(), w, pcm)
+            && pcm.getDataSize() == w.dataLen && std::memcmp (pcm.getData(), d + w.dataAt, w.dataLen) == 0)   // proven lossless
+        {
+            juce::MemoryOutputStream bin;
+            bin.writeInt ((int) w.dataAt); bin.write (d, w.dataAt);
+            const auto tail = mb.getSize() - w.dataAt - w.dataLen;
+            bin.writeInt ((int) tail); bin.write (d + w.dataAt + w.dataLen, tail);
+            bin.writeInt (w.ch); bin.writeInt (w.bits); bin.writeInt ((int) w.dataLen);
+            bin.write (flac.getData(), flac.getSize());
+            return flacTag + juce::Base64::toBase64 (bin.getData(), bin.getDataSize());
+        }
+    }
+    return juce::Base64::toBase64 (mb.getData(), mb.getSize());
+}
+static bool unpackGlued (const juce::String& s, juce::MemoryOutputStream& out)
+{
+    if (! s.startsWith (flacTag)) return juce::Base64::convertFromBase64 (out, s);
+    juce::MemoryOutputStream binS;
+    if (! juce::Base64::convertFromBase64 (binS, s.substring ((int) std::strlen (flacTag)))) return false;
+    juce::MemoryInputStream in (binS.getData(), binS.getDataSize(), false);
+    const auto headLen = in.readInt(); if (headLen < 0 || headLen > in.getNumBytesRemaining()) return false;
+    juce::MemoryBlock head; in.readIntoMemoryBlock (head, headLen);
+    const auto tailLen = in.readInt(); if (tailLen < 0 || tailLen > in.getNumBytesRemaining()) return false;
+    juce::MemoryBlock tail; in.readIntoMemoryBlock (tail, tailLen);
+    WavLayout w; w.ch = in.readInt(); w.bits = in.readInt(); w.dataLen = (size_t) in.readInt();
+    if (w.ch < 1 || w.ch > 8 || (w.bits != 16 && w.bits != 24)) return false;
+    const auto at = (size_t) in.getPosition();
+    out.write (head.getData(), head.getSize());
+    if (! flacDecode (static_cast<const char*> (binS.getData()) + at, binS.getDataSize() - at, w, out)) return false;
+    out.write (tail.getData(), tail.getSize());
+    return true;
+}
 static juce::File unglue (const juce::String& s)
 {
     if (gluedIn == nullptr) return {};
@@ -30,7 +146,7 @@ static juce::File unglue (const juce::String& s)
     auto dst = hhsHome().getChildFile ("Glued Audio").getChildFile (juce::String::toHexString (s.hashCode64()) + "-" + juce::String::toHexString (it->second.hashCode64())).getChildFile (name);
     if (dst.existsAsFile()) return dst;
     juce::MemoryOutputStream mo;
-    if (! juce::Base64::convertFromBase64 (mo, it->second)) return {};
+    if (! unpackGlued (it->second, mo)) return {};
     dst.getParentDirectory().createDirectory();
     return dst.replaceWithData (mo.getData(), mo.getDataSize()) ? dst : juce::File();
 }
@@ -517,7 +633,7 @@ bool saveProject (const Project& p, const juce::File& f)
             total += size;
             juce::ValueTree g ("F");
             g.setProperty ("path", a.getFullPathName(), nullptr);
-            g.setProperty ("data", juce::Base64::toBase64 (mb.getData(), mb.getSize()), nullptr);
+            g.setProperty ("data", packGlued (mb), nullptr);
             glued.appendChild (g, nullptr);
         };
         for (auto& c : p.channels) { glue (c.sampleFile); glue (c.smpLayerFile); }
@@ -528,12 +644,34 @@ bool saveProject (const Project& p, const juce::File& f)
     auto xml = tree.createXml();
     if (! xml) return false;
     auto tmp = f.getSiblingFile (f.getFileName() + ".saving");   // never leave a half-written song behind
-    return xml->writeTo (tmp) && tmp.moveFileTo (f);
+    tmp.deleteFile();
+    {   // the song is zlib-compressed XML: patterns, automation and glued audio shrink to KB/MB instead of tens of MB
+        juce::FileOutputStream fo (tmp);
+        if (! fo.openedOk()) return false;
+        juce::GZIPCompressorOutputStream z (fo, 6);
+        if (! z.writeString (xml->toString())) return false;   // writeString adds a trailing 0; stripped on load
+        z.flush();
+        if (fo.getStatus().failed()) return false;
+    }
+    return tmp.moveFileTo (f);
 }
 
 bool loadProject (Project& p, const juce::File& f)
 {
-    auto xml = juce::XmlDocument::parse (f);
+    std::unique_ptr<juce::XmlElement> xml;
+    {
+        juce::MemoryBlock raw;
+        if (! f.loadFileAsData (raw) || raw.getSize() < 2) return false;
+        const auto* b = static_cast<const juce::uint8*> (raw.getData());
+        if (b[0] == 0x78 && ((b[0] << 8) | b[1]) % 31 == 0)   // zlib header: compressed song (older songs are plain XML)
+        {
+            juce::MemoryInputStream mi (raw, false);
+            juce::GZIPDecompressorInputStream z (mi);
+            juce::MemoryOutputStream mo; mo.writeFromInputStream (z, -1);
+            xml = juce::XmlDocument::parse (juce::String::fromUTF8 (static_cast<const char*> (mo.getData()), (int) strnlen (static_cast<const char*> (mo.getData()), mo.getDataSize())));
+        }
+        else xml = juce::XmlDocument::parse (f);
+    }
     if (! xml || ! xml->hasTagName ("HUMHOUSE_PROJECT")) return false;
     IOBaseScope base (f);
     auto tree = juce::ValueTree::fromXml (*xml);

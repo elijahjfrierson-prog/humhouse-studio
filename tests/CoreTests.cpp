@@ -3151,10 +3151,21 @@ int main (int argc, char** argv)
         Project p; Channel c; c.id = 77; c.name = "Shot"; c.sampleFile = wav; p.channels.push_back (c);
         auto song = dir.getChildFile ("Songs").getChildFile ("glue.hhs"); song.getParentDirectory().createDirectory();
         CHECK (saveProject (p, song));
+        juce::MemoryBlock wavBytes; wav.loadFileAsData (wavBytes);
+        {   // compressed song: zlib container, glued WAV as lossless FLAC, smaller than the WAV it carries
+            juce::MemoryBlock sb; song.loadFileAsData (sb);
+            CHECK (sb.getSize() > 2 && (juce::uint8) sb[0] == 0x78);
+            CHECK (song.getSize() < wav.getSize());
+            std::printf ("compressed song: %lld bytes (wav %lld)\n", (long long) song.getSize(), (long long) wav.getSize());
+        }
         const auto size = wav.getSize(); wav.deleteFile();
         Project q; CHECK (loadProject (q, song));
         CHECK (! q.channels.empty() && q.channels.back().sampleFile.existsAsFile() && q.channels.back().sampleFile.getSize() == size
                && q.channels.back().sampleFile.getFileName() == "myshot.wav");
+        {   // byte-for-byte identical after FLAC round trip
+            juce::MemoryBlock back; if (! q.channels.empty()) q.channels.back().sampleFile.loadFileAsData (back);
+            CHECK (back == wavBytes);
+        }
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
         dir.deleteRecursively();
     }
