@@ -1297,6 +1297,13 @@ public:
             return;
         }
         for (int b = 0; b < 3; ++b) if (topButton (b).contains (p)) { choiceMenu (b == 0 ? "room" : b == 1 ? "mic" : "cab"); return; }
+        if (e.mods.isPopupMenu() && grid.onParamMenu)   // right-click a knob: Link to controller / automate, like the plain knobs
+        {
+            if (sceneArea().contains (p))
+                for (int k = 0; k < numKnobs; ++k) if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { grid.onParamMenu (knobIds[k]); return; }
+            const auto it = inspectorItems();
+            for (int i = 0; i < (int) it.size(); ++i) if (inspectorCell (i).contains (p)) { grid.onParamMenu (it[(size_t) i]); return; }
+        }
         if (sceneArea().contains (p))
         {
             for (int k = 0; k < numKnobs; ++k)
@@ -1872,7 +1879,8 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
-    else if (ty == "hhamp") { grid->hideWhere ([] (const juce::String&) { return true; }); grid->setSize (1100, grid->getHeight()); visual = new AmpStage (*grid); vh = 640; }
+    else if (ty == "hhamp") { grid->hideWhere ([] (const juce::String&) { return true; }); grid->setSize (1100, grid->getHeight()); visual = new AmpStage (*grid); vh = 640;
+                              if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) vh = juce::jlimit (420, 640, d->userArea.getHeight() - 120 - grid->getHeight()); }
     else if (ty == "glitch")
     {
         grid->hideWhere ([] (const juce::String& id) { return id == "fx" || id == "steplen" || (id.startsWithChar ('s') && id != "smooth"); });
