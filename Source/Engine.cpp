@@ -304,6 +304,7 @@ struct Engine::TrackRuntime
     std::atomic<float> level { 0.0f };   // post-FX pre-fader block peak (sidechain source)
     std::atomic<float> cpu { 0.0f };     // share of the block this insert took (decaying peak)
     bool live = false;                   // fed by an armed lane this block (Low Latency Mode, scheduled first)
+    bool unaligned = false;              // Low Latency armed path or Set to master: never delayed to line up with slower inputs
     float duckGain = 1.0f;
     float gainL = -1.0f, gainR = -1.0f;   // last fader gain: ramps, so automation / fader moves never zipper
     std::vector<std::shared_ptr<FxRuntime>> fx;
@@ -1109,7 +1110,7 @@ void Engine::prepareRuntimes()
 
 int Engine::takeLatency() const
 {
-    return juce::jmax (0, recordLatency.load() + playbackDelay.load() + juce::roundToInt (recordOffsetMs.load() * 0.001 * sampleRate));
+    return recordLatency.load() + playbackDelay.load() + juce::roundToInt (recordOffsetMs.load() * 0.001 * sampleRate);   // a negative offset may make it < 0: the take moves later
 }
 
 void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
@@ -1455,7 +1456,7 @@ void Engine::finishRecordingWriters()
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
             // latency compensation: what you sang at beat b reaches the file `lat` samples later
-            const juce::int64 lat = juce::jlimit<juce::int64> (0, written / 2, (juce::int64) t->latency);
+            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, written / 2, (juce::int64) t->latency);   // < 0: a negative Recording offset reads from earlier in the file
             const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
             double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
@@ -2136,7 +2137,7 @@ void Engine::processTrack (int t)
         {
             auto& srt = *trackRt[(size_t) S[k].first];
             const int dl = tr.inputAlign - srt.arrival;
-            if (dl > 0 && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
+            if (dl > 0 && ! srt.unaligned && k < tr.edge.size() && tr.edge[k].ready()) tr.edge[k].addDelayed (srt.out, tr.out, n, dl, S[k].second);
             else if (wide)
                 for (int ch = 0; ch < 2; ++ch)
                 {
@@ -2637,6 +2638,9 @@ void Engine::mixTracks (const float* const*, int, int)
         if (ln.armed && ln.mixerTrack > 0 && ln.mixerTrack < (int) trackRt.size() && trackRt[(size_t) ln.mixerTrack]) trackRt[(size_t) ln.mixerTrack]->live = true;
     const bool ll = lowLatency.load (std::memory_order_relaxed) && ! offline.load (std::memory_order_relaxed);   // exports / freeze keep every plug-in
     llNow = ll && std::any_of (trackRt.begin(), trackRt.end(), [] (const auto& t) { return t && t->live; });
+    const bool off = offline.load (std::memory_order_relaxed);
+    for (size_t i = 0; i < trackRt.size(); ++i)
+        if (trackRt[i]) trackRt[i]->unaligned = (llNow && trackRt[i]->live) || (! off && i > 0 && i < aproj.mixer.size() && aproj.mixer[i].direct);
     for (auto& L : levels)
         for (int t : L)
         {
@@ -2655,11 +2659,7 @@ void Engine::mixTracks (const float* const*, int, int)
             int in = 0;
             // Low Latency Mode: a monitored (armed) path joins unaligned, so its FX stay on but never hold the rest back
             for (auto& sg : sources[(size_t) t])
-            {
-                if (sg.first >= (int) trackRt.size()) continue;
-                const bool direct = t == 0 && sg.first < (int) aproj.mixer.size() && aproj.mixer[(size_t) sg.first].direct && ! offline.load (std::memory_order_relaxed);
-                if (! (llNow && trackRt[(size_t) sg.first]->live) && ! direct) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
-            }
+                if (sg.first < (int) trackRt.size() && ! trackRt[(size_t) sg.first]->unaligned) in = std::max (in, trackRt[(size_t) sg.first]->arrival);
             tr.ownLatency = own; tr.inputAlign = std::min (in, kPdcSize - 1);
             tr.arrival = std::min (tr.inputAlign + std::max (0, own), kPdcSize - 1);
         }
