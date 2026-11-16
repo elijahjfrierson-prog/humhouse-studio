@@ -1445,6 +1445,7 @@ if (phoneUI)
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
             m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
+            m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
@@ -1724,6 +1725,10 @@ if (phoneUI)
                     const int n = shrinkSongs (dir);
                     flash (juce::String (n) + " song(s) shrunk to KB: their audio stays next to them on disk");
                 });
+                break;
+            case 4718:
+                if (videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
+                if (videoExportAllHook()) videoExportAllHook()(); else flash ("EXPORT ALL needs the VIDEO editor (desktop build with video)");
                 break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();

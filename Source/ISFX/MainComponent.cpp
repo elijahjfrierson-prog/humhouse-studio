@@ -1702,6 +1702,21 @@ bool MainComponent::exportSequence (const Project& p, int seqIndex, const Export
     ExportJob job = jobIn;
     rack.reset();
     job.audioFx = [this] (float* L, float* R, int n) { rack.process (L, R, n); };
+    if (job.soundtrack.existsAsFile())   // EXPORT ALL: the host's Record mix replaces the sequence's own sound
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::shared_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (job.soundtrack));
+        auto pos = std::make_shared<juce::int64> ((juce::int64) std::llround (ticksToSec (job.rangeStart) * (rd ? rd->sampleRate : kMixRate)));
+        job.audioFx = [rd, pos] (float* L, float* R, int n)
+        {
+            std::fill (L, L + n, 0.0f); std::fill (R, R + n, 0.0f);
+            if (rd == nullptr) return;
+            float* ch[2] { L, R };
+            rd->read (ch, rd->numChannels > 1 ? 2 : 1, *pos, n);
+            if (rd->numChannels < 2) std::copy (L, L + n, R);
+            *pos += n;
+        };
+    }
     trackRacks.reset();
     job.trackFx = &trackRacks;
     juce::String codec;
@@ -1753,8 +1768,10 @@ void MainComponent::exportDialog()
         bool all = which == 1; const bool cuts = which == 2;
         const int xml = dialog->getComboBoxComponent ("xml")->getSelectedItemIndex();
         juce::MessageManager::callAsync ([this] { dialog.reset(); });
+        const auto track = std::exchange (soundtrack, juce::File());
         if (r != 1) return;
         ExportJob job;
+        job.soundtrack = track;
         outputSize (st.project, shortSide, job.width, job.height);
         job.width &= ~1; job.height &= ~1; job.fps = fps;
         job.mbps = (int) std::lround (mb[q] * (double) job.width * job.height / (1920.0 * 1080.0) * fps / 30.0);

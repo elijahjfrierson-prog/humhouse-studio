@@ -41,6 +41,7 @@ public:
     struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };
     std::vector<ClipRender> renderClips (const juce::File& dir, bool selectedOnly);   // PUSH: each clip with sound -> WAV at its timeline spot
     bool hasSelection() const { return ! st.selected.isEmpty(); }
+    void exportWithSoundtrack (const juce::File& wav) { soundtrack = wav; exportDialog(); }   // EXPORT ALL: the picture + this WAV as its sound
     ~MainComponent() override;
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -52,6 +53,7 @@ public:
 private:
     void timerCallback() override;
     int focusSweep = 0;
+    juce::File soundtrack;
     void scrollBarMoved (juce::ScrollBar*, double) override;
     void refresh (bool inspectorToo);
     void seek (Ticks t);

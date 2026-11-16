@@ -48,6 +48,7 @@ struct ExportJob
     Ticks rangeStart = 0, rangeEnd = 0;   // end 0 = sequence end
     std::function<void (float* L, float* R, int n)> audioFx;   // master plug-in chain (optional)
     TrackFxHost* trackFx = nullptr;                            // per-track plug-in chains (optional)
+    juce::File soundtrack;                                     // EXPORT ALL: this WAV (48 kHz) is the video's whole sound
 };
 
 // renderFrame(time, rgbaOut) must fill width*height*4 bytes (top-down RGBA)

@@ -23,9 +23,12 @@ public:
         ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
         addAndMakeVisible (*ed);
         setLookAndFeel (&isfx::sharedLookAndFeel());   // same buttons/fonts/colours as the InSequence FX app
-        for (auto* b : { &push, &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
+        for (auto* b : { &push, &exportAll, &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
         push.setTooltip ("PUSH the whole VIDEO sequence or the selected clips onto the Record timeline as editable clips; the video pops out and follows the playhead");
         push.onClick = [this] { pushMenu(); };
+        exportAll.setTooltip ("EXPORT ALL: one video file with the picture and the whole Record timeline's mix (every clip, track, mixer and FX) as its sound");
+        exportAll.onClick = [this] { exportAllWithRecord(); };
+        videoExportAllHook() = [this] { exportAllWithRecord(); };
         addAndMakeVisible (info);
         follow.setClickingTogglesState (true); follow.setToggleState (true, juce::dontSendNotification);
         follow.setTooltip ("The video plays and scrubs with HumHouse's playhead (Beat / Record / Mix)");
@@ -41,7 +44,7 @@ public:
         toMixer.onClick = [this] { tracksMenu(); };
         startTimerHz (30);
     }
-    ~EditorView() override { videoPopHook() = nullptr; stopTimer(); setLookAndFeel (nullptr); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
+    ~EditorView() override { videoPopHook() = nullptr; videoExportAllHook() = nullptr; stopTimer(); setLookAndFeel (nullptr); if (win) win->clearContentComponent(); win.reset(); ed.reset(); }
     void paint (juce::Graphics& g) override
     {
         g.fillAll (isfx::theme::bg);
@@ -52,6 +55,7 @@ public:
     {
         auto r = getLocalBounds(); auto b = r.removeFromTop (bar).reduced (4);
         push.setBounds (b.removeFromLeft (80)); b.removeFromLeft (4);
+        exportAll.setBounds (b.removeFromLeft (110)); b.removeFromLeft (4);
         pop.setBounds (b.removeFromLeft (100)); b.removeFromLeft (4);
         follow.setBounds (b.removeFromLeft (96)); b.removeFromLeft (4);
         toRecord.setBounds (b.removeFromLeft (170)); b.removeFromLeft (4);
@@ -180,6 +184,34 @@ private:
     Studio& s;
     std::unique_ptr<isfx::MainComponent> ed;
     std::unique_ptr<Win> win;
+    juce::TextButton exportAll { "EXPORT ALL" };
+    struct MixJob : juce::ThreadWithProgressWindow   // renders the Record mix off the message thread, then hands it to the video export
+    {
+        MixJob (Engine& e, juce::File f) : juce::ThreadWithProgressWindow ("EXPORT ALL: rendering the Record mix...", true, true), engine (e), file (std::move (f)) {}
+        void run() override { ok = engine.renderToWav (file, true, [this] (float p) { setProgress (p); return ! threadShouldExit(); }, -1, 24, (double) isfx::kMixRate, 0); }
+        void threadComplete (bool cancelled) override { if (onDone) onDone (ok && ! cancelled); }
+        Engine& engine; juce::File file; bool ok = false; std::function<void (bool)> onDone;
+    };
+    std::unique_ptr<MixJob> mixJob;
+    void exportAllWithRecord()
+    {
+        if (mixJob != nullptr) return;
+        auto wav = hhsHome().getChildFile ("Video Export").getChildFile ("Record mix.wav");
+        wav.getParentDirectory().createDirectory();
+        s.engine.stop();
+        mixJob = std::make_unique<MixJob> (s.engine, wav);
+        mixJob->onDone = [safe = juce::Component::SafePointer<EditorView> (this), wav] (bool ok)
+        {
+            juce::MessageManager::callAsync ([safe, wav, ok] {
+                if (safe == nullptr) return;
+                safe->mixJob = nullptr;
+                if (! ok) { safe->info.setText ("EXPORT ALL stopped: the Record mix didn't render", juce::dontSendNotification); return; }
+                if (! safe->popped()) safe->popOut();
+                safe->ed->exportWithSoundtrack (wav);
+            });
+        };
+        mixJob->launchThread();
+    }
     juce::TextButton push { "PUSH" }, pop { "POP OUT" }, follow { "FOLLOW" }, toRecord { "SONG TO RECORD" }, toMixer { "TRACKS TO MIXER" };
     juce::Label info;
     bool hostWasPlaying = false; double lastT = -1.0;
@@ -318,4 +350,5 @@ std::unique_ptr<juce::Component> createVideoView (Studio& s) { return std::make_
 namespace hhs
 {
 std::function<void()>& videoPopHook() { static std::function<void()> hook; return hook; }
+std::function<void()>& videoExportAllHook() { static std::function<void()> hook; return hook; }
 }

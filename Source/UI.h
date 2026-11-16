@@ -231,13 +231,18 @@ inline void setOnTopSafely (juce::Component& c, bool onTop)
     c.setAlwaysOnTop (onTop);
 }
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
+#if JUCE_MAC
+void joinFullScreen (juce::Component&);   // MacWindows.mm: pop-outs / plug-in windows live inside the app's full-screen space
+#else
+inline void joinFullScreen (juce::Component&) {}
+#endif
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
     auto& d = juce::Desktop::getInstance();
     for (int i = 0; i < d.getNumComponents(); ++i)
         if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
-            c->toFront (false);
+        { joinFullScreen (*c); c->toFront (false); }
 }
 inline void updateFloating (juce::Component& c)
 {
@@ -462,6 +467,7 @@ juce::PopupMenu patchBayRouteMenu (Studio&, std::function<void (Project&, int in
 std::unique_ptr<juce::Component> createPatchBayView (Studio&);
 struct BayInfo { juce::String name; std::vector<int> chans; int insert = 0; std::vector<int> stacks; };
 std::vector<BayInfo> bayInfo (Studio&);   // the Patch Bays (loaded from settings), for LANE's BAY filter   // PATCH tab
+std::function<void()>& videoExportAllHook();                     // EXPORT ALL: video + the whole Record mix as one file (set while the VIDEO editor exists)
 std::function<void()>& videoPopHook();                           // VID POP: pops the VIDEO window out (set while the VIDEO editor exists)
 std::unique_ptr<juce::Component> createVideoView (Studio&);      // VIDEO tab: score to picture
 inline std::function<void (int)> openPianoMain;                   // open a channel in the BEAT page Piano Roll
