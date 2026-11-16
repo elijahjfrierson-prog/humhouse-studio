@@ -612,12 +612,75 @@ Project projectFromTree (const juce::ValueTree& root)
     return p;
 }
 
+std::atomic<bool>& packAudioInSong() { static std::atomic<bool> on { false }; return on; }
+
+template <typename Fn> static void forEachAudio (Project& p, Fn&& fn)
+{
+    for (auto& c : p.channels) { fn (c.sampleFile); fn (c.smpLayerFile); }
+    for (auto& c : p.clips) fn (c.audioFile);
+    for (auto& m : p.mixer) fn (m.frozenFile);
+    for (auto& a : p.audioPool) fn (a);
+}
+
+// KB songs keep their audio beside them: anything outside the song's folder is copied once into "<song> Files"
+static void gatherAudio (Project& p, const juce::File& song)
+{
+    const auto dir = song.getParentDirectory(), files = dir.getChildFile (song.getFileNameWithoutExtension() + " Files");
+    const auto bundled = bundledSoundsRoot();
+    std::map<juce::String, juce::File> done;
+    forEachAudio (p, [&] (juce::File& f)
+    {
+        if (f == juce::File() || ! f.existsAsFile() || f.isAChildOf (dir)) return;
+        if (bundled != juce::File() && f.isAChildOf (bundled)) return;   // built-in sounds ship with every HumHouse app
+        auto it = done.find (f.getFullPathName());
+        if (it == done.end())
+        {
+            auto dst = files.getChildFile (f.getFileName());
+            if (dst.existsAsFile() && dst.getSize() != f.getSize()) dst = files.getNonexistentChildFile (f.getFileNameWithoutExtension(), f.getFileExtension(), false);
+            if (! dst.existsAsFile() && ! (files.createDirectory().wasOk() && f.copyFileTo (dst))) return;   // copy failed: keep the original path
+            it = done.emplace (f.getFullPathName(), dst).first;
+        }
+        f = it->second;
+    });
+}
+
+static int missingAudio (Project& p)
+{
+    int n = 0;
+    forEachAudio (p, [&n] (juce::File& f) { if (f != juce::File() && ! f.existsAsFile()) ++n; });
+    return n;
+}
+
+int shrinkSongs (const juce::File& folder)
+{
+    int n = 0;
+    for (const auto& f : folder.findChildFiles (juce::File::findFiles, true, "*.hhs"))
+    {
+        if (f.getParentDirectory().getFileName() == "Backup") continue;
+        const auto before = f.getSize();
+        Project p;
+        if (! loadProject (p, f)) continue;   // packed audio is unpacked to disk here when its original file is gone
+        const int missingBefore = missingAudio (p);
+        const auto keep = f.getSiblingFile (f.getFileName() + ".shrinking");
+        if (! f.copyFileTo (keep)) continue;
+        Project back;
+        const bool ok = saveProject (p, f) && loadProject (back, f) && missingAudio (back) <= missingBefore && back.clips.size() == p.clips.size();
+        if (! ok) { f.deleteFile(); keep.moveFileTo (f); continue; }   // anything off: the original song comes back untouched
+        keep.deleteFile();
+        if (f.getSize() < before) ++n;
+    }
+    return n;
+}
+
 bool saveProject (const Project& p, const juce::File& f)
 {
     IOBaseScope base (f);
-    auto tree = projectToTree (p);
+    Project kb;
+    const bool local = ! packAudioInSong().load() && f.getParentDirectory().getFileName() != "Backup";
+    if (local) { kb = p; gatherAudio (kb, f); }
+    auto tree = projectToTree (local ? kb : p);
     // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
-    if (f.getParentDirectory().getFileName() != "Backup")
+    if (packAudioInSong().load() && f.getParentDirectory().getFileName() != "Backup")
     {
         juce::ValueTree glued ("GLUED");
         std::set<juce::String> seen; juce::int64 total = 0;

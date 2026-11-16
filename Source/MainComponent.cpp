@@ -750,6 +750,7 @@ public:
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", false);
+        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
         engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
@@ -1443,6 +1444,8 @@ if (phoneUI)
         {
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
+            m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
+            m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
             {
@@ -1713,6 +1716,20 @@ if (phoneUI)
                 break;
             }
             case 4715: convertStems(); break;
+            case 4716:
+                chooser = std::make_unique<juce::FileChooser> ("Folder with your .hhs songs (subfolders too)", hhsHome());
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
+                    const auto dir = fc.getResult();
+                    if (! dir.isDirectory()) return;
+                    const int n = shrinkSongs (dir);
+                    flash (juce::String (n) + " song(s) shrunk to KB: their audio stays next to them on disk");
+                });
+                break;
+            case 4717:
+                packAudioInSong() = ! packAudioInSong().load();
+                studio.settings->setValue ("packAudioInSong", packAudioInSong().load());
+                flash (packAudioInSong().load() ? "Songs pack their audio inside (MB)" : "Songs stay KB and point at their audio files");
+                break;
             case mClearBlacklist: engine.knownPlugins.clearBlacklistedFiles(); flash ("Crashed plugins re-enabled"); break;
             case mTypingKeys: typingKeyboard() = ! typingKeyboard(); studio.settings->setValue ("typingKeys", typingKeyboard()); break;
             case mMidiInputs: studio.settings->setValue ("midiIn", juce::String()); enableMidiInputs(); flash ("MIDI: all connected keyboards"); break;

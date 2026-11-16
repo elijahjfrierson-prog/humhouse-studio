@@ -2800,6 +2800,7 @@ int main (int argc, char** argv)
         CHECK (share (kick, StemDrums) > 0.4 && share (bass, StemBass) > 0.7 && share (voc, StemVocals) > 0.5 && share (pad, StemMelodies) > 0.5);
     }
 
+    packAudioInSong() = true;   // the glue tests below pack audio inside the song (off by default: KB songs)
     // audio is glued to the song: a backup opened after the song folder moved still finds its vocal, and a same-named take of another size is never picked up
     {
         const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("hhs-glue-test");
@@ -3167,6 +3168,9 @@ int main (int argc, char** argv)
             CHECK (back == wavBytes);
         }
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
+        packAudioInSong() = false;   // default: the song only points at its audio, so it stays KB
+        CHECK (saveProject (q, song) && song.getSize() < 16 * 1024);
+        std::printf ("KB song: %lld bytes\n", (long long) song.getSize());
         dir.deleteRecursively();
     }
 

@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include "Model.h"
 
 namespace hhs
@@ -6,6 +7,8 @@ namespace hhs
 juce::ValueTree projectToTree (const Project&);
 Project projectFromTree (const juce::ValueTree&);
 bool saveProject (const Project&, const juce::File&);
+std::atomic<bool>& packAudioInSong();        // false (default): KB songs that point at their audio files; true: audio packed inside (MB, opens anywhere)
+int shrinkSongs (const juce::File& folder);  // re-saves every .hhs under folder without packed audio (unpacking any it carried); returns how many shrank
 bool loadProject (Project&, const juce::File&);
 juce::File writeBackup (const Project&, int keep = 50);
 // one file to email / AirDrop / text: the project as a template, with every sound it uses inside
