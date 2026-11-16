@@ -24,8 +24,8 @@ public:
     {
         if (! sample || sample->getNumSamples() == 0) return;
         const double target = (keyTrack ? key - rootKey : 0) + pitch;   // key off: the sample stays the sample
-        if (cutItself && ! (glide > 0.0f && (mono || slide))) choke();
-        if (! mono && slide && glide > 0.0f)
+        if (cutItself && glide <= 0.0f) choke();
+        if (! mono && glide > 0.0f)   // Poly + Glide: chords glide into the next chord (FL porta), SLIDE notes not needed
         {
             // poly portamento / sliding chords (FL): every note of the chord glides the nearest held voice that no
             // other note of this chord took yet - a chord slides as a chord instead of collapsing onto one voice
@@ -284,7 +284,7 @@ public:
     void noteOn (int key, float vel, bool slide) override
     {
         const double k = key + pitch;
-        if (! mono && slide && glide > 0.0f)
+        if (! mono && glide > 0.0f)   // Poly + Glide: chords glide into the next chord (FL porta), SLIDE notes not needed
         {
             // poly portamento / sliding chords: each chord note glides the nearest held voice not taken yet (see sampler)
             Voice* best = nullptr; double bestD = 1.0e9;
