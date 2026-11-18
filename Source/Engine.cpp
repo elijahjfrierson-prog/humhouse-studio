@@ -693,7 +693,7 @@ bool Engine::applyNoLatencyDriver()
         if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen())
         {
             int best = 0;   // the largest size at or under 256, else the smallest the driver offers
-            for (int b : d->getAvailableBufferSizes()) if (b <= 256 ? b > best : best == 0 || (best > 256 && b < best)) best = b;
+            for (int b : d->getAvailableBufferSizes()) if (b <= 256 ? (best == 0 || best > 256 || b > best) : (best == 0 || (best > 256 && b < best))) best = b;
             if (best > 0 && best != setup.bufferSize)
             {
                 const auto working = deviceManager.getAudioDeviceSetup();
