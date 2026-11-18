@@ -684,8 +684,24 @@ bool Engine::applyNoLatencyDriver()
         if (! has) continue;
         deviceManager.setCurrentAudioDeviceType (want, true);
         auto setup = deviceManager.getAudioDeviceSetup();
-        if (setup.bufferSize > 256 || setup.bufferSize <= 0) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }
-        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen()) return true;
+        const auto fallback = setup;
+        // keep the user's interface + channels when the new driver lists them
+        setup.outputDeviceName = before.outputDeviceName; setup.inputDeviceName = before.inputDeviceName;
+        setup.inputChannels = before.inputChannels; setup.outputChannels = before.outputChannels;
+        setup.useDefaultInputChannels = before.useDefaultInputChannels; setup.useDefaultOutputChannels = before.useDefaultOutputChannels;
+        if (deviceManager.setAudioDeviceSetup (setup, true).isNotEmpty()) { setup = fallback; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen())
+        {
+            int best = 0;   // the largest size at or under 256, else the smallest the driver offers
+            for (int b : d->getAvailableBufferSizes()) if (b <= 256 ? b > best : best == 0 || (best > 256 && b < best)) best = b;
+            if (best > 0 && best != setup.bufferSize)
+            {
+                const auto working = deviceManager.getAudioDeviceSetup();
+                auto s2 = working; s2.bufferSize = best;
+                if (deviceManager.setAudioDeviceSetup (s2, true).isNotEmpty()) deviceManager.setAudioDeviceSetup (working, true);   // driver refused: keep the open stream
+            }
+            if (auto* d2 = deviceManager.getCurrentAudioDevice(); d2 != nullptr && d2->isOpen()) return true;
+        }
     }
     deviceManager.setCurrentAudioDeviceType (cur, true);   // neither opened on this card: keep what worked
     deviceManager.setAudioDeviceSetup (before, true);
