@@ -25,7 +25,7 @@ public:
         return ps;
     }
     enum { pMS, pHC, pLC, pDel, pTempo, pSize, pMod, pDiff, pSpeed, pBass, pDec, pCross, pDamp, pDry, pEr, pWet, pSep, pSlap, pSlapMix };
-    double tailSeconds() const override { return juce::jmin (25.0, (double) p (pDec) * 1.5 + 0.3); }
+    double tailSeconds() const override { return 30.0; }   // longest Decay (20 s) + slap/pre-delay: turning Decay up later never cuts the tail
     void prepare (double s, int) override
     {
         sr = s;
