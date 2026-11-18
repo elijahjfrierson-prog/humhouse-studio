@@ -318,7 +318,9 @@ private:
         const auto& md = model();
         const int chan = (int) p (pChan);
         const int stages = juce::jlimit (1, 6, md.stages - (chan == 0 ? juce::jmin (2, md.stages - 1) : chan == 1 ? 1 : 0));
-        const float gk = chan == 2 ? p (pLeadGain) : p (pGain), mk = chan == 2 ? p (pLeadMaster) : p (pMaster);
+        const int mi = (int) p (pModel);
+        const bool leadKnobs = chan == 2 && (mi == 2 || mi == 5 || mi == 6);   // only 5150 / VX 30 / SLDN panels have separate lead gain + master
+        const float gk = leadKnobs ? p (pLeadGain) : p (pGain), mk = leadKnobs ? p (pLeadMaster) : p (pMaster);
         const float gdb = (gk / 10.0f) * md.maxGainDb * 0.82f * (chan == 0 ? 0.55f : chan == 1 ? 0.8f : 1.0f);
         const float perStage = juce::Decibels::decibelsToGain (gdb / (float) stages) * 1.3f;
         const float master = std::pow (mk / 10.0f, 2.0f) * 2.5f + 0.05f;
