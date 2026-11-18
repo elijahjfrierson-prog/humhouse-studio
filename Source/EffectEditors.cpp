@@ -1308,25 +1308,32 @@ public:
             if (i >= 0 && i < numAmps) { grid.setExternal ("model", (float) i); grid.commitNow(); repaint(); }
             return;
         }
-        for (int b = 0; b < 3; ++b) if (topButton (b).contains (p)) { choiceMenu (b == 0 ? "room" : b == 1 ? "mic" : "cab"); return; }
+        for (int b = 0; b < 4; ++b) if (topButton (b).contains (p)) { choiceMenu (b == 0 ? "room" : b == 1 ? "mic" : b == 2 ? "mic2" : "cab"); return; }
         if (e.mods.isPopupMenu() && grid.onParamMenu)   // right-click a knob: Link to controller / automate, like the plain knobs
         {
             if (sceneArea().contains (p))
-                for (int k = 0; k < numKnobs; ++k) if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { grid.onParamMenu (knobIds[k]); return; }
+                for (int k = 0; k < numKnobs(); ++k) if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { grid.onParamMenu (knobId (k)); return; }
             const auto it = inspectorItems();
             for (int i = 0; i < (int) it.size(); ++i) if (inspectorCell (i).contains (p)) { grid.onParamMenu (it[(size_t) i]); return; }
         }
         if (sceneArea().contains (p))
         {
-            for (int k = 0; k < numKnobs; ++k)
-                if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { dragKnob = k; dragFrom = grid.liveValueOf (knobIds[k]); repaint(); return; }
-            const auto mg = micGeo();
-            const juce::Line<float> body (mg.cap, mg.tail), pole (juce::Point<float> (mg.poleX, mg.topY), juce::Point<float> (mg.poleX, mg.floorY));
-            juce::Point<float> near;
-            if (body.getDistanceFromPoint (p, near) < juce::jmax (10.0f, mg.len * 0.18f)) { micDrag = true; return; }   // grab the mic itself
-            if (pole.getDistanceFromPoint (p, near) < 14.0f || juce::Rectangle<float> (300.0f * mg.ps, 60.0f * mg.ps + 20.0f).withCentre ({ mg.poleX, mg.floorY - 20.0f * mg.ps }).contains (p))
-            { standDrag = true; return; }                                                                         // or the stand by its base / pole
-            if (speakerBox().expanded (40).contains (p)) { micDrag = true; moveMic (p); }
+            for (int k = 0; k < numKnobs(); ++k)
+                if (p.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { dragKnob = k; dragFrom = grid.liveValueOf (knobId (k)); repaint(); return; }
+            for (int w = mic2On() ? 1 : 0; w >= 0; --w)   // grab a mic by its body, or its stand by the base / pole (generous, not finicky)
+            {
+                const auto mg = micGeo (w);
+                const juce::Line<float> body (mg.cap, mg.tail), pole (juce::Point<float> (mg.poleX, mg.topY), juce::Point<float> (mg.poleX, mg.floorY));
+                juce::Point<float> near;
+                const bool onMic = body.getDistanceFromPoint (p, near) < juce::jmax (16.0f, mg.len * 0.25f);
+                const bool onStand = ! onMic && (pole.getDistanceFromPoint (p, near) < 20.0f || juce::Rectangle<float> (320.0f * mg.ps, 70.0f * mg.ps + 24.0f).withCentre ({ mg.poleX, mg.floorY - 20.0f * mg.ps }).contains (p));
+                if (onMic || onStand)
+                {
+                    am = w; micDrag = onMic; standDrag = onStand; dragP0 = p;
+                    dragX0 = grid.liveValueOf (mp (w, "x")); dragY0 = grid.liveValueOf (mp (w, "y")); dragD0 = grid.liveValueOf (mp (w, "dist"));
+                    repaint(); return;
+                }
+            }
             return;
         }
         for (int n = 0; n < numNodes; ++n)
@@ -1351,7 +1358,7 @@ public:
     void mouseDrag (const juce::MouseEvent& e) override
     {
         const float dv = (float) (e.getDistanceFromDragStartX() - e.getDistanceFromDragStartY()) * (e.mods.isShiftDown() ? 0.002f : 0.008f);
-        if (dragKnob >= 0) { grid.setExternal (knobIds[dragKnob], juce::jlimit (0.0f, 10.0f, dragFrom + dv * 10.0f)); repaint(); return; }
+        if (dragKnob >= 0) { grid.setExternal (knobId (dragKnob), juce::jlimit (0.0f, 10.0f, dragFrom + dv * 10.0f)); repaint(); return; }
         if (insKnob >= 0)
         {
             const auto items = inspectorItems();
@@ -1373,8 +1380,8 @@ public:
     }
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        for (int k = 0; k < numKnobs; ++k)
-            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { resetParam (knobIds[k]); return; }
+        for (int k = 0; k < numKnobs(); ++k)
+            if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f) { resetParam (knobId (k)); return; }
         for (int n = 0; n < numNodes; ++n)
             if (nodeRect (n).contains (e.position) && pedalSlot (n) >= 0) { const auto id = slotId (pedalSlot (n)) + "on"; grid.setExternal (id, grid.liveValueOf (id) > 0.5f ? 0.0f : 1.0f); grid.commitNow(); repaint(); return; }
         const auto items = inspectorItems();
@@ -1383,23 +1390,46 @@ public:
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
         const float d = (w.deltaY != 0 ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f);
-        for (int k = 0; k < numKnobs; ++k)
+        for (int k = 0; k < numKnobs(); ++k)
             if (e.position.getDistanceFrom (knobCentre (k)) <= knobRadius() * 1.5f)
-            { grid.setExternal (knobIds[k], juce::jlimit (0.0f, 10.0f, grid.liveValueOf (knobIds[k]) + d * 2.0f)); grid.commitNow(); repaint(); return; }
+            { grid.setExternal (knobId (k), juce::jlimit (0.0f, 10.0f, grid.liveValueOf (knobId (k)) + d * 2.0f)); grid.commitNow(); repaint(); return; }
         const auto items = inspectorItems();
         for (int i = 0; i < (int) items.size(); ++i)
             if (inspectorCell (i).contains (e.position))
                 if (const auto* p = grid.paramDef (items[(size_t) i]); p != nullptr && p->choices.empty())
                 { grid.setExternal (p->id, grid.liveValueOf (p->id) + d * 0.2f * (p->mx - p->mn)); grid.commitNow(); repaint(); return; }
         if (! sceneArea().contains (e.position)) return;
-        if (e.mods.isShiftDown()) grid.setExternal ("micangle", grid.liveValueOf ("micangle") + d * 30.0f);
-        else grid.setExternal ("micdist", grid.liveValueOf ("micdist") - d * 1.5f);
+        if (e.mods.isShiftDown()) grid.setExternal (mp (am, "angle"), grid.liveValueOf (mp (am, "angle")) + d * 20.0f);
+        else grid.setExternal (mp (am, "dist"), grid.liveValueOf (mp (am, "dist")) - d * 0.8f);
         grid.commitNow(); repaint();
     }
 private:
-    static constexpr int numAmps = 15, numKnobs = 8, numNodes = 15;
-    static constexpr const char* knobIds[numKnobs] { "gain", "bass", "mid", "treble", "presence", "master", "bias", "sag" };
-    static constexpr const char* knobNames[numKnobs] { "GAIN", "BASS", "MID", "TREBLE", "PRES", "MASTER", "BIAS", "SAG" };
+    static constexpr int numAmps = 15, maxKnobs = 9, numNodes = 15;
+    // each amp's real front panel, left to right (label + the parameter it turns)
+    struct KnobSet { int n; const char* ids[maxKnobs]; const char* names[maxKnobs]; };
+    static const KnobSet& knobSet (int m)
+    {
+        static const KnobSet sets[numAmps] {
+            { 6, { "gain", "treble", "bass", "reverb", "speed", "intensity" }, { "VOLUME", "TREBLE", "BASS", "REVERB", "SPEED", "INTENSITY" } },                                   // FDR DLX
+            { 6, { "presence", "bass", "mid", "treble", "master", "gain" }, { "PRESENCE", "BASS", "MIDDLE", "TREBLE", "MASTER", "PRE-AMP" } },                                    // MSHL 800
+            { 9, { "gain", "leadgain", "bass", "mid", "treble", "master", "leadmaster", "resonance", "presence" }, { "RHY PRE", "LEAD PRE", "LOW", "MID", "HIGH", "RHY POST", "LEAD POST", "RESONANCE", "PRESENCE" } },   // PVY 5150
+            { 6, { "gain", "treble", "mid", "bass", "presence", "master" }, { "GAIN", "TREBLE", "MID", "BASS", "PRESENCE", "MASTER" } },                                          // MSA REC
+            { 6, { "master", "treble", "mid", "bass", "gain", "reverb" }, { "VOLUME", "TREBLE", "MIDDLE", "BASS", "GAIN", "REVERB" } },                                           // ORNG 50
+            { 8, { "gain", "leadgain", "treble", "bass", "reverb", "speed", "intensity", "master" }, { "NORMAL", "TOP BOOST", "TREBLE", "BASS", "REVERB", "SPEED", "DEPTH", "MASTER" } },   // VX 30
+            { 8, { "gain", "leadgain", "bass", "mid", "treble", "master", "leadmaster", "presence" }, { "PREAMP", "OD PREAMP", "BASS", "MIDDLE", "TREBLE", "NORM MSTR", "OD MSTR", "PRESENCE" } },   // SLDN 100
+            { 7, { "gain", "master", "treble", "mid", "bass", "presence", "resonance" }, { "GAIN", "VOLUME", "TREBLE", "MIDDLE", "BASS", "PRESENCE", "DEEP" } },                  // DZL HRB
+            { 7, { "gain", "bass", "mid", "treble", "master", "presence", "resonance" }, { "GAIN", "BASS", "MID", "TREBLE", "VOLUME", "PRESENCE", "RESONANCE" } },               // BGNR UBR
+            { 7, { "gain", "treble", "mid", "bass", "reverb", "speed", "intensity" }, { "VOLUME", "TREBLE", "MIDDLE", "BASS", "REVERB", "SPEED", "INTENSITY" } },                // FDR TWN
+            { 7, { "gain", "bass", "mid", "treble", "presence", "master", "resonance" }, { "GAIN", "BASS", "MID", "TREBLE", "PRESENCE", "MASTER", "DEPTH" } },                   // RNDL 100
+            { 7, { "gain", "bass", "mid", "treble", "master", "presence", "resonance" }, { "GAIN", "BASS", "MIDDLE", "TREBLE", "VOLUME", "PRESENCE", "DEPTH" } },                // ENGL PWR
+            { 5, { "gain", "bass", "mid", "treble", "master" }, { "GAIN", "BASS", "MIDRANGE", "TREBLE", "MASTER" } },                                                             // AMPG SVT
+            { 7, { "gain", "treble", "mid", "bass", "reverb", "speed", "intensity" }, { "VOLUME", "TREBLE", "MID", "BASS", "REVERB", "SPEED", "DEPTH" } },                       // TK IMP
+            { 7, { "gain", "bass", "mid", "treble", "master", "resonance", "presence" }, { "GAIN", "LOW", "MID", "HIGH", "VOLUME", "RESONANCE", "PRESENCE" } } };              // PVY 5150-III
+        return sets[juce::jlimit (0, numAmps - 1, m)];
+    }
+    int numKnobs() const { return knobSet (model()).n; }
+    const char* knobId (int k) const { return knobSet (model()).ids[k]; }
+    const char* knobName (int k) const { return knobSet (model()).names[k]; }
     // per amp, fractions of its head picture: knob row centre / half height, panel colour, label colour, knob style
     // (0 chrome, 1 black, 2 gold, 3 chicken-head), badge centre x/y + height, badge colour, script badge
     struct Look { float rowY, rowH; juce::uint32 panel, label; int knob; float tx, ty, th; juce::uint32 tag; bool script; };
@@ -1428,26 +1458,30 @@ private:
     float chainH() const { return 74.0f; }
     float insH() const { return 92.0f; }
     juce::Rectangle<float> sceneArea() const { return getLocalBounds().toFloat().withTrimmedLeft (122).withTrimmedBottom (chainH() + insH() + 4); }
-    juce::Rectangle<float> topButton (int b) const { const auto s = sceneArea(); return { s.getRight() - 3.0f * 170.0f + (float) b * 170.0f, s.getY() + 6.0f, 164.0f, 22.0f }; }
+    juce::Rectangle<float> topButton (int b) const { const auto s = sceneArea(); return { s.getRight() - 4.0f * 150.0f + (float) b * 150.0f, s.getY() + 6.0f, 144.0f, 22.0f }; }
     static constexpr float cabX = 457.0f, cabY = 200.0f, cabW = 376.0f, cabH = 360.0f;   // the cab inside the rendered studio (1280x720)
     float headAspect() const { const auto src = headSrc (model()); return (float) src.getHeight() / (float) src.getWidth(); }
     juce::Point<float> cabScale() const   // the CAB picker sizes the rendered cab: 1x12 small, 2x12 wide + short, 4x12 full, 8x10 tall
     {
-        switch (juce::roundToInt (grid.liveValueOf ("cab")))
-        {
-            case 0: case 5: return { 0.56f, 0.56f };
-            case 1: return { 0.96f, 0.6f };
-            case 4: return { 0.9f, 1.28f };
-            default: return { 1.0f, 1.0f };
-        }
+        const auto sp = cabSpeakers(); const int n = sp.x, sz = sp.y;
+        if (n == 1) return sz == 10 ? juce::Point<float> (0.5f, 0.5f) : sz == 15 ? juce::Point<float> (0.62f, 0.66f) : juce::Point<float> (0.56f, 0.56f);
+        if (n == 2) return sz == 15 ? juce::Point<float> (0.66f, 1.1f) : sz == 10 ? juce::Point<float> (0.84f, 0.52f) : juce::Point<float> (0.96f, 0.6f);
+        if (n == 4) return sz == 10 ? juce::Point<float> (0.8f, 0.86f) : juce::Point<float> (1.0f, 1.0f);
+        if (n == 6) return { 0.9f, 1.1f };
+        return n >= 8 ? juce::Point<float> (0.9f, 1.28f) : juce::Point<float> (1.0f, 1.0f);
+    }
+    juce::Point<int> cabSpeakers() const   // "4x12 Closed V-30" -> 4 speakers of 12"
+    {
+        const auto nm = grid.choiceOf ("cab"); const int x = nm.indexOfChar ('x');
+        return x > 0 ? juce::Point<int> (nm.substring (0, x).getIntValue(), nm.substring (x + 1).getIntValue()) : juce::Point<int> (4, 12);
     }
     float headW (float fullCabW) const { return juce::jmax (fullCabW * cabScale().x * 0.96f, fullCabW * 0.72f); }
     juce::Rectangle<float> plateRect() const   // the 3D studio render, scaled so the amp stands up close and fills the view
     {
         const auto s = sceneArea();
-        const float fit = s.getHeight() * 0.86f / (cabH * cabScale().y + headW (cabW) * headAspect());
+        const float fit = s.getHeight() * 0.7f / (cabH * cabScale().y + headW (cabW) * headAspect());
         const float sc = fit;   // the whole amp always fits; a wider view just shows more of the room's walls
-        return { s.getCentreX() - (cabX + cabW * 0.5f) * sc, s.getBottom() - s.getHeight() * 0.05f - (cabY + cabH) * sc, 1280.0f * sc, 720.0f * sc };
+        return { s.getCentreX() - (cabX + cabW * 0.5f) * sc, s.getBottom() - s.getHeight() * 0.24f - (cabY + cabH) * sc, 1280.0f * sc, 720.0f * sc };
     }
     juce::Rectangle<float> cabFull() const { const auto r = plateRect(); const float k = r.getWidth() / 1280.0f; return { r.getX() + cabX * k, r.getY() + cabY * k, cabW * k, cabH * k }; }
     juce::Rectangle<float> cabRect() const
@@ -1464,10 +1498,14 @@ private:
     juce::Point<float> knobCentre (int k) const
     {
         const auto h = headRect(); const auto& L = looks[model()];
-        return { h.getX() + h.getWidth() * (0.10f + 0.80f * (float) k / (float) (numKnobs - 1)), h.getY() + h.getHeight() * L.rowY };
+        return { h.getX() + h.getWidth() * (0.10f + 0.80f * (float) k / (float) juce::jmax (1, numKnobs() - 1)), h.getY() + h.getHeight() * L.rowY };
     }
-    float knobRadius() const { const auto h = headRect(); return juce::jmin (h.getWidth() * 0.034f, h.getHeight() * looks[model()].rowH * 0.78f); }
-    juce::Point<int> cabGrid() const { const int c = juce::roundToInt (grid.liveValueOf ("cab")); return c == 1 ? juce::Point<int> (2, 1) : c == 2 || c == 3 ? juce::Point<int> (2, 2) : c == 4 ? juce::Point<int> (2, 4) : juce::Point<int> (1, 1); }
+    float knobRadius() const { const auto h = headRect(); return juce::jmin (h.getWidth() * 0.034f * 8.0f / (float) juce::jmax (8, numKnobs()), h.getHeight() * looks[model()].rowH * 0.78f); }
+    juce::Point<int> cabGrid() const
+    {
+        const auto sp = cabSpeakers();
+        return sp.x == 1 ? juce::Point<int> (1, 1) : sp.x == 2 ? (sp.y == 15 ? juce::Point<int> (1, 2) : juce::Point<int> (2, 1)) : sp.x == 4 ? juce::Point<int> (2, 2) : sp.x == 6 ? juce::Point<int> (2, 3) : juce::Point<int> (2, 4);
+    }
     juce::Rectangle<float> speakerCell (int cx, int cy) const
     {
         const auto c = cabRect().reduced (cabRect().getWidth() * 0.06f, cabRect().getHeight() * 0.08f); const auto n = cabGrid();
@@ -1477,14 +1515,16 @@ private:
     juce::Rectangle<float> speakerBox() const { const auto c = cabRect(); return c.reduced (c.getWidth() * 0.08f, c.getHeight() * 0.08f); }   // the grille: where the mic can aim
     // the rendered mic stand: tripod + pole stand on the floor, the boom reaches the mic; Distance brings it toward you
     struct MicGeo { juce::Point<float> cap, tail, clutch; float len = 0, tilt = 0, side = 1, poleX = 0, floorY = 0, topY = 0, ps = 1; };
-    MicGeo micGeo() const
+    bool mic2On() const { return grid.liveValueOf ("mic2on") > 0.5f; }
+    static juce::String mp (int w, const char* f) { return juce::String (w == 0 ? "mic" : "mic2") + f; }
+    MicGeo micGeo (int w) const
     {
         MicGeo m; const auto c = cabRect(); const auto s = sceneArea();
-        const float dn = juce::jlimit (0.0f, 1.0f, (grid.liveValueOf ("micdist") - 0.1f) / 5.9f);
-        m.side = grid.liveValueOf ("micx") < 0.5f ? -1.0f : 1.0f;
+        const float dn = juce::jlimit (0.0f, 1.0f, (grid.liveValueOf (mp (w, "dist")) - 0.1f) / 5.9f);
+        m.side = grid.liveValueOf (mp (w, "x")) < 0.5f ? -1.0f : 1.0f;
         m.len = c.getWidth() * (0.28f + 0.16f * dn);
-        m.cap = micPoint() + juce::Point<float> (0.0f, c.getHeight() * 0.10f * dn);
-        m.tilt = m.side * juce::degreesToRadians (grid.liveValueOf ("micangle")) * 0.6f;
+        m.cap = micPoint (w) + juce::Point<float> (0.0f, c.getHeight() * 0.10f * dn);
+        m.tilt = m.side * juce::degreesToRadians (grid.liveValueOf (mp (w, "angle"))) * 0.6f;
         m.tail = m.cap + juce::Point<float> (m.side * std::cos (m.tilt), std::sin (m.tilt) * m.side) * m.len;
         m.poleX = m.tail.x + m.side * c.getWidth() * (0.16f + 0.12f * dn);
         const float beside = c.getWidth() * (0.12f + 0.10f * dn);   // the stand stands beside the cab (black on black would vanish)
@@ -1495,29 +1535,29 @@ private:
         m.clutch = { m.poleX, m.topY + 85.0f * m.ps };
         return m;
     }
-    void moveStand (juce::Point<float> p)   // drag the stand by its base: left/right = position, toward you / away = distance
+    // drags move relative to where you grabbed, at half speed: small hand moves = small mic moves
+    void moveStand (juce::Point<float> p)   // the stand by its base: left/right = position, toward you / away = distance
     {
-        const auto c = cabRect(); const auto s = sceneArea(); const auto m = micGeo();
-        const float off = m.poleX - micPoint().x;
-        grid.setExternal ("micx", juce::jlimit (0.0f, 1.0f, (p.x - off - speakerBox().getX()) / speakerBox().getWidth()));
-        const float dn = juce::jlimit (0.0f, 1.0f, ((p.y - c.getBottom()) / juce::jmax (1.0f, s.getBottom() - c.getBottom()) - 0.12f) / 0.8f);
-        grid.setExternal ("micdist", 0.1f + dn * 5.9f);
+        const auto c = cabRect(); const auto s = sceneArea();
+        grid.setExternal (mp (am, "x"), juce::jlimit (0.0f, 1.0f, dragX0 + (p.x - dragP0.x) * 0.5f / juce::jmax (1.0f, speakerBox().getWidth())));
+        grid.setExternal (mp (am, "dist"), juce::jlimit (0.1f, 6.0f, dragD0 + (p.y - dragP0.y) * 0.5f * 5.9f / juce::jmax (1.0f, (s.getBottom() - c.getBottom()) * 0.8f)));
         repaint();
     }
-    juce::Point<float> micPoint() const { const auto c = speakerBox(); return { c.getX() + grid.liveValueOf ("micx") * c.getWidth(), c.getY() + (1.0f - grid.liveValueOf ("micy")) * c.getHeight() }; }
+    juce::Point<float> micPoint (int w) const { const auto c = speakerBox(); return { c.getX() + grid.liveValueOf (mp (w, "x")) * c.getWidth(), c.getY() + (1.0f - grid.liveValueOf (mp (w, "y"))) * c.getHeight() }; }
     void moveMic (juce::Point<float> p)
     {
         const auto c = speakerBox();
-        grid.setExternal ("micx", juce::jlimit (0.0f, 1.0f, (p.x - c.getX()) / c.getWidth()));
-        grid.setExternal ("micy", juce::jlimit (0.0f, 1.0f, 1.0f - (p.y - c.getY()) / c.getHeight()));
+        grid.setExternal (mp (am, "x"), juce::jlimit (0.0f, 1.0f, dragX0 + (p.x - dragP0.x) * 0.5f / juce::jmax (1.0f, c.getWidth())));
+        grid.setExternal (mp (am, "y"), juce::jlimit (0.0f, 1.0f, dragY0 - (p.y - dragP0.y) * 0.5f / juce::jmax (1.0f, c.getHeight())));
         repaint();
     }
+    int am = 0; juce::Point<float> dragP0; float dragX0 = 0, dragY0 = 0, dragD0 = 1;
     juce::Rectangle<float> chainArea() const { return getLocalBounds().toFloat().withTrimmedTop ((float) getHeight() - chainH() - insH()).withHeight (chainH()); }
     juce::Rectangle<float> nodeRect (int n) const { const auto a = chainArea().reduced (6, 8); const float w = a.getWidth() / (float) numNodes; return { a.getX() + w * (float) n + 3.0f, a.getY(), w - 6.0f, a.getHeight() }; }
     static int pedalSlot (int n) { return n >= 1 && n <= 6 ? n - 1 : n == 12 || n == 13 ? n - 6 : -1; }
     static juce::String slotId (int s) { return s < 6 ? "s" + juce::String (s + 1) : "p" + juce::String (s - 5); }
     juce::Rectangle<float> insArea() const { return getLocalBounds().toFloat().removeFromBottom (insH()).reduced (6, 4); }
-    juce::Rectangle<float> inspectorCell (int i) const { const auto a = insArea().withTrimmedLeft (110); const float w = juce::jmin (96.0f, a.getWidth() / 12.0f); return { a.getX() + w * (float) i, a.getY(), w - 4.0f, a.getHeight() }; }
+    juce::Rectangle<float> inspectorCell (int i) const { const auto a = insArea().withTrimmedLeft (110); const float w = juce::jmin (96.0f, a.getWidth() / (float) juce::jmax<size_t> (12, inspectorItems().size())); return { a.getX() + w * (float) i, a.getY(), w - 4.0f, a.getHeight() }; }
     std::vector<juce::String> inspectorItems() const
     {
         const int ps = pedalSlot (selected);
@@ -1525,9 +1565,9 @@ private:
         switch (selected)
         {
             case 0: return { "input" };
-            case 7: return { "model", "channel", "power", "gain", "bass", "mid", "treble", "presence", "master", "bias", "sag", "response" };
+            case 7: return { "model", "channel", "power", "gain", "bass", "mid", "treble", "presence", "master", "leadgain", "leadmaster", "resonance", "reverb", "speed", "intensity", "bias", "sag", "response" };
             case 8: return { "cab", "cabmix" };
-            case 9: return { "mic", "micx", "micy", "micdist", "micangle" };
+            case 9: return { "mic", "micx", "micy", "micdist", "micangle", "mic2on", "mic2", "mic2x", "mic2y", "mic2dist", "mic2angle", "micblend" };
             case 10: return { "room", "roomsize", "reflect", "damping", "roomwet" };
             case 11: return { "eq1", "eq2", "eq3", "eq4", "eq5" };
             default: return { "output" };
@@ -1591,7 +1631,7 @@ private:
     void paintRoom (juce::Graphics& g, juce::Rectangle<float> s)
     {
         const int rm = juce::roundToInt (grid.liveValueOf ("room"));
-        static constexpr juce::uint32 tint[5] { 0x00000000, 0x38ffb060, 0x70201812, 0x50405878, 0x60102040 };
+        static constexpr juce::uint32 tint[6] { 0x00000000, 0x38ffb060, 0x70201812, 0x50405878, 0x60102040, 0x3cb040ff };
         g.setColour (juce::Colour (0xff15120f)); g.fillRect (s);
         if (room.isValid())
         {
@@ -1602,7 +1642,17 @@ private:
             if (pr.getRight() < s.getRight())
                 g.drawImage (room, (int) pr.getRight() - 1, (int) pr.getY(), (int) std::ceil (s.getRight() - pr.getRight()) + 1, (int) pr.getHeight(), 1190, 0, 90, 720);
             g.drawImage (room, pr, juce::RectanglePlacement::stretchToFit);
-            g.setColour (juce::Colour (tint[juce::jlimit (0, 4, rm)])); g.fillRect (s);
+            g.setColour (juce::Colour (tint[juce::jlimit (0, 5, rm)])); g.fillRect (s);
+            if (rm == 5)   // Chroma Room: colour-washed LED strips (the room sound uses the Chroma Verb character)
+            {
+                static constexpr juce::uint32 led[4] { 0x70ff3cc8, 0x7040b0ff, 0x7060ff9a, 0x70ffb030 };
+                for (int i = 0; i < 4; ++i)
+                {
+                    const float x = s.getX() + s.getWidth() * (0.08f + 0.28f * (float) i);
+                    g.setGradientFill (juce::ColourGradient (juce::Colour (led[i]), x, s.getY(), juce::Colour (led[i]).withAlpha (0.0f), x, s.getY() + s.getHeight() * 0.6f, false));
+                    g.fillRect (x - 3.0f, s.getY(), 6.0f, s.getHeight() * 0.6f);
+                }
+            }
             if (rm == 2)   // vocal booth: foam wedges on the walls
             {
                 g.setColour (juce::Colour (0x50000000));
@@ -1637,10 +1687,10 @@ private:
         const auto row = juce::Rectangle<float> (h.getX() + h.getWidth() * 0.04f, h.getY() + h.getHeight() * (L.rowY - L.rowH), h.getWidth() * 0.92f, h.getHeight() * L.rowH * 2.0f);
         g.setColour (juce::Colour (L.panel)); g.fillRoundedRectangle (row, 2.0f);
         const float kr = knobRadius();
-        for (int k = 0; k < numKnobs; ++k)
+        for (int k = 0; k < numKnobs(); ++k)
         {
             const auto kc = knobCentre (k);
-            const float v = juce::jlimit (0.0f, 1.0f, grid.liveValueOf (knobIds[k]) / 10.0f), a = juce::degreesToRadians (-135.0f + 270.0f * v);
+            const float v = juce::jlimit (0.0f, 1.0f, grid.liveValueOf (knobId (k)) / 10.0f), a = juce::degreesToRadians (-135.0f + 270.0f * v);
             if (L.knob == 3)   // chicken head
             {
                 g.setColour (juce::Colour (0xffeee6d2)); g.fillEllipse (kc.x - kr * 0.7f, kc.y - kr * 0.7f, kr * 1.4f, kr * 1.4f);
@@ -1659,12 +1709,12 @@ private:
                 g.drawLine (kc.x + std::sin (a) * cr * 0.2f, kc.y - std::cos (a) * cr * 0.2f, kc.x + std::sin (a) * kr * 0.95f, kc.y - std::cos (a) * kr * 0.95f, juce::jmax (1.4f, kr * 0.16f));
             }
             g.setColour (juce::Colour (L.label)); g.setFont (juce::FontOptions (juce::jmax (7.0f, kr * 0.62f), juce::Font::bold));
-            g.drawFittedText (knobNames[k], juce::Rectangle<float> (kr * 3.2f, kr * 0.8f).withCentre ({ kc.x, kc.y + kr * 1.35f }).toNearestInt(), juce::Justification::centred, 1);
+            g.drawFittedText (knobName (k), juce::Rectangle<float> (kr * 3.2f, kr * 0.8f).withCentre ({ kc.x, kc.y + kr * 1.35f }).toNearestInt(), juce::Justification::centred, 1);
         }
         paintMic (g, s);
         // room / mic / cab pickers
-        static const char* lab[3] { "ROOM", "MIC", "CAB" }; static const char* ids[3] { "room", "mic", "cab" };
-        for (int b = 0; b < 3; ++b)
+        static const char* lab[4] { "ROOM", "MIC 1", "MIC 2", "CAB" }; static const char* ids[4] { "room", "mic", "mic2", "cab" };
+        for (int b = 0; b < 4; ++b)
         {
             const auto r = topButton (b);
             g.setColour (juce::Colour (0xd0101014)); g.fillRoundedRectangle (r, 4.0f);
@@ -1673,15 +1723,16 @@ private:
             g.drawFittedText (juce::String (lab[b]) + ": " + grid.choiceOf (ids[b]) + juce::String (juce::CharPointer_UTF8 ("  \xe2\x96\xbe")), r.reduced (6, 0).toNearestInt(), juce::Justification::centredLeft, 1);
         }
         g.setColour (juce::Colours::white.withAlpha (0.75f)); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        juce::String info = dragKnob >= 0 ? juce::String (knobNames[dragKnob]) + "  " + juce::String (grid.liveValueOf (knobIds[dragKnob]), 1)
-                                          : grid.choiceOf ("mic") + "  X " + juce::String (grid.liveValueOf ("micx"), 2) + "  Y " + juce::String (grid.liveValueOf ("micy"), 2) + "  "
-                                            + juce::String (grid.liveValueOf ("micdist"), 1) + " ft  " + juce::String (juce::roundToInt (grid.liveValueOf ("micangle"))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
+        juce::String info = dragKnob >= 0 ? juce::String (knobName (dragKnob)) + "  " + juce::String (grid.liveValueOf (knobId (dragKnob)), 1)
+                                          : "MIC " + juce::String (am + 1) + ": " + grid.choiceOf (mp (am, "")) + "  X " + juce::String (grid.liveValueOf (mp (am, "x")), 2) + "  Y " + juce::String (grid.liveValueOf (mp (am, "y")), 2) + "  "
+                                            + juce::String (grid.liveValueOf (mp (am, "dist")), 1) + " ft  " + juce::String (juce::roundToInt (grid.liveValueOf (mp (am, "angle")))) + juce::String (juce::CharPointer_UTF8 ("\xc2\xb0"))
                                             + "   (drag the mic to aim, drag its stand to move it closer / farther, wheel = distance, shift+wheel = angle)";
         g.drawFittedText (info, s.removeFromBottom (18).reduced (8, 0).toNearestInt(), juce::Justification::centredLeft, 1);
     }
-    void paintMic (juce::Graphics& g, juce::Rectangle<float>)
+    void paintMic (juce::Graphics& g, juce::Rectangle<float> s) { if (mic2On()) paintMic (g, s, 1); paintMic (g, s, 0); }
+    void paintMic (juce::Graphics& g, juce::Rectangle<float>, int w)
     {
-        const auto m = micGeo();
+        const auto m = micGeo (w);
         g.setColour (juce::Colour (0x50000000));   // contact shadow under the tripod
         g.fillEllipse (juce::Rectangle<float> (300.0f * m.ps, 34.0f * m.ps).withCentre ({ m.poleX, m.floorY - 6.0f * m.ps }));
         g.setOpacity (1.0f);
@@ -1693,7 +1744,7 @@ private:
             if (d.x < 0) t = t.scaled (1.0f, -1.0f);   // boom reaching left: keep the clip on top
             g.drawImageTransformed (boom, t.scaled (bs).rotated (std::atan2 (d.y, d.x)).translated (m.tail));
         }
-        const int mi = juce::jlimit (0, 5, juce::roundToInt (grid.liveValueOf ("mic")));
+        const int mi = juce::jlimit (0, 5, juce::roundToInt (grid.liveValueOf (mp (w, ""))));
         if (const auto& img = mics[mi]; img.isValid())
         {
             const float k = m.len / (float) img.getWidth();
@@ -1701,7 +1752,11 @@ private:
             if (m.side < 0) t = t.scaled (-1.0f, 1.0f);   // stand on the left: the mic points right, into the speaker
             g.drawImageTransformed (img, t.scaled (k).rotated (m.tilt).translated (m.cap));
         }
-        if (micDrag || standDrag) { g.setColour (col::accent); g.drawEllipse (m.cap.x - 4, m.cap.y - 4, 8, 8, 1.5f); }
+        if ((micDrag || standDrag) && w == am) { g.setColour (col::accent); g.drawEllipse (m.cap.x - 4, m.cap.y - 4, 8, 8, 1.5f); }
+        // floor tag: which mic + how far from the grille, so distance reads at a glance
+        g.setColour (juce::Colour (0xc0101014)); const auto tg = juce::Rectangle<float> (86.0f, 16.0f).withCentre ({ m.poleX, m.floorY + 12.0f });
+        g.fillRoundedRectangle (tg, 3.0f); g.setColour (w == am ? col::accent : juce::Colours::white); g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
+        g.drawFittedText ("MIC " + juce::String (w + 1) + "  " + juce::String (grid.liveValueOf (mp (w, "dist")), 1) + " ft", tg.toNearestInt(), juce::Justification::centred, 1);
     }
     void paintChain (juce::Graphics& g)
     {

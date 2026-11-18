@@ -1388,7 +1388,8 @@ public:
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
-        startTimerHz (60);   // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { timerCallback(); });   // no-skip: the playhead moves on every screen refresh (was a 60 Hz timer drifting against vsync)
+        // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
     }
     ~Playlist() override { s.removeChangeListener (this); }
 
@@ -3399,6 +3400,7 @@ private:
         ++tileGen;   // song edit or a waveform finished loading
         if (src == &s) refresh(); else repaint();
     }
+    std::unique_ptr<juce::VBlankAttachment> vblank;
     void timerCallback() override
     {
         const bool playing = s.engine.isPlaying();

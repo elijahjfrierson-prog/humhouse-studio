@@ -86,7 +86,7 @@ public:
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
         refresh();
-        startTimerHz (30);
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { timerCallback(); });   // no-skip: playhead on every screen refresh, not a 30 Hz timer
     }
     ~PianoRoll() override { s.removeChangeListener (this); }
 
@@ -968,6 +968,7 @@ private:
         wasPlaying = playing;
     }
     bool wasPlaying = false;
+    std::unique_ptr<juce::VBlankAttachment> vblank;
 };
 }
 

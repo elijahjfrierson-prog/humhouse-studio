@@ -749,7 +749,7 @@ public:
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
-        engine.lowLatency = studio.settings->getBoolValue ("lowLatency", false);
+        engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
         engine.ramCache = studio.settings->getBoolValue ("ramCache", true);

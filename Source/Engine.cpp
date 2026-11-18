@@ -659,7 +659,14 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
        #if JUCE_IOS
         if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
        #else
-        if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+        #if JUCE_WINDOWS
+        // older laptops (no ASIO) default to DirectSound or plain shared WASAPI: 30-100 ms before a buffer is even counted.
+        // WASAPI low-latency shared mode keeps the Windows mixer (other apps, OBS) but uses the driver's smallest period.
+        for (auto* t : deviceManager.getAvailableDeviceTypes())
+            if (t->getTypeName() == "Windows Audio (Low Latency Mode)" && deviceManager.getCurrentAudioDeviceType() != "ASIO")
+            { deviceManager.setCurrentAudioDeviceType (t->getTypeName(), true); setup = deviceManager.getAudioDeviceSetup(); break; }
+        #endif
+        if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // about 5 ms: record through FX on time; raise it in Audio settings if a big session crackles
        #endif
     }
     if (dualOut.load()) setDualOutput (true);
