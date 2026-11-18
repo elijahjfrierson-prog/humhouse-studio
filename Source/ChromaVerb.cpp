@@ -87,7 +87,7 @@ public:
             {
                 const auto& ln = line[k]; const int N = (int) ln.size();
                 const float md = modDepth * std::sin (ph + (float) k * 0.785f);
-                const float rp = (float) lineW - (float) d[k] - md + (float) N * 2.0f;
+                const float rp = (float) (lineW % N) - (float) d[k] - md + (float) N * 2.0f;   // small numbers: float stays sample-exact in long sessions
                 const int i0 = (int) rp; const float fr = rp - (float) i0;
                 const float a0 = ln[(size_t) (i0 % N)], a1 = ln[(size_t) ((i0 + 1) % N)];
                 float v = a0 + fr * (a1 - a0);
