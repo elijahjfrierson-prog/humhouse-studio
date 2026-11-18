@@ -1587,7 +1587,7 @@ private:
     static int pedalSlot (int n) { return n >= 1 && n <= 6 ? n - 1 : n == 12 || n == 13 ? n - 6 : -1; }
     static juce::String slotId (int s) { return s < 6 ? "s" + juce::String (s + 1) : "p" + juce::String (s - 5); }
     juce::Rectangle<float> insArea() const { return getLocalBounds().toFloat().removeFromBottom (insH()).reduced (6, 4); }
-    juce::Rectangle<float> inspectorCell (int i) const { const auto a = insArea().withTrimmedLeft (110); const float w = juce::jmin (96.0f, a.getWidth() / (float) juce::jmax<size_t> (12, inspectorItems().size())); return { a.getX() + w * (float) i, a.getY(), w - 4.0f, a.getHeight() }; }
+    juce::Rectangle<float> inspectorCell (int i) const { const auto a = insArea().withTrimmedLeft (110); const float w = juce::jmin (96.0f, a.getWidth() / (float) juce::jmax (12, (int) inspectorItems().size())); return { a.getX() + w * (float) i, a.getY(), w - 4.0f, a.getHeight() }; }
     std::vector<juce::String> inspectorItems() const
     {
         const int ps = pedalSlot (selected);
