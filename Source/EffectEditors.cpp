@@ -227,6 +227,13 @@ const std::vector<FactoryPreset>& factoryPresets (const juce::String& type)
                     { "Mac / iPhone mic", { { "threshold", -50.0f }, { "attack", 0.5f }, { "release", 180.0f }, { "range", -40.0f }, { "hold", 150.0f }, { "keylo", 120.0f }, { "keyhi", 5000.0f }, { "tame", 8.0f } } } } },
         { "pump", { { "Classic 1/4", { { "depth", 0.8f }, { "rate", 1.0f } } }, { "Subtle", { { "depth", 0.4f } } }, { "1/8 Pulse", { { "rate", 2.0f }, { "depth", 0.7f } } } } },
         { "clip", { { "Warm", { { "gain", 3.0f }, { "ceiling", -1.0f } } }, { "Loud", { { "gain", 9.0f }, { "ceiling", -0.5f } } } } },
+        { "chromaverb", { { "Vocal Slapback", { { "slap", 110.0f }, { "slapmix", 0.35f }, { "wet", 0.12f }, { "dec", 1.2f }, { "size", 0.35f }, { "hcut", 200.0f }, { "lcut", 9000.0f } } },
+                          { "Vocal Plate", { { "size", 0.5f }, { "dec", 1.8f }, { "diff", 0.95f }, { "wet", 0.22f }, { "er", 0.15f }, { "hcut", 250.0f }, { "damp", 9000.0f } } },
+                          { "Vocal Chamber", { { "size", 0.6f }, { "dec", 2.4f }, { "wet", 0.25f }, { "er", 0.35f }, { "delay", 30.0f }, { "hcut", 200.0f } } },
+                          { "Dense Hall", { { "size", 0.9f }, { "dec", 4.5f }, { "diff", 1.0f }, { "mod", 0.45f }, { "wet", 0.3f }, { "delay", 40.0f } } },
+                          { "Master Glue", { { "size", 0.3f }, { "dec", 0.8f }, { "wet", 0.08f }, { "er", 0.2f }, { "hcut", 300.0f }, { "sep", 1.2f } } },
+                          { "Master Room", { { "size", 0.45f }, { "dec", 1.1f }, { "wet", 0.12f }, { "er", 0.3f }, { "hcut", 180.0f }, { "lcut", 10000.0f } } },
+                          { "Slap + Hall", { { "slap", 90.0f }, { "slapmix", 0.25f }, { "size", 0.8f }, { "dec", 3.0f }, { "wet", 0.2f } } } } },
         { "verb", { { "Vocal Plate", { { "size", 0.5f }, { "damp", 0.5f }, { "mix", 0.2f }, { "lowcut", 300.0f } } }, { "Big Hall", { { "size", 0.9f }, { "damp", 0.3f }, { "mix", 0.3f } } }, { "Small Room", { { "size", 0.25f }, { "damp", 0.6f }, { "mix", 0.15f } } }, { "Lo-fi Wash", { { "size", 0.8f }, { "damp", 0.9f }, { "mix", 0.4f } } }, { "Reverse Swell", { { "size", 0.85f }, { "damp", 0.4f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 1.0f } } }, { "Ghost Hall Reverse", { { "size", 0.6f }, { "damp", 0.35f }, { "width", 1.0f }, { "mix", 0.45f }, { "lowcut", 200.0f }, { "reverse", 1.0f }, { "revlen", 1.0f }, { "revroom", 4.0f } } }, { "Cathedral Reverse", { { "size", 0.7f }, { "damp", 0.3f }, { "width", 1.0f }, { "mix", 0.5f }, { "lowcut", 180.0f }, { "reverse", 1.0f }, { "revlen", 2.0f }, { "revroom", 5.0f } } }, { "Plate Reverse", { { "size", 0.5f }, { "damp", 0.2f }, { "mix", 0.4f }, { "lowcut", 250.0f }, { "reverse", 1.0f }, { "revlen", 0.0f }, { "revroom", 3.0f } } } } },
         { "delay", { { "1/4 Echo", { { "time", 4.0f }, { "feedback", 0.3f }, { "mix", 0.2f } } }, { "1/8 Ping Pong", { { "time", 2.0f }, { "pingpong", 1.0f }, { "feedback", 0.4f } } }, { "Dotted 1/8", { { "time", 3.0f }, { "feedback", 0.45f } } }, { "Dub Throw", { { "time", 5.0f }, { "feedback", 0.7f }, { "tone", 3000.0f }, { "mix", 0.35f } } } } },
         { "flanger", { { "Jet Plane", { { "rate", 0.1f }, { "depth", 0.9f }, { "delay", 3.0f }, { "feedback", 0.8f } } }, { "Classic Flange", { { "rate", 0.3f }, { "depth", 0.7f }, { "delay", 1.5f }, { "feedback", 0.5f } } }, { "Zero Flange", { { "rate", 0.2f }, { "depth", 1.0f }, { "delay", 0.6f }, { "feedback", -0.7f }, { "invert", 1.0f } } }, { "Subtle Vocal", { { "rate", 0.2f }, { "depth", 0.4f }, { "delay", 2.0f }, { "feedback", 0.2f }, { "mix", 0.25f } } }, { "Metal Comb", { { "rate", 0.05f }, { "depth", 0.2f }, { "delay", 5.0f }, { "feedback", 0.9f } } }, { "Wobble 808", { { "rate", 2.0f }, { "depth", 0.5f }, { "delay", 1.0f }, { "feedback", 0.3f }, { "mix", 0.35f } } } } },
@@ -1158,6 +1165,29 @@ public:
             }
             g.setColour (col::text); fitText (g, "REVERB TAIL  size " + juce::String ((int) (size * 100)) + "%  damp " + juce::String ((int) (damp * 100)) + "%", a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
+        else if (type == "chromaverb")   // controls on the left, our House on the right: it grows with Size / Decay and glows with Wet
+        {
+            const float size = grid.valueOf ("size"), dec = grid.valueOf ("dec"), wet = grid.valueOf ("wet"), er = grid.valueOf ("er");
+            const float k = juce::jlimit (0.35f, 1.0f, 0.35f + 0.4f * size + 0.25f * juce::jmin (1.0f, dec / 8.0f));
+            auto right = a.removeFromRight (a.getHeight() * 1.2f);
+            const float hw = right.getWidth() * k, hh = right.getHeight() * k;
+            const auto box = juce::Rectangle<float> (hw, hh).withCentre (right.getCentre());
+            juce::Path house; const float roofH = hh * 0.42f;
+            house.startNewSubPath (box.getX(), box.getY() + roofH); house.lineTo (box.getCentreX(), box.getY()); house.lineTo (box.getRight(), box.getY() + roofH);
+            house.lineTo (box.getRight(), box.getBottom()); house.lineTo (box.getX(), box.getBottom()); house.closeSubPath();
+            for (int i = 4; i >= 1; --i)   // the room "echoes": outlines spread with the early reflections
+            {
+                g.setColour (col::accent.withAlpha (0.08f * (float) i * (0.3f + er)));
+                g.strokePath (house, juce::PathStrokeType (2.0f), juce::AffineTransform::scale (1.0f + 0.06f * (float) (5 - i), 1.0f + 0.06f * (float) (5 - i), box.getCentreX(), box.getCentreY()));
+            }
+            g.setGradientFill (juce::ColourGradient (col::accent.withAlpha (0.25f + 0.7f * wet), box.getCentreX(), box.getY(), col::accent2.withAlpha (0.2f + 0.5f * wet), box.getCentreX(), box.getBottom(), false));
+            g.fillPath (house);
+            g.setColour (juce::Colours::white.withAlpha (0.85f)); g.strokePath (house, juce::PathStrokeType (2.0f));
+            g.setColour (juce::Colour (0xff101014)); g.fillRoundedRectangle (juce::Rectangle<float> (hw * 0.22f, hh * 0.3f).withCentre ({ box.getCentreX(), box.getBottom() - hh * 0.15f }), 2.0f);
+            g.setColour (col::text);
+            fitText (g, "CHROMA VERB  size " + juce::String ((int) (size * 100)) + "%  decay " + juce::String (dec, 1) + " s  wet " + juce::String ((int) (wet * 100)) + "%"
+                        + (grid.valueOf ("slapmix") > 0.01f ? "  slap " + juce::String ((int) grid.valueOf ("slap")) + " ms" : juce::String()), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
+        }
         else if (type == "delay")
         {
             static const float spacing[] { 0.125f, 0.25f, 0.5f, 0.75f, 1.0f, 1.5f, 2.0f };
@@ -1998,6 +2028,7 @@ void openEffectEditor (Studio& s, int track, int slotUid)
     else if (ty == "stdyn" || ty == "comp") visual = new DynGraph (*grid, liveFx, "threshold", "ratio", "knee");
     else if (ty == "strip") visual = new DynGraph (*grid, liveFx, "compTh", "compRatio", {});
     else if (ty == "verb" || ty == "delay" || ty == "filter") visual = new FxPicture (*grid, ty);
+    else if (ty == "chromaverb") { visual = new FxPicture (*grid, ty); vh = 220; }
     else if (ty == "hhamp") { grid->hideWhere ([] (const juce::String&) { return true; }); grid->setSize (1100, grid->getHeight()); visual = new AmpStage (*grid); vh = 640;
                               if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) vh = juce::jlimit (420, 640, d->userArea.getHeight() - 120 - grid->getHeight()); }
     else if (ty == "glitch")

@@ -2031,7 +2031,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
         { "pump", "Pump (Sidechain)", "Dynamics" }, { "clip", "Soft Clipper", "Dynamics" },
-        { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
+        { "verb", "Room Verb", "Space" }, { "chromaverb", "Chroma Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
         { "hhamp", "Amp House (amp rig)", "Guitar" },
@@ -2093,6 +2093,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "comp") return std::make_unique<Compressor>();
     if (id == "limiter") return std::make_unique<Limiter>();
     if (id == "verb") return std::make_unique<RoomVerb>();
+    if (id == "chromaverb") return createChromaVerb();
     if (id == "delay") return std::make_unique<EchoTape>();
     if (id == "chorus") return std::make_unique<Chorus>();
     if (id == "flanger") return std::make_unique<Flanger>();
