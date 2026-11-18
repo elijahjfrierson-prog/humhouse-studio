@@ -1638,6 +1638,7 @@ if (phoneUI)
         }
         if (id == 476)
         {
+            if (engine.isRecording()) { flash ("Stop recording first, then switch the No Latency Driver"); return; }
             engine.noLatencyDriver = ! engine.noLatencyDriver.load();
             studio.settings->setValue ("noLatencyDriver", engine.noLatencyDriver.load());
             const bool sw = engine.applyNoLatencyDriver();
