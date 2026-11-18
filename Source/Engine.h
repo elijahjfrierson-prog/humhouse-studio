@@ -64,6 +64,8 @@ public:
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
+    std::atomic<bool> noLatencyDriver { true };   // HumHouse No Latency Driver (Windows): never run on DirectSound / plain WASAPI when no ASIO card is in use
+    bool applyNoLatencyDriver();                  // switch to WASAPI low-latency shared mode (fallback: exclusive), true if it changed
     std::atomic<bool> lowLatency { false };      // Low Latency Mode: armed tracks go straight to the master (no delay-compensation wait), FX stay on
     std::atomic<bool> ramCache { true };         // Pro Tools-style disk cache: clips play from RAM (up to the budget) instead of streaming
     float trackLoad (int track) const;           // share of the audio block this insert used (0..1)

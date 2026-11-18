@@ -659,18 +659,38 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
        #if JUCE_IOS
         if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
        #else
-        #if JUCE_WINDOWS
-        // older laptops (no ASIO) default to DirectSound or plain shared WASAPI: 30-100 ms before a buffer is even counted.
-        // WASAPI low-latency shared mode keeps the Windows mixer (other apps, OBS) but uses the driver's smallest period.
-        for (auto* t : deviceManager.getAvailableDeviceTypes())
-            if (t->getTypeName() == "Windows Audio (Low Latency Mode)" && deviceManager.getCurrentAudioDeviceType() != "ASIO")
-            { deviceManager.setCurrentAudioDeviceType (t->getTypeName(), true); setup = deviceManager.getAudioDeviceSetup(); break; }
-        #endif
         if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // about 5 ms: record through FX on time; raise it in Audio settings if a big session crackles
        #endif
     }
+    applyNoLatencyDriver();   // every launch, also on existing installs
     if (dualOut.load()) setDualOutput (true);
     deviceManager.addAudioCallback (this);
+}
+
+// Why old laptops lag: without an ASIO card, Windows apps land on DirectSound (~60-100 ms) or plain shared WASAPI
+// (10 ms engine period + a big buffer). Our built-in driver is WASAPI low-latency shared mode (the IAudioClient3 smallest
+// period, OBS and other apps still play), falling back to exclusive mode, and back to the old driver if neither opens.
+bool Engine::applyNoLatencyDriver()
+{
+   #if JUCE_WINDOWS
+    if (! noLatencyDriver.load()) return false;
+    const auto cur = deviceManager.getCurrentAudioDeviceType();
+    if (cur == "ASIO" || cur == "Windows Audio (Low Latency Mode)") return false;
+    const auto before = deviceManager.getAudioDeviceSetup();
+    for (const char* want : { "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+    {
+        bool has = false;
+        for (auto* t : deviceManager.getAvailableDeviceTypes()) has = has || t->getTypeName() == want;
+        if (! has) continue;
+        deviceManager.setCurrentAudioDeviceType (want, true);
+        auto setup = deviceManager.getAudioDeviceSetup();
+        if (setup.bufferSize > 256 || setup.bufferSize <= 0) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen()) return true;
+    }
+    deviceManager.setCurrentAudioDeviceType (cur, true);   // neither opened on this card: keep what worked
+    deviceManager.setAudioDeviceSetup (before, true);
+   #endif
+    return false;
 }
 
 void Engine::setDualOutput (bool on)

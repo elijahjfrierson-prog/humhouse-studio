@@ -769,6 +769,7 @@ public:
         if (studio.settings->containsKey ("fontGrad")) applyFontGradient (studio.settings->getValue ("fontGrad"));
         applySavedLayout (studio);
         auto audioXml = studio.settings->getXmlValue ("audio");
+        engine.noLatencyDriver = studio.settings->getBoolValue ("noLatencyDriver", true);
         engine.initialiseAudio (audioXml.get());
         engine.setPerformance (perf().threads, perf().mt, perf().smart);
         if (auto pl = studio.settings->getXmlValue ("plugins")) engine.knownPlugins.recreateFromXml (*pl);
@@ -1544,6 +1545,9 @@ if (phoneUI)
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
                 pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
+               #if JUCE_WINDOWS
+                pm.addItem (476, "HumHouse No Latency Driver (built-in fast Windows audio when no ASIO driver is used)", true, engine.noLatencyDriver.load());
+               #endif
                 pm.addItem (473, "Low Latency Mode (armed track goes straight to the master, FX stay on; takes still land on time)", true, engine.lowLatency.load());
                 {
                     juce::PopupMenu om;
@@ -1630,6 +1634,15 @@ if (phoneUI)
             engine.recordOffsetMs = Engine::recordOffsetChoices[id - 490];
             studio.settings->setValue ("recordOffsetMs", (double) engine.recordOffsetMs.load());
             flash ("Recording offset " + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms: new takes move by this much");
+            return;
+        }
+        if (id == 476)
+        {
+            engine.noLatencyDriver = ! engine.noLatencyDriver.load();
+            studio.settings->setValue ("noLatencyDriver", engine.noLatencyDriver.load());
+            const bool sw = engine.applyNoLatencyDriver();
+            flash (engine.noLatencyDriver.load() ? (sw ? "No Latency Driver on: switched to fast Windows audio" : "No Latency Driver on")
+                                                 : "No Latency Driver off: pick any driver in Audio settings");
             return;
         }
         if (id == 473 || id == 474)
