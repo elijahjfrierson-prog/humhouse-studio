@@ -64,3 +64,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Iso Room
 - lock: AUDIO CLIPS
 - lock: BEAT PATTERNS
+- lock: always closable, also while streaming
