@@ -62,3 +62,5 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Tune Finder
 - lock: Recording offset slider
 - lock: Iso Room
+- lock: AUDIO CLIPS
+- lock: BEAT PATTERNS

@@ -518,7 +518,6 @@ private:
     void browserRootChanged (const juce::File&) override {}
 };
 
-#if ! HHS_LICENSED
 // PATTERNS tab (FL-style pool): beat patterns + audio clips, split by channel / track, drag onto the Playlist
 class PoolBrowser : public juce::Component, private juce::ListBoxModel, private juce::Timer
 {
@@ -714,25 +713,20 @@ private:
         dc->startDragging (desc, &list, juce::ScaledImage (img), false);
     }
 };
-#endif
 
 class Browser : public juce::Component
 {
 public:
     explicit Browser (Studio& st) : plugins (st), samples (st)
-       #if ! HHS_LICENSED
         , pool (st)
-       #endif
     {
         setupButton (pTab, "PLUGIN HOUSE", "Built-in effects, HumHouse plugins and every third-party plugin you own");
         setupButton (sTab, "SAMPLES / KITS", "Browse your samples and drum kits");
         for (auto* t : { &pTab, &sTab }) { t->setRadioGroupId (7); t->setClickingTogglesState (true); addAndMakeVisible (t); }
-       #if ! HHS_LICENSED
         setupButton (aTab, "PATTERNS", "Every beat pattern and audio clip in the project");
         aTab.setRadioGroupId (7); aTab.setClickingTogglesState (true); addAndMakeVisible (aTab);
         aTab.onClick = [this] { show (2); };
         addChildComponent (pool);
-       #endif
         pTab.onClick = [this] { show (0); };
         sTab.onClick = [this] { show (1); };
         addChildComponent (plugins); addChildComponent (samples);
@@ -744,13 +738,9 @@ public:
     {
         auto r = getLocalBounds().withTrimmedRight (1);
         auto tabs = r.removeFromTop (30).reduced (4, 3);
-       #if ! HHS_LICENSED
         const int w3 = tabs.getWidth() / 3;
         pTab.setBounds (tabs.removeFromLeft (w3).reduced (1, 0)); sTab.setBounds (tabs.removeFromLeft (w3).reduced (1, 0)); aTab.setBounds (tabs.reduced (1, 0));
         pool.setBounds (r);
-       #else
-        pTab.setBounds (tabs.removeFromLeft (tabs.getWidth() / 2).reduced (1, 0)); sTab.setBounds (tabs.reduced (1, 0));
-       #endif
         plugins.setBounds (r); samples.setBounds (r);
     }
 
@@ -758,16 +748,12 @@ private:
     juce::TextButton pTab, sTab;
     PluginList plugins;
     SampleBrowser samples;
-   #if ! HHS_LICENSED
     juce::TextButton aTab;
     PoolBrowser pool;
-   #endif
     void show (int i)
     {
         plugins.setVisible (i == 0); samples.setVisible (i == 1);
-       #if ! HHS_LICENSED
         pool.setVisible (i == 2);
-       #endif
     }
 };
 }
