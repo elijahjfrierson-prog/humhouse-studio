@@ -597,6 +597,7 @@ private:
             std::map<juce::String, std::vector<Row>> groups;   // split by track
             for (auto& f : p.audioPool)
             {
+                if (! f.existsAsFile()) continue;   // a discarded (silent) take is never listed
                 int n = 0; juce::String lane;
                 for (auto& c : p.clips) if (c.patternIndex < 0 && c.audioFile == f) { ++n; if (lane.isEmpty() && c.lane >= 0 && c.lane < (int) p.lanes.size()) lane = p.lanes[(size_t) c.lane].name; }
                 Row r; r.name = f.getFileNameWithoutExtension(); r.file = f; r.colour = col::accent2;

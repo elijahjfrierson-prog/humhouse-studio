@@ -2142,7 +2142,6 @@ public:
                 Clip c; c.uid = p.newUid(); c.lane = lane; c.start = at; c.patternIndex = pat;
                 c.length = p.patterns[(size_t) pat].lengthBeats();
                 p.clips.push_back (c);
-                adoptLaneRoute (p, p.clips.back());   // its instruments play through the track's insert (FX), like a clip moved onto it
             });
             return;
         }
