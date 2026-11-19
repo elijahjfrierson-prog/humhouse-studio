@@ -4,7 +4,8 @@
 #include <thread>
 #include "BinaryData.h"
 #if JUCE_IOS
-void hhsWatchPhoneRoute (std::atomic<bool>& speakerOut);   // IosRoute.mm
+void* hhsWatchPhoneRoute (std::atomic<bool>& speakerOut);   // IosRoute.mm
+void hhsUnwatchPhoneRoute (void* token);
 #endif
 
 namespace hhs
@@ -753,7 +754,7 @@ public:
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
        #if JUCE_IOS
-        hhsWatchPhoneRoute (engine.speakerOut);
+        routeWatch = hhsWatchPhoneRoute (engine.speakerOut);
        #endif
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
@@ -1062,6 +1063,9 @@ public:
 
     ~MainComponent() override
     {
+       #if JUCE_IOS
+        hhsUnwatchPhoneRoute (routeWatch);
+       #endif
         closeDjDecks(); closePatchBay();
         relayoutMain = nullptr; lowMemoryMain = nullptr; saveBackupMain = nullptr;
         miniKb = nullptr;
@@ -1865,6 +1869,7 @@ private:
     } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
     int savedFlash = 0;
+    void* routeWatch = nullptr;   // iOS headphone route observer
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {
         void mouseUp (const juce::MouseEvent& e) override
