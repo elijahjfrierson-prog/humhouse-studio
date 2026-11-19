@@ -2073,7 +2073,7 @@ public:
         {
             clipboard.clear(); clipLo = 1e9; clipHi = 0;
             for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }
-            copyHere = markerNow(); nextAfter = clipHi;
+            copyHere = lower == 'x' ? -1.0 : markerNow(); nextAfter = clipHi;   // cut: the paste always goes on the marker (the cut range is empty now)
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
