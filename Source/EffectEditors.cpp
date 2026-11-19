@@ -183,6 +183,36 @@ private:
     int ticks = 0;
 };
 
+// Tune Finder plug-in window: reads the running effect (key / BPM / tune) live, 4 times a second
+class TuneFinderView : public juce::Component, private juce::Timer
+{
+public:
+    TuneFinderView (Studio& st, int t, int u) : s (st), track (t), uid (u) { setSize (420, 200); startTimerHz (4); }
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::panel);
+        auto r = getLocalBounds().reduced (16);
+        g.setColour (col::dim); g.setFont (juce::FontOptions (14.0f));
+        g.drawText ("TUNE FINDER  (listens to this insert)", r.removeFromTop (22), juce::Justification::centredLeft);
+        g.setColour (col::text); g.setFont (juce::FontOptions (34.0f, juce::Font::bold));
+        g.drawText (keyTxt, r.removeFromTop (60), juce::Justification::centredLeft);
+        g.setFont (juce::FontOptions (18.0f)); g.setColour (col::accent2);
+        g.drawText (infoTxt, r.removeFromTop (30), juce::Justification::centredLeft);
+    }
+private:
+    Studio& s; int track, uid; juce::String keyTxt { "Listening..." }, infoTxt;
+    void timerCallback() override
+    {
+        auto* fx = s.engine.builtinFx (track, uid);
+        if (fx == nullptr) return;
+        const int k = juce::roundToInt (fx->getParam ("key"));
+        const juce::String kt = k <= 0 ? juce::String ("Listening... (play some audio)") : KeyGuess::keyName ((k - 1) % 12, (k - 1) / 12);
+        const float bpm = fx->getParam ("bpm"), cents = fx->getParam ("cents");
+        const juce::String it = k <= 0 ? juce::String() : (bpm > 0 ? juce::String (bpm, 1) + " BPM   " : juce::String()) + "Tuning " + (cents >= 0 ? "+" : "") + juce::String (cents, 0) + " cents";
+        if (kt != keyTxt || it != infoTxt) { keyTxt = kt; infoTxt = it; repaint(); }
+    }
+};
+
 bool focusExisting (const juce::String& key)
 {
     for (auto* w : EditorWindow::windows())
@@ -1983,6 +2013,12 @@ void openEffectEditor (Studio& s, int track, int slotUid)
         return;
     }
 
+    if (slot->type == "tunefinder")
+    {
+        EditorWindow::windows().add (new EditorWindow ("Tune Finder - " + trackName, new TuneFinderView (s, track, slotUid), key,
+                                                       [&s, track, slotUid] { return s.engine.builtinFx (track, slotUid) != nullptr; }));
+        return;
+    }
     if (slot->type == "scope")
     {
         auto* view = createScopeView ([&s, track, slotUid]() -> ScopeTap* {

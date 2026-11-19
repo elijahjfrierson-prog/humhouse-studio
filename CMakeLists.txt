@@ -29,6 +29,8 @@ set(HHS_CORE_SOURCES
     Source/StudioEffects.cpp
     Source/AmpSim.cpp
     Source/ChromaVerb.cpp
+    Source/IsoRoomFx.cpp
+    Source/IsoRoom/IsoRoomEngine.cpp
     Source/Engine.cpp
     Source/PluginSandbox.cpp
     Source/ProjectIO.cpp

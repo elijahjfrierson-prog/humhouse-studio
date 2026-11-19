@@ -2685,6 +2685,7 @@ private:
         juce::PopupMenu m;
         m.addSectionHeader ("TEMPLATES ON THIS PHONE");
         auto ts = templateFiles();
+        ts.removeIf ([] (const juce::File& f) { return ! f.isAChildOf (templatesDir()); });   // only the app's own Templates folder: a song folder added as a source is never deleted here
         for (int i = 0; i < ts.size() && i < 90; ++i)
         {
             juce::PopupMenu sub;

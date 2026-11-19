@@ -294,10 +294,17 @@ inline void joinFullScreen (juce::Component&) {}
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
+    // Mixer / tool windows first, plug-in windows after them, the one being worked in last: a plug-in never drops behind the Mixer
     auto& d = juce::Desktop::getInstance();
-    for (int i = 0; i < d.getNumComponents(); ++i)
-        if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
-        { joinFullScreen (*c); c->toFront (false); }
+    juce::Component* active = nullptr;
+    if (auto* f = juce::Component::getCurrentlyFocusedComponent()) active = f->getTopLevelComponent();
+    for (int pass = 0; pass < 3; ++pass)
+        for (int i = 0; i < d.getNumComponents(); ++i)
+            if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
+            {
+                const bool plug = c->getProperties().contains ("noHold");
+                if ((pass == 0 && ! plug && c != active) || (pass == 1 && plug && c != active) || (pass == 2 && c == active)) { joinFullScreen (*c); c->toFront (false); }
+            }
 }
 inline void updateFloating (juce::Component& c)
 {

@@ -61,3 +61,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Templates on this phone
 - lock: Tune Finder
 - lock: Recording offset slider
+- lock: Iso Room

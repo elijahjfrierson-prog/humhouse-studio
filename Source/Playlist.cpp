@@ -1041,6 +1041,7 @@ struct LaneHeader : public juce::Component
     }
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
+        setOpaque (true);   // paints its whole bar: an armed track's meter redraw never repaints the Playlist under it
         name.setEditable (false, true);
         rightClick.f = [this] (const juce::MouseEvent& e) { mouseDown (e.getEventRelativeTo (this)); };
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
@@ -2070,8 +2071,9 @@ public:
         const auto lower = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode());
         if (k.getModifiers() == juce::ModifierKeys (cmd) && (lower == 'c' || lower == 'x'))
         {
-            clipboard.clear(); clipLo = 1e9;
-            for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
+            clipboard.clear(); clipLo = 1e9; clipHi = 0;
+            for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }
+            copyHere = markerNow(); nextAfter = clipHi;
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
@@ -2079,7 +2081,11 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = juce::jmax (0.0, s.engine.isPlaying() ? s.engine.markerBeats() : s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
+            // marker not moved since copying: lands right after the copy, the same way Cmd+B stacks (each paste after the last);
+            // marker moved: lands exactly on the marker
+            const double here = markerNow();
+            double at = here;
+            if (std::abs (here - copyHere) < 1.0e-6) { at = nextAfter; nextAfter += juce::jmax (0.0, clipHi - clipLo); }   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -2248,7 +2254,8 @@ private:
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
     double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
-    std::vector<Clip> clipboard; double clipLo = 0; bool cloneOnDrag = false, cloned = false;
+    std::vector<Clip> clipboard; double clipLo = 0, clipHi = 0, copyHere = -1.0, nextAfter = 0;
+    double markerNow() const { return juce::jmax (0.0, s.engine.isPlaying() ? s.engine.markerBeats() : s.engine.positionBeats()); } bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
     static constexpr int hbarH = phoneUI ? 26 : 12;
@@ -3448,7 +3455,8 @@ private:
             }
             lastPx = px;
         }
-        for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();
+        static int armTick = 0;
+        if ((++armTick & 1) == 0) for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();   // armed meters at 30 Hz: the playhead + scrolling keep the full 60
     }
 };
 }
