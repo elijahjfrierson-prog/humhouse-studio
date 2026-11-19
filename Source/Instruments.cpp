@@ -3,6 +3,8 @@
 #include "Drummer/DrummerCore.h"
 #include "DrumSynth.h"
 #include <cmath>
+#include <mutex>
+#include <map>
 
 namespace hhs
 {
@@ -725,11 +727,103 @@ std::shared_ptr<const std::vector<float>> humWaveFactory (int kind)
     return tables[(size_t) juce::jlimit (0, (int) tables.size() - 1, kind)];
 }
 
+// ------------------------------------------------------------ multisampled instrument: a recorded instrument
+// (HumHouse Grand = Salamander Grand Piano, Yamaha C5, CC-BY 3.0) mapped by a ".hhkeys" text file:
+//   release <seconds>            damper time constant
+//   <file> <root> <lo> <hi> <vlo> <vhi>   (tab separated, file relative to the map)
+struct KeyZone { SharedSample s; int root = 60, lo = 0, hi = 127, vlo = 1, vhi = 127; };
+struct KeyMap { std::vector<KeyZone> zones; float release = 0.25f; };
+static std::shared_ptr<const KeyMap> loadKeyMap (const juce::File& f, double sr)
+{
+    static std::mutex m; static std::map<juce::String, std::shared_ptr<const KeyMap>> cache;   // shared by every channel using it
+    const std::lock_guard<std::mutex> lock (m);
+    const auto key = f.getFullPathName() + "@" + juce::String (sr);
+    if (auto it = cache.find (key); it != cache.end()) return it->second;
+    auto km = std::make_shared<KeyMap>();
+    juce::StringArray lines; lines.addLines (f.loadFileAsString());
+    for (auto& l : lines)
+    {
+        auto t = juce::StringArray::fromTokens (l, "\t", ""); t.trim(); t.removeEmptyStrings();
+        if (t.size() == 2 && t[0] == "release") { km->release = juce::jlimit (0.02f, 5.0f, t[1].getFloatValue()); continue; }
+        if (t.size() < 6) continue;
+        KeyZone z; z.s = loadSampleFile (f.getSiblingFile (t[0]), sr);
+        if (! z.s) continue;
+        z.root = t[1].getIntValue(); z.lo = t[2].getIntValue(); z.hi = t[3].getIntValue(); z.vlo = t[4].getIntValue(); z.vhi = t[5].getIntValue();
+        km->zones.push_back (std::move (z));
+    }
+    cache[key] = km;
+    return km;
+}
+class KeysInstrument : public ChannelInstrument
+{
+public:
+    explicit KeysInstrument (std::shared_ptr<const KeyMap> m) : map (std::move (m)) {}
+    void prepare (double s, int) override { sr = s; }
+    void update (const Channel& c) override { release = juce::jmax (map ? map->release : 0.25f, c.ampRelease); pitch = c.pitch; }
+    void noteOn (int key, float vel, bool) override { noteOnAt (key, vel, false, 0.0); }
+    void noteOnAt (int key, float vel, bool, double secondsIn) override
+    {
+        if (! map) return;
+        const int v = juce::jlimit (1, 127, (int) std::lround (vel * 127.0f));
+        const KeyZone* z = nullptr; int best = 1 << 20;
+        for (auto& k : map->zones)
+            if (key >= k.lo && key <= k.hi)
+            {
+                const int d = v < k.vlo ? k.vlo - v : v > k.vhi ? v - k.vhi : 0;
+                if (d < best) { best = d; z = &k; }
+            }
+        if (z == nullptr) return;
+        for (auto& o : voices) if (o.z != nullptr && o.key == key && ! o.releasing) { o.releasing = true; o.tau = 0.03f; }   // a re-struck key damps its last strike
+        Voice* nv = nullptr;
+        for (auto& o : voices) if (o.z == nullptr) { nv = &o; break; }
+        if (nv == nullptr) { nv = &voices[0]; for (auto& o : voices) if (o.env * o.gain < nv->env * nv->gain) nv = &o; }
+        *nv = {};
+        nv->z = z; nv->key = key; nv->step = std::pow (2.0, (key - z->root + pitch) / 12.0);
+        nv->pos = juce::jmax (0.0, secondsIn) * sr * nv->step;
+        nv->gain = 0.27f + 0.73f * vel;   // Salamander amp_veltrack 73%: velocity layers + level
+    }
+    void noteOff (int key) override { for (auto& o : voices) if (o.z != nullptr && o.key == key && ! o.releasing) { o.releasing = true; o.tau = release; } }
+    void allNotesOff() override { for (auto& o : voices) if (o.z != nullptr) { o.releasing = true; o.tau = 0.01f; } }
+    bool isActive() const override { for (auto& o : voices) if (o.z != nullptr) return true; return false; }
+    void render (juce::AudioBuffer<float>& out, int start, int num) override
+    {
+        const int oc = out.getNumChannels();
+        for (auto& o : voices)
+        {
+            if (o.z == nullptr) continue;
+            const auto& b = *o.z->s; const int len = b.getNumSamples(), sc = b.getNumChannels();
+            const float* L = b.getReadPointer (0); const float* R = b.getReadPointer (sc > 1 ? 1 : 0);
+            const float rc = std::exp (-1.0f / (o.tau * (float) sr));
+            for (int i = 0; i < num; ++i)
+            {
+                const int p = (int) o.pos;
+                if (p + 2 >= len || o.env < 1.0e-4f) { o.z = nullptr; break; }
+                const float t = (float) (o.pos - p);
+                auto herm = [&] (const float* d) {
+                    const float y0 = d[p > 0 ? p - 1 : 0], y1 = d[p], y2 = d[p + 1], y3 = d[p + 2];
+                    const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+                    return ((c3 * t + c2) * t + c1) * t + y1; };
+                const float g = o.gain * o.env;
+                out.addSample (0, start + i, herm (L) * g);
+                if (oc > 1) out.addSample (1, start + i, herm (R) * g);
+                if (o.releasing) o.env *= rc;
+                o.pos += o.step;
+            }
+        }
+    }
+private:
+    struct Voice { const KeyZone* z = nullptr; double pos = 0, step = 1; float gain = 0, env = 1, tau = 0.25f; bool releasing = false; int key = -1; };
+    std::shared_ptr<const KeyMap> map;
+    std::array<Voice, 48> voices {};
+    double sr = 44100; float release = 0.25f, pitch = 0;
+};
+
 std::unique_ptr<ChannelInstrument> createInstrument (const Channel& c, SharedSample sample, double sr)
 {
     std::unique_ptr<ChannelInstrument> inst;
     if (c.type == ChannelType::Drummer) return createDrummerInstrument (c, sr);
     if (c.type == ChannelType::Synth) inst = std::make_unique<SynthInstrument>();
+    else if (c.type == ChannelType::Sampler && c.sampleFile.hasFileExtension ("hhkeys")) inst = std::make_unique<KeysInstrument> (loadKeyMap (c.sampleFile, sr));
     else if (c.type == ChannelType::Sampler)
     {
         if (! sample && c.builtinDrum >= 0)

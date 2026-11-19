@@ -310,6 +310,24 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main (int argc, char** argv)
 {
+    {   // HumHouse Grand: the recorded piano plays every key, and a released note dies away
+        auto map = juce::File::getCurrentWorkingDirectory().getChildFile ("Sounds/HumHouse Grand/HumHouse Grand.hhkeys");
+        if (map.existsAsFile())
+        {
+            hhs::Channel c; c.type = hhs::ChannelType::Sampler; c.sampleFile = map;
+            auto inst = hhs::createInstrument (c, nullptr, 44100.0);
+            CHECK (inst != nullptr);
+            juce::AudioBuffer<float> o (2, 4410);
+            for (int k : { 21, 40, 60, 84, 108 })
+            {
+                o.clear(); inst->noteOn (k, 0.8f, false); inst->render (o, 0, 4410);
+                CHECK (o.getMagnitude (0, 4410) > 0.01f && std::isfinite (o.getSample (0, 100)));
+                inst->noteOff (k);
+            }
+            for (int b = 0; b < 40 && inst->isActive(); ++b) { o.clear(); inst->render (o, 0, 4410); }
+            CHECK (! inst->isActive());
+        }
+    }
     // offline AutoPitch render for A/B against references: HHS_AP_IN=in.wav HHS_AP_OUT=out.wav HHSTests
     if (auto* inPath = std::getenv ("HHS_AP_IN"))
     {

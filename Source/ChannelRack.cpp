@@ -384,8 +384,11 @@ static Channel poolChannel (const PoolInstrument& e)
     sp.grain = e.grain; sp.evolve = e.evolve; sp.bWarp = e.bWarp; sp.bStart = e.bStart; sp.bDrop = e.bDrop; sp.bClick = e.bClick;
     sp.xWave = e.xw; sp.xVol = e.xv; sp.xSemi = e.xs; sp.xFine = e.xf;
     c.glide = e.glide; c.mono = e.mono; c.rootKey = e.root;
-    if (e.sample != nullptr)
-        if (const auto f = bundledSoundsRoot().getChildFile (e.sample); f.existsAsFile())
+    // the acoustic pianos are the recorded HumHouse Grand (real Yamaha C5 grand, every key and 4 velocity layers)
+    const juce::String nm (e.name);
+    const char* smp = e.sample != nullptr ? e.sample : (nm == "Acoustic Piano" || nm == "Grand Piano") ? "HumHouse Grand/HumHouse Grand.hhkeys" : nullptr;
+    if (smp != nullptr)
+        if (const auto f = bundledSoundsRoot().getChildFile (smp); f.existsAsFile())
         {
             c.type = ChannelType::Sampler; c.sampleFile = f; c.keyTrack = true; c.rootKey = e.root;
         }

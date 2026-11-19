@@ -806,7 +806,7 @@ void Engine::sync()
         else
         {
             SharedSample s;
-            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile())
+            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile() && ! ch.sampleFile.hasFileExtension ("hhkeys"))
             {
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
