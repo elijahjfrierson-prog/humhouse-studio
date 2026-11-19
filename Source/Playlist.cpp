@@ -43,7 +43,8 @@ namespace hhs
 {
 namespace
 {
-constexpr int toolbarH = 32, headerW = 220, rulerH = 24;
+constexpr int toolbarH = 32, rulerH = 24;
+static int headerW = 220;   // phone: X folds the track panel to a thin strip, > opens it
 
 juce::AudioFormatManager& formats()
 {
@@ -1329,6 +1330,12 @@ public:
         rackPop.icon = (int) CursorIcon::Rack;
         rackPop.onClick = [] { if (rackPopOut) rackPopOut(); };
         addAndMakeVisible (rackPop);
+        if (phoneUI)
+        {
+            setupButton (panelBtn, "X", "Close / open the track panel (Track 1, 2...)");
+            panelBtn.onClick = [this] { headerW = headerW > 40 ? 36 : 220; panelBtn.setButtonText (headerW > 40 ? "X" : ">"); resized(); repaint(); };
+            addAndMakeVisible (panelBtn);
+        }
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
@@ -1428,6 +1435,7 @@ public:
                 addDrummer.setBounds (getWidth() - 56, getHeight() - hbarH - 4 - 6 * 48, 52, 44); addDrummer.toFront (false);
             }
         }
+        if (phoneUI) { panelBtn.setBounds (2, toolbarH + 1, 32, rulerH - 2); panelBtn.toFront (false); }
         layoutHeaders();
     }
 
@@ -1518,7 +1526,7 @@ public:
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        drawHeadline (g, "PLAYLIST", { 8, toolbarH, headerW - 16, rulerH }, juce::Justification::centredLeft);
+        if (headerW > 40) drawHeadline (g, "PLAYLIST", { phoneUI ? 40 : 8, toolbarH, headerW - (phoneUI ? 48 : 16), rulerH }, juce::Justification::centredLeft);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
@@ -1549,6 +1557,7 @@ public:
         {
             touchPos[1] = e.position; pinching = true; panTap = false;
             pinchD0 = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])); pinchPpb0 = pxPerBeat;
+            pinchDx0 = std::abs (touchPos[0].x - touchPos[1].x); pinchDy0 = std::abs (touchPos[0].y - touchPos[1].y); pinchZh0 = zoomH;
             pinchBeat = xToBeat ((touchPos[0].x + touchPos[1].x) * 0.5f); return;
         }
         if (phoneUI && e.source.getIndex() > 0)   // touch: a second finger scrolls freely up/down and side to side
@@ -1711,6 +1720,11 @@ public:
             if (pinching)   // two-finger pinch: zoom from very close to very far, anchored between the fingers
             {
                 const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
+                if (pinchDy0 > pinchDx0 && pinchDy0 >= 40.0f)   // fingers above each other: tracks get taller / shorter
+                {
+                    zoomH = juce::jlimit (0.4f, 4.0f, pinchZh0 * juce::jmax (20.0f, std::abs (touchPos[0].y - touchPos[1].y)) / pinchDy0);
+                    layoutHeaders(); lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
+                }
                 pxPerBeat = juce::jlimit (1.0f, 1600.0f, pinchPpb0 * d / pinchD0);
                 scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) headerW) / pxPerBeat);
                 lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
@@ -2175,7 +2189,8 @@ public:
 private:
     enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, AutoCurve, Pan, Gain };
     float curve0 = 0.0f;
-    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
+    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchZh0 = 1.0f; double pinchBeat = 0;
+    juce::TextButton panelBtn;
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
     void fitAll()   // whole song and every track on screen
@@ -3360,7 +3375,7 @@ private:
         {
             const int y = laneY ((int) i);
             headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
-            headers[i]->setVisible (y + laneHOf ((int) i) > toolbarH + rulerH);
+            headers[i]->setVisible (headerW > 40 && y + laneHOf ((int) i) > toolbarH + rulerH);
         }
     }
     void refresh()

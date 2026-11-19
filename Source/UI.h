@@ -25,19 +25,62 @@ inline bool fxOffered (const juce::String& id, const juce::String& category)
     if (phoneUI && id == "hhamp") return false;   // amp rig is desktop only
     return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "steq7" || id == "glitch" || id == "scope");
 }
-// phone: a panel bigger than the screen goes in a finger-scrolled view instead of being cut off (desktop: unchanged)
+// phone: two fingers pinch-zoom whatever is inside (plug-in windows, dialogs); one finger still works the controls,
+// a drag scrolls once it's bigger than the screen. Takes ownership of c.
+class PinchZoomView : public juce::Viewport
+{
+public:
+    PinchZoomView (juce::Component* c, int maxW, int maxH) : content (c)
+    {
+        holder.addAndMakeVisible (c);
+        setViewedComponent (&holder, false);
+        setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+        holder.addMouseListener (&pinch, true);
+        c->addComponentListener (&pinch);
+        apply (1.0f);
+        setSize (juce::jmin (c->getWidth(), maxW), juce::jmin (c->getHeight(), maxH));
+    }
+    ~PinchZoomView() override { content->removeComponentListener (&pinch); holder.removeMouseListener (&pinch); setViewedComponent (nullptr, false); }
+    void apply (float z)
+    {
+        zoom = juce::jlimit (0.5f, 3.0f, z);
+        content->setTransform (juce::AffineTransform::scale (zoom));
+        content->setTopLeftPosition (0, 0);
+        holder.setSize (juce::roundToInt ((float) content->getWidth() * zoom), juce::roundToInt ((float) content->getHeight() * zoom));
+    }
+private:
+    struct Pinch : juce::MouseListener, juce::ComponentListener
+    {
+        explicit Pinch (PinchZoomView& o) : v (o) {}
+        PinchZoomView& v; juce::Point<float> p[2]; bool down[2] {}, busy = false; float d0 = 1.0f, z0 = 1.0f;
+        juce::Point<float> at (const juce::MouseEvent& e) const { return e.getEventRelativeTo (&v).position; }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            const int i = e.source.getIndex(); if (i > 1) return;
+            p[i] = at (e); down[i] = true;
+            if (down[0] && down[1]) { d0 = juce::jmax (20.0f, p[0].getDistanceFrom (p[1])); z0 = v.zoom; }
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            const int i = e.source.getIndex(); if (i > 1) return;
+            p[i] = at (e);
+            if (down[0] && down[1]) v.apply (z0 * juce::jmax (20.0f, p[0].getDistanceFrom (p[1])) / d0);
+        }
+        void mouseUp (const juce::MouseEvent& e) override { const int i = e.source.getIndex(); if (i <= 1) down[i] = false; }
+        void componentMovedOrResized (juce::Component&, bool, bool resized) override { if (resized && ! busy) { busy = true; v.apply (v.zoom); busy = false; } }
+    };
+    std::unique_ptr<juce::Component> content;
+    juce::Component holder;
+    Pinch pinch { *this };
+    float zoom = 1.0f;
+};
+// phone: every panel goes in a pinch-zoom view, finger-scrolled when it's bigger than the screen (desktop: unchanged)
 inline juce::Component* fitToScreen (juce::Component* c)
 {
     if (! phoneUI || c == nullptr) return c;
     const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
     if (d == nullptr) return c;
-    const int maxW = d->userArea.getWidth() - 8, maxH = d->userArea.getHeight() - 60;   // room for the title bar
-    if (c->getWidth() <= maxW && c->getHeight() <= maxH) return c;
-    auto* v = new juce::Viewport();
-    v->setViewedComponent (c, true);
-    v->setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
-    v->setSize (juce::jmin (c->getWidth() + v->getScrollBarThickness(), maxW), juce::jmin (c->getHeight(), maxH));
-    return v;
+    return new PinchZoomView (c, d->userArea.getWidth() - 8, d->userArea.getHeight() - 60);   // room for the title bar
 }
 // a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
 void pumpPendingPaints();   // paints held-back windows every screen refresh (PaintPump.cpp)

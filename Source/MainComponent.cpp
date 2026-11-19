@@ -837,6 +837,18 @@ public:
             t->onClick = [this, v] { setView (v); };
             addAndMakeVisible (t);
         }
+        if (phoneUI)   // phone: one PAGE folder instead of 4 tabs
+        {
+            setupButton (pagesBtn, "PAGE: REC", "Pages: Beat, Record, Mix, Patch Bay");
+            pagesBtn.onClick = [this]
+            {
+                juce::PopupMenu m;
+                const char* names[] { "BEAT  (Channel Rack + Piano Roll)", "RECORD  (Playlist)", "MIX  (Mixer)", "PATCH  (Patch Bay)" };
+                for (int k = 0; k < 4; ++k) if (! (phoneLite && k == 3)) m.addItem (k + 1, names[k], true, view == k);
+                m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pagesBtn), [this] (int r) { if (r > 0) setView (r - 1); });
+            };
+            addAndMakeVisible (pagesBtn);
+        }
         setupButton (songBtn, "PAT", "Pattern / Song mode (L)", true);
         songBtn.onClick = [this] { studio.edit ("Pattern/Song", [this] (Project& p) { p.songMode = songBtn.getToggleState(); }); };
         setupButton (startBtn, {}, "Back to the start (Home)"); startBtn.kind = 3;
@@ -1108,11 +1120,12 @@ if (phoneUI)
                 r = d->safeAreaInsets.subtractedFrom (r);   // below the notch / status bar
             r.removeFromTop (6);   // phone: the same controls, wrapped into as many rows as the width needs (portrait or landscape)
             videoTab.setVisible (false);   // phone: no VIDEO page
+            for (auto* t : { &beatTab, &recordTab, &mixTab, &patchTab }) t->setVisible (false);   // they live in the PAGE folder
             // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
-                { &menuBtn, 70 }, { nullptr, 130 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 }, { nullptr, brk },
-                { &beatTab, 80 }, { &recordTab, 80 }, { &mixTab, 80 }, { &patchTab, 80 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 }, { nullptr, brk },
+                { &menuBtn, 70 }, { nullptr, 96 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 },
+                { &pagesBtn, 120 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 },
                 { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
@@ -1121,7 +1134,8 @@ if (phoneUI)
             for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &pianoBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
                                                                     &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
                 c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
-            const int rowH = 46, avail = juce::jmax (200, r.getWidth() - 16);
+            for (auto& it : items) if (it.second > 0) it.second = it.second * 85 / 100;   // crunched: more room for the page
+            const int rowH = 38, avail = juce::jmax (200, r.getWidth() - 16);
             int x = 0, rows = 1;
             for (auto& it : items) { if (it.second == brk) { if (x > 0) { ++rows; x = 0; } continue; } if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
             topBar = r.removeFromTop (rows * rowH + 8);
@@ -1457,7 +1471,7 @@ if (phoneUI)
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
             m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
-            m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
+            if (! phoneUI) m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
@@ -1507,7 +1521,7 @@ if (phoneUI)
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
             if (! phoneUI) add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
-            add (mPatchBay, "Patch Bay (nodes: sequencers, sounds, FX, LFOs)");
+            if (! phoneLite) add (mPatchBay, "Patch Bay (nodes: sequencers, sounds, FX, LFOs)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
             m.addSeparator();
@@ -1600,7 +1614,7 @@ if (phoneUI)
         }
         if (id == 395 && lastTemplate.isNotEmpty()) { writeTemplate (lastTemplate); return; }
         if (id == 396) { addTemplateFolder(); return; }
-        if (id == 397) { templatesDir().createDirectory(); templatesDir().startAsProcess(); return; }
+        if (id == 397) { templatesDir().createDirectory(); if (phoneUI) phoneTemplates(); else templatesDir().startAsProcess(); return; }
         if (id == 398) { shareProjectAsTemplate(); return; }
         if (id == 399) { importSharedFile(); return; }
         if (id >= 700 && id < 790)
@@ -1805,6 +1819,7 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     int coreTick = 0;
     juce::VBlankAttachment paintPump { this, [] { pumpPendingPaints(); } };   // visuals never wait behind mouse moves
+    juce::TextButton pagesBtn;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
     // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
@@ -2122,6 +2137,8 @@ private:
     void setView (int v)
     {
         if (phoneUI && v == 4) return;   // phone: no VIDEO page
+        if (phoneLite && v == 3) return;   // stripped phone app: no Patch Bay
+        if (phoneUI) pagesBtn.setButtonText (juce::String ("PAGE: ") + (v == 0 ? "BEAT" : v == 1 ? "REC" : v == 2 ? "MIX" : "PATCH"));
         if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab };
@@ -2605,6 +2622,29 @@ private:
    #endif
 
     static juce::File templatesDir() { return docsDir().getChildFile ("Templates"); }
+    // phone: templates live in the app (Files > On My iPhone > HumHouse Studio > Templates); open, delete or clear them here
+    void phoneTemplates()
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader ("TEMPLATES ON THIS PHONE");
+        auto ts = templateFiles();
+        for (int i = 0; i < ts.size() && i < 90; ++i)
+        {
+            juce::PopupMenu sub;
+            sub.addItem (1000 + i, "Open (new song from it)"); sub.addItem (2000 + i, "Delete");
+            m.addSubMenu (ts[i].getFileNameWithoutExtension(), sub);
+        }
+        if (ts.isEmpty()) m.addItem (-1, "(no templates yet)", false);
+        m.addSeparator(); m.addItem (3000, "Delete all templates", ! ts.isEmpty());
+        m.showMenuAsync ({}, [this, ts] (int r) {
+            if (r >= 1000 && r < 1000 + ts.size()) newProject (ts[r - 1000]);
+            else if (r >= 2000 && r < 2000 + ts.size()) { ts[r - 2000].deleteFile(); flash ("Template deleted: " + ts[r - 2000].getFileNameWithoutExtension()); }
+            else if (r == 3000)
+                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete all templates?")
+                                                  .withMessage (juce::String (ts.size()) + " templates on this phone will be deleted. Your songs stay.").withButton ("Delete").withButton ("Cancel"),
+                                              [this, ts] (int b) { if (b != 1) return; for (auto& f : ts) f.deleteFile(); flash ("Templates cleared"); });
+        });
+    }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
     juce::StringArray templateFolders() const
     {

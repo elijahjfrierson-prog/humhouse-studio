@@ -59,6 +59,7 @@ public:
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
+        if (phoneUI && proc == nullptr) content = fitToScreen (content);   // built-in plug-ins pinch-zoom (hosted AUv3 views size themselves)
         setContentOwned (content, true);
         // decided before the window is on screen: changing it later rebuilds the native window, and hosted plug-in
         // views (Analog Lab, ZENOLOGY, Surge XT on macOS) lose their window and collapse to an empty box

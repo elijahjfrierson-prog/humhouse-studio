@@ -217,7 +217,7 @@ struct Strip : public juce::Component
                 else if (r == 5) s.edit ("Set to master", [this] (Project& p) {
                     auto& mt = p.mixer[(size_t) index];
                     mt.direct = ! mt.direct;
-                    if (mt.direct) { mt.sends.clear(); mt.routesToMaster = true; }   // only the master, so no bus can add delay
+                    if (mt.direct) mt.routesToMaster = true;   // master path is unaligned (no latency); bus sends and routes stay
                 });
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
                 else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
