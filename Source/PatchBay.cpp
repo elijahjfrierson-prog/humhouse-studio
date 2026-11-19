@@ -729,7 +729,7 @@ private:
         juce::PopupMenu m;
         m.addItem (1, "Reset");
         m.addItem (2, "Min"); m.addItem (3, "Middle"); m.addItem (4, "Max");
-        if (n.kind != LfoNode) { m.addSeparator(); m.addItem (5, w == 0 ? (n.kind == Fx ? "Automate this FX..." : "Automate level") : "Automate pan"); }
+        if (n.kind != LfoNode && ! phoneLite) { m.addSeparator(); m.addItem (5, w == 0 ? (n.kind == Fx ? "Automate this FX..." : "Automate level") : "Automate pan"); }
         const auto key = n.key;
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(), [safe = juce::Component::SafePointer<Canvas> (this), key, w] (int r) {
             if (safe == nullptr || r <= 0) return;
@@ -977,7 +977,7 @@ public:
         int k = 0;
         for (auto& d : s.engine.knownPlugins.getTypes()) { if (d.isInstrument) inv.addItem (1000 + k, d.name); else vst.addItem (3000 + k, d.name); ++k; }
         inst.addSubMenu ("VST instrument", inv);
-        int fi = 0; for (auto& e : builtinEffects()) fx.addItem (2000 + fi++, e.name);
+        int fi = 0; for (auto& e : builtinEffects()) { if (fxOffered (e.id, e.category)) fx.addItem (2000 + fi, e.name); ++fi; }
         m.addSubMenu ("Add instrument", inst);
         m.addSubMenu ("Add FX (built-in)", fx); m.addSubMenu ("Add VST effect", vst);
         m.addItem (4, "Add LFO");
@@ -1241,8 +1241,7 @@ private:
             au.addItem (1000 + i, ps[(size_t) i].second);
             for (int g = 0; g < 4; ++g) gate[g].addItem (2000 + g * 200 + i, ps[(size_t) i].second);
         }
-        m.addSubMenu ("Automate", au);
-        for (int g = 0; g < 4; ++g) m.addSubMenu (gates[g], gate[g]);
+        if (! phoneLite) { m.addSubMenu ("Automate", au); for (int g = 0; g < 4; ++g) m.addSubMenu (gates[g], gate[g]); }
         for (int i = 0; i < (int) lfos().size(); ++i) lf.addItem (100 + i, lfos()[(size_t) i].name);
         m.addSubMenu ("Modulate with LFO", lf);
         m.addSeparator(); m.addItem (2, "Remove FX");

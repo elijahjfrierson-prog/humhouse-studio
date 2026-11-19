@@ -66,7 +66,7 @@ void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
     std::map<juce::String, juce::PopupMenu> cats, makers;
     const auto& fx = builtinEffects();
     for (size_t i = 0; i < fx.size(); ++i)
-        if (! (phoneUI && juce::String (fx[i].id) == "hhamp"))   // amp rig is desktop only: the phone stays light on CPU
+        if (fxOffered (fx[i].id, fx[i].category))
             cats[fx[i].category].addItem ((int) i + 1, fx[i].name);
     for (auto& [c, sub] : cats) builtins.addSubMenu (c, sub);
     auto types = s.engine.knownPlugins.getTypes();
@@ -84,8 +84,7 @@ void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
     juce::PopupMenu third;
     for (auto& [maker, sub] : makers) third.addSubMenu (maker, sub);
     m.addSubMenu ("Third-party plugins", third, third.getNumItems() > 0);
-    m.addSeparator();
-    m.addItem (9999, "Scan / manage plugins...");
+    if (! phoneUI) { m.addSeparator(); m.addItem (9999, "Scan / manage plugins..."); }
     m.showMenuAsync ({}, [&s, track, replaceSlotUid, types] (int r) {
         const auto& all = builtinEffects();
         if (r >= 1 && r <= (int) all.size()) addEffect (s, track, all[(size_t) r - 1].id, {}, replaceSlotUid);
@@ -113,7 +112,7 @@ public:
         addAndMakeVisible (list);
         setupButton (scan, "Scan plugins", "Find every VST3 / AU plugin on this computer");
         scan.onClick = [this] { showPluginScanner (s); };
-        addAndMakeVisible (scan);
+        if (! phoneUI) addAndMakeVisible (scan);   // no plug-in scanner on the phone
         s.engine.knownPlugins.addChangeListener (this);
         rebuild();
     }
@@ -122,7 +121,7 @@ public:
     {
         auto r = getLocalBounds().reduced (4);
         search.setBounds (r.removeFromTop (26)); r.removeFromTop (4);
-        scan.setBounds (r.removeFromBottom (28)); r.removeFromBottom (4);
+        if (! phoneUI) { scan.setBounds (r.removeFromBottom (28)); r.removeFromBottom (4); }
         list.setBounds (r);
     }
 
@@ -143,7 +142,7 @@ private:
         juce::String lastCat;
         entries.push_back ({ "HUMHOUSE BUILT-INS", {}, 0, {}, -1 });
         for (auto& f : builtinEffects())
-            if (match (f.name, f.category)) entries.push_back ({ f.name, f.category, 1, f.id, -1 });
+            if (fxOffered (f.id, f.category) && match (f.name, f.category)) entries.push_back ({ f.name, f.category, 1, f.id, -1 });
         types = s.engine.knownPlugins.getTypes();
         for (int pass = 0; pass < 3; ++pass)
         {

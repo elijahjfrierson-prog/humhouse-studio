@@ -2521,7 +2521,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 }
                 il = nl; ir = nr;
             }
-            if (lane.monitor && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
+            if (lane.monitor && ! speakerOut.load() && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;
                 dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n);

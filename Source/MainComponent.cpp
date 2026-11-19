@@ -3,6 +3,9 @@
 #include "ProjectImport.h"
 #include <thread>
 #include "BinaryData.h"
+#if JUCE_IOS
+bool hhsPhoneSpeakerOut();   // IosRoute.mm
+#endif
 
 namespace hhs
 {
@@ -346,7 +349,7 @@ void Knob::showMenu()
     m.addItem (2, "Reset to default (" + getTextFromValue (defValue) + ")");
     m.addSeparator();
     m.addItem (3, "Min"); m.addItem (4, "Middle"); m.addItem (5, "Max");
-    if (onAutomate) { m.addSeparator(); m.addItem (6, "Automate / LFO / link..."); }
+    if (onAutomate && ! phoneLite) { m.addSeparator(); m.addItem (6, "Automate / LFO / link..."); }
     juce::Component::SafePointer<Knob> self (this);
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [self] (int r) {
         if (self == nullptr || r <= 0) return;
@@ -748,7 +751,7 @@ public:
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
-        engine.pluginSandbox = studio.settings->getBoolValue ("pluginSandbox", false);
+        engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
@@ -1107,6 +1110,7 @@ if (phoneUI)
             if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
             if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
+            if (phoneLite) items.erase (std::remove_if (items.begin(), items.end(), [this] (const auto& it) { return it.first == &scopeBtn; }), items.end());   // stripped phone app: no spectrum
             for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &pianoBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
                                                                     &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
                 c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
@@ -1495,7 +1499,7 @@ if (phoneUI)
             add (mRecord, "Record (Playlist)", "F5", true, view == 1);
             add (mMix, "Mix (Mixer)", "F9", true, view == 2);
             add (mBrowser, "Plugin House / Browser", "F8", true, showBrowser);
-            add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
+            if (! phoneUI) add (mDJ, "Hum Verse (DJ: 2 decks, waveforms, hot cues, library)");
             add (mPatchBay, "Patch Bay (nodes: sequencers, sounds, FX, LFOs)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
@@ -1509,7 +1513,7 @@ if (phoneUI)
         else if (index == 3)
         {
             add (mAudio, "Audio settings (device, buffer size, sample rate)...");
-            add (mPlugins, "Plugin House: scan / manage plugins...");
+            if (! phoneUI) add (mPlugins, "Plugin House: scan / manage plugins...");
             add (mAutoBackup, "Auto-backup (every 8 edits + every 2 minutes)", {}, true, autoBackup());
             add (mTypingKeys, "Typing keyboard to piano (play live: Z-M / Q-I rows)", {}, true, typingKeyboard());
             {
@@ -1544,7 +1548,6 @@ if (phoneUI)
                 pm.addSeparator();
                 pm.addItem (470, "Multithreaded mixer + instruments (spread tracks over cores)", true, perf().mt);
                 pm.addItem (471, "Smart disable (silent plugins / instruments sleep)", true, perf().smart);
-                pm.addItem (472, "Crash-protect new plug-ins (own process: safer, but heavier with many plug-ins)", true, engine.pluginSandbox.load());
                #if JUCE_WINDOWS
                 pm.addItem (476, "HumHouse No Latency Driver (built-in fast Windows audio when no ASIO driver is used)", true, engine.noLatencyDriver.load());
                #endif
@@ -1858,7 +1861,7 @@ private:
         MainComponent& m;
     } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
-    int savedFlash = 0;
+    int savedFlash = 0, routeTick = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {
         void mouseUp (const juce::MouseEvent& e) override
@@ -2158,6 +2161,9 @@ private:
 
     void timerCallback() override
     {
+       #if JUCE_IOS
+        if (++routeTick >= 15) { routeTick = 0; engine.speakerOut = hhsPhoneSpeakerOut(); }   // ~2 Hz: headphones in / out
+       #endif
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);

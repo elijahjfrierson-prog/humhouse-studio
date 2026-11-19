@@ -445,7 +445,7 @@ public:
         addAndMakeVisible (house);
         eqLabel.setText ("EQ  (drag dots, wheel = Q, double-click = flat)", juce::dontSendNotification);
         eqGraph = std::make_unique<MiniEqGraph> (s, [this] { return track(); });
-        addAndMakeVisible (*eqGraph);
+        if (! phoneLite) addAndMakeVisible (*eqGraph);   // stripped phone app: no graphic EQ
         eqGraph->onSelect = [this] (int) { showEqBand(); };
         eqShape.addItemList ({ "Bell", "Low shelf", "High shelf", "Low cut", "High cut", "Notch" }, 1);
         eqShape.setTooltip ("Shape of the selected EQ band");
@@ -455,10 +455,10 @@ public:
             s.edit ("Mini EQ shape", [&] (Project& p) { p.mixer[(size_t) track()].meqType[(size_t) b] = ty; });
             eqGraph->repaint();
         };
-        addAndMakeVisible (eqShape);
+        if (! phoneLite) addAndMakeVisible (eqShape);
         eqLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         eqLabel.setColour (juce::Label::textColourId, col::accent);
-        addAndMakeVisible (eqLabel);
+        if (! phoneLite) addAndMakeVisible (eqLabel);
         static const char* bandName[] { "Low", "Lo-Mid", "Mid", "Hi-Mid", "High" };
         for (int b = 0; b < 5; ++b)
             for (int k = 0; k < 3; ++k)
@@ -678,7 +678,7 @@ private:
         m.addItem (1, "Open editor"); m.addItem (2, fx[(size_t) i].bypass ? "Turn on" : "Bypass");
         m.addItem (3, "Replace (Plugin House)..."); m.addItem (4, "Move up", i > 0); m.addItem (5, "Move down", i + 1 < (int) fx.size());
         std::vector<AutoTarget> targets;
-        m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
+        if (! phoneLite) m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
         m.addSeparator(); m.addItem (6, "Remove");
         m.showMenuAsync ({}, [this, t, i, uid, targets] (int r) {
             if (r >= 100)

@@ -173,8 +173,10 @@ jobs:
           cmake -S . -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
-      - name: Build (HumHouse Studio Master for iPhone)
-        run: cmake --build build-ios --config Release --target HumHouseStudioMaster -- -sdk iphoneos -jobs 2
+      - name: Build (HumHouse Studio Master + stripped subscription app for iPhone)
+        run: |
+          cmake --build build-ios --config Release --target HumHouseStudioMaster -- -sdk iphoneos -jobs 2
+          cmake --build build-ios --config Release --target HumHouseStudio -- -sdk iphoneos -jobs 2
       - name: Package .ipa
         run: |
           APP=$(find build-ios/HumHouseStudioMaster_artefacts -maxdepth 2 -type d -name "*.app" | head -1)
@@ -182,6 +184,10 @@ jobs:
           mkdir -p Payload artifacts
           cp -R "$APP" Payload/
           zip -qry artifacts/HumHouse-Studio-iPhone.ipa Payload
+          LITE=$(find build-ios/HumHouseStudio_artefacts -maxdepth 2 -type d -name "*.app" | head -1)
+          echo "lite app: $LITE"; test -n "$LITE"
+          rm -rf Payload && mkdir Payload && cp -R "$LITE" Payload/
+          zip -qry artifacts/HumHouse-Studio-iPhone-Subscription.ipa Payload
           ls -la artifacts
       - uses: actions/upload-artifact@v4
         with:

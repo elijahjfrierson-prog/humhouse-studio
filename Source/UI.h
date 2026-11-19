@@ -14,6 +14,17 @@ inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one 
 #else
 inline constexpr bool phoneUI = false;
 #endif
+#if JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
+inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
+#else
+inline constexpr bool phoneLite = false;
+#endif
+// built-in effects offered in the Plugin House menus (old projects still load every effect)
+inline bool fxOffered (const juce::String& id, const juce::String& category)
+{
+    if (phoneUI && id == "hhamp") return false;   // amp rig is desktop only
+    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "steq7" || id == "glitch" || id == "scope");
+}
 // phone: a panel bigger than the screen goes in a finger-scrolled view instead of being cut off (desktop: unchanged)
 inline juce::Component* fitToScreen (juce::Component* c)
 {

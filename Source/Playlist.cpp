@@ -3169,7 +3169,7 @@ private:
        #endif
        #endif
         std::vector<AutoTarget> autoT;
-        if (! clip.isAuto())
+        if (! clip.isAuto() && ! phoneLite)
         {
             juce::PopupMenu am;
             if (clip.isAudio()) am = automateMenu (s, autoT, 2000, p.clipInsert (clip), 0, -1);
