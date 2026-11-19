@@ -147,9 +147,9 @@ public:
 private:
     juce::Component* current() { return ours != nullptr && ours->isVisible() ? (juce::Component*) ours.get() : native.get(); }
     static std::map<juce::String, juce::Point<int>>& lastGood() { static std::map<juce::String, juce::Point<int>> m; return m; }
-    bool collapsed() const { return native->getWidth() < 160 || native->getHeight() < 100; }
+    bool collapsed() const { return native->getWidth() < 400 || native->getHeight() < 300; }   // ZENOLOGY can report a ~190x110 stub: no instrument UI is that small
     // ZENOLOGY (and some others) report a 0-size view when first attached: once the window is on screen,
-    // a collapsed native UI is pushed out to its last good size (or 1000x640) so it draws full size
+    // a collapsed native UI is pushed out to its last good size (or 1200x800) so it draws full size
     void timerCallback() override
     {
         if (++ticks == 16) startTimer (1000);   // keeps watching, slower: Antares, Analog Lab, ZENOLOGY can collapse later (preset load, window move)
@@ -157,7 +157,7 @@ private:
         if (collapsed())
         {
             auto it = lastGood().find (proc.getName());
-            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             native->setSize (want.x, want.y);   // collapsed rescue
             fit();
         }
@@ -172,7 +172,7 @@ private:
         if (c == native.get() && collapsed())   // the plug-in still reports a 0-size view: the window opens at its last good size anyway
         {
             const auto it = lastGood().find (proc.getName());
-            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             cw = want.x; chgt = want.y; native->setBounds (0, bar, cw, chgt);
         }
         setSize (juce::jmax (220, cw), chgt + bar);
