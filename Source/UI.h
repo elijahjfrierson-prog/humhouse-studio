@@ -257,8 +257,7 @@ inline void makeCaptureFriendly (juce::Component& c)
 
 // Pop-out Mixer / plug-in windows float over the app. On macOS a real "always on top" (floating level) window is hidden
 // from OBS / screen-capture window lists, so there they stay normal windows and are raised above the app after each click.
-// Linux: X11 can't drop "always on top" from a live window, so a topmost window would stay glued over OBS / other apps
-#if JUCE_MAC || JUCE_LINUX || JUCE_BSD
+#if JUCE_MAC
 inline constexpr bool floatWithTopmost = false;
 #else
 inline constexpr bool floatWithTopmost = true;
