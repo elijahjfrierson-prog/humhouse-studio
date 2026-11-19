@@ -255,7 +255,8 @@ public:
                 if (e.mods.isPopupMenu()) { dotMenu (*n, true, i); return; }
                 // grab a plugged cable off its input dot to move or unplug it, or start a new cable backwards from an empty one
                 for (size_t k = 0; k < cables.size(); ++k)
-                    if (cables[k].to == n->key && cables[k].in == i && cables[k].type != ChainCable)
+                    if (cables[k].to == n->key && cables[k].in == i && cables[k].type != ChainCable
+                        && ! (phoneLite && (cables[k].type == LfoCable || cables[k].type == AutoCable)))   // stripped phone app can't re-plug automation: don't unplug it
                         if (auto* src = byKey (cables[k].from))
                         {
                             const auto c = cables[k]; const int sp = c.out;
