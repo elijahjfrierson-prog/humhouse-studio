@@ -1913,7 +1913,7 @@ private:
             setContentOwned (k, false);
             setUsingNativeTitleBar (true); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
             setWantsKeyboardFocus (false);
-            centreWithSize (640, 120); setAlwaysOnTop (true); addToDesktop (getDesktopWindowStyleFlags()); setVisible (true);
+            centreWithSize (640, 120); addToDesktop (getDesktopWindowStyleFlags()); setVisible (true); markFloating (*this);   // floats over the app only, never glued over other apps
             miniKeyboardOpen() = true;
         }
         ~MiniKb() override { miniKeyboardOpen() = false; }

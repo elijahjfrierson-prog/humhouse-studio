@@ -65,8 +65,8 @@ struct WelcomeWindow : public juce::DocumentWindow
         setUsingNativeTitleBar (true);
         setContentOwned (p, true);
         centreWithSize (getWidth(), getHeight());
-        setAlwaysOnTop (true);
         setVisible (true);
+        toFront (true);   // in front, never glued on top of other apps (streaming)
     }
     std::function<void()> onClose;
     void closeButtonPressed() override { if (onClose) onClose(); }
