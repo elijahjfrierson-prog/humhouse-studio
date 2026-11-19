@@ -67,3 +67,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: always closable, also while streaming
 - lock: HumHouse Grand/HumHouse Grand.hhkeys
 - lock: class KeysInstrument
+- lock: Show in Finder (the clip's audio file)
