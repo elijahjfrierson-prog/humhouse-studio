@@ -626,12 +626,14 @@ private:
             int filled = 0;
             for (auto& [id, nl] : src.notes) if (! nl.empty()) ++filled;
             if (filled < 2) return;
+            // the source already plays on the Playlist: the per-channel copies wait in the pool (never auto-placed on top of it)
+            const bool srcPlaced = std::any_of (p.clips.begin(), p.clips.end(), [idx] (const Clip& c) { return c.patternIndex == idx; });
             int after = idx;
             for (auto& ch : p.channels)
             {
                 auto it = src.notes.find (ch.id);
                 if (it == src.notes.end() || it->second.empty()) continue;
-                Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour; one.notes[ch.id] = it->second;
+                Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour; one.notes[ch.id] = it->second; one.placed = srcPlaced;
                 after = p.insertPatternAfter (after, one);
             }
             juce::ignoreUnused (this);

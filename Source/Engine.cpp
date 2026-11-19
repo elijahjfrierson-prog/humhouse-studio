@@ -1550,6 +1550,7 @@ void Engine::finishRecordingWriters()
             c.sourceOffset = srcOff; c.mixerTrack = insert; c.takeGroup = group;
             c.fadeIn = c.fadeOut = 0.02;
             newClips.push_back (c);
+            if (std::find (proj.audioPool.begin(), proj.audioPool.end(), t->file) == proj.audioPool.end()) proj.audioPool.push_back (t->file);   // a take stays in Audio Clips even after its clip is deleted
         }
         if (newClips.empty()) continue;
         if (t->surprise)

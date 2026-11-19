@@ -43,6 +43,7 @@ private:
         hhir::IsoParameters q;
         q.thresholdDb = p (0); q.attackMs = p (1); q.holdMs = p (2); q.releaseMs = p (3); q.rangeDb = p (4);
         q.depthDb = p (5); q.sensitivity = p (6) / 100.0f; q.smoothingMs = p (7); q.autoTrack = p (8) > 0.5f; q.learning = p (9) > 0.5f;
+        if (q.learning && q.autoTrack) { q.autoTrack = false; setParamQuiet (8, 0.0f); }   // Learn Room = a new room: Auto Room turns off so it keeps what you learned
         q.lowCutHz = p (10); q.highCutHz = p (11); q.keyLowHz = p (12); q.keyHighHz = p (13);
         q.mix = p (14) / 100.0f; q.outputDb = p (15); q.listenResidual = p (16) > 0.5f;
         engine.setParameters (q);
