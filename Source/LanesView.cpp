@@ -487,6 +487,7 @@ private:
 
     void addMenu (bool atMouse = false)
     {
+        if (phoneLite) return;   // stripped phone app: no automation
         auto& p = s.p(); const int tr = track();
         if (tr >= (int) p.mixer.size()) return;
         const auto& mt = p.mixer[(size_t) tr];

@@ -238,7 +238,7 @@ public:
         for (int w = 0; w < 3; ++w)
             if (hasK (*n, w) && kRect (*n, w).expanded (2).contains (e.getPosition()))
             {
-                if (w == 2) { autoMenu (*n, -1); return; }
+                if (w == 2) { if (! phoneLite) autoMenu (*n, -1); return; }
                 if (e.mods.isPopupMenu()) { knobMenu (*n, w); return; }
                 if (e.mods.isAltDown()) { kReset (*n, w); return; }
                 kKey = n->key; kWhich = w; kStart = kGet (*n, w); kY = e.y; return;
@@ -879,7 +879,7 @@ private:
     }
     void applyLfo (int li, const AutoTarget& t)
     {
-        if (li < 0 || li >= (int) lfos().size()) return;
+        if (phoneLite || li < 0 || li >= (int) lfos().size()) return;
         createAutomationClip (s, t, (int) s.p().lanes.size() - 1);
         const auto l = lfos()[(size_t) li];
         s.edit ("Patch Bay: LFO shape", [&] (Project& p) {
