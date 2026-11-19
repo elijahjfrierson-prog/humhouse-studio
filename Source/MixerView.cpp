@@ -643,7 +643,7 @@ private:
         const int sel = eqGraph != nullptr ? eqGraph->selected : 2, w = eqRow.getWidth() / 3;
         for (int i = 0; i < eqKnobs.size(); ++i)
         {
-            const bool show = i / 3 == sel && ! eqRow.isEmpty();
+            const bool show = ! phoneLite && i / 3 == sel && ! eqRow.isEmpty();
             if (show && eqKnobs[i]->getParentComponent() == nullptr) addChildComponent (eqKnobs[i]);
             eqKnobs[i]->setVisible (show);
             if (show) eqKnobs[i]->setBounds (eqRow.getX() + (i % 3) * w, eqRow.getY(), w, eqRow.getHeight());
