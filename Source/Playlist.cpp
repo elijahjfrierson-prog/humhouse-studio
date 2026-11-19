@@ -1430,6 +1430,7 @@ public:
         if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
         t.removeFromLeft (4); rackPop.setBounds (t.removeFromLeft (32));
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
+        vZoom.setVisible (! phoneUI);   // phone: pinch up / down sets track height
         if (phoneUI)
         {
             int y = getHeight() - hbarH - 4 - 5 * 48;
@@ -2269,6 +2270,7 @@ private:
         {
             const auto ca = clipArea();
             vbarP.setBounds (getWidth() - 56 - hbarH - 2, ca.getY(), hbarH, ca.getHeight());
+            vbarP.setVisible (false);   // phone: finger panning scrolls; the bar only got in the way of the side buttons
             vbarP.sync (totalLaneH() + 40.0, scrollY, ca.getHeight());
         }
     }

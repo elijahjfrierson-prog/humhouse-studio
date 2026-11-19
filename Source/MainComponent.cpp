@@ -750,7 +750,7 @@ public:
         kbState.addListener (&kbListen);
 
         if (studio.settings->containsKey ("uiScale"))
-            juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));
+            juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, phoneUI ? 1.5 : 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));   // phone: 150% max, bigger never fits
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
@@ -1570,7 +1570,7 @@ if (phoneUI)
                 juce::PopupMenu sc;
                 const float cur = juce::Desktop::getInstance().getGlobalScaleFactor();
                 const int pcts[] { 75, 90, 100, 110, 125, 150, 175, 200 };
-                for (int i = 0; i < 8; ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
+                for (int i = 0; i < (phoneUI ? 6 : 8); ++i) sc.addItem (200 + i, juce::String (pcts[i]) + "%", true, std::abs (cur * 100.0f - (float) pcts[i]) < 1.0f);
                 m.addSubMenu ("UI scale", sc);
             }
             {
