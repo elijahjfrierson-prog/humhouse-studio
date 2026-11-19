@@ -92,6 +92,7 @@ public:
     // used to pull it (and Paste / drops at the playhead) up to 250 ms before where the marker was put
     double positionBeats() const { return std::max (0.0, playing.load() ? position.load() - antAheadBeats.load() : position.load()); }
     void setPositionBeats (double b);
+    double markerBeats() const;   // the blue marker: where play started / the playhead was put
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
     std::atomic<float> blockLoadFrac { 0.3f };   // recent peak share of the block deadline the audio callback used

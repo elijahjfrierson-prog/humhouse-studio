@@ -1,3 +1,4 @@
+#include <optional>
 #include <set>
 #include "UI.h"
 #include "ProjectImport.h"
@@ -848,6 +849,12 @@ public:
                 m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pagesBtn), [this] (int r) { if (r > 0) setView (r - 1); });
             };
             addAndMakeVisible (pagesBtn);
+            // BandLab-style: selecting clips pops SELECT / TRASH / STAMP (copy) / PAINT (paste) right above them
+            setupButton (cbSelect, "SELECT", "Select tool"); cbSelect.onClick = [this] { if (playlist != nullptr) playlist->keyPressed (juce::KeyPress ('e')); };
+            setupButton (cbTrash, "TRASH", "Delete the selected clips"); cbTrash.onClick = [this] { phoneDelete(); };
+            setupButton (cbStamp, "STAMP", "Copy the selected clips (then tap where they go and PAINT)"); cbStamp.onClick = [this] { phoneCopyPaste ('c'); };
+            setupButton (cbPaint, "PAINT", "Paste what you stamped"); cbPaint.onClick = [this] { phoneCopyPaste ('v'); };
+            for (auto* b : { &cbSelect, &cbTrash, &cbStamp, &cbPaint }) addChildComponent (b);
         }
         setupButton (songBtn, "PAT", "Pattern / Song mode (L)", true);
         songBtn.onClick = [this] { studio.edit ("Pattern/Song", [this] (Project& p) { p.songMode = songBtn.getToggleState(); }); };
@@ -1124,21 +1131,25 @@ if (phoneUI)
             // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
-                { &menuBtn, 70 }, { nullptr, 96 }, { &closeAllBtn, 46 }, { &startBtn, 46 }, { &playBtn, 46 }, { &stopBtn, 46 }, { &recBtn, 46 }, { &songBtn, 56 },
-                { &pagesBtn, 120 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &saveBtn, 80 },
-                { &bpm, 110 }, { &posLabel, 110 }, { &browserBtn, 96 }, { &keysBtn, 128 }, { &toolsBtn, 92 }, { &moreBtn, 86 } };
-            if (toolsOpen) items.insert (items.end(), { { nullptr, brk }, { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
-            if (keysOpen) items.insert (items.end(), { { nullptr, brk }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
-            if (moreOpen) items.insert (items.end(), { { nullptr, brk }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
+                { &menuBtn, 70 }, { &pagesBtn, 120 }, { &songBtn, 56 }, { &saveBtn, 80 }, { &browserBtn, 96 }, { nullptr, brk },
+                { &toolsBtn, 92 }, { &keysBtn, 100 }, { &moreBtn, 86 } };   // 2 rows: everything else sits in the folders, transport at the bottom
+            if (toolsOpen) items.insert (items.end(), { { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
+            if (keysOpen) items.insert (items.end(), { { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
+            if (moreOpen) items.insert (items.end(), { { &closeAllBtn, 46 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &bpm, 110 }, { &posLabel, 110 }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
             if (phoneLite) items.erase (std::remove_if (items.begin(), items.end(), [this] (const auto& it) { return it.first == &scopeBtn; }), items.end());   // stripped phone app: no spectrum
             for (auto* c : std::initializer_list<juce::Component*> { &retroBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &delBtn, &dupBtn, &altABtn, &altSBtn, &pianoBtn, &octDnBtn, &octUpBtn, &noteDnBtn, &noteUpBtn,
-                                                                    &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel })
+                                                                    &metroBtn, &countBtn, &mixPopBtn, &scopeBtn, &themeBtn, &cpuLabel, &closeAllBtn, &rackPopBtn, &importBtn, &bpm, &posLabel })
                 c->setVisible (std::any_of (items.begin(), items.end(), [c] (const auto& it) { return it.first == c; }));
             for (auto& it : items) if (it.second > 0) it.second = it.second * 85 / 100;   // crunched: more room for the page
             const int rowH = 38, avail = juce::jmax (200, r.getWidth() - 16);
             int x = 0, rows = 1;
             for (auto& it : items) { if (it.second == brk) { if (x > 0) { ++rows; x = 0; } continue; } if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
             topBar = r.removeFromTop (rows * rowH + 8);
+            {
+                auto cb = juce::Rectangle<int> (topBar.getX() + 8, topBar.getBottom() + 2, juce::jmin (380, topBar.getWidth() - 16), 40);
+                const int bw = cb.getWidth() / 4;
+                for (auto* b : { &cbSelect, &cbTrash, &cbStamp, &cbPaint }) b->setBounds (cb.removeFromLeft (bw).reduced (2));
+            }
             logoArea = {};
             int y = topBar.getY() + 4; x = 0;
             for (auto& it : items)
@@ -1203,7 +1214,9 @@ if (phoneUI)
         }
         }
         {
-            auto foot = r.removeFromBottom (phoneUI ? 30 : 22);
+            auto foot = r.removeFromBottom (phoneUI ? 46 : 22);
+            if (phoneUI)   // phone: start / play / stop / record live at the bottom, under your thumb
+                for (auto* b : std::initializer_list<juce::Component*> { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setVisible (true); b->setBounds (foot.removeFromLeft (52).reduced (2)); }
             laneBtn.setBounds (foot.removeFromLeft (phoneUI ? 64 : 52).reduced (1));
             lanePop.setVisible (showLanes);
             if (showLanes) lanePop.setBounds (foot.removeFromLeft (phoneUI ? 52 : 44).reduced (1));
@@ -1524,6 +1537,7 @@ if (phoneUI)
             if (! phoneLite) add (mPatchBay, "Patch Bay (nodes: sequencers, sounds, FX, LFOs)");
             m.addSeparator();
             add (mSamplesUsed, "Samples used in this project...");
+            m.addItem (4721, "Tune Finder: key / BPM / tune of the selected clip");
             m.addSeparator();
             add (mDetachRack, "Detach Channel Rack (own window)", {}, true, popouts.count (rack.get()) > 0);
             add (mDetachPiano, "Detach Piano Roll (own window)", {}, true, popouts.count (piano.get()) > 0);
@@ -1583,6 +1597,7 @@ if (phoneUI)
                     }
                     pm.addSubMenu ("Recording offset (" + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms)", om);
                 }
+                pm.addItem (4720, "Recording offset slider (-5000 to +5000 ms, like Logic)...");
                 pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
@@ -1660,6 +1675,18 @@ if (phoneUI)
             flash ("Recording offset " + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms: new takes move by this much");
             return;
         }
+        if (id == 4720)
+        {
+            auto* sl = new juce::Slider (juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
+            sl->setRange (-5000.0, 5000.0, 1.0); sl->setTextValueSuffix (" ms"); sl->setDoubleClickReturnValue (true, 0.0);
+            sl->setValue (engine.recordOffsetMs.load(), juce::dontSendNotification);
+            sl->setTooltip ("Recording offset: + moves new takes earlier, - later. Double-click = 0");
+            sl->onValueChange = [this, sl] { engine.recordOffsetMs = (float) sl->getValue(); studio.settings->setValue ("recordOffsetMs", sl->getValue()); };
+            sl->setSize (phoneUI ? 340 : 520, 48);
+            juce::CallOutBox::launchAsynchronously (std::unique_ptr<juce::Component> (sl), getLocalBounds().withSizeKeepingCentre (20, 20), this);
+            return;
+        }
+        if (id == 4721) { if (tuneFinderHook) tuneFinderHook(); return; }
         if (id == 476)
         {
             if (engine.isRecording()) { flash ("Stop recording first, then switch the No Latency Driver"); return; }
@@ -1819,20 +1846,45 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     int coreTick = 0;
     juce::VBlankAttachment paintPump { this, [] { pumpPendingPaints(); } };   // visuals never wait behind mouse moves
-    juce::TextButton pagesBtn;
+    juce::TextButton pagesBtn, cbSelect, cbTrash, cbStamp, cbPaint;
+    bool clipBarShown = false;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
     // phone: double-tap = right-click on every control (FX slots, clips, nodes, knobs...)
-    struct DoubleTapMenu : juce::MouseListener
+    // phone: a double tap or a ~0.5 s hold acts as ONE right-click (plug-in windows excluded: holding works their controls)
+    struct DoubleTapMenu : juce::MouseListener, private juce::Timer
     {
         bool busy = false;
+        static bool marked (juce::Component* c, const char* prop) { for (; c != nullptr; c = c->getParentComponent()) if (c->getProperties().contains (prop)) return true; return false; }
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
-            if (! phoneUI || busy || e.eventComponent == nullptr || e.mods.isPopupMenu()) return;
-            juce::Component::SafePointer<juce::Component> t (e.eventComponent);
-            const auto mods = e.mods.withoutMouseButtons().withFlags (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::popupMenuClickModifier);
-            const auto pos = e.position;
-            auto src = e.source;
+            stopTimer();
+            if (! phoneUI || busy || e.eventComponent == nullptr || e.mods.isPopupMenu() || marked (e.eventComponent, "ownDoubleTap")) return;
+            fire (e.eventComponent, e.position, e.source, e.mods);
+        }
+        juce::Component::SafePointer<juce::Component> holdT; juce::Point<float> holdPos; juce::Point<float> holdScreen;
+        std::optional<juce::MouseInputSource> holdSrc; juce::ModifierKeys holdMods; bool held = false;
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            stopTimer(); held = false;
+            if (! phoneUI || busy || e.eventComponent == nullptr || e.mods.isPopupMenu() || e.source.getIndex() > 0 || marked (e.eventComponent, "noHold")) return;
+            holdT = e.eventComponent; holdPos = e.position; holdScreen = e.position + e.eventComponent->getScreenPosition().toFloat(); holdSrc = e.source; holdMods = e.mods;
+            startTimer (550);
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (isTimerRunning() && e.eventComponent != nullptr && (e.position + e.eventComponent->getScreenPosition().toFloat()).getDistanceFrom (holdScreen) > 10.0f) stopTimer();
+        }
+        void mouseUp (const juce::MouseEvent&) override { stopTimer(); }
+        void timerCallback() override
+        {
+            stopTimer();
+            if (holdT != nullptr && holdSrc && holdSrc->isDragging()) { held = true; fire (holdT.getComponent(), holdPos, *holdSrc, holdMods); }
+        }
+        void fire (juce::Component* comp, juce::Point<float> pos, juce::MouseInputSource src, juce::ModifierKeys m)
+        {
+            juce::Component::SafePointer<juce::Component> t (comp);
+            const auto mods = m.withoutMouseButtons().withFlags (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::popupMenuClickModifier);
             juce::MessageManager::callAsync ([this, t, mods, pos, src] {
                 if (t == nullptr) return;
                 busy = true;
@@ -2186,6 +2238,11 @@ private:
 
     void timerCallback() override
     {
+        if (phoneUI)
+        {
+            const bool any = view == 1 && std::any_of (studio.p().clips.begin(), studio.p().clips.end(), [] (const Clip& c) { return c.selected; });
+            if (any != clipBarShown) { clipBarShown = any; for (auto* b : { &cbSelect, &cbTrash, &cbStamp, &cbPaint }) { b->setVisible (any); if (any) b->toFront (false); } }
+        }
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
@@ -2638,7 +2695,13 @@ private:
         m.addSeparator(); m.addItem (3000, "Delete all templates", ! ts.isEmpty());
         m.showMenuAsync ({}, [this, ts] (int r) {
             if (r >= 1000 && r < 1000 + ts.size()) newProject (ts[r - 1000]);
-            else if (r >= 2000 && r < 2000 + ts.size()) { ts[r - 2000].deleteFile(); flash ("Template deleted: " + ts[r - 2000].getFileNameWithoutExtension()); }
+            else if (r >= 2000 && r < 2000 + ts.size())
+            {
+                const auto f = ts[r - 2000];
+                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + f.getFileNameWithoutExtension() + "\"?")
+                                                  .withMessage ("Are you sure? This template is deleted from the phone. Your songs stay.").withButton ("Delete").withButton ("Cancel"),
+                                              [this, f] (int b) { if (b == 1 && f.deleteFile()) flash ("Template deleted: " + f.getFileNameWithoutExtension()); });
+            }
             else if (r == 3000)
                 juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete all templates?")
                                                   .withMessage (juce::String (ts.size()) + " templates on this phone will be deleted. Your songs stay.").withButton ("Delete").withButton ("Cancel"),

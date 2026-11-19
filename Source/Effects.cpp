@@ -1544,7 +1544,7 @@ public:
         // two smoothing stages = an eased S-curve blend between the untouched consonant and the tuned vowel (~12 ms),
         // so consonants stay crisp but the hand-off isn't a sudden switch (that was the punchy, attacky edge)
         const float wetCoef = 1.0f - std::exp (-1.0f / (0.003f * (float) sr));
-        const float wetRel = 1.0f - std::exp (-1.0f / (0.07f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
+        const float wetRel = 1.0f - std::exp (-1.0f / (0.12f * (float) sr));   // the tune lets go of a note slowly (sustain + release, not a drop)
         // Body + Character: chest weight, a little forward bite and soft even-order harmonics on the tuned voice,
         // so it sounds full and alive instead of thin (all zero latency)
         const float body = p (13), chr = p (14);
@@ -1599,7 +1599,7 @@ public:
                     const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
                     bool rough = false; int wn = 512; float hz = 0, aper = 1;
                     auto detect = [&] (int len) {
-                        const bool low = lastMidi == 0 || lastMidi < 50;   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
+                        const bool low = lastMidi == 0 || lastMidi < 53;   // up to F3: low notes get ~3 full cycles, so they lock as hard as high ones   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
                         len = juce::jlimit (256, low ? 1536 : 1024, len);
                         std::array<float, 1536> win {};
                         for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
@@ -1624,7 +1624,8 @@ public:
                     // sung vowel too, so the tune cups it from the first hop instead of waiting for the rasp to settle
                     const bool push = lvl > 0.01f && (voiceLvl > 0 ? lvl > 1.3f * voiceLvl : lvl > 0.03f);
                     const bool belt = push || (heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f);
-                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
+                    const bool holding = heldNote > 0 && style != 0;   // inside a sung note, darker / breathier timbres and low inflections keep being read (Antares holds there)
+                    if (lvl < (hard ? 0.07f : holding ? 0.06f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : holding ? 0.48f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
@@ -1662,7 +1663,7 @@ public:
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || belt || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || belt || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.55f : 0.3f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
@@ -1671,7 +1672,7 @@ public:
                     // Hard Tune sustain (Auto-Tune feel): the fading / breathy tail of a held note stays on the note
                     // for up to 0.8 s instead of slipping back to the natural pitch, so the corrected note rings on
                     if (midi > 0) tailHops = 0;
-                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.8f : 0.45f))
+                    else if (midi == 0.0f && heldNote > 0 && lvl > 1.0e-4f && (hard || ! consonant) && ++tailHops * hopSec < (hard ? 0.8f : 0.7f))
                     {
                         wetTarget = 1.0f;
                         // the tail keeps following the voice onto the held note (a frozen ratio drifted off as the voice sagged)
@@ -2012,6 +2013,62 @@ KeyGuess findKey (const float* x, int n, double sr)
     return g;
 }
 
+// ------------------------------------------------------------ Tune Finder (plug-in)
+// listens to its insert and shows the key / scale, tempo and tuning (cents off A440); the audio passes through untouched.
+// The analysis runs on its own thread every 1.5 s, never on the audio thread.
+class TuneFinder : public BuiltinEffect, private juce::Thread
+{
+public:
+    TuneFinder() : juce::Thread ("Tune Finder") { initDefaults(); ring.assign ((size_t) (20 * aRate), 0.0f); startThread (juce::Thread::Priority::low); }
+    ~TuneFinder() override { stopThread (3000); }
+    const char* typeId() const override { return "tunefinder"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<const char*> keys = [] {
+            static std::vector<juce::String> names;
+            for (int sc = 0; sc < 2; ++sc) for (int r = 0; r < 12; ++r) names.push_back (KeyGuess::keyName (r, sc));
+            std::vector<const char*> v { "Listening..." };
+            for (auto& n : names) v.push_back (n.toRawUTF8());
+            return v; }();
+        static const std::vector<ParamDef> ps { { "key", "Detected key", 0, 24, 0, keys }, { "bpm", "Detected BPM", 0, 300, 0 },
+                                                { "cents", "Tuning (cents off A440)", -50, 50, 0 }, { "listen", "Listen (seconds)", 4, 20, 8 } };
+        return ps;
+    }
+    void prepare (double s, int) override { ds = juce::jmax (1, juce::roundToInt (s / aRate)); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const auto* l = b.getReadPointer (0); const auto* r = b.getNumChannels() > 1 ? b.getReadPointer (1) : l;
+        int w = wpos.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i)
+        {
+            acc += 0.5f * (l[i] + r[i]);
+            if (++accN >= ds) { ring[(size_t) w] = acc / (float) accN; w = (w + 1) % (int) ring.size(); acc = 0; accN = 0; filled = std::min (filled + 1, (int) ring.size()); }
+        }
+        wpos.store (w, std::memory_order_release);
+    }
+private:
+    static constexpr double aRate = 11025.0;
+    std::vector<float> ring; std::atomic<int> wpos { 0 }; int filled = 0, ds = 4, accN = 0; float acc = 0;
+    void run() override
+    {
+        std::vector<float> buf;
+        while (! threadShouldExit())
+        {
+            wait (1500);
+            const int len = juce::jlimit (4 * (int) aRate, (int) ring.size(), (int) (p (3) * aRate));
+            if (filled < 4 * (int) aRate) continue;
+            const int w = wpos.load (std::memory_order_acquire), N = (int) ring.size(), use = std::min (len, filled);
+            buf.resize ((size_t) use);
+            float e = 0;
+            for (int k = 0; k < use; ++k) { const float v = ring[(size_t) ((w - use + k + N) % N)]; buf[(size_t) k] = v; e += v * v; }
+            if (std::sqrt (e / (float) use) < 1.0e-4f) continue;   // silence: keep the last answer
+            const auto g = findKey (buf.data(), use, aRate);
+            setParamQuiet (0, (float) (1 + g.root + 12 * g.scaleIndex));
+            setParamQuiet (1, (float) g.bpm); setParamQuiet (2, g.cents);
+        }
+    }
+};
+
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
 std::unique_ptr<BuiltinEffect> createPurify();
@@ -2035,7 +2092,7 @@ const std::vector<EffectInfo>& builtinEffects()
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
         { "hhamp", "Amp House (amp rig)", "Guitar" },
-        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" }, { "tunefinder", "Tune Finder (key / BPM / tune)", "Utility" } };
     return fx;
 }
 
@@ -2103,6 +2160,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();
     if (id == "glitch") return std::make_unique<GlitchGate>();
+    if (id == "tunefinder") return std::make_unique<TuneFinder>();
     if (id == "hhmaster") return std::make_unique<HumHouseMaster>();
     if (id == "wide") return std::make_unique<StereoWide>();
     if (id == "clip") return std::make_unique<SoftClip>();

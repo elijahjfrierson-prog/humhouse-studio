@@ -23,7 +23,7 @@ inline constexpr bool phoneLite = false;
 inline bool fxOffered (const juce::String& id, const juce::String& category)
 {
     if (phoneUI && id == "hhamp") return false;   // amp rig is desktop only
-    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "steq7" || id == "glitch" || id == "scope");
+    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "glitch" || id == "scope");
 }
 // phone: two fingers pinch-zoom whatever is inside (plug-in windows, dialogs); one finger still works the controls,
 // a drag scrolls once it's bigger than the screen. Takes ownership of c.
@@ -87,6 +87,7 @@ void pumpPendingPaints();   // paints held-back windows every screen refresh (Pa
 inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
+inline std::function<void()> tuneFinderHook;   // Tune Finder on the selected clip (set by the Playlist)
 inline juce::Component* phoneClipTarget = nullptr;   // after COPY: any tap on this editor (even on a note / clip) picks the drop spot
 // phone: a double tap acts like a right-click (track / clip / channel menus)
 inline juce::MouseEvent asRightClick (const juce::MouseEvent& e)

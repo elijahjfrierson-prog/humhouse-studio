@@ -1316,6 +1316,7 @@ double Engine::loopLengthOf (const Project& proj)
 }
 
 static double startBeat = 0.0;
+double Engine::markerBeats() const { return startBeat; }
 
 // Audio clips stream from disk with no wait on the audio thread; load the audio at the play position
 // (and each later clip's start) before playback, so the first beat isn't silent.

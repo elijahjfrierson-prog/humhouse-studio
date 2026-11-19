@@ -1174,7 +1174,7 @@ struct LaneHeader : public juce::Component
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
     juce::Slider soft, vol; float softPrev = 0.0f;
-    void mouseDoubleClick (const juce::MouseEvent& e) override { if (phoneUI && ! grip().expanded (3).contains (e.getPosition())) { const auto r = asRightClick (e); mouseDown (r); mouseUp (r); return; } if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (phoneUI && ! grip().expanded (3).contains (e.getPosition())) return; if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
         setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
@@ -1330,6 +1330,10 @@ public:
         rackPop.icon = (int) CursorIcon::Rack;
         rackPop.onClick = [] { if (rackPopOut) rackPopOut(); };
         addAndMakeVisible (rackPop);
+        tuneFinderHook = [this] {
+            for (auto& c : s.p().clips) if (c.selected && (c.isAudio() || c.patternIndex >= 0)) { const auto copy = c; findKeyForClip (copy); return; }
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Tune Finder", "Select an audio or pattern clip first, then run Tune Finder. Or put the Tune Finder plug-in on a mixer insert to read it live.");
+        };
         if (phoneUI)
         {
             setupButton (panelBtn, "X", "Close / open the track panel (Track 1, 2...)");
@@ -1912,7 +1916,7 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH) { timeSelA = timeSelB = -1; s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
-        if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; clipMenu (i); return; }   // phone: double tap = the right-click menu (stem split, settings...)
+        if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; return; }   // phone: double tap = the right-click menu (stem split, settings...)
         if (i >= 0 && p.clips[(size_t) i].isAuto() && hitAutoCurve (p.clips[(size_t) i], e.position) >= 0) return;   // mouseDown already straightened that curve
         if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
         {
@@ -2075,7 +2079,7 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = juce::jmax (0.0, s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
+            const double at = juce::jmax (0.0, s.engine.isPlaying() ? s.engine.markerBeats() : s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -3373,6 +3377,12 @@ private:
     {
         for (size_t i = 0; i < headers.size(); ++i)
         {
+            auto& h = *headers[i];
+            if (! h.getProperties().contains ("rcAll"))   // right-click / hold anywhere on the track bar opens the track menu (Delete...)
+            {
+                h.getProperties().set ("rcAll", true);
+                for (auto* c : h.getChildren()) if (c != &h.name && dynamic_cast<juce::Button*> (c) == nullptr) c->addMouseListener (&h.rightClick, true);
+            }
             const int y = laneY ((int) i);
             headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
             headers[i]->setVisible (headerW > 40 && y + laneHOf ((int) i) > toolbarH + rulerH);

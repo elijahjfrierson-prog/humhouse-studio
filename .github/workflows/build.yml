@@ -31,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Feature lock (nothing the owner asked for disappears)
+        run: python3 scripts/feature_lock.py
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'

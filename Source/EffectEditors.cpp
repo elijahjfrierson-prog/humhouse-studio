@@ -56,6 +56,7 @@ public:
                   juce::AudioProcessor* p = nullptr, bool resizable = false)
         : juce::DocumentWindow (title, col::panel, juce::DocumentWindow::closeButton), key (std::move (k)), proc (p), valid (std::move (stillValid))
     {
+        getProperties().set ("noHold", true);   // phone: holding a plug-in control is how it is used, never a right-click
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
@@ -147,13 +148,14 @@ private:
     // a collapsed native UI is pushed out to its last good size (or 1000x640) so it draws full size
     void timerCallback() override
     {
-        if (++ticks > 16) { stopTimer(); return; }
+        if (++ticks == 16) startTimer (1000);   // keeps watching, slower: Antares, Analog Lab, ZENOLOGY can collapse later (preset load, window move)
         if (! native->isVisible()) return;
         if (collapsed())
         {
             auto it = lastGood().find (proc.getName());
             const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
             native->setSize (want.x, want.y);   // collapsed rescue
+            fit();
         }
         else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
     }
@@ -162,7 +164,14 @@ private:
         const juce::ScopedValueSetter<bool> sv (fitting, true);
         if (! collapsed()) lastGood()[proc.getName()] = { native->getWidth(), native->getHeight() };
         auto* c = current();
-        setSize (juce::jmax (220, c->getWidth()), c->getHeight() + bar);
+        int cw = c->getWidth(), chgt = c->getHeight();
+        if (c == native.get() && collapsed())   // the plug-in still reports a 0-size view: the window opens at its last good size anyway
+        {
+            const auto it = lastGood().find (proc.getName());
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1000, 640);
+            cw = want.x; chgt = want.y; native->setBounds (0, bar, cw, chgt);
+        }
+        setSize (juce::jmax (220, cw), chgt + bar);
         resized();
     }
     static constexpr int bar = 28;

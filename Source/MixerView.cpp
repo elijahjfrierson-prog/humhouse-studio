@@ -445,7 +445,7 @@ public:
         addAndMakeVisible (house);
         eqLabel.setText ("EQ  (drag dots, wheel = Q, double-click = flat)", juce::dontSendNotification);
         eqGraph = std::make_unique<MiniEqGraph> (s, [this] { return track(); });
-        if (! phoneLite) addAndMakeVisible (*eqGraph);   // stripped phone app: no graphic EQ
+        addAndMakeVisible (*eqGraph);
         eqGraph->onSelect = [this] (int) { showEqBand(); };
         eqShape.addItemList ({ "Bell", "Low shelf", "High shelf", "Low cut", "High cut", "Notch" }, 1);
         eqShape.setTooltip ("Shape of the selected EQ band");
@@ -455,10 +455,10 @@ public:
             s.edit ("Mini EQ shape", [&] (Project& p) { p.mixer[(size_t) track()].meqType[(size_t) b] = ty; });
             eqGraph->repaint();
         };
-        if (! phoneLite) addAndMakeVisible (eqShape);
+        addAndMakeVisible (eqShape);
         eqLabel.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         eqLabel.setColour (juce::Label::textColourId, col::accent);
-        if (! phoneLite) addAndMakeVisible (eqLabel);
+        addAndMakeVisible (eqLabel);
         static const char* bandName[] { "Low", "Lo-Mid", "Mid", "Hi-Mid", "High" };
         for (int b = 0; b < 5; ++b)
             for (int k = 0; k < 3; ++k)
@@ -643,7 +643,7 @@ private:
         const int sel = eqGraph != nullptr ? eqGraph->selected : 2, w = eqRow.getWidth() / 3;
         for (int i = 0; i < eqKnobs.size(); ++i)
         {
-            const bool show = ! phoneLite && i / 3 == sel && ! eqRow.isEmpty();
+            const bool show = i / 3 == sel && ! eqRow.isEmpty();
             if (show && eqKnobs[i]->getParentComponent() == nullptr) addChildComponent (eqKnobs[i]);
             eqKnobs[i]->setVisible (show);
             if (show) eqKnobs[i]->setBounds (eqRow.getX() + (i % 3) * w, eqRow.getY(), w, eqRow.getHeight());
