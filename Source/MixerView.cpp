@@ -917,6 +917,7 @@ private:
                 for (auto* id : ch.fx)
                 {
                     if (p.mixer[(size_t) t].fx.size() >= (size_t) maxSlots) break;
+                    if (! std::all_of (builtinEffects().begin(), builtinEffects().end(), [id] (const EffectInfo& e) { return juce::String (e.id) != id || fxOffered (e.id, e.category); })) continue;
                     auto& f = p.addFx (t, id);
                     if (juce::String (id) == "peakctl") ctl = f.uid;
                     if (juce::String (id) == "filter") flt = f.uid;
