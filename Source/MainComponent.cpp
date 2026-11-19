@@ -4,7 +4,7 @@
 #include <thread>
 #include "BinaryData.h"
 #if JUCE_IOS
-bool hhsPhoneSpeakerOut();   // IosRoute.mm
+void hhsWatchPhoneRoute (std::atomic<bool>& speakerOut);   // IosRoute.mm
 #endif
 
 namespace hhs
@@ -752,6 +752,9 @@ public:
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
+       #if JUCE_IOS
+        hhsWatchPhoneRoute (engine.speakerOut);
+       #endif
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
@@ -1861,7 +1864,7 @@ private:
         MainComponent& m;
     } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
-    int savedFlash = 0, routeTick = 0;
+    int savedFlash = 0;
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
     {
         void mouseUp (const juce::MouseEvent& e) override
@@ -2161,9 +2164,6 @@ private:
 
     void timerCallback() override
     {
-       #if JUCE_IOS
-        if (++routeTick >= 15) { routeTick = 0; engine.speakerOut = hhsPhoneSpeakerOut(); }   // ~2 Hz: headphones in / out
-       #endif
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
