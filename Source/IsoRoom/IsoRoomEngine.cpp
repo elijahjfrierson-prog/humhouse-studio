@@ -352,8 +352,9 @@ void IsoRoomEngine::process(float* const* channels, int numChannels, int numSamp
                 const float energy = band.env.process(bandSample);
                 // Both channels follow one floor estimate; the left channel
                 // owns the bookkeeping so a stereo pair never drifts apart.
+                // the louder channel decides (a right-only vocal is still voice): channel 1's envelope is one sample behind
                 if (ch == 0)
-                    bandTarget[static_cast<size_t>(b)] = computeBandGain(b, band, energy);
+                    bandTarget[static_cast<size_t>(b)] = computeBandGain(b, band, numChannels > 1 ? std::max(energy, bands[1][static_cast<size_t>(b)].env.value()) : energy);
                 const float target = bandTarget[static_cast<size_t>(b)];
                 // Open fast, close at the smoothing rate: a consonant must come
                 // through whole, the room can leave gracefully.
@@ -362,18 +363,16 @@ void IsoRoomEngine::process(float* const* channels, int numChannels, int numSamp
 
                 if (b > 0 && b < kBands - 1)
                     wet = split[static_cast<size_t>(b)].allPass(wet);
-                wet += bandSample * band.gain;
+                // dry / wet / residual are blended per band, inside the same all-pass tree, so a partial Mix never
+                // phase-cancels against the untouched input
+                const float g = band.gain * gateGain;
+                wet += bandSample * (params.listenResidual ? 1.0f - g : dryMix + wetMix * g);
                 if (ch == 0)
                     bandGainSum += band.gain;
             }
 
-            wet *= gateGain;
-
-            float out;
-            if (params.listenResidual)
-                out = dry - wet;
-            else
-                out = dry * dryMix + wet * wetMix;
+            (void) dry;
+            const float out = wet;
 
             channels[ch][i] = out * outGain + kTiny - kTiny;
         }

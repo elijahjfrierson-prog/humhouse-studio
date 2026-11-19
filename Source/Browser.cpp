@@ -606,7 +606,7 @@ private:
             for (auto& [g, rs] : groups) { Row h; h.header = true; h.name = g; next.push_back (h); next.insert (next.end(), rs.begin(), rs.end()); }
         }
         juce::String sg (audio ? "A" : "P"); sg << p.currentPattern;
-        for (auto& r : next) sg << "|" << r.name << r.sub << (int) r.header;
+        for (auto& r : next) sg << "|" << r.name << r.sub << (int) r.header << ":" << r.index << ":" << r.file.getFullPathName();   // a new project with same-named rows still refreshes
         if (sg == sig) return;
         sig = sg; rows = std::move (next);
         list.updateContent(); list.repaint();
