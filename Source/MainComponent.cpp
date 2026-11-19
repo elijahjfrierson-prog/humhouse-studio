@@ -758,7 +758,7 @@ public:
         routeWatch = hhsWatchPhoneRoute (engine.speakerOut);
        #endif
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
-        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", false);
+        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", phoneUI);   // phone: songs carry every sample, one-shot and clip inside, so they open exactly on a computer
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
         engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
