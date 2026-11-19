@@ -1657,7 +1657,9 @@ public:
                     if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
                     {
                         const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < ((rough || pendingRough) && ! belt ? 0.35f : 0.6f);   // a scream wobbles: the 2nd read may be a bit off
-                        if (same) pendingMidi = 0;
+                        // Hard Tune: a clean, clearly pitched word start is tuned from its first reading (Antares catches the
+                        // first cycle; waiting for a 2nd read let low word starts through untuned)
+                        if (same || (hard && lastMidi == 0 && ! rough && aper < 0.15f)) pendingMidi = 0;
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
                     else if (midi != -1.0f) pendingMidi = 0;
