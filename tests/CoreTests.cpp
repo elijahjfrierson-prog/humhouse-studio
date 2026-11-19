@@ -327,6 +327,7 @@ int main (int argc, char** argv)
             const int n = std::min (512, N - at);
             for (int c = 0; c < 2; ++c) b.copyFrom (c, 0, all, c, at, n);
             ap->process (b, n, ctx);
+            if (auto* lg = std::getenv ("HHS_AP_LOG")) { static FILE* f = std::fopen (lg, "w"); if (f) std::fprintf (f, "%d %.3f %.3f\n", at, ap->meter (100), ap->meter (101)); }
             for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, 0 + c, 0, n);
         }
         juce::File out (juce::String (std::getenv ("HHS_AP_OUT") ? std::getenv ("HHS_AP_OUT") : "/tmp/ap_out.wav")); out.deleteFile();

@@ -1522,6 +1522,7 @@ public:
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
+    float meter (int i) const override { return i == 100 ? detectedMidi.load() : i == 101 ? correctedMidi.load() : 0.0f; }   // pitch readout for offline analysis
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         const int style = (int) p (0);
@@ -1701,7 +1702,7 @@ public:
                         // above / below, and holding the note that first reading picked put short words a half step off
                         const bool young = hard && (float) youngHops * hopSec < youngSec;
                         const int prevHeld = heldNote; bool restart = onset;
-                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : 0.12f)));
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : hard ? 0.05f : 0.12f)));
                         int target = nearestScaleNote (centre, root, scale);
                         if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
