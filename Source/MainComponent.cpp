@@ -1535,7 +1535,7 @@ if (phoneUI)
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             if (! phoneUI)
             {
-                m.addItem (4722, "Background picture (behind the UI, from Downloads)...");
+                m.addItem (4722, "Background picture...");   // Background picture (behind the UI, from Downloads)
                 m.addItem (4723, "Remove background picture", bgPicture.isValid());
             }
             m.addSeparator();
