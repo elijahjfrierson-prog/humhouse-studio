@@ -108,3 +108,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: bgPicture pre-scaled to the window (No Hitch)
 - lock: Poly (glide multiple notes)
 - lock: no redraw until it moves a quarter pixel
+- lock: ZENOLOGY: a forced window bigger than its own maxed-out UI

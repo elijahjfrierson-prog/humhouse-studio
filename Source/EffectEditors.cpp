@@ -184,7 +184,15 @@ private:
             const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             cw = want.x; chgt = want.y; native->setBounds (0, bar, cw, chgt);
         }
-        setSize (juce::jmax (220, cw), chgt + bar);
+        // ZENOLOGY: a forced window bigger than its own maxed-out UI, so a shrink never cuts the instrument off
+        int fw = juce::jmax (220, cw), fh = chgt + bar;
+        if (proc.getName().containsIgnoreCase ("ZENOLOGY"))
+        {
+            const auto scr = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+            fw = juce::jmax (fw, juce::jmin (1600, scr.getWidth() - 40));
+            fh = juce::jmax (fh, juce::jmin (1050, scr.getHeight() - 60));
+        }
+        setSize (fw, fh);
         resized();
     }
     static constexpr int bar = 28;
