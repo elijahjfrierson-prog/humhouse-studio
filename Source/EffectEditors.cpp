@@ -2908,6 +2908,8 @@ void openChannelEditor (Studio& s, int channelId)
     }
     func.push_back ({ "glide", "Portamento / glide (s)", 0, 1, 0, ch->glide, {} });
     func.push_back ({ "mono", "Mono / legato", 0, 1, 0, ch->mono ? 1.0f : 0.0f, { "Off", "On" } });
+    // Poly glide: every note of a chord glides into the next chord (FL porta); the opposite of Mono / legato
+    func.push_back ({ "poly", "Poly (glide multiple notes)", 0, 1, 0, ch->mono ? 0.0f : 1.0f, { "Off", "On" } });
 
     std::function<void (const juce::String&, float)> setter = [&s, channelId] (const juce::String& id, float v) {
             s.live ([&] (Project&) {
@@ -2915,7 +2917,7 @@ void openChannelEditor (Studio& s, int channelId)
                 if (c == nullptr) return;
                 auto& sp = c->synth;
                 if (id == "volume") c->volume = v; else if (id == "pan") c->pan = v; else if (id == "pitch") c->pitch = v;
-                else if (id == "glide") c->glide = v; else if (id == "mono") c->mono = v > 0.5f; else if (id == "root") c->rootKey = (int) v; else if (id == "keyTrack") c->keyTrack = v > 0.5f;
+                else if (id == "glide") c->glide = v; else if (id == "mono") c->mono = v > 0.5f; else if (id == "poly") c->mono = v <= 0.5f; else if (id == "root") c->rootKey = (int) v; else if (id == "keyTrack") c->keyTrack = v > 0.5f;
                 else if (id == "wave") sp.wave = (int) v; else if (id == "attack") sp.attack = v; else if (id == "decay") sp.decay = v;
                 else if (id == "sustain") sp.sustain = v; else if (id == "release") sp.release = v; else if (id == "cutoff") sp.cutoff = v;
                 else if (id == "res") sp.resonance = v; else if (id == "detune") sp.detune = v; else if (id == "unison") sp.unison = (int) v;
