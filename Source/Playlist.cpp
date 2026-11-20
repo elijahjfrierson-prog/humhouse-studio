@@ -1613,7 +1613,7 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
             // handle = drag the playhead; drag on the numbers = loop range (E: also selects clips in it); click = move playhead
-            drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
+            drag = std::abs (e.position.x - playheadX()) < 10.0f ? Drag::Scrub   // the handle where it's drawn
                  : tool == PTool::Select && ! e.mods.isShiftDown() ? Drag::TimeSel : Drag::Ruler;
             if (drag == Drag::Scrub) mouseDrag (e);
             return;
