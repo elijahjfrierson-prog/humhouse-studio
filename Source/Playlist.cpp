@@ -1046,6 +1046,8 @@ struct LaneHeader : public juce::Component
         name.setEditable (false, true);
         rightClick.f = [this] (const juce::MouseEvent& e) { const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
+        nameSwipe.f = [this] (const juce::MouseEvent& e) { if (phoneUI && ! e.mods.isPopupMenu()) mouseUp (e.getEventRelativeTo (this)); };
+        name.addMouseListener (&nameSwipe, false);    // phone: swiping across the track name opens / slims the list too
         name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
@@ -1312,6 +1314,7 @@ struct LaneHeader : public juce::Component
         });
     }
     Studio& s; int index;
+    struct UpListener : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseUp (const juce::MouseEvent& e) override { if (f) f (e); } } nameSwipe;
     struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, solo, mon, norm; juce::ComboBox input, insert;
 };
@@ -1464,8 +1467,8 @@ public:
         }
         if (phoneUI)
         {
-            const int laneTop = toolbarH + rulerH, laneArea = juce::jmax (80, getHeight() - laneTop - hbarH);
-            slideHandle.setBounds (headerW, laneTop + (laneArea - 72) / 2, 20, 72); slideHandle.toFront (false);
+            slideHandle.setBounds (juce::jmax (0, headerW - 34), toolbarH + 1, 34, rulerH - 2);   // in the ruler row's corner: never over the clips
+            slideHandle.toFront (false);
         }
         layoutHeaders();
     }
