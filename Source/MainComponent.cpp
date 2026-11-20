@@ -1217,9 +1217,10 @@ if (phoneUI)
             for (auto& it : items) { if (it.second == brk) { if (x > 0) { ++rows; x = 0; } continue; } if (x > 0 && x + it.second > avail) { ++rows; x = 0; } x += it.second + 4; }
             topBar = r.removeFromTop (rows * rowH + 8);
             {
-                auto cb = juce::Rectangle<int> (topBar.getX() + 8, topBar.getBottom() + 2, juce::jmin (380, topBar.getWidth() - 16), 40);
-                const int bw = cb.getWidth() / 4;
-                for (auto* b : { &cbSelect, &cbTrash, &cbStamp, &cbPaint }) b->setBounds (cb.removeFromLeft (bw).reduced (2));
+                // clip bar: STAMP / PAINT only (copy / paste); Select and Delete are the Playlist's icon tools, no word duplicates
+                auto cb = juce::Rectangle<int> (topBar.getX() + 8, topBar.getBottom() + 2, juce::jmin (190, topBar.getWidth() - 16), 40);
+                const int bw = cb.getWidth() / 2;
+                for (auto* b : { &cbStamp, &cbPaint }) b->setBounds (cb.removeFromLeft (bw).reduced (2));
             }
             logoArea = {};
             int y = topBar.getY() + 4; x = 0;
@@ -2346,7 +2347,7 @@ private:
         if (phoneUI)
         {
             const bool any = view == 1 && std::any_of (studio.p().clips.begin(), studio.p().clips.end(), [] (const Clip& c) { return c.selected; });
-            if (any != clipBarShown) { clipBarShown = any; for (auto* b : { &cbSelect, &cbTrash, &cbStamp, &cbPaint }) { b->setVisible (any); if (any) b->toFront (false); } }
+            if (any != clipBarShown) { clipBarShown = any; for (auto* b : { &cbStamp, &cbPaint }) { b->setVisible (any); if (any) b->toFront (false); } }
         }
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();

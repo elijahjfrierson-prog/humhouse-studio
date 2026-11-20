@@ -111,3 +111,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: paste / copy spot: the blue playhead you see
 - lock: one-shots / kit samples are always glued in
 - lock: Phone: a hold is a drag (it used to delete the dot you were moving)
+- lock: clip bar: STAMP / PAINT only (copy / paste)
