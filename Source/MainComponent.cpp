@@ -802,7 +802,8 @@ public:
         routeWatch = hhsWatchPhoneRoute (engine.speakerOut);
        #endif
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
-        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", phoneUI);   // phone: songs carry every sample, one-shot and clip inside, so they open exactly on a computer
+        packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", phoneUI);
+        if (! phoneUI) if (const juce::File bgf (studio.settings->getValue ("bgPicture")); bgf.existsAsFile()) bgPicture = juce::ImageFileFormat::loadFrom (bgf);   // phone: songs carry every sample, one-shot and clip inside, so they open exactly on a computer
         engine.recordOffsetMs = (float) studio.settings->getDoubleValue ("recordOffsetMs", 0.0);
         engine.ramCache = studio.settings->getBoolValue ("ramCache", true);
         col::fontColour = juce::Colour::fromString (studio.settings->getValue ("fontColour", "00000000"));
@@ -1156,6 +1157,8 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (col::bg);
+        if (bgPicture.isValid())   // your picture behind the UI (fills the window, cropped to fit)
+            g.drawImageWithin (bgPicture, 0, topBar.getBottom(), getWidth(), getHeight() - topBar.getBottom(), juce::RectanglePlacement::fillDestination);
         g.setColour (col::panel);
         g.fillRect (topBar);
         if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
@@ -1530,6 +1533,11 @@ if (phoneUI)
             m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
             if (! phoneUI) m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
+            if (! phoneUI)
+            {
+                m.addItem (4722, "Background picture (behind the UI, from Downloads)...");
+                m.addItem (4723, "Remove background picture", bgPicture.isValid());
+            }
             m.addSeparator();
             add (mSave, "Save (+ backup)", "Ctrl+S"); add (mSaveAs, "Save as...", "Ctrl+Shift+S");
             {
@@ -1839,6 +1847,18 @@ if (phoneUI)
                 if (videoView == nullptr) { videoView = createVideoView (studio); addChildComponent (*videoView); }
                 if (videoExportAllHook()) videoExportAllHook()(); else flash ("EXPORT ALL needs the VIDEO editor (desktop build with video)");
                 break;
+            case 4722:   // a picture behind the UI: shows wherever a page is popped out (View > Detach ...)
+                chooser = std::make_unique<juce::FileChooser> ("Background picture", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.heic;*.webp");
+                chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
+                    const auto f = fc.getResult();
+                    if (! f.existsAsFile()) return;
+                    auto img = juce::ImageFileFormat::loadFrom (f);
+                    if (! img.isValid()) { flash ("Couldn't read that picture (PNG, JPG or GIF work)"); return; }
+                    bgPicture = img; studio.settings->setValue ("bgPicture", f.getFullPathName());
+                    flash ("Background picture set: pop pages out (View > Detach) to see it"); repaint();
+                });
+                break;
+            case 4723: bgPicture = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();
                 studio.settings->setValue ("packAudioInSong", packAudioInSong().load());
@@ -1993,6 +2013,7 @@ private:
     juce::MenuBarComponent menuBar { this };
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
+    juce::Image bgPicture;   // Background picture (desktop)
     juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" }, toolsBtn, keysBtn, moreBtn;
     bool toolsOpen = true, keysOpen = false, moreOpen = false;
     bool clipArmed = false; int clipView = -1;
