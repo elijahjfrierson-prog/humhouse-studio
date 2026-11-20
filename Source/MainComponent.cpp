@@ -2755,6 +2755,7 @@ private:
         });
     }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
+    static bool inBackupFolder (const juce::File& f) { for (auto d = f.getParentDirectory(); d != d.getParentDirectory(); d = d.getParentDirectory()) if (d.getFileName() == "Backup") return true; return false; }
     juce::StringArray templateFolders() const
     {
         juce::StringArray dirs { templatesDir().getFullPathName() };
@@ -2766,7 +2767,7 @@ private:
         juce::Array<juce::File> fs;
         for (auto& d : templateFolders())
             for (auto& f : juce::File (d).findChildFiles (juce::File::findFiles, true, "*.hhs"))
-                if (f.getFileName() != "_default.hhs" && ! f.getFullPathName().contains ("Backup") && ! fs.contains (f)) fs.add (f);
+                if (f.getFileName() != "_default.hhs" && ! inBackupFolder (f) && ! fs.contains (f)) fs.add (f);   // "My Backup Beat" is still a template
         std::sort (fs.begin(), fs.end(), [] (const juce::File& a, const juce::File& b) { return a.getFileNameWithoutExtension().compareNatural (b.getFileNameWithoutExtension()) < 0; });
         return fs;
     }
