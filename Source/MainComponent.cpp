@@ -608,7 +608,7 @@ static const std::vector<DawKeys>& dawKeyPresets()
     const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
     static const std::vector<DawKeys> d {
         { "Pro Tools", { { "home", K (K::returnKey) }, { "rec", K (K::F12Key) }, { "mixer", K ('=', cmd, 0) }, { "export", K ('b', cmd | alt, 0) }, { "metro", K ('7') } } },
-        { "Logic Pro", { { "home", K (K::returnKey) }, { "rec", K ('r') }, { "mixer", K ('x') }, { "piano", K ('p') }, { "browser", K ('f') }, { "metro", K ('k') }, { "export", K ('b', cmd, 0) } } },
+        { "Logic Pro", { { "home", K (K::returnKey) }, { "rec", K ('r') }, { "mixer", K ('x') }, { "piano", K ('p') }, { "browser", K ('f') }, { "metro", K ('k') } } },   // Logic's Cmd+B bounce is our Cmd+B duplicate: export stays Cmd+R
         { "FL Studio", { { "rec", K ('r') }, { "song", K ('l') }, { "playlist", K (K::F5Key) }, { "piano", K (K::F7Key) }, { "mixer", K (K::F9Key) }, { "metro", K ('m', cmd, 0) }, { "export", K ('r', cmd, 0) } } },
         { "Ableton Live", { { "rec", K (K::F9Key) }, { "song", K (K::tabKey) }, { "mixer", K ('m', cmd | alt, 0) }, { "browser", K ('b', cmd | alt, 0) }, { "export", K ('r', cmd | shift, 0) } } },
         { "Studio One", { { "mixer", K (K::F3Key) }, { "metro", K ('c') }, { "export", K ('e', cmd, 0) } } },
@@ -649,7 +649,7 @@ struct KeyCmdEditor : juce::Component
     // someone coming from another DAW gets its key commands (Set to: Pro Tools, Logic, FL, Ableton...)
     void applyDaw (int i)
     {
-        keys.clear();
+        for (auto& a : keyActions()) keys.erase (a.id);   // your + ADD SHORTCUT menu keys stay
         if (i >= 0 && i < (int) dawKeyPresets().size())
         {
             const auto& p = dawKeyPresets()[(size_t) i];
@@ -1403,7 +1403,7 @@ if (phoneUI)
         if (is (juce::KeyPress::spaceKey, 0)) { engine.togglePlay(); return true; }
         if (is (juce::KeyPress::homeKey, 0)) { engine.setPositionBeats (0.0); return true; }
         if (is ('u', cmd)) { showShortcuts(); return true; }   // Cmd/Ctrl+U: Shortcuts window on / off
-        if (isTypingNoteKey (k))
+        if (! remapping && isTypingNoteKey (k))   // a key moved onto R (Set to Pro Tools / Ableton) still records
         {
             const int key = 48 + typingKeyOffset (k.getKeyCode());
             if (heldTyping.count (k.getKeyCode()) == 0) { heldTyping[k.getKeyCode()] = key; liveNote (key, 0.8f, true); }
