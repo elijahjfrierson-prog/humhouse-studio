@@ -1261,12 +1261,18 @@ if (phoneUI)
         }
         }
         {
-            auto foot = r.removeFromBottom (phoneUI ? 46 : 22);
-            if (phoneUI)   // phone: start / play / stop / record live at the bottom, under your thumb
-                for (auto* b : std::initializer_list<juce::Component*> { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setVisible (true); b->setBounds (foot.removeFromLeft (52).reduced (2)); }
-            laneBtn.setBounds (foot.removeFromLeft (phoneUI ? 64 : 52).reduced (1));
+            auto foot = r.removeFromBottom (phoneUI ? 54 : 22);
+            const auto fullFoot = foot;
+            laneBtn.setBounds (foot.removeFromLeft (phoneUI ? 64 : 52).reduced (1));   // LANE stays on the left
             lanePop.setVisible (showLanes);
             if (showLanes) lanePop.setBounds (foot.removeFromLeft (phoneUI ? 52 : 44).reduced (1));
+            if (phoneUI)   // phone: start / play / stop / record in the bottom middle, a bit bigger, under your thumb
+            {
+                auto mid = fullFoot.withSizeKeepingCentre (4 * 62, fullFoot.getHeight());
+                if (mid.getX() < foot.getX()) mid.setX (foot.getX());
+                for (auto* b : std::initializer_list<juce::Component*> { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setVisible (true); b->setBounds (mid.removeFromLeft (62).reduced (2)); }
+                foot = foot.withLeft (juce::jmin (foot.getRight(), startBtn.getX() + 4 * 62 + 4));
+            }
             hintBar.setVisible (build::hint || phoneUI);
             if (build::hint || phoneUI) hintBar.setBounds (foot);
         }

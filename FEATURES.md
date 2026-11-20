@@ -94,3 +94,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at once, or skips instead of moving smoothly (scrolling, follow-playhead, zoom, selection, meters, recording). Every hitch is a bug: big drawing jobs are split into small pieces done ahead of time, never in one frame.
 - lock: No Hitch (Logic / Pro Tools tiled backing store)
 - lock: phone portrait: 2 rows so every tool icon shows
+- lock: phone: start / play / stop / record in the bottom middle
