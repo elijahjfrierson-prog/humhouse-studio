@@ -45,7 +45,7 @@ namespace
 {
 constexpr int toolbarH = 32, rulerH = 24;
 static int headerW = phoneUI ? 110 : 220;   // phone (BandLab): a slim track list; swipe right = all options, swipe left = slim / hidden, X hides it
-constexpr int phoneHeadHidden = 36, phoneHeadSlim = 110, phoneHeadFull = 220;
+constexpr int phoneHeadHidden = 0, phoneHeadSlim = 110, phoneHeadFull = 220;
 
 juce::AudioFormatManager& formats()
 {
@@ -1351,7 +1351,11 @@ public:
         {
             setupButton (panelBtn, "X", "Close / open the track panel (Track 1, 2...)");
             panelBtn.onClick = [this] { setPhoneHeader (headerW > phoneHeadHidden ? phoneHeadHidden : phoneHeadSlim); };
-            addAndMakeVisible (panelBtn);
+            addChildComponent (panelBtn);
+            // the arrow handle on the track list's edge: slide it left to close the list all the way, right to open it; tap toggles
+            slideHandle.width = [this] { return headerW; };
+            slideHandle.set = [this] (int w, bool done) { w = juce::jlimit (0, phoneHeadFull, w); if (done && w < 60) w = phoneHeadHidden; setPhoneHeader (w); };
+            addAndMakeVisible (slideHandle);
         }
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
@@ -1458,7 +1462,11 @@ public:
                 addDrummer.setBounds (getWidth() - 56, getHeight() - hbarH - 4 - 6 * 48, 52, 44); addDrummer.toFront (false);
             }
         }
-        if (phoneUI) { panelBtn.setBounds (2, toolbarH + 1, 32, rulerH - 2); panelBtn.toFront (false); }
+        if (phoneUI)
+        {
+            const int laneTop = toolbarH + rulerH, laneArea = juce::jmax (80, getHeight() - laneTop - hbarH);
+            slideHandle.setBounds (headerW, laneTop + (laneArea - 72) / 2, 20, 72); slideHandle.toFront (false);
+        }
         layoutHeaders();
     }
 
@@ -2230,10 +2238,33 @@ private:
     float curve0 = 0.0f;
     juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchZh0 = 1.0f; double pinchBeat = 0;
     juce::TextButton panelBtn;
+    struct SlideHandle : juce::Component   // phone: drag to slide the track list open / closed
+    {
+        std::function<int()> width; std::function<void (int, bool)> set;
+        int w0 = 0; bool moved = false;
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (col::panel.brighter (0.15f)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+            g.setColour (col::accent); g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+            g.drawText (width && width() > 60 ? "<" : ">", getLocalBounds(), juce::Justification::centred);
+        }
+        void mouseDown (const juce::MouseEvent&) override { w0 = width ? width() : 0; moved = false; }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (std::abs (e.getDistanceFromDragStartX()) > 4) moved = true;
+            if (moved && set) set (w0 + e.getDistanceFromDragStartX(), false);
+        }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (! set) return;
+            if (moved) set (w0 + e.getDistanceFromDragStartX(), true);
+            else set (w0 > 60 ? phoneHeadHidden : phoneHeadSlim, true);
+        }
+    } slideHandle;
     void setPhoneHeader (int w)
     {
         headerW = w; panelBtn.setButtonText (headerW > phoneHeadHidden ? "X" : ">");
-        resized(); layoutHeaders(); repaint();
+        resized(); layoutHeaders(); slideHandle.repaint(); repaint();
     }
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
