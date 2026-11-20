@@ -854,6 +854,9 @@ public:
         };
         swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! touchHeld()) s.commit ("Swing"); };
         swing.onDragEnd = [this] { s.commit ("Swing"); };
+        drumSec.setTooltip ("Drummer section the Drummer rows show and edit (same steps as the Drummer's STEPS page)");
+        drumSec.onChange = [this] { if (const int id = drumSec.getSelectedId(); id > 0) { drumSection = id - 1; repaint(); } };
+        addChildComponent (drumSec);
         for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing, (juce::Component*) &popBtn })
             addAndMakeVisible (c);
         refresh();
@@ -893,14 +896,17 @@ public:
             auto* ch = s.channel (rows[ri]->channelId);
             if (ch == nullptr) continue;
             auto it = pat.notes.find (ch->id);
+            bool manual = true;
+            const int dbits = drumRowBits (*ch, manual);   // Drummer rows: the Drummer's own sequence (same as its STEPS page)
             for (int st = 0; st < steps; ++st)
             {
                 juce::Rectangle<float> r ((float) ctlW + st * w + 1, (float) y + 4, w - 2, (float) rowH - 8);
                 const bool group = (st / 4) % 2 == 0;
                 int count = 0;
-                if (it != pat.notes.end())
+                if (dbits >= 0) count = (dbits >> (st % 16)) & 1;
+                else if (it != pat.notes.end())
                     for (auto& n : it->second) if (n.start >= st * 0.25 - 1e-6 && n.start < (st + 1) * 0.25 - 1e-6) ++count;
-                g.setColour (count > 0 ? ch->colour : (group ? col::panel2.brighter (0.06f) : col::grid));
+                g.setColour (count > 0 ? (manual ? ch->colour : ch->colour.withAlpha (0.5f)) : (group ? col::panel2.brighter (0.06f) : col::grid));
                 g.fillRoundedRectangle (r, 3);
                 if (count > 1)
                 {
@@ -933,7 +939,8 @@ public:
         addBtn.setBounds (top.removeFromLeft (90)); top.removeFromLeft (4);
         kitBtn.setBounds (top.removeFromLeft (90)); top.removeFromLeft (8);
         patternBox.setBounds (top.removeFromLeft (150)); top.removeFromLeft (8);
-        swing.setBounds (top.removeFromLeft (28));
+        swing.setBounds (top.removeFromLeft (28)); top.removeFromLeft (8);
+        drumSec.setBounds (top.removeFromLeft (120));
         popBtn.setToggleState (dynamic_cast<juce::ResizableWindow*> (getParentComponent()) != nullptr, juce::dontSendNotification);
         popBtn.setBounds (top.removeFromRight (34));
         layoutRows();
@@ -1043,7 +1050,8 @@ private:
     std::vector<std::unique_ptr<Row>> rows;
     juce::TextButton addBtn, kitBtn;
     IconTextButton popBtn;
-    juce::ComboBox patternBox;
+    juce::ComboBox patternBox, drumSec;   // drumSec: which Drummer section (bars 1-8, 9-16 ...) the Drummer rows show
+    int drumSection = 0;
     Knob swing { "Swing", "delays every other step for groove", 0.0, 1.0, 0.0 };
     std::unique_ptr<juce::FileChooser> chooser;
     int scrollY = 0;
@@ -1064,12 +1072,55 @@ private:
         step = (int) ((pt.x - ctlW) / stepW());
         return row >= 0 && row < (int) rows.size() && step >= 0 && step < numSteps();
     }
-    bool stepOn (int id, int step) { auto& p = s.p(); return p.patterns[(size_t) p.currentPattern].stepOn (id, step); }
+    // a Drummer row edits the Drummer channel itself (Split-by-drum rows: the one they play), the drum groups it shows
+    const Channel* drumSource (const Channel& ch, int& mask) const
+    {
+        if (ch.type != ChannelType::Drummer) return nullptr;
+        mask = ch.drum.groupMask & 31;
+        if (ch.drumLink == 0) return &ch;
+        for (auto& c : const_cast<Studio&> (s).p().channels) if (c.id == ch.drumLink) return &c;
+        return nullptr;
+    }
+    // the 16-step bar the row plays in the picked section: your steps, or (dimmed) what the drummer plays on its own
+    int drumRowBits (const Channel& ch, bool& manual) const
+    {
+        int mask = 0;
+        const auto* src = drumSource (ch, mask);
+        if (src == nullptr) return -1;
+        const auto own = src->drum.steps.find (drumSection);
+        manual = own != src->drum.steps.end();
+        const auto b = manual ? own->second : drummerSeedSteps (src->drum, const_cast<Studio&> (s).p().bpm, drumSection);
+        int u = 0;
+        for (int gi = 0; gi < NumDrumGroups; ++gi) if (mask >> gi & 1) u |= b[(size_t) gi];
+        return u;
+    }
+    bool stepOn (int id, int step)
+    {
+        bool manual = true;
+        if (auto* ch = s.channel (id)) if (const int u = drumRowBits (*ch, manual); u >= 0) return (u >> (step % 16) & 1) != 0;
+        auto& p = s.p(); return p.patterns[(size_t) p.currentPattern].stepOn (id, step);
+    }
     void setStep (int id, int step, bool on)
     {
         if (stepOn (id, step) == on) return;
         auto* ch = s.channel (id);
         if (ch == nullptr) return;
+        if (int mask = 0; const auto* src = drumSource (*ch, mask))
+        {
+            const int srcId = src->id, sec = drumSection, bit = step % 16;
+            int first = 0; while (first < NumDrumGroups - 1 && (mask >> first & 1) == 0) ++first;
+            s.edit ("Drummer steps", [srcId, sec, bit, mask, first, on] (Project& p) {
+                for (auto& c : p.channels)
+                    if (c.id == srcId)
+                    {
+                        if (c.drum.steps.count (sec) == 0) c.drum.steps[sec] = drummerSeedSteps (c.drum, p.bpm, sec);   // first edit keeps what the drummer was playing
+                        auto& a = c.drum.steps[sec];
+                        for (int gi = 0; gi < NumDrumGroups; ++gi)
+                            if (mask >> gi & 1) { if (! on) a[(size_t) gi] &= ~(1 << bit); else if (gi == first) a[(size_t) gi] |= 1 << bit; }
+                    }
+            });
+            repaint(); return;
+        }
         s.live ([&] (Project& p) { p.patterns[(size_t) p.currentPattern].toggleStep (id, step, ch->rootKey); });
         if (on) s.engine.previewNote (id, ch->rootKey, 0.8f, true);
         repaint();
@@ -1161,6 +1212,25 @@ private:
         patternBox.addItem ("+ New pattern", (int) p.patterns.size() + 1);
         patternBox.setSelectedItemIndex (p.currentPattern, juce::dontSendNotification);
         swing.setValue (p.swing, juce::dontSendNotification);
+        {   // Drummer sections: Bars 1-8, 9-16 ... over the song's drummer regions
+            const Channel* dr = nullptr;
+            for (auto& c : p.channels) if (c.type == ChannelType::Drummer && c.drumLink == 0) { dr = &c; break; }
+            drumSec.clear (juce::dontSendNotification);
+            if (dr != nullptr)
+            {
+                double end = 32.0;
+                for (auto& c : p.clips) if (c.isDrummer()) end = juce::jmax (end, c.start + c.length);
+                int k = 0;
+                for (; k < 64 && (k == 0 || drumSectionStart (dr->drum, k) < end - 1e-6); ++k)
+                {
+                    const int b0 = (int) (drumSectionStart (dr->drum, k) / 4.0) + 1;
+                    drumSec.addItem ("Bars " + juce::String (b0) + "-" + juce::String (b0 + drumSectionBars (dr->drum, k) - 1), k + 1);
+                }
+                drumSection = juce::jlimit (0, k - 1, drumSection);
+                drumSec.setSelectedId (drumSection + 1, juce::dontSendNotification);
+            }
+            drumSec.setVisible (dr != nullptr);
+        }
         if (s.selectedChannel < 0 && ! p.channels.empty()) s.selectedChannel = p.channels.front().id;
         repaint();
     }

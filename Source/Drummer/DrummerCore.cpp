@@ -310,10 +310,11 @@ int drumGroupLane (int g)
 std::array<int, 5> drummerSeedSteps (const DrummerParams& p, double bpm, int section)
 {
     std::array<int, 5> st {};
-    auto hits = drummerHits (p, bpm, 32.0 * (section + 1));
+    const double start = drumSectionStart (p, section);
+    auto hits = drummerHits (p, bpm, start + 4.0);
     for (auto& h : *hits)
     {
-        const double rel = h.beat - 32.0 * section;
+        const double rel = h.beat - start;
         if (rel < 0.0 || rel >= 4.0 || h.vel < 0.25f) continue;
         st[(size_t) drumGroupOf (h.lane)] |= 1 << juce::jlimit (0, 15, (int) std::round (rel * 4.0));
     }

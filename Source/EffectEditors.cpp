@@ -2357,10 +2357,11 @@ struct DrummerPad : juce::Component, juce::Timer
 };
 
 // STEPS: the mini manual sequencer for one 8-bar section: a 16-step bar per drum, repeated over the 8 bars, dead on the grid
-struct DrumSteps : juce::Component
+struct DrumSteps : juce::Component, private juce::Timer
 {
     DrumSteps (Studio& st, int id, int sec) : s (st), channelId (id), section (sec)
     {
+        startTimerHz (10);   // Channel Rack edits to the same steps show here right away
         addAndMakeVisible (autoBtn);
         autoBtn.setButtonText ("Back to auto");
         autoBtn.onClick = [this]
@@ -2385,15 +2386,16 @@ struct DrumSteps : juce::Component
                     + (man ? "  |  your steps repeat, the drummer plays around them and fills bar 8" : "  |  AUTO: click a step - one kick and the drummer builds around it"),
                     10, 4, getWidth() - 20, 18, juce::Justification::centredLeft);
         const auto r = grid(); const float cw = r.getWidth() / 16.0f, rh = r.getHeight() / (float) NumDrumGroups;
+        const auto bits = man ? it->second : drummerSeedSteps (c->drum, s.p().bpm, section);   // AUTO: what the drummer plays, dimmed
         for (int gi = 0; gi < NumDrumGroups; ++gi)
         {
             g.setColour (col::text);
             fitText (g, drumGroupName (gi), juce::Rectangle<float> (r.getX() - 62, r.getY() + gi * rh, 58, rh), juce::Justification::centredRight);
             for (int k = 0; k < 16; ++k)
             {
-                const bool on = man && (it->second[(size_t) gi] >> k & 1) != 0;
+                const bool on = (bits[(size_t) gi] >> k & 1) != 0;
                 auto cell = juce::Rectangle<float> (r.getX() + k * cw, r.getY() + gi * rh, cw, rh).reduced (2.0f);
-                g.setColour (on ? juce::Colour (0xffffc93d) : k / 4 % 2 == 0 ? col::bg.brighter (0.08f) : col::bg); g.fillRoundedRectangle (cell, 3.0f);
+                g.setColour (on ? juce::Colour (0xffffc93d).withAlpha (man ? 1.0f : 0.45f) : k / 4 % 2 == 0 ? col::bg.brighter (0.08f) : col::bg); g.fillRoundedRectangle (cell, 3.0f);
                 g.setColour (col::grid); g.drawRoundedRectangle (cell, 3.0f, 1.0f);
             }
         }
@@ -2406,18 +2408,27 @@ struct DrumSteps : juce::Component
         const int st = juce::jlimit (0, 15, (int) ((e.position.x - r.getX()) / (r.getWidth() / 16.0f)));
         const int i = channelId, k0 = all > 0 ? 0 : section, k1 = all > 0 ? all - 1 : section;
         const auto cur = c->drum.steps.find (section);
-        const bool on = cur != c->drum.steps.end() && (cur->second[(size_t) gi] >> st & 1) != 0;
+        const auto shown = cur != c->drum.steps.end() ? cur->second : drummerSeedSteps (c->drum, s.p().bpm, section);
+        const bool on = (shown[(size_t) gi] >> st & 1) != 0;
         s.edit ("Drummer steps", [i, k0, k1, gi, st, on] (Project& p) {
             for (auto& ch : p.channels)
                 if (ch.id == i)
                     for (int k = k0; k <= k1; ++k)
                     {
+                        if (ch.drum.steps.count (k) == 0) ch.drum.steps[k] = drummerSeedSteps (ch.drum, p.bpm, k);   // first edit keeps what the drummer was playing
                         auto& b = ch.drum.steps[k][(size_t) gi];
                         b = on ? (b & ~(1 << st)) : (b | 1 << st);
                     }
         });
         repaint();
     }
+    void timerCallback() override
+    {
+        const auto* c = s.channel (channelId);
+        const auto key = c != nullptr ? c->drum.performanceKey() : juce::String();
+        if (key != lastKey) { lastKey = key; repaint(); }
+    }
+    juce::String lastKey;
     Studio& s; int channelId, section, all = 0; juce::TextButton autoBtn;   // all > 0: edits go to sections 0 .. all-1
 };
 

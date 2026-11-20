@@ -78,3 +78,5 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: void claimFileTypes()
 - lock: name, knobs, boxes: the menu opens right away
 - lock: HumHouse Drummer (turn this track into drums)
+- lock: Drummer section the Drummer rows show and edit
+- lock: first edit keeps what the drummer was playing
