@@ -831,20 +831,26 @@ bool packTemplate (const Project& src, const juce::String& name, const juce::Fil
 
 juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDir)
 {
+    // any HumHouse template zip: our .hhpack, one re-zipped by Finder (__MACOSX/._ files), names with dots ("Vibes..."),
+    // the song at the top or one folder down
     juce::ZipFile zip (pack);
-    juce::String top;
+    juce::String song; int depth = 1 << 20;
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
-        if (n.startsWithChar ('/') || n.contains ("..") || n.containsChar (':')) return {};   // nothing may land outside the template's folder
-        if (top.isEmpty() && n.endsWithIgnoreCase (".hhs") && n.containsChar ('/'))
-            top = n.upToFirstOccurrenceOf ("/", false, false);
+        if (n.startsWithChar ('/') || n.containsChar (':')) return {};   // nothing may land outside the template's folder
+        for (auto& part : juce::StringArray::fromTokens (n, "/", "")) if (part == "..") return {};
+        if (n.startsWith ("__MACOSX/") || n.startsWith ("._") || n.contains ("/._")) continue;
+        if (n.endsWithIgnoreCase (".hhs"))
+            if (const int d = n.retainCharacters ("/").length(); d < depth) { depth = d; song = n; }
     }
-    if (top.isEmpty()) return {};
+    if (song.isEmpty() || depth > 1) return {};
     auto stage = freshTempDir();
     if (! stage.createDirectory() || zip.uncompressTo (stage, true).failed()) { stage.deleteRecursively(); return {}; }
-    auto from = stage.getChildFile (top);
-    auto inner = from.getChildFile (top + ".hhs");
+    stage.getChildFile ("__MACOSX").deleteRecursively();
+    const auto inner = stage.getChildFile (song);
+    const auto top = depth == 1 ? song.upToFirstOccurrenceOf ("/", false, false) : inner.getFileNameWithoutExtension();
+    const auto from = depth == 1 ? stage.getChildFile (top) : stage;
     Project check;
     if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
     templatesDir.createDirectory();
@@ -852,8 +858,8 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     const bool ok = from.copyDirectoryTo (dest);
     stage.deleteRecursively();
     if (! ok) return {};
-    auto hhs = dest.getChildFile (top + ".hhs");
-    if (dest.getFileName() != top)
+    auto hhs = dest.getChildFile (inner.getFileName());
+    if (hhs.getFileNameWithoutExtension() != dest.getFileName())   // the template list finds <folder>/<folder>.hhs
     {
         auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
         if (hhs.moveFileTo (renamed)) hhs = renamed;

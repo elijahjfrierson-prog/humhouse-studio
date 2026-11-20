@@ -328,6 +328,12 @@ int main (int argc, char** argv)
             CHECK (! inst->isActive());
         }
     }
+    if (auto* lp = std::getenv ("HHS_LOAD"))   // HHS_LOAD=song.hhs HHSTests: does this song open?
+    {
+        hhs::Project q; const bool ok = hhs::loadProject (q, juce::File (lp));
+        std::printf ("load %s: %s  channels=%d clips=%d\n", lp, ok ? "OK" : "FAILED", (int) q.channels.size(), (int) q.clips.size());
+        return ok ? 0 : 1;
+    }
     // offline AutoPitch render for A/B against references: HHS_AP_IN=in.wav HHS_AP_OUT=out.wav HHSTests
     if (auto* inPath = std::getenv ("HHS_AP_IN"))
     {
@@ -3095,6 +3101,18 @@ int main (int argc, char** argv)
         auto t2 = hhs::unpackTemplate (pack, inbox);   // received twice: kept side by side, nothing overwritten
         CHECK (t2.existsAsFile() && t2 != t);
         CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
+        {   // a template named with dots, and one re-zipped by Finder (song at the top + __MACOSX junk), both open
+            auto dots = tmp.getChildFile ("Vibes....hhpack");
+            CHECK (hhs::packTemplate (p, "Vibes...", dots));
+            CHECK (hhs::unpackTemplate (dots, inbox).existsAsFile());
+            juce::ZipFile::Builder z; auto songFile = tmp.getChildFile ("Loose.hhs");
+            CHECK (hhs::saveProject (q, songFile));
+            z.addFile (songFile, 9, "Loose.hhs"); z.addFile (songFile, 9, "__MACOSX/._Loose.hhs");
+            auto loose = tmp.getChildFile ("Loose.hhpack");
+            { juce::FileOutputStream os (loose); CHECK (os.openedOk() && z.writeToStream (os, nullptr)); }
+            auto lt = hhs::unpackTemplate (loose, inbox);
+            CHECK (lt.existsAsFile() && lt.getFileNameWithoutExtension() == lt.getParentDirectory().getFileName());
+        }
         std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
         tmp.deleteRecursively();
     }
