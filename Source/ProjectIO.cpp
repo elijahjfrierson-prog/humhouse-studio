@@ -784,6 +784,21 @@ static juce::File freshTempDir()
         .getChildFile ("hhpack-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
 }
 
+juce::String unreadableReason (const juce::File& f)
+{
+    if (! f.exists()) return "HumHouse can't find that file (moved, renamed or deleted):\n" + f.getFullPathName();
+    if (f.isDirectory()) return {};
+    if (f.getSize() == 0) return "That file is empty on this device. If it's in iCloud Drive, download it first (cloud icon in Finder / Files), then open it again.";
+    juce::FileInputStream in (f);
+    if (! in.openedOk())
+       #if JUCE_IOS
+        return "iPhone isn't letting HumHouse read that file. Open it from Files > On My iPhone > HumHouse Studio, or share it to HumHouse, then open it again.";
+       #else
+        return "Your computer's privacy settings are blocking HumHouse from reading that folder. Allow HumHouse in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or move the song into Music > HumHouse Studio, then open it again.";
+       #endif
+    return {};
+}
+
 bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
 {
     const auto legal = juce::File::createLegalFileName (name.trim().isEmpty() ? juce::String ("Template") : name.trim());

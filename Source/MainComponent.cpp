@@ -2626,7 +2626,8 @@ private:
         }
         else if (! loadProject (q, f))
         {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "Not a HumHouse project.");
+            const auto why = unreadableReason (f);
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", why.isNotEmpty() ? why : "Not a HumHouse project, or it's damaged: " + f.getFileName() + "\nTry File > Open backup.");
             return;
         }
         if (f.getParentDirectory().getFileName() == "Backup") q.projectFile = juce::File();
@@ -2839,8 +2840,9 @@ public:
     // a file opened from Finder / Explorer / an email, or dropped on the window
     void openFile (const juce::File& f)
     {
-        auto fail = [] (const juce::String& what) {
-            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", "That file isn't a HumHouse " + what + ".");
+        auto fail = [f] (const juce::String& what) {
+            const auto why = unreadableReason (f);
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Open", why.isNotEmpty() ? why : "That file isn't a HumHouse " + what + ".");
         };
         if (f.hasFileExtension ("hhpack"))
         {
