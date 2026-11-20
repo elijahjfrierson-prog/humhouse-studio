@@ -735,10 +735,11 @@ struct KeyZone { SharedSample s; int root = 60, lo = 0, hi = 127, vlo = 1, vhi =
 struct KeyMap { std::vector<KeyZone> zones; float release = 0.25f; };
 static std::shared_ptr<const KeyMap> loadKeyMap (const juce::File& f, double sr)
 {
-    static std::mutex m; static std::map<juce::String, std::shared_ptr<const KeyMap>> cache;   // shared by every channel using it
+    // shared by every channel using it, freed when the last one goes (weak: a deleted piano / old sample rate doesn't stay in RAM)
+    static std::mutex m; static std::map<juce::String, std::weak_ptr<const KeyMap>> cache;
     const std::lock_guard<std::mutex> lock (m);
     const auto key = f.getFullPathName() + "@" + juce::String (sr);
-    if (auto it = cache.find (key); it != cache.end()) return it->second;
+    if (auto it = cache.find (key); it != cache.end()) if (auto live = it->second.lock()) return live;
     auto km = std::make_shared<KeyMap>();
     juce::StringArray lines; lines.addLines (f.loadFileAsString());
     for (auto& l : lines)
@@ -746,7 +747,9 @@ static std::shared_ptr<const KeyMap> loadKeyMap (const juce::File& f, double sr)
         auto t = juce::StringArray::fromTokens (l, "\t", ""); t.trim(); t.removeEmptyStrings();
         if (t.size() == 2 && t[0] == "release") { km->release = juce::jlimit (0.02f, 5.0f, t[1].getFloatValue()); continue; }
         if (t.size() < 6) continue;
-        KeyZone z; z.s = loadSampleFile (f.getSiblingFile (t[0]), sr);
+        auto sf = f.getSiblingFile (t[0]);   // a map copied without its samples (shared template) uses this app's built-in copy
+        if (! sf.existsAsFile()) sf = bundledSoundsRoot().getChildFile (f.getParentDirectory().getFileName()).getChildFile (t[0]);
+        KeyZone z; z.s = loadSampleFile (sf, sr);
         if (! z.s) continue;
         z.root = t[1].getIntValue(); z.lo = t[2].getIntValue(); z.hi = t[3].getIntValue(); z.vlo = t[4].getIntValue(); z.vhi = t[5].getIntValue();
         km->zones.push_back (std::move (z));
