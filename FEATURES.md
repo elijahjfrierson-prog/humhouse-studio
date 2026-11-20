@@ -105,3 +105,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: the biggest size this plug-in ever showed: windows open maxed out
 - lock: only the ruler + clips slide
 - lock: CADisableMinimumFrameDurationOnPhone
+- lock: bgPicture pre-scaled to the window (No Hitch)

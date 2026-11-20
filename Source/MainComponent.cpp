@@ -1167,8 +1167,22 @@ public:
     void paint (juce::Graphics& g) override
     {
         g.fillAll (col::bg);
-        if (bgPicture.isValid())   // your picture behind the UI (fills the window, cropped to fit)
-            g.drawImageWithin (bgPicture, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);   // the toolbar (top or bottom) paints over it
+        if (bgPicture.isValid())   // your picture behind the UI (fills the window, cropped to fit); the toolbar paints over it
+        {
+            // No Hitch: scaled once to the window's pixels, then every repaint (clock, meters, buttons) is a plain copy,
+            // never a full-size photo resampled 60x a second
+            const float sc = g.getInternalContext().getPhysicalPixelScaleFactor();
+            const int pw = juce::roundToInt (getWidth() * sc), ph = juce::roundToInt (getHeight() * sc);
+            if (pw > 0 && ph > 0 && (bgScaled.getWidth() != pw || bgScaled.getHeight() != ph || bgScaledFrom != bgPicture))
+            {
+                bgScaled = juce::Image (juce::Image::RGB, pw, ph, true);
+                juce::Graphics bg (bgScaled);
+                bg.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
+                bg.drawImageWithin (bgPicture, 0, 0, pw, ph, juce::RectanglePlacement::fillDestination);
+                bgScaledFrom = bgPicture;
+            }
+            if (bgScaled.isValid()) g.drawImage (bgScaled, 0, 0, getWidth(), getHeight(), 0, 0, bgScaled.getWidth(), bgScaled.getHeight());
+        }
         g.setColour (col::panel);
         g.fillRect (topBar);
         if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
@@ -2033,6 +2047,7 @@ private:
     juce::Rectangle<int> topBar, logoArea;
     std::unique_ptr<juce::FileChooser> chooser, importChooser;
     juce::Image bgPicture;   // Background picture (desktop)
+    juce::Image bgScaled, bgScaledFrom;   // bgPicture pre-scaled to the window (No Hitch)
     juce::TextButton closeAllBtn { "X" }, menuBtn { "MENU" }, importBtn { "+ IMPORT" }, copyBtn { "COPY" }, pasteBtn { "PASTE" }, altABtn { "ALT+A" }, altSBtn { "ALT+S" }, dupBtn { "CMD+B" }, delBtn { "DELETE" }, octUpBtn { "OCT+" }, octDnBtn { "OCT-" }, noteUpBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xb2")) }, noteDnBtn { juce::String (juce::CharPointer_UTF8 ("\xe2\x96\xbc")) }, undoBtn { "UNDO" }, redoBtn { "REDO" }, dropBtn { "CLIPBOARD: DROP HERE" }, toolsBtn, keysBtn, moreBtn;
     bool toolsOpen = true, keysOpen = false, moreOpen = false;
     bool clipArmed = false; int clipView = -1;
