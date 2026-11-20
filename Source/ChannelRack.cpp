@@ -855,7 +855,7 @@ public:
         swing.onValueChange = [this] { s.live ([this] (Project& p) { p.swing = swing.getValue(); }); if (! touchHeld()) s.commit ("Swing"); };
         swing.onDragEnd = [this] { s.commit ("Swing"); };
         drumSec.setTooltip ("Drummer section the Drummer rows show and edit (same steps as the Drummer's STEPS page)");
-        drumSec.onChange = [this] { if (const int id = drumSec.getSelectedId(); id > 0) { drumSection = id - 1; repaint(); } };
+        drumSec.onChange = [this] { if (const int id = drumSec.getSelectedId(); id > 0) { drumSection = id - 1; refresh(); } };
         addChildComponent (drumSec);
         for (juce::Component* c : { (juce::Component*) &addBtn, (juce::Component*) &kitBtn, (juce::Component*) &patternBox, (juce::Component*) &swing, (juce::Component*) &popBtn })
             addAndMakeVisible (c);
@@ -940,9 +940,9 @@ public:
         kitBtn.setBounds (top.removeFromLeft (90)); top.removeFromLeft (8);
         patternBox.setBounds (top.removeFromLeft (150)); top.removeFromLeft (8);
         swing.setBounds (top.removeFromLeft (28)); top.removeFromLeft (8);
-        drumSec.setBounds (top.removeFromLeft (120));
         popBtn.setToggleState (dynamic_cast<juce::ResizableWindow*> (getParentComponent()) != nullptr, juce::dontSendNotification);
-        popBtn.setBounds (top.removeFromRight (34));
+        popBtn.setBounds (top.removeFromRight (34));   // the dock button keeps its room; the section picker takes what's left
+        drumSec.setBounds (top.removeFromLeft (juce::jmin (120, juce::jmax (0, top.getWidth() - 4))));
         layoutRows();
     }
 
@@ -952,7 +952,17 @@ public:
         int row, step;
         if (! hitStep (e.getPosition(), row, step)) return;
         const int id = rows[(size_t) row]->channelId;
-        if (e.mods.isPopupMenu()) { rollMenu (id, step); return; }
+        if (e.mods.isPopupMenu())
+        {
+            bool man = true;
+            if (auto* ch = s.channel (id); ch != nullptr && drumRowBits (*ch, man) >= 0)   // Drummer row: its section steps, not pattern notes
+            {
+                juce::PopupMenu m; m.addItem (1, "Clear step", stepOn (id, step));
+                m.showMenuAsync ({}, [sp = juce::Component::SafePointer<ChannelRack> (this), id, step] (int r) { if (sp != nullptr && r == 1) sp->setStep (id, step, false); });
+                return;
+            }
+            rollMenu (id, step); return;
+        }
         if (phoneUI) { touchStep = { row, step }; touchPanned = false; touchScroll0 = scrollY; return; }
         paintOn = ! stepOn (id, step);
         setStep (id, step, paintOn);
@@ -1051,7 +1061,7 @@ private:
     juce::TextButton addBtn, kitBtn;
     IconTextButton popBtn;
     juce::ComboBox patternBox, drumSec;   // drumSec: which Drummer section (bars 1-8, 9-16 ...) the Drummer rows show
-    int drumSection = 0;
+    int drumSection = 0; double drumBeat = 0;   // the picked section's first song beat
     Knob swing { "Swing", "delays every other step for groove", 0.0, 1.0, 0.0 };
     std::unique_ptr<juce::FileChooser> chooser;
     int scrollY = 0;
@@ -1087,9 +1097,11 @@ private:
         int mask = 0;
         const auto* src = drumSource (ch, mask);
         if (src == nullptr) return -1;
-        const auto own = src->drum.steps.find (drumSection);
+        if (! const_cast<Studio&> (s).p().songMode) return -1;   // Pattern mode plays the pattern's notes: the row edits those
+        const int sec = drumSectionAt (src->drum, drumBeat + 1.0e-6);
+        const auto own = src->drum.steps.find (sec);
         manual = own != src->drum.steps.end();
-        const auto b = manual ? own->second : drummerSeedSteps (src->drum, const_cast<Studio&> (s).p().bpm, drumSection);
+        const auto b = manual ? own->second : drummerSeedSteps (src->drum, const_cast<Studio&> (s).p().bpm, sec);
         int u = 0;
         for (int gi = 0; gi < NumDrumGroups; ++gi) if (mask >> gi & 1) u |= b[(size_t) gi];
         return u;
@@ -1105,9 +1117,10 @@ private:
         if (stepOn (id, step) == on) return;
         auto* ch = s.channel (id);
         if (ch == nullptr) return;
-        if (int mask = 0; const auto* src = drumSource (*ch, mask))
+        int mask = 0; bool man = true;
+        if (const auto* src = drumSource (*ch, mask); src != nullptr && drumRowBits (*ch, man) >= 0)
         {
-            const int srcId = src->id, sec = drumSection, bit = step % 16;
+            const int srcId = src->id, sec = drumSectionAt (src->drum, drumBeat + 1.0e-6), bit = step % 16;
             int first = 0; while (first < NumDrumGroups - 1 && (mask >> first & 1) == 0) ++first;
             s.edit ("Drummer steps", [srcId, sec, bit, mask, first, on] (Project& p) {
                 for (auto& c : p.channels)
@@ -1117,6 +1130,15 @@ private:
                         auto& a = c.drum.steps[sec];
                         for (int gi = 0; gi < NumDrumGroups; ++gi)
                             if (mask >> gi & 1) { if (! on) a[(size_t) gi] &= ~(1 << bit); else if (gi == first) a[(size_t) gi] |= 1 << bit; }
+                        // an emptied row stays silent in this section (an empty row would hand the drum back to the auto groove)
+                        auto& mute = c.drum.sectionMute;
+                        if ((int) mute.size() <= sec) mute.resize ((size_t) sec + 1, 0);
+                        for (int gi = 0; gi < NumDrumGroups; ++gi)
+                            if (mask >> gi & 1)
+                            {
+                                if (! on && a[(size_t) gi] == 0) mute[(size_t) sec] |= 1 << gi;
+                                if (on && gi == first) mute[(size_t) sec] &= ~(1 << gi);
+                            }
                     }
             });
             repaint(); return;
@@ -1213,8 +1235,10 @@ private:
         patternBox.setSelectedItemIndex (p.currentPattern, juce::dontSendNotification);
         swing.setValue (p.swing, juce::dontSendNotification);
         {   // Drummer sections: Bars 1-8, 9-16 ... over the song's drummer regions
-            const Channel* dr = nullptr;
-            for (auto& c : p.channels) if (c.type == ChannelType::Drummer && c.drumLink == 0) { dr = &c; break; }
+            const Channel* dr = nullptr;   // labels follow the selected Drummer (or the first one)
+            if (const auto* sel = s.channel (s.selectedChannel); sel != nullptr && sel->type == ChannelType::Drummer)
+                for (auto& c : p.channels) if (c.id == (sel->drumLink != 0 ? sel->drumLink : sel->id)) dr = &c;
+            if (dr == nullptr) for (auto& c : p.channels) if (c.type == ChannelType::Drummer && c.drumLink == 0) { dr = &c; break; }
             drumSec.clear (juce::dontSendNotification);
             if (dr != nullptr)
             {
@@ -1227,9 +1251,10 @@ private:
                     drumSec.addItem ("Bars " + juce::String (b0) + "-" + juce::String (b0 + drumSectionBars (dr->drum, k) - 1), k + 1);
                 }
                 drumSection = juce::jlimit (0, k - 1, drumSection);
+                drumBeat = drumSectionStart (dr->drum, drumSection);
                 drumSec.setSelectedId (drumSection + 1, juce::dontSendNotification);
             }
-            drumSec.setVisible (dr != nullptr);
+            drumSec.setVisible (dr != nullptr && p.songMode);
         }
         if (s.selectedChannel < 0 && ! p.channels.empty()) s.selectedChannel = p.channels.front().id;
         repaint();
