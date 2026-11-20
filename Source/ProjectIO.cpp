@@ -681,15 +681,20 @@ bool saveProject (const Project& p, const juce::File& f)
     if (local) { kb = p; gatherAudio (kb, f); }
     auto tree = projectToTree (local ? kb : p);
     // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
-    if (packAudioInSong().load() && f.getParentDirectory().getFileName() != "Backup")
+    // one-shots / kit samples are always glued in (small), so a song moved computer <-> phone never loses its drums,
+    // even when the song otherwise only points at its audio files (KB mode)
+    const bool packAll = packAudioInSong().load();
+    if (f.getParentDirectory().getFileName() != "Backup")
     {
+        const Project& src = local ? kb : p;   // the paths the song stores
         juce::ValueTree glued ("GLUED");
         std::set<juce::String> seen; juce::int64 total = 0;
         const auto bundled = bundledSoundsRoot();
-        auto glue = [&] (const juce::File& a)
+        auto glue = [&] (const juce::File& a, bool kitSound = false)
         {
             if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
-            if (bundled != juce::File() && a.isAChildOf (bundled)) return;   // built-in sounds ship with every HumHouse app
+            // built-in sounds ship with every HumHouse app; kit one-shots still ride along (a few hundred KB) so the other device always has them
+            if (! kitSound && bundled != juce::File() && a.isAChildOf (bundled)) return;
             const auto size = a.getSize();
             if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
             juce::MemoryBlock mb;
@@ -700,9 +705,12 @@ bool saveProject (const Project& p, const juce::File& f)
             g.setProperty ("data", packGlued (mb), nullptr);
             glued.appendChild (g, nullptr);
         };
-        for (auto& c : p.channels) { glue (c.sampleFile); glue (c.smpLayerFile); }
-        for (auto& c : p.clips) glue (c.audioFile);
-        for (auto& a : p.audioPool) glue (a);
+        for (auto& c : src.channels) { glue (c.sampleFile, true); glue (c.smpLayerFile, true); }
+        if (packAll)
+        {
+            for (auto& c : src.clips) glue (c.audioFile);
+            for (auto& a : src.audioPool) glue (a);
+        }
         if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
     }
     auto xml = tree.createXml();

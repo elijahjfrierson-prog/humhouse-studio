@@ -109,3 +109,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: no redraw until it moves a quarter pixel
 - lock: whole frame painted: no stale picture shows around a plug-in view
 - lock: paste / copy spot: the blue playhead you see
+- lock: one-shots / kit samples are always glued in
