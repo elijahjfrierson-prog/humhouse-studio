@@ -107,3 +107,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: CADisableMinimumFrameDurationOnPhone
 - lock: bgPicture pre-scaled to the window (No Hitch)
 - lock: Poly (glide multiple notes)
+- lock: no redraw until it moves a quarter pixel

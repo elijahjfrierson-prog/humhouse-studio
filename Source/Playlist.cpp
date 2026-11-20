@@ -3642,7 +3642,9 @@ private:
         const float anchor = (float) headerW + (float) clipArea().getWidth() * 0.33f;
         if ((px > anchor || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500)
         {
-            scrollX = juce::jmax (0.0, pos - (anchor - (float) headerW) / pxPerBeat);
+            const double to = juce::jmax (0.0, pos - (anchor - (float) headerW) / pxPerBeat);
+            if (std::abs (to - scrollX) * pxPerBeat < 0.25) return;   // slow songs / zoomed out: no redraw until it moves a quarter pixel, so spectrums keep their frames
+            scrollX = to;
             // only the ruler + clips slide: the track bars, toolbar and their knobs don't move, so they aren't redrawn 60x a second
             syncHBar(); repaint (headerW, toolbarH, getWidth() - headerW, getHeight() - toolbarH); lastPx = beatToX (pos);
         }
@@ -3650,6 +3652,7 @@ private:
         {
             // only redraw what moves: the old + new playhead strips, and the growing take while recording
             auto strip = [this] (float x) { if (x >= 0) repaint ((int) x - 8, toolbarH, 16, getHeight() - toolbarH); };
+            if (std::abs (px - lastPx) < 0.25f && ! s.engine.isRecording()) return;   // hasn't moved a quarter pixel: nothing to redraw
             strip (lastPx); strip (px);
             if (s.engine.isRecording())
             {
