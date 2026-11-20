@@ -1,4 +1,4 @@
-// Chroma Verb: dense HumHouse reverb laid out like a classic DAW reverb table (pre-delay, size, diffusion, modulation,
+// Drocetti Verb (was Chroma Verb; type id stays "chromaverb" so saved songs load): dense HumHouse reverb laid out like a classic DAW reverb table (pre-delay, size, diffusion, modulation,
 // bass/decay/crossover/damping, dry / early / wet + stereo separation) with a slapback tap for vocals and the master.
 // Late field: 4 input all-passes into an 8-line modulated feedback delay network (Householder mix).
 #include "Effects.h"
