@@ -1045,7 +1045,7 @@ struct LaneHeader : public juce::Component
     {
         setOpaque (true);   // paints its whole bar: an armed track's meter redraw never repaints the Playlist under it
         name.setEditable (false, true);
-        rightClick.f = [this] (const juce::MouseEvent& e) { const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
+        rightClick.f = [this] (const juce::MouseEvent& e) { popupAt = juce::Time::getMillisecondCounter(); const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
         nameSwipe.f = [this] (const juce::MouseEvent& e)   // only a real sideways swipe: never a reorder or anything else
         {
@@ -1319,6 +1319,7 @@ struct LaneHeader : public juce::Component
         });
     }
     Studio& s; int index;
+    juce::uint32 popupAt = 0;   // a right-click / phone hold just opened the track menu: the button under it must not toggle
     struct UpListener : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseUp (const juce::MouseEvent& e) override { if (f) f (e); } } nameSwipe;
     struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, solo, mon, norm; juce::ComboBox input, insert;
@@ -3543,7 +3544,21 @@ private:
             if (! h.getProperties().contains ("rcAll"))   // right-click / hold anywhere on the track bar opens the track menu (Delete...)
             {
                 h.getProperties().set ("rcAll", true);
-                for (auto* c : h.getChildren()) if (c != &h.name && dynamic_cast<juce::Button*> (c) == nullptr) c->addMouseListener (&h.rightClick, true);
+                for (auto* c : h.getChildren())
+                {
+                    if (c == &h.name) continue;
+                    c->addMouseListener (&h.rightClick, true);   // R M S L N, knobs, boxes, the gaps: the whole bar opens the track menu
+                    if (auto* b = dynamic_cast<juce::Button*> (c))
+                    {
+                        auto orig = b->onClick; auto* hp = &h;
+                        b->onClick = [hp, b, orig]
+                        {
+                            if (juce::Time::getMillisecondCounter() - hp->popupAt < 800)
+                            { if (b->getClickingTogglesState()) b->setToggleState (! b->getToggleState(), juce::dontSendNotification); return; }
+                            if (orig) orig();
+                        };
+                    }
+                }
             }
             const int y = laneY ((int) i);
             headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
