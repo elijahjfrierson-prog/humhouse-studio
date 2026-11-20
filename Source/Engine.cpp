@@ -1341,6 +1341,7 @@ void Engine::primeClipReaders (double beat)
 void Engine::play()
 {
     if (playing.load()) return;
+    tookThisRun = false;
     publishProject();   // start from the song as it is right now (armed lanes, punch, loop)
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
     const double here = position.load();
@@ -1387,9 +1388,13 @@ void Engine::stop()
         playing = false; countingIn = false;
         panicPending = true;   // the audio thread silences every voice at its next block
     }
-    lastTakeStart = -1.0;
     finishRecordingWriters();
-    if (proj.quickPunch && lastTakeStart >= 0.0) position = startBeat = lastTakeStart;
+    if (proj.quickPunch && tookThisRun && lastTakeStart >= 0.0)
+    {
+        // Quick Punch: back to the first bar of the last take (took bars 9-13 -> bar 9), ready to go again
+        const double bar = juce::jmax (1.0, (double) proj.beatsPerBar);
+        position = startBeat = std::floor (lastTakeStart / bar + 1.0e-6) * bar;
+    }
     else if (proj.returnToStart) position = startBeat;
 }
 
@@ -1510,6 +1515,7 @@ void Engine::finishRecordingWriters()
         std::swap (done, takes);
     }
     if (done.empty()) return;
+    bool batchTake = false;
     bool added = false;
     for (auto& t : done)
     {
@@ -1563,7 +1569,8 @@ void Engine::finishRecordingWriters()
             added = true;
             continue;
         }
-        if (! newClips.empty()) lastTakeStart = lastTakeStart < 0.0 ? newClips.front().start : std::min (lastTakeStart, newClips.front().start);
+        if (! batchTake || newClips.front().start < lastTakeStart) lastTakeStart = newClips.front().start;   // the latest punch counts, also after a punch-out with the rec button
+        batchTake = tookThisRun = true;
         if (! proj.hasPunch())
         {
             // a new take never records over an earlier one: if the track is busy there it drops to the next free track

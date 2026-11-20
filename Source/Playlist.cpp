@@ -1414,7 +1414,7 @@ public:
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
         setupButton (rts, "RETURN", "On stop, jump back to where playback started", true);
         rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
-        setupButton (qpunch, "QUICK PUNCH", "On stop after a take, the playhead jumps to the start of that take, ready for the next punch", true);
+        setupButton (qpunch, "QUICK PUNCH", "On stop after a take, the playhead jumps to the first bar of that take (took bars 9-13 -> bar 9), ready for the next punch", true);
         qpunch.onClick = [this] { const bool on = qpunch.getToggleState(); s.edit ("Quick punch", [on] (Project& p) { p.quickPunch = on; }); };
         setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
         preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };

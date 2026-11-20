@@ -894,6 +894,16 @@ public:
                 m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&pagesBtn), [this] (int r) { if (r > 0) setView (r - 1); });
             };
             addAndMakeVisible (pagesBtn);
+            // BEAT / REC / MIX: one tap each (owner: no page folder for these three); PAGE keeps Patch Bay
+            const char* pg[] { "BEAT", "REC", "MIX" };
+            for (int k = 0; k < 3; ++k)
+            {
+                auto& b = k == 0 ? beatPg : k == 1 ? recPg : mixPg;
+                setupButton (b, pg[k], juce::String ("Go to ") + pg[k], false);
+                b.setColour (juce::TextButton::buttonOnColourId, col::accent);
+                b.onClick = [this, k] { setView (k); };
+                addAndMakeVisible (b);
+            }
             // BandLab-style: selecting clips pops SELECT / TRASH / STAMP (copy) / PAINT (paste) right above them
             setupButton (cbSelect, "SELECT", "Select tool"); cbSelect.onClick = [this] { if (playlist != nullptr) playlist->keyPressed (juce::KeyPress ('e')); };
             setupButton (cbTrash, "TRASH", "Delete the selected clips"); cbTrash.onClick = [this] { phoneDelete(); };
@@ -1178,7 +1188,7 @@ if (phoneUI)
             // top: menu, logo, transport / pages, import, save / BPM, position, folders; open folders add a row each
             constexpr int brk = -1;
             std::vector<std::pair<juce::Component*, int>> items {
-                { &menuBtn, 70 }, { &pagesBtn, 120 }, { &songBtn, 56 }, { &saveBtn, 80 }, { &browserBtn, 96 }, { nullptr, brk },
+                { &menuBtn, 70 }, { &beatPg, 58 }, { &recPg, 52 }, { &mixPg, 52 }, { &pagesBtn, 64 }, { &songBtn, 56 }, { &saveBtn, 80 }, { &browserBtn, 96 }, { nullptr, brk },
                 { &toolsBtn, 92 }, { &keysBtn, 100 }, { &moreBtn, 86 } };   // 2 rows: everything else sits in the folders, transport at the bottom
             if (toolsOpen) items.insert (items.end(), { { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
@@ -1261,17 +1271,18 @@ if (phoneUI)
         }
         }
         {
-            auto foot = r.removeFromBottom (phoneUI ? 54 : 22);
+            const int tp = juce::jlimit (60, 96, col::laneMinH), tw = 74;   // phone transport: as tall as a track, easy to hit
+            auto foot = r.removeFromBottom (phoneUI ? tp : 22);
             const auto fullFoot = foot;
             laneBtn.setBounds (foot.removeFromLeft (phoneUI ? 64 : 52).reduced (1));   // LANE stays on the left
             lanePop.setVisible (showLanes);
             if (showLanes) lanePop.setBounds (foot.removeFromLeft (phoneUI ? 52 : 44).reduced (1));
             if (phoneUI)   // phone: start / play / stop / record in the bottom middle, a bit bigger, under your thumb
             {
-                auto mid = fullFoot.withSizeKeepingCentre (4 * 62, fullFoot.getHeight());
+                auto mid = fullFoot.withSizeKeepingCentre (4 * tw, fullFoot.getHeight());
                 if (mid.getX() < foot.getX()) mid.setX (foot.getX());
-                for (auto* b : std::initializer_list<juce::Component*> { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setVisible (true); b->setBounds (mid.removeFromLeft (62).reduced (2)); }
-                foot = foot.withLeft (juce::jmin (foot.getRight(), startBtn.getX() + 4 * 62 + 4));
+                for (auto* b : std::initializer_list<juce::Component*> { &startBtn, &playBtn, &stopBtn, &recBtn }) { b->setVisible (true); b->setBounds (mid.removeFromLeft (tw).reduced (2)); }
+                foot = foot.withLeft (juce::jmin (foot.getRight(), startBtn.getX() + 4 * tw + 4));
             }
             hintBar.setVisible (build::hint || phoneUI);
             if (build::hint || phoneUI) hintBar.setBounds (foot);
@@ -1916,7 +1927,7 @@ private:
     juce::Label titleLabel, posLabel, cpuLabel, hintBar;
     int coreTick = 0;
     juce::VBlankAttachment paintPump { this, [] { pumpPendingPaints(); } };   // visuals never wait behind mouse moves
-    juce::TextButton pagesBtn, cbSelect, cbTrash, cbStamp, cbPaint;
+    juce::TextButton pagesBtn, beatPg, recPg, mixPg, cbSelect, cbTrash, cbStamp, cbPaint;
     bool clipBarShown = false;
     juce::TextButton beatTab { "BEAT" }, recordTab { "RECORD" }, mixTab { "MIX" }, patchTab { "PATCH" }, videoTab { "VIDEO" };
     std::unique_ptr<juce::Component> patchView, videoView;
@@ -2263,7 +2274,11 @@ private:
     {
         if (phoneUI && v == 4) return;   // phone: no VIDEO page
         if (phoneLite && v == 3) return;   // stripped phone app: no Patch Bay
-        if (phoneUI) pagesBtn.setButtonText (juce::String ("PAGE: ") + (v == 0 ? "BEAT" : v == 1 ? "REC" : v == 2 ? "MIX" : "PATCH"));
+        if (phoneUI)
+        {
+            pagesBtn.setButtonText (v == 3 ? "PATCH" : "PAGES");
+            beatPg.setToggleState (v == 0, juce::dontSendNotification); recPg.setToggleState (v == 1, juce::dontSendNotification); mixPg.setToggleState (v == 2, juce::dontSendNotification);
+        }
         if (view != 2) lastView = view;
         view = v;
         juce::TextButton* tabs[] { &beatTab, &recordTab, &mixTab, &patchTab, &videoTab };

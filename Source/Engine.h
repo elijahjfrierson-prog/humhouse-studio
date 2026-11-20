@@ -289,6 +289,7 @@ private:
     };
     std::vector<std::unique_ptr<Take>> takes;
     double lastTakeStart = -1.0;
+    bool tookThisRun = false;   // Quick Punch: this play/record run made a take
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;

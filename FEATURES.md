@@ -96,3 +96,6 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: phone portrait: 2 rows so every tool icon shows
 - lock: phone: start / play / stop / record in the bottom middle
 - lock: R M S L N, knobs, boxes, the gaps: the whole bar opens the track menu
+- lock: BEAT / REC / MIX: one tap each
+- lock: Quick Punch: back to the first bar of the last take
+- lock: phone transport: as tall as a track, easy to hit
