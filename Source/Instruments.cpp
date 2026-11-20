@@ -749,6 +749,7 @@ static std::shared_ptr<const KeyMap> loadKeyMap (const juce::File& f, double sr)
         if (t.size() < 6) continue;
         auto sf = f.getSiblingFile (t[0]);   // a map copied without its samples (shared template) uses this app's built-in copy
         if (! sf.existsAsFile()) sf = bundledSoundsRoot().getChildFile (f.getParentDirectory().getFileName()).getChildFile (t[0]);
+        if (! sf.existsAsFile()) sf = bundledSoundsRoot().getChildFile (f.getFileNameWithoutExtension()).getChildFile (t[0]);   // map packed loose in a template's Sounds
         KeyZone z; z.s = loadSampleFile (sf, sr);
         if (! z.s) continue;
         z.root = t[1].getIntValue(); z.lo = t[2].getIntValue(); z.hi = t[3].getIntValue(); z.vlo = t[4].getIntValue(); z.vhi = t[5].getIntValue();
