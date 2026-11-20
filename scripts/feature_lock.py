@@ -3,7 +3,8 @@
 import pathlib, sys
 root = pathlib.Path(__file__).resolve().parent.parent
 text = "\n".join(p.read_text(errors="ignore") for p in (root / "Source").rglob("*") if p.suffix in (".cpp", ".h", ".mm"))
-text += "\n".join(p.read_text(errors="ignore") for p in (root / ".github" / "workflows").glob("*.yml"))   # CI rules lock too
+text += "\n".join(p.read_text(errors="ignore") for p in (root / ".github" / "workflows").glob("*.yml"))
+text += (root / "CMakeLists.txt").read_text(errors="ignore")   # CI rules lock too
 locks = [l.split("lock:", 1)[1].strip() for l in (root / "FEATURES.md").read_text().splitlines() if l.startswith("- lock:")]
 missing = [s for s in locks if s.lower() not in text.lower()]
 for s in missing: print("FEATURE LOCK: missing from Source/:", s)

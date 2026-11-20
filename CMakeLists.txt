@@ -184,6 +184,8 @@ function(hhs_add_app target product bundle licensed)
         DOCUMENT_BROWSER_ENABLED TRUE
         TARGETED_DEVICE_FAMILY "1,2"
         NEEDS_CURL TRUE
+        # iPhone Pro: ProMotion 120 Hz (iOS caps apps at 60 fps without this)
+        PLIST_TO_MERGE "<plist><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/></dict></plist>"
     )
     if(IOS)   # bundled kits / sounds go inside the .app (bundledSoundsRoot = next to the executable)
         add_custom_command(TARGET ${target} POST_BUILD
