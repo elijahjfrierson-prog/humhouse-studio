@@ -1044,6 +1044,7 @@ struct LaneHeader : public juce::Component
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
         setOpaque (true);   // paints its whole bar: an armed track's meter redraw never repaints the Playlist under it
+        getProperties().set ("holdMenu", true);   // phone hold on any of its buttons opens this bar's track menu
         name.setEditable (false, true);
         rightClick.f = [this] (const juce::MouseEvent& e) { popupAt = juce::Time::getMillisecondCounter(); const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
@@ -1208,6 +1209,7 @@ struct LaneHeader : public juce::Component
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (e.mods.isPopupMenu()) popupAt = juce::Time::getMillisecondCounter();
         if (! e.mods.isPopupMenu() && nearBottomEdge (e)) { edgeDrag = true; dragStartH = getHeight(); return; }
         auto& sel = s.selectedLanes;
         if (e.mods.isPopupMenu()) { if (! sel.contains (index)) { sel.clear(); sel.add (index); s.laneAnchor = index; } }
@@ -1321,7 +1323,7 @@ struct LaneHeader : public juce::Component
     Studio& s; int index;
     juce::uint32 popupAt = 0;   // a right-click / phone hold just opened the track menu: the button under it must not toggle
     struct UpListener : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseUp (const juce::MouseEvent& e) override { if (f) f (e); } } nameSwipe;
-    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
+    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; juce::uint32 lastDown = 0; void mouseDown (const juce::MouseEvent& e) override { lastDown = juce::Time::getMillisecondCounter(); if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, solo, mon, norm; juce::ComboBox input, insert;
 };
 
@@ -2313,6 +2315,7 @@ private:
         return { in ? r.getX() + len * 0.5f : r.getRight() - len * 0.5f, r.getBottom() - gn * r.getHeight() };
     }
     Studio& s;
+    juce::Component headerHost;   // declared before headers: they leave it before it goes
     std::vector<std::unique_ptr<LaneHeader>> headers;
     juce::TextButton addTrack, addDrummer, loopRec, rts, qpunch, preroll, clearPunch;
     IconTextButton rackPop;
@@ -3538,6 +3541,8 @@ private:
     }
     void layoutHeaders()
     {
+        const int top = toolbarH + rulerH;   // headers live below the toolbar + ruler: a half-scrolled track never covers the tools
+        headerHost.setBounds (0, top, juce::jmax (0, headerW), juce::jmax (0, getHeight() - top));
         for (size_t i = 0; i < headers.size(); ++i)
         {
             auto& h = *headers[i];
@@ -3553,7 +3558,7 @@ private:
                         auto orig = b->onClick; auto* hp = &h;
                         b->onClick = [hp, b, orig]
                         {
-                            if (juce::Time::getMillisecondCounter() - hp->popupAt < 800)
+                            if (hp->popupAt != 0 && hp->popupAt >= hp->rightClick.lastDown)   // this press opened the menu (right-click or hold): no toggle
                             { if (b->getClickingTogglesState()) b->setToggleState (! b->getToggleState(), juce::dontSendNotification); return; }
                             if (orig) orig();
                         };
@@ -3561,7 +3566,7 @@ private:
                 }
             }
             const int y = laneY ((int) i);
-            headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
+            headers[i]->setBounds (0, y - top, headerW, laneHOf ((int) i));
             headers[i]->setVisible (headerW > 40 && y + laneHOf ((int) i) > toolbarH + rulerH);
         }
     }
@@ -3571,6 +3576,7 @@ private:
         if (headers.size() != p.lanes.size())
         {
             headers.clear();
+            if (headerHost.getParentComponent() == nullptr) { headerHost.setInterceptsMouseClicks (false, true); addAndMakeVisible (headerHost); }
             for (size_t i = 0; i < p.lanes.size(); ++i) 
             {
                 headers.push_back (std::make_unique<LaneHeader> (s, (int) i));
@@ -3590,7 +3596,7 @@ private:
                     vZoom.setValue (zoomH, juce::dontSendNotification);
                     layoutHeaders(); repaint();
                 };
-                addAndMakeVisible (*headers.back());
+                headerHost.addAndMakeVisible (*headers.back());
             }
             layoutHeaders();
         }

@@ -1964,6 +1964,8 @@ private:
         }
         void fire (juce::Component* comp, juce::Point<float> pos, juce::MouseInputSource src, juce::ModifierKeys m)
         {
+            for (auto* up = comp->getParentComponent(); up != nullptr; up = up->getParentComponent())   // a button on a track bar: the bar's own menu
+                if (up->getProperties().contains ("holdMenu")) { pos = up->getLocalPoint (comp, pos); comp = up; break; }
             juce::Component::SafePointer<juce::Component> t (comp);
             const auto mods = m.withoutMouseButtons().withFlags (juce::ModifierKeys::rightButtonModifier | juce::ModifierKeys::popupMenuClickModifier);
             juce::MessageManager::callAsync ([this, t, mods, pos, src] {
