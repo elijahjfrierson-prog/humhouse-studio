@@ -948,8 +948,15 @@ public:
         {
             browserBtn.setToggleState (showBrowser, juce::dontSendNotification);
             browserTab.setTooltip ("Samples / Patterns / Plugin House: tap to bring it out or tuck it back in");
-            browserTab.onClick = [this] { browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); };
+            browserTab.onClick = [this] { browserFull = false; browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); };
             addAndMakeVisible (browserTab);
+            browserPop.setTooltip ("Pop Samples / Patterns / Plugin House out full screen (tap again to put it back)");
+            browserPop.onClick = [this] {
+                browserFull = ! browserFull;
+                if (browserFull && ! showBrowser) browserBtn.setToggleState (true, juce::sendNotificationSync);
+                resized();
+            };
+            addAndMakeVisible (browserPop);
         }
         setupButton (themeBtn, "COLOR", "Color wheel: change the overall color of the DAW");
         themeBtn.onClick = [this] { showThemeDialog (studio); };
@@ -1283,14 +1290,19 @@ if (phoneUI)
         }
         if (phoneUI)
         {   // side tab: tap to bring Samples / Patterns / Plugin House out, tap again to tuck it back in
-            auto tab = r.removeFromLeft (34);
+            auto tab = r.removeFromLeft (26);   // slim side tab: < / > tucks the browser in or out, the button below pops it out full screen
+            if (! showBrowser) browserFull = false;
             browserTab.setButtonText (showBrowser ? "<" : ">");
-            browserTab.setBounds (tab.withSizeKeepingCentre (32, juce::jmin (140, tab.getHeight())));
+            const auto mid = tab.withSizeKeepingCentre (24, juce::jmin (132, tab.getHeight()));
+            browserTab.setBounds (mid.withHeight (84));
+            browserPop.setButtonText (browserFull ? "[-]" : "[+]");
+            browserPop.setBounds (mid.withTrimmedTop (88));
         }
         if (here (browser))
         {
             browser->setVisible (showBrowser);
-            if (showBrowser && phoneUI) browser->setBounds (r.removeFromLeft (juce::jmin (260, r.getWidth() * 36 / 100)));
+            if (showBrowser && phoneUI && browserFull) { browser->setBounds (r); browser->toFront (false); }
+            else if (showBrowser && phoneUI) browser->setBounds (r.removeFromLeft (juce::jmin (260, r.getWidth() * 36 / 100)));
             else if (showBrowser) { const int bw = juce::jlimit (160, juce::jmax (160, r.getWidth() / 2), build::browserW); browser->setBounds (build::browserRight ? r.removeFromRight (bw) : r.removeFromLeft (bw)); }
         }
         const bool dockMix = build::mixDock && ! phoneUI && view != 2 && here (mixer) && r.getHeight() > 300;
@@ -2158,7 +2170,7 @@ private:
     }
     int view = 0, ticks = 0, lastView = 0; bool rackHidden = false;
     bool showBrowser = ! phoneUI;
-    juce::TextButton browserTab { ">" };
+    juce::TextButton browserTab { ">" }, browserPop { "[+]" }; bool browserFull = false;   // phone: browser popped out full screen
     juce::TextButton laneBtn, lanePop;
     bool showLanes = false;
     juce::String flashText;
