@@ -2323,7 +2323,7 @@ private:
     double plSnap = 1.0;
     float lastPx = -1.0f;
     bool wasPlaying = false;
-    double uiPos = -1.0, uiLastT = 0.0;
+    double uiPos = -1.0, uiLastT = 0.0, uiEng = -1.0;
     // No Hitch screen clock (FL / Logic): the engine position only moves once per audio block, so 60 Hz frames would
     // see 0 or 2 blocks and the song shudders. The screen moves at the tempo every refresh and eases toward the engine.
     double smoothPos()
@@ -2331,7 +2331,9 @@ private:
         const double eng = s.engine.positionBeats(), now = juce::Time::getMillisecondCounterHiRes() * 0.001;
         const double bps = s.p().bpm / 60.0, dt = now - uiLastT;
         uiLastT = now;
-        if (uiPos < 0.0 || dt > 0.25 || s.engine.isCountingIn()) return uiPos = eng;
+        const bool back = eng < uiEng - 1.0e-6;   // the engine went back (loop wrap, however short): follow it at once
+        uiEng = eng;
+        if (uiPos < 0.0 || dt > 0.25 || back || s.engine.isCountingIn()) return uiPos = eng;
         const double pred = uiPos + dt * bps, err = eng - pred;
         if (std::abs (err) > 0.5 * bps) return uiPos = eng;   // seek, loop, punch: go there
         return uiPos = juce::jmax (uiPos, pred + err * 0.08);
@@ -3631,7 +3633,7 @@ private:
         glideStep();
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
-        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = -1.0; return; }
+        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = uiEng = -1.0; return; }
         wasPlaying = true;
         const double pos = smoothPos();
         float px = beatToX (pos);
