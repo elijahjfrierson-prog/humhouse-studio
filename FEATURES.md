@@ -76,3 +76,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: any HumHouse template zip
 - lock: juce::String unreadableReason
 - lock: void claimFileTypes()
+- lock: name, knobs, boxes: the menu opens right away

@@ -1043,7 +1043,7 @@ struct LaneHeader : public juce::Component
     {
         setOpaque (true);   // paints its whole bar: an armed track's meter redraw never repaints the Playlist under it
         name.setEditable (false, true);
-        rightClick.f = [this] (const juce::MouseEvent& e) { mouseDown (e.getEventRelativeTo (this)); };
+        rightClick.f = [this] (const juce::MouseEvent& e) { const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
         name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
