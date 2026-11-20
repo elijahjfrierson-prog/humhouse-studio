@@ -81,3 +81,6 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Drummer section the Drummer rows show and edit
 - lock: first edit keeps what the drummer was playing
 - lock: the same way Cmd+B stacks (each paste after the last)
+- lock: follow: no page jumps
+- lock: mouse-wheel targets the view glides to
+- lock: half a screen above and below: up / down scrolling slides it too

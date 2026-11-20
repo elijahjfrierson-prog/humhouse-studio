@@ -2002,11 +2002,14 @@ public:
             scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
-            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
+        {
+            const double to = juce::jmax (0.0, (glideX >= 0 ? glideX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
+            if (w.isSmooth) { scrollX = to; glideX = -1; } else glideX = to;
+        }
         else
         {
-            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 420));
-            layoutHeaders();
+            const int to = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), (glideY >= 0 ? glideY : scrollY) - (int) (w.deltaY * 420));
+            if (w.isSmooth) { scrollY = to; glideY = -1; layoutHeaders(); } else glideY = to;
         }
         repaint();
     }
@@ -2255,6 +2258,25 @@ private:
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
+    double glideX = -1; int glideY = -1;   // mouse-wheel targets the view glides to on each screen refresh
+    bool glideStep()
+    {
+        bool moved = false;
+        if (glideX >= 0)
+        {
+            const double d = glideX - scrollX;
+            if (std::abs (d) * pxPerBeat < 0.5) { scrollX = glideX; glideX = -1; } else scrollX += d * 0.35;
+            moved = true;
+        }
+        if (glideY >= 0)
+        {
+            const int d = glideY - scrollY;
+            if (std::abs (d) <= 1) { scrollY = glideY; glideY = -1; } else scrollY += (int) std::round (d * 0.35);
+            layoutHeaders(); moved = true;
+        }
+        if (moved) { syncHBar(); repaint(); }
+        return moved;
+    }
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
@@ -2676,7 +2698,7 @@ private:
     }
     // Logic / Reaper style: the clip layer is drawn once into a picture two screens wide, then scrolling and the
     // playhead only slide / copy that picture. It's redrawn when the song, zoom, size or theme changes.
-    juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0;
+    juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0; int tileScrollY = 0;
     juce::Rectangle<int> tileArea; float paintRight = -1.0f; juce::uint32 lastKeyMiss = 0;
     float contentRight() const { return paintRight > 0 ? paintRight : (float) getWidth(); }
     juce::uint64 contentKey (juce::Rectangle<int> area)
@@ -2686,7 +2708,7 @@ private:
         auto str = [&add] (const juce::String& t) { add (t.hashCode64()); };
         auto& p = s.p();
         add (tileGen); add (pxPerBeat); add (area.getWidth()); add (area.getHeight()); add (area.getX()); add (area.getY());
-        add (scrollY); add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
+        add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
         add (p.punchIn); add (p.punchOut); add (p.hasPunch()); add (timeSelA); add (timeSelB);
         for (auto c : { col::bg, col::panel, col::grid, col::gridBar, col::accent, col::accent2, col::text, col::dim }) add (c.getARGB());
         for (auto& [k, v] : laneMul) { add (k); add (v); }
@@ -2713,12 +2735,14 @@ private:
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
-        const int tw = area.getWidth() * 2;
-        if (area.isEmpty() || scale <= 0 || (double) tw * area.getHeight() * scale * scale > 24.0e6) return false;   // ~100 MB cap
+        const int tw = area.getWidth() * 3;   // a screen behind, a screen ahead: following / scrolling slides it for 1.75 screens before a redraw
+        const int th = area.getHeight() * 2;  // half a screen above and below: up / down scrolling slides it too
+        if (area.isEmpty() || scale <= 0 || (double) tw * th * scale * scale > 32.0e6) return false;   // ~130 MB cap
         const auto key = contentKey (area);
         const double viewBeats = area.getWidth() / (double) pxPerBeat, tileBeats = tw / (double) pxPerBeat;
         const bool same = tile.isValid() && key == tileKey && scale == tileScale && area == tileArea;
-        if (! same || scrollX < tileScroll - 1.0e-9 || scrollX + viewBeats > tileScroll + tileBeats + 1.0e-9)
+        if (! same || scrollX < tileScroll - 1.0e-9 || scrollX + viewBeats > tileScroll + tileBeats + 1.0e-9
+            || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + th)
         {
             const auto now = juce::Time::getMillisecondCounter();
             if (! same && key != tileKey)
@@ -2728,26 +2752,27 @@ private:
                 lastKeyMiss = now;
                 if (hot) return false;
             }
-            const int pw = juce::roundToInt ((float) tw * scale), ph = juce::roundToInt ((float) area.getHeight() * scale);
+            const int pw = juce::roundToInt ((float) tw * scale), ph = juce::roundToInt ((float) th * scale);
             if (! tile.isValid() || tile.getWidth() != pw || tile.getHeight() != ph) tile = juce::Image (juce::Image::RGB, pw, ph, false);
-            const double keep = scrollX;
-            tileScroll = scrollX - viewBeats * 0.5;   // half a screen of room on each side
+            const double keep = scrollX; const int keepY = scrollY;
+            tileScroll = juce::jmax (0.0, scrollX - viewBeats * 0.25);   // most of the room ahead, where the playhead and scrolling go
+            tileScrollY = juce::jmax (0, scrollY - area.getHeight() / 2);
             {
                 juce::Graphics ig (tile);
                 ig.addTransform (juce::AffineTransform::scale (scale));
                 ig.setOrigin ({ -area.getX(), -area.getY() });
-                const auto tr = area.withWidth (tw);
+                const auto tr = area.withWidth (tw).withHeight (th);
                 ig.reduceClipRegion (tr);
                 ig.setColour (col::bg); ig.fillRect (tr);
-                scrollX = tileScroll; paintRight = (float) tr.getRight();
+                scrollX = tileScroll; scrollY = tileScrollY; paintRight = (float) tr.getRight();
                 paintContent (ig, tr);
-                scrollX = keep; paintRight = -1.0f;
+                scrollX = keep; scrollY = keepY; paintRight = -1.0f;
             }
             tileKey = key; tileScale = scale; tileArea = area;
         }
         const float dx = std::round ((float) ((tileScroll - scrollX) * pxPerBeat) * scale) / scale;
         g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
-        g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) area.getY()));
+        g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)
@@ -3454,12 +3479,20 @@ private:
     std::unique_ptr<juce::VBlankAttachment> vblank;
     void timerCallback() override
     {
+        glideStep();
         const bool playing = s.engine.isPlaying();
         if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; return; }
         wasPlaying = true;
         const double pos = s.engine.positionBeats();
         float px = beatToX (pos);
-        if ((px > getWidth() - 40 || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500) { scrollX = juce::jmax (0.0, pos - 2.0); repaint(); lastPx = beatToX (pos); }
+        // follow: no page jumps. Past a third of the view the song slides under a still playhead on every screen refresh
+        // (Logic / Pro Tools continuous scroll); the clips are a pre-drawn picture, so the slide only moves that picture
+        const float anchor = (float) headerW + (float) clipArea().getWidth() * 0.33f;
+        if ((px > anchor || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500)
+        {
+            scrollX = juce::jmax (0.0, pos - (anchor - (float) headerW) / pxPerBeat);
+            syncHBar(); repaint(); lastPx = beatToX (pos);
+        }
         else
         {
             // only redraw what moves: the old + new playhead strips, and the growing take while recording
