@@ -80,3 +80,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: HumHouse Drummer (turn this track into drums)
 - lock: Drummer section the Drummer rows show and edit
 - lock: first edit keeps what the drummer was playing
+- lock: the same way Cmd+B stacks (each paste after the last)
