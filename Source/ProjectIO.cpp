@@ -799,11 +799,19 @@ juce::String unreadableReason (const juce::File& f)
     return {};
 }
 
-bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
+// a template's folder name: Windows drops trailing dots / spaces ("Vibes..." -> "Vibes"), and "Backup" / "_default"
+// are names HumHouse treats specially (backups skip packing audio, _default is hidden from the template list)
+static juce::String templateFolderName (const juce::String& name)
 {
-    // Windows drops trailing dots / spaces from folder names ("Vibes..." -> "Vibes"): strip them so the pack builds everywhere
     auto legal = juce::File::createLegalFileName (name.trim()).trimCharactersAtEnd (". ");
     if (legal.isEmpty()) legal = "Template";
+    if (legal.equalsIgnoreCase ("Backup") || legal.equalsIgnoreCase ("_default")) legal << " Template";
+    return legal;
+}
+
+bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
+{
+    const auto legal = templateFolderName (name);
     auto stage = freshTempDir();
     auto root = stage.getChildFile (legal);
     auto sounds = root.getChildFile ("Sounds");
@@ -822,7 +830,7 @@ bool packTemplate (const Project& src, const juce::String& name, const juce::Fil
         }
         f = it->second;
     };
-    for (auto& c : p.channels) take (c.sampleFile);
+    for (auto& c : p.channels) { take (c.sampleFile); take (c.smpLayerFile); }   // 808 / sampler layers travel too
     for (auto& c : p.clips) take (c.audioFile);
     for (auto& m : p.mixer) take (m.frozenFile);
     for (auto& f : p.audioPool) take (f);
@@ -876,9 +884,7 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     Project check;
     if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
     templatesDir.createDirectory();
-    auto destName = juce::File::createLegalFileName (top).trimCharactersAtEnd (". ");
-    if (destName.isEmpty()) destName = "Template";
-    auto dest = templatesDir.getNonexistentChildFile (destName, {}, false);
+    auto dest = templatesDir.getNonexistentChildFile (templateFolderName (top), {}, false);
     const bool ok = from.copyDirectoryTo (dest);
     stage.deleteRecursively();
     if (! ok) return {};
@@ -886,6 +892,7 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     if (hhs.getFileNameWithoutExtension() != dest.getFileName())   // the template list finds <folder>/<folder>.hhs
     {
         auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
+        if (renamed.existsAsFile()) renamed.moveFileTo (renamed.getNonexistentSibling (true));   // another song already has that name: keep it beside
         if (hhs.moveFileTo (renamed)) hhs = renamed;
     }
     return hhs.existsAsFile() ? hhs : juce::File();
