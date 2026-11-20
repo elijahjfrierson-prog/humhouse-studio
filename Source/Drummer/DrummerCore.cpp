@@ -311,7 +311,7 @@ std::array<int, 5> drummerSeedSteps (const DrummerParams& p, double bpm, int sec
 {
     std::array<int, 5> st {};
     const double start = drumSectionStart (p, section);
-    auto hits = drummerHits (p, bpm, start + 4.0);
+    auto hits = drummerHits (p, bpm, start + 4.0 * juce::jmax (2, drumSectionBars (p, section)));   // the section's groove, not a one-bar render that ends in a fill
     for (auto& h : *hits)
     {
         const double rel = h.beat - start;
