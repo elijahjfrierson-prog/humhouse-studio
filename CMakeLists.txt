@@ -228,7 +228,7 @@ if(NOT IOS)
 enable_testing()
 juce_add_console_app(HHSTests PRODUCT_NAME "HHSTests" NEEDS_CURL TRUE)
 target_sources(HHSTests PRIVATE ${HHS_CORE_SOURCES} tests/CoreTests.cpp)
-target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="HumHouse Studio")
+target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="HumHouse Studio" HHS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)

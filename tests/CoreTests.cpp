@@ -310,6 +310,18 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main (int argc, char** argv)
 {
+    {   // the owner's real songs (one zlib, one plain XML) always open: a build that can't open them never ships
+        int opened = 0;
+        for (auto& f : juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs").findChildFiles (juce::File::findFiles, false, "*.hhs"))
+        {
+            hhs::Project q; const bool ok = hhs::loadProject (q, f);
+            CHECK (ok && ! q.channels.empty());
+            if (ok) ++opened;
+            CHECK (hhs::unreadableReason (f).isEmpty());
+        }
+        CHECK (opened >= 2);
+        CHECK (hhs::unreadableReason (juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs/missing.hhs")).isNotEmpty());
+    }
     {   // HumHouse Grand: the recorded piano plays every key, and a released note dies away
         auto map = juce::File::getCurrentWorkingDirectory().getChildFile ("Sounds/HumHouse Grand/HumHouse Grand.hhkeys");
         if (map.existsAsFile())
