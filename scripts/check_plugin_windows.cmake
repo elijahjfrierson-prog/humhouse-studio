@@ -3,7 +3,7 @@
 file(READ "${CMAKE_CURRENT_LIST_DIR}/../Source/EffectEditors.cpp" src)
 # the only native resize allowed: pushing a collapsed (0-size) view out to its last good size
 string(REGEX MATCHALL "native->setSize" ns "${src}")
-string(FIND "${src}" "if (collapsed())" c1)
+string(FIND "${src}" "if (collapsed()" c1)   # also "if (collapsed() || shrank)": the one resize also restores a view that shrank back right after opening
 string(FIND "${src}" "native->setSize (want.x, want.y);   // collapsed rescue" c2)
 list(LENGTH ns nn)
 if(NOT nn EQUAL 1 OR c1 LESS 0 OR c2 LESS c1)

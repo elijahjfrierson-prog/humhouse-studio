@@ -154,18 +154,16 @@ private:
     {
         if (++ticks == 16) startTimer (1000);   // keeps watching, slower: Antares, Analog Lab, ZENOLOGY can collapse later (preset load, window move)
         if (! native->isVisible()) return;
-        if (collapsed())
+        const auto it = lastGood().find (proc.getName());
+        // maxed out: right after opening, a plug-in that showed full size then shrank back (ZENOLOGY) goes back to its biggest
+        // size; later zoom-outs the user picks stay
+        const bool shrank = ! collapsed() && it != lastGood().end() && restores < 8 && ticks < 16
+                            && (native->getWidth() < it->second.x || native->getHeight() < it->second.y);
+        if (collapsed() || shrank)
         {
-            auto it = lastGood().find (proc.getName());
-            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
+            auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
+            if (shrank) { ++restores; want = { juce::jmax (native->getWidth(), want.x), juce::jmax (native->getHeight(), want.y) }; }
             native->setSize (want.x, want.y);   // collapsed rescue
-            fit();
-        }
-        else if (const auto it = lastGood().find (proc.getName()); it != lastGood().end() && restores < 8
-                 && (native->getWidth() < it->second.x || native->getHeight() < it->second.y))
-        {
-            ++restores;   // maxed out: the plug-in shrank back after showing full size (ZENOLOGY), so it goes back to its biggest size
-            native->setSize (juce::jmax (native->getWidth(), it->second.x), juce::jmax (native->getHeight(), it->second.y));
             fit();
         }
         else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
