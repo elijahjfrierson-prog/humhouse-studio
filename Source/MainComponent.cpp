@@ -1158,7 +1158,7 @@ public:
     {
         g.fillAll (col::bg);
         if (bgPicture.isValid())   // your picture behind the UI (fills the window, cropped to fit)
-            g.drawImageWithin (bgPicture, 0, topBar.getBottom(), getWidth(), getHeight() - topBar.getBottom(), juce::RectanglePlacement::fillDestination);
+            g.drawImageWithin (bgPicture, 0, 0, getWidth(), getHeight(), juce::RectanglePlacement::fillDestination);   // the toolbar (top or bottom) paints over it
         g.setColour (col::panel);
         g.fillRect (topBar);
         if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
@@ -1848,7 +1848,7 @@ if (phoneUI)
                 if (videoExportAllHook()) videoExportAllHook()(); else flash ("EXPORT ALL needs the VIDEO editor (desktop build with video)");
                 break;
             case 4722:   // a picture behind the UI: shows wherever a page is popped out (View > Detach ...)
-                chooser = std::make_unique<juce::FileChooser> ("Background picture", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.heic;*.webp");
+                chooser = std::make_unique<juce::FileChooser> ("Background picture", juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile ("Downloads"), "*.png;*.jpg;*.jpeg;*.gif");
                 chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [this] (const juce::FileChooser& fc) {
                     const auto f = fc.getResult();
                     if (! f.existsAsFile()) return;
