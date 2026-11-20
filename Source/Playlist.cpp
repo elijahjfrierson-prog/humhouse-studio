@@ -44,7 +44,8 @@ namespace hhs
 namespace
 {
 constexpr int toolbarH = 32, rulerH = 24;
-static int headerW = 220;   // phone: X folds the track panel to a thin strip, > opens it
+static int headerW = phoneUI ? 110 : 220;   // phone (BandLab): a slim track list; swipe right = all options, swipe left = slim / hidden, X hides it
+constexpr int phoneHeadHidden = 36, phoneHeadSlim = 110, phoneHeadFull = 220;
 
 juce::AudioFormatManager& formats()
 {
@@ -1157,6 +1158,18 @@ struct LaneHeader : public juce::Component
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 3);
+        const bool slim = phoneUI && getWidth() < 150;   // phone slim list: name + R M S; swipe right for the rest
+        for (auto* c : std::initializer_list<juce::Component*> { &mon, &norm, &vol, &soft, &input, &insert }) c->setVisible (! slim);
+        if (slim)
+        {
+            name.setBounds (r.removeFromTop (r.getHeight() / 2));
+            r.removeFromTop (2);
+            const int bw = (r.getWidth() - 4) / 3;
+            arm.setBounds (r.removeFromLeft (bw)); r.removeFromLeft (2);
+            mute.setBounds (r.removeFromLeft (bw)); r.removeFromLeft (2);
+            solo.setBounds (r);
+            return;
+        }
         auto top = r.removeFromTop (r.getHeight() / 2);
         arm.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
         mute.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
@@ -1172,6 +1185,7 @@ struct LaneHeader : public juce::Component
     }
     std::function<void (int lane, int height)> onHeight;
     std::function<void (int size)> onAllHeights;
+    std::function<void (bool open)> onSwipe;   // phone: swipe the track list right (open) / left (slim, then hidden)
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
     juce::Slider soft, vol; float softPrev = 0.0f;
@@ -1206,6 +1220,8 @@ struct LaneHeader : public juce::Component
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (edgeDrag) { edgeDrag = false; return; }
+        if (phoneUI && onSwipe && std::abs (e.getDistanceFromDragStartX()) > 40 && std::abs (e.getDistanceFromDragStartX()) > 2 * std::abs (e.getDistanceFromDragStartY()))
+        { onSwipe (e.getDistanceFromDragStartX() > 0); return; }
         if (! e.mods.isPopupMenu())
         {
             // drag a track's header up/down to reorder; the tracks in between shift to make room, each keeps its mixer insert
@@ -1334,7 +1350,7 @@ public:
         if (phoneUI)
         {
             setupButton (panelBtn, "X", "Close / open the track panel (Track 1, 2...)");
-            panelBtn.onClick = [this] { headerW = headerW > 40 ? 36 : 220; panelBtn.setButtonText (headerW > 40 ? "X" : ">"); resized(); repaint(); };
+            panelBtn.onClick = [this] { setPhoneHeader (headerW > phoneHeadHidden ? phoneHeadHidden : phoneHeadSlim); };
             addAndMakeVisible (panelBtn);
         }
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
@@ -2214,6 +2230,11 @@ private:
     float curve0 = 0.0f;
     juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchZh0 = 1.0f; double pinchBeat = 0;
     juce::TextButton panelBtn;
+    void setPhoneHeader (int w)
+    {
+        headerW = w; panelBtn.setButtonText (headerW > phoneHeadHidden ? "X" : ">");
+        resized(); layoutHeaders(); repaint();
+    }
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
     void fitAll()   // whole song and every track on screen
@@ -3453,6 +3474,10 @@ private:
                 {
                     laneMul[lane] = juce::jlimit (0.3f, 8.0f, (float) h / (float) juce::jmax (1.0f, (float) laneH * zoomH));
                     layoutHeaders(); repaint();
+                };
+                headers.back()->onSwipe = [this] (bool open)
+                {
+                    setPhoneHeader (open ? (headerW < phoneHeadSlim ? phoneHeadSlim : phoneHeadFull) : (headerW > phoneHeadSlim ? phoneHeadSlim : phoneHeadHidden));
                 };
                 headers.back()->onAllHeights = [this] (int size)
                 {

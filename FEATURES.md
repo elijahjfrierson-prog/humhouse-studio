@@ -86,3 +86,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: half a screen above and below: up / down scrolling slides it too
 - lock: Background picture (behind the UI, from Downloads)
 - lock: phone: compact fixed tracks
+- lock: phone slim list: name + R M S; swipe right for the rest
