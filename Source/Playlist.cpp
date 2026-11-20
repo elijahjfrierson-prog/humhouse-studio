@@ -3161,7 +3161,8 @@ private:
         m.addItem (917, "Perfect Pitch: SNAP all selected clips", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
         m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
-       #if JUCE_WINDOWS
+       #if JUCE_IOS
+       #elif JUCE_WINDOWS
         m.addItem (919, "Show in Explorer (the clip's audio file)", clip.isAudio() && clip.audioFile.existsAsFile());
        #else
         m.addItem (919, "Show in Finder (the clip's audio file)", clip.isAudio() && clip.audioFile.existsAsFile());
