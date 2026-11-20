@@ -1423,7 +1423,11 @@ public:
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
-        if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
+        if (addDrummer.isVisible())   // the Channel Rack button always keeps its room: Drums shrinks, or steps aside on narrow windows
+        {
+            const int w = juce::jmin (120, t.getWidth() - 6 - 4 - 32);
+            if (w >= 56) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (w)); } else addDrummer.setBounds ({});
+        }
         t.removeFromLeft (4); rackPop.setBounds (t.removeFromLeft (32));
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
         vZoom.setVisible (! phoneUI);   // phone: pinch up / down sets track height
