@@ -657,7 +657,12 @@ struct KeyCmdEditor : juce::Component
             for (auto& a : keyActions())
                 if (keys.find (a.id) == keys.end())
                     for (auto& [id, k] : p.keys) if (k == a.def) keys[a.id] = juce::KeyPress();   // one key, one command
-            status.setText (juce::String (p.daw) + " key commands set. Anything without a key: click it to set one.", juce::dontSendNotification);
+            int moved = 0;   // an added menu shortcut on one of this DAW's keys loses that key (it would hide the command)
+            for (auto& [id, k] : keys)
+                if (id.startsWith ("menu:") && k.isValid())
+                    for (auto& [pid, pk] : p.keys) if (pk == k) { k = juce::KeyPress(); ++moved; break; }
+            status.setText (juce::String (p.daw) + " key commands set." + (moved > 0 ? " " + juce::String (moved) + " of your added shortcuts used a " + p.daw + " key and now has no key." : juce::String())
+                            + " Anything without a key: click it to set one.", juce::dontSendNotification);
         }
         else status.setText ("HumHouse key commands set.", juce::dontSendNotification);
         waiting = -1; refresh(); save();
