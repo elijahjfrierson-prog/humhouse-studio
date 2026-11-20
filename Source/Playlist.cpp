@@ -1413,7 +1413,8 @@ public:
     void resized() override
     {
         placeSplitBars();
-        laneH = juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
+        // phone: compact fixed tracks (pinch fingers above each other = taller / shorter); a few tracks no longer fill half the screen each
+        laneH = phoneUI ? col::laneMinH : juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
         auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
@@ -1728,7 +1729,7 @@ public:
                 const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
                 if (pinchDy0 > pinchDx0 && pinchDy0 >= 40.0f)   // fingers above each other: tracks get taller / shorter
                 {
-                    zoomH = juce::jlimit (0.4f, 4.0f, pinchZh0 * juce::jmax (20.0f, std::abs (touchPos[0].y - touchPos[1].y)) / pinchDy0);
+                    zoomH = juce::jlimit (0.35f, 4.0f, pinchZh0 * juce::jmax (20.0f, std::abs (touchPos[0].y - touchPos[1].y)) / pinchDy0);
                     layoutHeaders(); lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
                 }
                 pxPerBeat = juce::jlimit (1.0f, 1600.0f, pinchPpb0 * d / pinchD0);

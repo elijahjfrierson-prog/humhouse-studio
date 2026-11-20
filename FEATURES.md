@@ -85,3 +85,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: mouse-wheel targets the view glides to
 - lock: half a screen above and below: up / down scrolling slides it too
 - lock: Background picture (behind the UI, from Downloads)
+- lock: phone: compact fixed tracks
