@@ -2788,47 +2788,82 @@ private:
         }
         return h;
     }
+    // No Hitch (Logic / Pro Tools tiled backing store): the clip layer is cached in strips half a screen wide on a fixed
+    // beat grid, two screens tall. Scrolling and following only slide them; the strip just ahead is drawn on a quiet
+    // screen refresh (prefetchStrip), so no frame ever redraws a whole screen at once.
+    struct Strip { juce::Image img; int k = 0; };
+    std::vector<Strip> strips; int stripW = 0;
+    double stripBeats() const { return stripW / (double) pxPerBeat; }
+    Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
+    void renderStrip (int k)
+    {
+        const auto area = tileArea; const float scale = tileScale;
+        const int th = area.getHeight() * 2;
+        if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
+        if (strips.size() >= 12)   // keep the strips nearest the view
+        {
+            const int here = (int) std::floor (scrollX / stripBeats());
+            auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
+            strips.erase (far);
+        }
+        Strip st; st.k = k;
+        st.img = juce::Image (juce::Image::RGB, juce::roundToInt ((float) stripW * scale), juce::roundToInt ((float) th * scale), false);
+        {
+            juce::Graphics ig (st.img);
+            ig.addTransform (juce::AffineTransform::scale (scale));
+            ig.setOrigin ({ -area.getX(), -area.getY() });
+            const auto tr = area.withWidth (stripW).withHeight (th);
+            ig.reduceClipRegion (tr);
+            ig.setColour (col::bg); ig.fillRect (tr);
+            const double keep = scrollX; const int keepY = scrollY;
+            scrollX = k * stripBeats(); scrollY = tileScrollY; paintRight = (float) tr.getRight();
+            paintContent (ig, tr);
+            scrollX = keep; scrollY = keepY; paintRight = -1.0f;
+        }
+        strips.push_back (std::move (st));
+    }
+    // one strip per screen refresh, just past the edge the view is heading to
+    void prefetchStrip()
+    {
+        if (strips.empty() || stripW <= 0 || drag != Drag::None) return;
+        const double sb = stripBeats(), viewBeats = tileArea.getWidth() / (double) pxPerBeat;
+        const int k0 = (int) std::floor (scrollX / sb), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
+        for (int k : { k1 + 1, k1 + 2, k0 - 1 })
+            if (k >= 0 && findStrip (k) == nullptr) { renderStrip (k); return; }
+    }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
-        const int tw = area.getWidth() * 3;   // a screen behind, a screen ahead: following / scrolling slides it for 1.75 screens before a redraw
-        const int th = area.getHeight() * 2;  // half a screen above and below: up / down scrolling slides it too
-        if (area.isEmpty() || scale <= 0 || (double) tw * th * scale * scale > 32.0e6) return false;   // ~130 MB cap
+        const int th = area.getHeight() * 2;   // half a screen above and below: up / down scrolling slides it too
+        if (area.isEmpty() || scale <= 0 || (double) area.getWidth() * th * scale * scale > 16.0e6) return false;
         const auto key = contentKey (area);
-        const double viewBeats = area.getWidth() / (double) pxPerBeat, tileBeats = tw / (double) pxPerBeat;
-        const bool same = tile.isValid() && key == tileKey && scale == tileScale && area == tileArea;
-        if (! same || scrollX < tileScroll - 1.0e-9 || scrollX + viewBeats > tileScroll + tileBeats + 1.0e-9
-            || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + th)
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea;
+        if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + th)
         {
             const auto now = juce::Time::getMillisecondCounter();
-            if (! same && key != tileKey)
+            if (key != tileKey)
             {
-                // content changing every frame (a live edit): drawing it straight is cheaper than re-rendering the picture
+                // content changing every frame (a live edit): drawing it straight is cheaper than re-rendering the strips
                 const bool hot = now - lastKeyMiss < 300;
                 lastKeyMiss = now;
-                if (hot) return false;
+                if (hot) { tileKey = key; strips.clear(); return false; }
             }
-            const int pw = juce::roundToInt ((float) tw * scale), ph = juce::roundToInt ((float) th * scale);
-            if (! tile.isValid() || tile.getWidth() != pw || tile.getHeight() != ph) tile = juce::Image (juce::Image::RGB, pw, ph, false);
-            const double keep = scrollX; const int keepY = scrollY;
-            tileScroll = juce::jmax (0.0, scrollX - viewBeats * 0.25);   // most of the room ahead, where the playhead and scrolling go
-            tileScrollY = juce::jmax (0, scrollY - area.getHeight() / 2);
-            {
-                juce::Graphics ig (tile);
-                ig.addTransform (juce::AffineTransform::scale (scale));
-                ig.setOrigin ({ -area.getX(), -area.getY() });
-                const auto tr = area.withWidth (tw).withHeight (th);
-                ig.reduceClipRegion (tr);
-                ig.setColour (col::bg); ig.fillRect (tr);
-                scrollX = tileScroll; scrollY = tileScrollY; paintRight = (float) tr.getRight();
-                paintContent (ig, tr);
-                scrollX = keep; scrollY = keepY; paintRight = -1.0f;
-            }
+            strips.clear();
             tileKey = key; tileScale = scale; tileArea = area;
+            stripW = juce::jmax (64, area.getWidth() / 2);
+            tileScrollY = juce::jmax (0, scrollY - area.getHeight() / 2);
         }
-        const float dx = std::round ((float) ((tileScroll - scrollX) * pxPerBeat) * scale) / scale;
+        const double sb = stripBeats(), viewBeats = area.getWidth() / (double) pxPerBeat;
+        const int k0 = juce::jmax (0, (int) std::floor (scrollX / sb)), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
         g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
-        g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+        for (int k = k0; k <= k1; ++k)
+        {
+            auto* st = findStrip (k);
+            if (st == nullptr) { renderStrip (k); st = findStrip (k); }
+            if (st == nullptr) return false;
+            const float dx = std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale;
+            g.drawImageTransformed (st->img, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+        }
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)
@@ -3540,6 +3575,7 @@ private:
     void timerCallback() override
     {
         glideStep();
+        prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
         if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; return; }
         wasPlaying = true;

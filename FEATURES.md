@@ -89,3 +89,7 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: phone slim list: name + R M S; swipe right for the rest
 - lock: the arrow handle on the track list
 - lock: the pop-out opens inside it (pop Mixer)
+
+## No Hitch Policy (owner's word)
+A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at once, or skips instead of moving smoothly (scrolling, follow-playhead, zoom, selection, meters, recording). Every hitch is a bug: big drawing jobs are split into small pieces done ahead of time, never in one frame.
+- lock: No Hitch (Logic / Pro Tools tiled backing store)
