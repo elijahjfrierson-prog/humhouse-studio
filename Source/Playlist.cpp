@@ -43,7 +43,8 @@ namespace hhs
 {
 namespace
 {
-constexpr int toolbarH = 32, rulerH = 24;
+static int toolbarH = 32;   // phone portrait: 2 rows so every tool icon shows
+constexpr int rulerH = 24;
 static int headerW = phoneUI ? 110 : 220;   // phone (BandLab): a slim track list; swipe right = all options, swipe left = slim / hidden, X hides it
 constexpr int phoneHeadHidden = 0, phoneHeadSlim = 110, phoneHeadFull = 220;
 
@@ -1439,14 +1440,17 @@ public:
 
     void resized() override
     {
+        toolbarH = phoneUI && getWidth() < 900 ? 66 : 32;
         placeSplitBars();
         // phone: compact fixed tracks (pinch fingers above each other = taller / shorter); a few tracks no longer fill half the screen each
         laneH = phoneUI ? col::laneMinH : juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
-        auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
+        auto bar = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
+        const bool twoRows = toolbarH > 40;
+        auto t = twoRows ? bar.removeFromTop ((bar.getHeight() - 4) / 2) : bar;
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &qpunch, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch || b == &qpunch ? 100 : 78)); t.removeFromLeft (4); }
-        t.removeFromLeft (10);
+        if (twoRows) { bar.removeFromTop (4); t = bar; } else t.removeFromLeft (10);   // portrait phone: tools, Group, Snap and the rack on row 2
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (32)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
