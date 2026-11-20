@@ -1642,7 +1642,9 @@ public:
                 drag = Drag::AutoCurve; dragClip = i; dragPt = sg; dragStart = e.position; curve0 = p.clips[(size_t) i].autoPts[(size_t) sg].curve;
                 return;
             }
-            if (k >= 0 && e.mods.isPopupMenu())   // right-click a point: delete it (FL)
+            // right-click a point: delete it (FL). Phone: a hold is a drag (it used to delete the dot you were moving);
+            // double-tap a dot deletes it
+            if (k >= 0 && (phoneUI ? e.getNumberOfClicks() >= 2 : e.mods.isPopupMenu()))
             {
                 const int uid = p.clips[(size_t) i].uid;
                 s.edit ("Delete automation point", [uid, k] (Project& pr) {
@@ -2502,7 +2504,7 @@ private:
     float autoBeatToX (const Clip& c, double b) const { return beatToX (c.start + b - c.patOffset); }
     int hitAutoPoint (const Clip& c, juce::Point<float> pt) const
     {
-        int best = -1; float bd = 8.0f;
+        int best = -1; float bd = phoneUI ? 18.0f : 8.0f;   // finger-sized on the phone
         for (int k = 0; k < (int) c.autoPts.size(); ++k)
         {
             const float d = pt.getDistanceFrom ({ autoBeatToX (c, c.autoPts[(size_t) k].beat), autoValueToY (c, c.autoPts[(size_t) k].value) });
@@ -2579,8 +2581,9 @@ private:
             const bool roomy = qi + 1 >= pts.size() || autoBeatToX (c, pts[qi + 1].beat) - x > 24.0f;
             const bool held = (drag == Drag::AutoPt || drag == Drag::AutoCurve) && dragPt == (int) qi && dragClip >= 0 && dragClip < (int) s.p().clips.size() && s.p().clips[(size_t) dragClip].uid == c.uid;
             lastDot = x;
-            g.setColour (juce::Colours::white); g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
-            g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
+            const float dr = phoneUI ? 5.5f : 3.5f;   // phone: bigger dots
+            g.setColour (juce::Colours::white); g.fillEllipse (x - dr, y - dr, dr * 2, dr * 2);
+            g.setColour (colour.darker (0.3f)); g.drawEllipse (x - dr, y - dr, dr * 2, dr * 2, 1.2f);
             if ((roomy && body.getHeight() >= 22.0f) || held)   // Logic-style 0-127 value next to every point
             {
                 g.setColour (held ? juce::Colours::white : colour.brighter (0.7f).withAlpha (0.9f));
@@ -2816,7 +2819,7 @@ private:
             add (c.gain); add (c.muted); add (c.selected); add (c.reversed); add (c.mixerTrack); add (c.fadeIn); add (c.fadeOut);
             add (c.fadeCurve); add (c.takeGroup); add (c.hidden); add (c.colour.getARGB()); add (c.drummer); add (c.autoTarget.kind);
             str (c.autoTarget.name); str (c.audioFile.getFullPathName());
-            for (auto& q : c.autoPts) { add (q.beat); add (q.value); }
+            for (auto& q : c.autoPts) { add (q.beat); add (q.value); add (q.curve); }
             if (c.isDrummer())
                 for (auto& ch : p.channels)
                     if (ch.id == c.drummer) add (ch.drum.performanceKey().hashCode64());
