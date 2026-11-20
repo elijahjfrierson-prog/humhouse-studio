@@ -2425,7 +2425,13 @@ struct DrumSteps : juce::Component, private juce::Timer
     void timerCallback() override
     {
         const auto* c = s.channel (channelId);
-        const auto key = c != nullptr ? c->drum.performanceKey() : juce::String();
+        juce::String key;   // the drummer's settings + your steps + section mutes (performanceKey leaves the steps out)
+        if (c != nullptr)
+        {
+            key = c->drum.performanceKey();
+            for (auto& [k, a] : c->drum.steps) { key << "|" << k; for (int v : a) key << "." << v; }
+            for (int v : c->drum.sectionMute) key << "m" << v;
+        }
         if (key != lastKey) { lastKey = key; repaint(); }
     }
     juce::String lastKey;
