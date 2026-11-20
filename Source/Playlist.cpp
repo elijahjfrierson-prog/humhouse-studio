@@ -2805,7 +2805,9 @@ private:
         const auto area = tileArea; const float scale = tileScale;
         const int th = area.getHeight() * 2;
         if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
-        if (strips.size() >= 12)   // keep the strips nearest the view
+        const double stripBytes = (double) stripW * scale * th * scale * 4.0;
+        const size_t maxStrips = (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));   // ~96 MB at most, 4 strips minimum
+        while (strips.size() >= maxStrips)   // keep the strips nearest the view
         {
             const int here = (int) std::floor (scrollX / stripBeats());
             auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
