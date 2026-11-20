@@ -2137,7 +2137,7 @@ public:
             // marker moved: lands exactly on the marker
             const double here = markerNow();
             double at = here;
-            if (std::abs (here - copyHere) < 1.0e-6) { at = nextAfter; nextAfter += juce::jmax (0.0, clipHi - clipLo); }   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
+            // simple (FL): playhead at bar 4 -> the paste lands at bar 4, every time
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -2370,7 +2370,14 @@ private:
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
     double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
     std::vector<Clip> clipboard; double clipLo = 0, clipHi = 0, copyHere = -1.0, nextAfter = 0;
-    double markerNow() const { return juce::jmax (0.0, s.engine.isPlaying() ? s.engine.markerBeats() : s.engine.positionBeats()); } bool cloneOnDrag = false, cloned = false;
+    // paste / copy spot: the blue playhead you see (while playing: where it is now, on the grid line it just passed;
+    // the start marker was bars behind it)
+    double markerNow() const
+    {
+        if (! s.engine.isPlaying()) return juce::jmax (0.0, s.engine.positionBeats());
+        const double p = uiPos >= 0.0 ? uiPos : s.engine.positionBeats();
+        return juce::jmax (0.0, plSnap > 0 ? std::floor (p / plSnap + 1.0e-6) * plSnap : p);
+    } bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
     static constexpr int hbarH = phoneUI ? 26 : 12;
