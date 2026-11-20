@@ -138,7 +138,8 @@ public:
         fit();
     }
     void childBoundsChanged (juce::Component* c) override { if (c != nullptr && c != &toggle && c->isVisible() && ! fitting) fit(); }   // the plug-in resized its own UI
-    void paint (juce::Graphics& g) override { g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
+    // whole frame painted: no stale picture shows around a plug-in view that is smaller than the window
+    void paint (juce::Graphics& g) override { g.fillAll (juce::Colours::black); g.setColour (col::panel); g.fillRect (0, 0, getWidth(), bar); }
     void resized() override
     {
         toggle.setBounds (getWidth() - 150, 3, 146, bar - 6);
@@ -154,15 +155,10 @@ private:
     {
         if (++ticks == 16) startTimer (1000);   // keeps watching, slower: Antares, Analog Lab, ZENOLOGY can collapse later (preset load, window move)
         if (! native->isVisible()) return;
-        const auto it = lastGood().find (proc.getName());
-        // maxed out: right after opening, a plug-in that showed full size then shrank back (ZENOLOGY) goes back to its biggest
-        // size; later zoom-outs the user picks stay
-        const bool shrank = ! collapsed() && it != lastGood().end() && restores < 8 && ticks < 16
-                            && (native->getWidth() < it->second.x || native->getHeight() < it->second.y);
-        if (collapsed() || shrank)
+        if (collapsed())
         {
-            auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
-            if (shrank) { ++restores; want = { juce::jmax (native->getWidth(), want.x), juce::jmax (native->getHeight(), want.y) }; }
+            auto it = lastGood().find (proc.getName());
+            const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             native->setSize (want.x, want.y);   // collapsed rescue
             fit();
         }
@@ -171,11 +167,7 @@ private:
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
-        if (! collapsed())   // the biggest size this plug-in ever showed: windows open maxed out
-        {
-            auto& g = lastGood()[proc.getName()];
-            g = { juce::jmax (g.x, native->getWidth()), juce::jmax (g.y, native->getHeight()) };
-        }
+        if (! collapsed()) lastGood()[proc.getName()] = { native->getWidth(), native->getHeight() };
         auto* c = current();
         int cw = c->getWidth(), chgt = c->getHeight();
         if (c == native.get() && collapsed())   // the plug-in still reports a 0-size view: the window opens at its last good size anyway
@@ -184,17 +176,7 @@ private:
             const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             cw = want.x; chgt = want.y; native->setBounds (0, bar, cw, chgt);
         }
-        // ZENOLOGY: a forced window bigger than its own maxed-out UI, so a shrink never cuts the instrument off
-        int fw = juce::jmax (220, cw), fh = chgt + bar;
-        auto& ds = juce::Desktop::getInstance().getDisplays();
-        const auto* disp = isShowing() ? ds.getDisplayForRect (getScreenBounds()) : ds.getPrimaryDisplay();   // the screen it's on (none: no forcing)
-        if (proc.getName().containsIgnoreCase ("ZENOLOGY") && disp != nullptr)
-        {
-            const auto scr = disp->userArea;
-            fw = juce::jmax (fw, juce::jmin (1600, scr.getWidth() - 40));
-            fh = juce::jmax (fh, juce::jmin (1050, scr.getHeight() - 60));
-        }
-        setSize (fw, fh);
+        setSize (juce::jmax (220, cw), chgt + bar);
         resized();
     }
     static constexpr int bar = 28;
@@ -203,7 +185,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
-    int ticks = 0, restores = 0;
+    int ticks = 0;
 };
 
 // Tune Finder plug-in window: reads the running effect (key / BPM / tune) live, 4 times a second
