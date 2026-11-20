@@ -1791,13 +1791,20 @@ public:
         if (drag == Drag::Marquee)
         {
             if (e.position.getDistanceFrom (dragStart) < 4) return;
+            auto dirty = marquee.expanded (2.0f);
             marquee = juce::Rectangle<float> (dragStart, e.position).getIntersection (clipArea().toFloat());
-            s.live ([&] (Project& pr) {
-                for (size_t i = 0; i < pr.clips.size(); ++i)
-                    pr.clips[i].selected = (i < marqueeBase.size() && marqueeBase[i]) || clipRect (pr.clips[i]).intersects (marquee);
-                for (auto& c : pr.clips) if (c.selected && c.group > 0) for (auto& o : pr.clips) if (o.group == c.group) o.selected = true;
-            });
-            changed = true; repaint(); return;
+            dirty = dirty.getUnion (marquee.expanded (2.0f));
+            // selection is UI only: no engine copy per mouse move (published on mouse up), and only what changed redraws
+            auto& pr = s.p();
+            std::vector<char> now (pr.clips.size(), 0); std::set<int> groups;
+            for (size_t i = 0; i < pr.clips.size(); ++i)
+                if ((now[i] = (i < marqueeBase.size() && marqueeBase[i]) || clipRect (pr.clips[i]).intersects (marquee)) && pr.clips[i].group > 0) groups.insert (pr.clips[i].group);
+            for (size_t i = 0; i < pr.clips.size(); ++i)
+            {
+                if (! now[i] && pr.clips[i].group > 0 && groups.count (pr.clips[i].group) > 0) now[i] = 1;
+                if ((now[i] != 0) != pr.clips[i].selected) { pr.clips[i].selected = now[i] != 0; dirty = dirty.getUnion (clipRect (pr.clips[i]).expanded (2.0f)); }
+            }
+            changed = true; repaint (dirty.getSmallestIntegerContainer()); return;
         }
         if (drag == Drag::Move && cloneOnDrag && ! cloned && e.position.getDistanceFrom (dragStart) > 4)
         {
@@ -1882,6 +1889,7 @@ public:
         if (drag == Drag::Marquee)
         {
             if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+            else s.live ([] (Project&) {});   // the drag's selection, published once
             marquee = {}; drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::TimeSel)

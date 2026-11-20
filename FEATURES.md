@@ -72,3 +72,5 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: dawKeyPresets
 - lock: Tune Finder: key / BPM / tune of this clip
 - lock: Tune Finder: key / BPM / tune of the selected clip
+- lock: selection is UI only: no engine copy per mouse move
+- lock: any HumHouse template zip
