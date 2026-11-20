@@ -88,3 +88,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: phone: compact fixed tracks
 - lock: phone slim list: name + R M S; swipe right for the rest
 - lock: the arrow handle on the track list
+- lock: the pop-out opens inside it (pop Mixer)

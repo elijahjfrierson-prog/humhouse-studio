@@ -2231,7 +2231,9 @@ private:
         w->setResizable (true, true);
         w->setResizeLimits (360, 220, 10000, 8000);
         w->centreWithSize (juce::jmax (900, c->getWidth()), juce::jmax (520, c->getHeight()));
+        joinFullScreen (*w);   // Mac full screen: the pop-out opens inside it (pop Mixer), not on its own Space like the MIX page
         w->setVisible (true);
+        joinFullScreen (*w); w->toFront (true);
         makeCaptureFriendly (*w);
         w->onClose = [safe = juce::Component::SafePointer<MainComponent> (this), c]
         {
