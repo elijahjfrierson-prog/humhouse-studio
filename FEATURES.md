@@ -99,3 +99,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: BEAT / REC / MIX: one tap each
 - lock: Quick Punch: back to the first bar of the last take
 - lock: phone transport: as tall as a track, easy to hit
+- lock: No Hitch screen clock (FL / Logic)

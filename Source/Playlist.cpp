@@ -2323,6 +2323,19 @@ private:
     double plSnap = 1.0;
     float lastPx = -1.0f;
     bool wasPlaying = false;
+    double uiPos = -1.0, uiLastT = 0.0;
+    // No Hitch screen clock (FL / Logic): the engine position only moves once per audio block, so 60 Hz frames would
+    // see 0 or 2 blocks and the song shudders. The screen moves at the tempo every refresh and eases toward the engine.
+    double smoothPos()
+    {
+        const double eng = s.engine.positionBeats(), now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const double bps = s.p().bpm / 60.0, dt = now - uiLastT;
+        uiLastT = now;
+        if (uiPos < 0.0 || dt > 0.25 || s.engine.isCountingIn()) return uiPos = eng;
+        const double pred = uiPos + dt * bps, err = eng - pred;
+        if (std::abs (err) > 0.5 * bps) return uiPos = eng;   // seek, loop, punch: go there
+        return uiPos = juce::jmax (uiPos, pred + err * 0.08);
+    }
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
@@ -3618,9 +3631,9 @@ private:
         glideStep();
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
-        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; return; }
+        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = -1.0; return; }
         wasPlaying = true;
-        const double pos = s.engine.positionBeats();
+        const double pos = smoothPos();
         float px = beatToX (pos);
         // follow: no page jumps. Past a third of the view the song slides under a still playhead on every screen refresh
         // (Logic / Pro Tools continuous scroll); the clips are a pre-drawn picture, so the slide only moves that picture
