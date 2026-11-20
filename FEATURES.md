@@ -70,3 +70,5 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Show in Finder (the clip's audio file)
 - lock: Set to: HumHouse
 - lock: dawKeyPresets
+- lock: Tune Finder: key / BPM / tune of this clip
+- lock: Tune Finder: key / BPM / tune of the selected clip

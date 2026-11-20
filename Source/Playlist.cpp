@@ -3161,6 +3161,7 @@ private:
         m.addItem (917, "Perfect Pitch: SNAP all selected clips", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
         m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
+        m.addItem (920, "Tune Finder: key / BPM / tune of this clip", clip.isAudio() || clip.patternIndex >= 0);
        #if JUCE_IOS
        #elif JUCE_WINDOWS
         m.addItem (919, "Show in Explorer (the clip's audio file)", clip.isAudio() && clip.audioFile.existsAsFile());
@@ -3241,6 +3242,7 @@ private:
                 return;
             }
             if (r == 15) { consolidate (uid); return; }
+            if (r == 920) { for (auto& o : s.p().clips) if (o.uid == uid) { const auto copy = o; findKeyForClip (copy); break; } return; }   // right-click Tune Finder
             if (r == 919) { for (auto& o : s.p().clips) if (o.uid == uid && o.audioFile.existsAsFile()) { o.audioFile.revealToUser(); break; } return; }   // right-click Show in Finder
             if (r == 17) { new ToolWindow ("Perfect Pitch - pitch of each note", new HumToneView (s, uid)); return; }
             if (r == 917) { perfectPitchSnapAll (s, uid); return; }
