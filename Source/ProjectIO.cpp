@@ -849,20 +849,25 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     // any HumHouse template zip: our .hhpack, one re-zipped by Finder (__MACOSX/._ files), names with dots ("Vibes..."),
     // the song at the top or one folder down
     juce::ZipFile zip (pack);
-    juce::String song; int depth = 1 << 20;
+    // the song to install: shallowest first, then the one named like its folder (our own packs), then non-Finder files
+    juce::String song; int depth = 1 << 20, rank = 1 << 20;
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
         if (n.startsWithChar ('/') || n.containsChar (':')) return {};   // nothing may land outside the template's folder
         for (auto& part : juce::StringArray::fromTokens (n, "/", "")) if (part == "..") return {};
-        if (n.startsWith ("__MACOSX/") || n.startsWith ("._") || n.contains ("/._")) continue;
-        if (n.endsWithIgnoreCase (".hhs"))
-            if (const int d = n.retainCharacters ("/").length(); d < depth) { depth = d; song = n; }
+        if (! n.endsWithIgnoreCase (".hhs")) continue;
+        const int d = n.retainCharacters ("/").length();
+        const auto file = n.fromLastOccurrenceOf ("/", false, false);
+        const bool finderJunk = n.startsWith ("__MACOSX/") || file.startsWith ("._");
+        const bool named = d == 1 && file.upToLastOccurrenceOf (".", false, false) == n.upToFirstOccurrenceOf ("/", false, false);
+        const int r = (finderJunk && ! named ? 2 : 0) + (named ? 0 : 1);
+        if (d < depth || (d == depth && r < rank)) { depth = d; rank = r; song = n; }
     }
     if (song.isEmpty() || depth > 1) return {};
     auto stage = freshTempDir();
     if (! stage.createDirectory() || zip.uncompressTo (stage, true).failed()) { stage.deleteRecursively(); return {}; }
-    stage.getChildFile ("__MACOSX").deleteRecursively();
+    if (! song.startsWith ("__MACOSX/")) stage.getChildFile ("__MACOSX").deleteRecursively();
     const auto inner = stage.getChildFile (song);
     const auto top = depth == 1 ? song.upToFirstOccurrenceOf ("/", false, false) : inner.getFileNameWithoutExtension();
     const auto from = depth == 1 ? stage.getChildFile (top) : stage;
