@@ -1129,16 +1129,15 @@ private:
                         if (c.drum.steps.count (sec) == 0) c.drum.steps[sec] = drummerSeedSteps (c.drum, p.bpm, sec);   // first edit keeps what the drummer was playing
                         auto& a = c.drum.steps[sec];
                         for (int gi = 0; gi < NumDrumGroups; ++gi)
-                            if (mask >> gi & 1) { if (! on) a[(size_t) gi] &= ~(1 << bit); else if (gi == first) a[(size_t) gi] |= 1 << bit; }
-                        // an emptied row stays silent in this section (an empty row would hand the drum back to the auto groove)
-                        auto& mute = c.drum.sectionMute;
-                        if ((int) mute.size() <= sec) mute.resize ((size_t) sec + 1, 0);
-                        for (int gi = 0; gi < NumDrumGroups; ++gi)
-                            if (mask >> gi & 1)
-                            {
-                                if (! on && a[(size_t) gi] == 0) mute[(size_t) sec] |= 1 << gi;
-                                if (on && gi == first) mute[(size_t) sec] &= ~(1 << gi);
-                            }
+                        {
+                            if ((mask >> gi & 1) == 0) continue;
+                            auto& v = a[(size_t) gi];
+                            const bool had = (v >> bit & 1) != 0;
+                            if (! on) v &= ~(1 << bit); else if (gi == first) v |= 1 << bit;
+                            // you emptied this drum's row: bit 16 (past the 16 steps) keeps it yours, so it stays silent instead of
+                            // going back to the auto groove; Back to auto clears it with the steps
+                            if (! on && had && (v & 0xffff) == 0) v |= 1 << 16;
+                        }
                     }
             });
             repaint(); return;
