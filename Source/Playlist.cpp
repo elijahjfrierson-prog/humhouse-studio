@@ -1256,9 +1256,7 @@ struct LaneHeader : public juce::Component
         }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
         m.addItem (11, "Duplicate track"); m.addItem (12, "Duplicate track with audio");
-       #if ! HHS_LICENSED
-        m.addItem (7, "HumHouse Drummer (turn this track into drums)");
-       #endif
+        m.addItem (7, "HumHouse Drummer (turn this track into drums)");   // every edition (owner: never lose Add drums)
         {
             juce::PopupMenu hm;
             hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
@@ -1324,9 +1322,7 @@ public:
             s.edit ("HumHouse Drummer", [id, at] (Project& p) { insertLane (p, 0); *id = makeLaneDrummer (p, 0, at, 8); });   // always track 1
             if (*id >= 0) openChannelEditor (s, *id);
         };
-       #if ! HHS_LICENSED
         addAndMakeVisible (addDrummer);
-       #endif
         setupButton (rackPop, {}, "Channel Rack: pop it out into its own window so you can edit samples / one-shots on Rec and in full screen (click again to dock it)");
         rackPop.icon = (int) CursorIcon::Rack;
         rackPop.onClick = [] { if (rackPopOut) rackPopOut(); };

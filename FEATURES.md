@@ -77,3 +77,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: juce::String unreadableReason
 - lock: void claimFileTypes()
 - lock: name, knobs, boxes: the menu opens right away
+- lock: HumHouse Drummer (turn this track into drums)
