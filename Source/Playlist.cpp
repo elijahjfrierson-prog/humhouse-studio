@@ -3643,7 +3643,8 @@ private:
         if ((px > anchor || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500)
         {
             scrollX = juce::jmax (0.0, pos - (anchor - (float) headerW) / pxPerBeat);
-            syncHBar(); repaint(); lastPx = beatToX (pos);
+            // only the ruler + clips slide: the track bars, toolbar and their knobs don't move, so they aren't redrawn 60x a second
+            syncHBar(); repaint (headerW, toolbarH, getWidth() - headerW, getHeight() - toolbarH); lastPx = beatToX (pos);
         }
         else
         {

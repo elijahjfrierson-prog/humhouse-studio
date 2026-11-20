@@ -161,12 +161,23 @@ private:
             native->setSize (want.x, want.y);   // collapsed rescue
             fit();
         }
+        else if (const auto it = lastGood().find (proc.getName()); it != lastGood().end() && restores < 8
+                 && (native->getWidth() < it->second.x || native->getHeight() < it->second.y))
+        {
+            ++restores;   // maxed out: the plug-in shrank back after showing full size (ZENOLOGY), so it goes back to its biggest size
+            native->setSize (juce::jmax (native->getWidth(), it->second.x), juce::jmax (native->getHeight(), it->second.y));
+            fit();
+        }
         else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
     }
     void fit()
     {
         const juce::ScopedValueSetter<bool> sv (fitting, true);
-        if (! collapsed()) lastGood()[proc.getName()] = { native->getWidth(), native->getHeight() };
+        if (! collapsed())   // the biggest size this plug-in ever showed: windows open maxed out
+        {
+            auto& g = lastGood()[proc.getName()];
+            g = { juce::jmax (g.x, native->getWidth()), juce::jmax (g.y, native->getHeight()) };
+        }
         auto* c = current();
         int cw = c->getWidth(), chgt = c->getHeight();
         if (c == native.get() && collapsed())   // the plug-in still reports a 0-size view: the window opens at its last good size anyway
@@ -184,7 +195,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
-    int ticks = 0;
+    int ticks = 0, restores = 0;
 };
 
 // Tune Finder plug-in window: reads the running effect (key / BPM / tune) live, 4 times a second

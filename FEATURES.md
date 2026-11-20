@@ -102,3 +102,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: No Hitch screen clock (FL / Logic)
 - lock: a newer push to the same PR cancels the older, now-outdated build
 - lock: Build cache: files that didn't change since the last run aren't compiled again
+- lock: the biggest size this plug-in ever showed: windows open maxed out
+- lock: only the ruler + clips slide
