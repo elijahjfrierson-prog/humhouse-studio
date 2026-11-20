@@ -1046,7 +1046,11 @@ struct LaneHeader : public juce::Component
         name.setEditable (false, true);
         rightClick.f = [this] (const juce::MouseEvent& e) { const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
-        nameSwipe.f = [this] (const juce::MouseEvent& e) { if (phoneUI && ! e.mods.isPopupMenu()) mouseUp (e.getEventRelativeTo (this)); };
+        nameSwipe.f = [this] (const juce::MouseEvent& e)   // only a real sideways swipe: never a reorder or anything else
+        {
+            const int dx = e.getDistanceFromDragStartX(), dy = e.getDistanceFromDragStartY();
+            if (phoneUI && onSwipe && ! e.mods.isPopupMenu() && std::abs (dx) > 40 && std::abs (dx) > 2 * std::abs (dy)) onSwipe (dx > 0);
+        };
         name.addMouseListener (&nameSwipe, false);    // phone: swiping across the track name opens / slims the list too
         name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
@@ -1467,7 +1471,8 @@ public:
         }
         if (phoneUI)
         {
-            slideHandle.setBounds (juce::jmax (0, headerW - 34), toolbarH + 1, 34, rulerH - 2);   // in the ruler row's corner: never over the clips
+            const int hw = headerW > phoneHeadHidden ? 34 : 16;   // closed: a thin tab, so the ruler stays usable
+            slideHandle.setBounds (juce::jmax (0, headerW - hw), toolbarH + 1, hw, rulerH - 2);   // in the ruler row's corner: never over the clips
             slideHandle.toFront (false);
         }
         layoutHeaders();
