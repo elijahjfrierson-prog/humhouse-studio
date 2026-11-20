@@ -1175,7 +1175,7 @@ public:
             const int pw = juce::roundToInt (getWidth() * sc), ph = juce::roundToInt (getHeight() * sc);
             if (pw > 0 && ph > 0 && (bgScaled.getWidth() != pw || bgScaled.getHeight() != ph || bgScaledFrom != bgPicture))
             {
-                bgScaled = juce::Image (juce::Image::RGB, pw, ph, true);
+                bgScaled = juce::Image (juce::Image::ARGB, pw, ph, true);   // keeps a PNG / GIF's see-through parts
                 juce::Graphics bg (bgScaled);
                 bg.setImageResamplingQuality (juce::Graphics::highResamplingQuality);
                 bg.drawImageWithin (bgPicture, 0, 0, pw, ph, juce::RectanglePlacement::fillDestination);
@@ -1889,7 +1889,7 @@ if (phoneUI)
                     flash ("Background picture set: pop pages out (View > Detach) to see it"); repaint();
                 });
                 break;
-            case 4723: bgPicture = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
+            case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();
                 studio.settings->setValue ("packAudioInSong", packAudioInSong().load());
