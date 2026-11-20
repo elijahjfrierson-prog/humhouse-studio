@@ -892,7 +892,8 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     if (hhs.getFileNameWithoutExtension() != dest.getFileName())   // the template list finds <folder>/<folder>.hhs
     {
         auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
-        if (renamed.existsAsFile()) renamed.moveFileTo (renamed.getNonexistentSibling (true));   // another song already has that name: keep it beside
+        if (renamed.existsAsFile() && ! renamed.getFullPathName().equalsIgnoreCase (hhs.getFullPathName()))   // another song already has that name: keep it beside
+            renamed.moveFileTo (renamed.getNonexistentSibling (true));   // (Demo/demo.hhs on a case-insensitive disk is the same file)
         if (hhs.moveFileTo (renamed)) hhs = renamed;
     }
     return hhs.existsAsFile() ? hhs : juce::File();
