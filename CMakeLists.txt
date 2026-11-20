@@ -216,7 +216,7 @@ function(hhs_add_app target product bundle licensed)
     if(APPLE AND NOT IOS AND HHS_WITH_ISFX)   # FFmpeg dylibs ship in Contents/Frameworks
         target_link_options(${target} PRIVATE "-Wl,-rpath,@executable_path/../Frameworks")
     endif()
-    target_link_libraries(${target} PRIVATE ${HHS_LIBS} HHSFonts
+    target_link_libraries(${target} PRIVATE ${HHS_LIBS} HHSFonts "$<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:-framework CoreServices>"
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endfunction()
 hhs_add_app(HumHouseStudio "HumHouse Studio" "com.humhouse.studio" 1)

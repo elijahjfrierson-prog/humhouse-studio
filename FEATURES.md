@@ -75,3 +75,4 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: selection is UI only: no engine copy per mouse move
 - lock: any HumHouse template zip
 - lock: juce::String unreadableReason
+- lock: void claimFileTypes()

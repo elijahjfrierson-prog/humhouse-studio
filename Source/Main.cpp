@@ -238,6 +238,7 @@ public:
             quit();
             return;
         }
+        hhs::claimFileTypes();   // macOS: HumHouse files open in the app you're running, never an old copy
        #if ! JUCE_IOS
         if (hhs::isPluginHostChild (commandLine))   // crash-protected plug-in helper: no window, runs until the host closes it
         {
