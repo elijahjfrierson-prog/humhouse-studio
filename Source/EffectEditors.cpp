@@ -543,7 +543,7 @@ private:
     {
         auto x = std::make_unique<juce::XmlElement> ("HUMHOUSE_PRESET");
         x->setAttribute ("kind", kind);
-        for (auto& p : params) { auto* e = x->createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
+        for (auto& p : params) if (p.id != "poly") { auto* e = x->createNewChildElement ("P"); e->setAttribute ("id", p.id); e->setAttribute ("v", (double) p.value); }
         return x;
     }
     void sharePreset()
