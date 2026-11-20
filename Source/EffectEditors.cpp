@@ -504,6 +504,13 @@ private:
                     Studio::readout() (p.name + ":  " + juce::String (juce::roundToInt (pc)) + "%   (" + juce::String (v, std::abs (v) >= 100 ? 0 : 2) + ")");
                 }
             }
+        if (id == "poly" || id == "mono")   // Poly = Mono off: the twin switch (and what a preset saves) follows
+            for (size_t i = 0; i < params.size(); ++i)
+                if (params[i].id == (id == "poly" ? "mono" : "poly"))
+                {
+                    params[i].value = v > 0.5f ? 0.0f : 1.0f;
+                    if (auto* cb = dynamic_cast<juce::ComboBox*> (controls[(int) i])) cb->setSelectedItemIndex ((int) params[i].value, juce::dontSendNotification);
+                }
         onSet (id, v);
         if (onAnyChange) onAnyChange();
     }
