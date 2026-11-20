@@ -801,7 +801,9 @@ juce::String unreadableReason (const juce::File& f)
 
 bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
 {
-    const auto legal = juce::File::createLegalFileName (name.trim().isEmpty() ? juce::String ("Template") : name.trim());
+    // Windows drops trailing dots / spaces from folder names ("Vibes..." -> "Vibes"): strip them so the pack builds everywhere
+    auto legal = juce::File::createLegalFileName (name.trim()).trimCharactersAtEnd (". ");
+    if (legal.isEmpty()) legal = "Template";
     auto stage = freshTempDir();
     auto root = stage.getChildFile (legal);
     auto sounds = root.getChildFile ("Sounds");
@@ -874,7 +876,9 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     Project check;
     if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
     templatesDir.createDirectory();
-    auto dest = templatesDir.getNonexistentChildFile (juce::File::createLegalFileName (top), {}, false);
+    auto destName = juce::File::createLegalFileName (top).trimCharactersAtEnd (". ");
+    if (destName.isEmpty()) destName = "Template";
+    auto dest = templatesDir.getNonexistentChildFile (destName, {}, false);
     const bool ok = from.copyDirectoryTo (dest);
     stage.deleteRecursively();
     if (! ok) return {};
