@@ -2800,14 +2800,17 @@ private:
     std::vector<Strip> strips; int stripW = 0;
     double stripBeats() const { return stripW / (double) pxPerBeat; }
     Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
+    size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
+    {
+        const double stripBytes = (double) stripW * tileScale * tileArea.getHeight() * 2 * tileScale * 4.0;
+        return (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));
+    }
     void renderStrip (int k)
     {
         const auto area = tileArea; const float scale = tileScale;
         const int th = area.getHeight() * 2;
         if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
-        const double stripBytes = (double) stripW * scale * th * scale * 4.0;
-        const size_t maxStrips = (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));   // ~96 MB at most, 4 strips minimum
-        while (strips.size() >= maxStrips)   // keep the strips nearest the view
+        while (strips.size() >= maxStrips())   // keep the strips nearest the view
         {
             const int here = (int) std::floor (scrollX / stripBeats());
             auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
@@ -2835,6 +2838,12 @@ private:
         if (strips.empty() || stripW <= 0 || drag != Drag::None) return;
         const double sb = stripBeats(), viewBeats = tileArea.getWidth() / (double) pxPerBeat;
         const int k0 = (int) std::floor (scrollX / sb), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
+        if (strips.size() >= maxStrips())   // full: only a strip well behind the view makes room, never one in or ahead of it (no redraw loop)
+        {
+            auto behind = std::find_if (strips.begin(), strips.end(), [k0] (const Strip& st) { return st.k < k0 - 1; });
+            if (behind == strips.end() || findStrip (k1 + 1) != nullptr) return;
+            strips.erase (behind);
+        }
         for (int k : { k1 + 1, k1 + 2, k0 - 1 })
             if (k >= 0 && findStrip (k) == nullptr) { renderStrip (k); return; }
     }
