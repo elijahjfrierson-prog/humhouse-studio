@@ -849,8 +849,8 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
     // any HumHouse template zip: our .hhpack, one re-zipped by Finder (__MACOSX/._ files), names with dots ("Vibes..."),
     // the song at the top or one folder down
     juce::ZipFile zip (pack);
-    // the song to install: shallowest first, then the one named like its folder (our own packs), then non-Finder files
-    juce::String song; int depth = 1 << 20, rank = 1 << 20;
+    // the song to install: real songs before Finder sidecars, then shallowest, then the one named like its folder (our own packs)
+    juce::String song; int depth = 1 << 20, rank = 1 << 20, junk = 1 << 20;
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
@@ -861,8 +861,8 @@ juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDi
         const auto file = n.fromLastOccurrenceOf ("/", false, false);
         const bool finderJunk = n.startsWith ("__MACOSX/") || file.startsWith ("._");
         const bool named = d == 1 && file.upToLastOccurrenceOf (".", false, false) == n.upToFirstOccurrenceOf ("/", false, false);
-        const int r = (finderJunk && ! named ? 2 : 0) + (named ? 0 : 1);
-        if (d < depth || (d == depth && r < rank)) { depth = d; rank = r; song = n; }
+        const int r = named ? 0 : 1, j = finderJunk && ! named ? 1 : 0;   // real songs first (a root ._X.hhs sidecar never wins), then shallowest, then folder-named
+        if (std::tie (j, d, r) < std::tie (junk, depth, rank)) { junk = j; depth = d; rank = r; song = n; }
     }
     if (song.isEmpty() || depth > 1) return {};
     auto stage = freshTempDir();
