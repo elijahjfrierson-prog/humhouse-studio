@@ -600,6 +600,24 @@ static const std::vector<KeyAction>& keyActions()
     return a;
 }
 
+// "Set to" another DAW: that DAW's keys for the commands it has; a HumHouse default it would collide with gets no key
+struct DawKeys { const char* daw; std::vector<std::pair<const char*, juce::KeyPress>> keys; };
+static const std::vector<DawKeys>& dawKeyPresets()
+{
+    using K = juce::KeyPress;
+    const int cmd = juce::ModifierKeys::commandModifier, shift = juce::ModifierKeys::shiftModifier, alt = juce::ModifierKeys::altModifier;
+    static const std::vector<DawKeys> d {
+        { "Pro Tools", { { "home", K (K::returnKey) }, { "rec", K (K::F12Key) }, { "mixer", K ('=', cmd, 0) }, { "export", K ('b', cmd | alt, 0) }, { "metro", K ('7') } } },
+        { "Logic Pro", { { "home", K (K::returnKey) }, { "rec", K ('r') }, { "mixer", K ('x') }, { "piano", K ('p') }, { "browser", K ('f') }, { "metro", K ('k') }, { "export", K ('b', cmd, 0) } } },
+        { "FL Studio", { { "rec", K ('r') }, { "song", K ('l') }, { "playlist", K (K::F5Key) }, { "piano", K (K::F7Key) }, { "mixer", K (K::F9Key) }, { "metro", K ('m', cmd, 0) }, { "export", K ('r', cmd, 0) } } },
+        { "Ableton Live", { { "rec", K (K::F9Key) }, { "song", K (K::tabKey) }, { "mixer", K ('m', cmd | alt, 0) }, { "browser", K ('b', cmd | alt, 0) }, { "export", K ('r', cmd | shift, 0) } } },
+        { "Studio One", { { "mixer", K (K::F3Key) }, { "metro", K ('c') }, { "export", K ('e', cmd, 0) } } },
+        { "Cubase", { { "mixer", K (K::F3Key) }, { "metro", K ('c') }, { "export", K ('e', cmd, 0) } } },
+        { "Reaper", { { "rec", K ('r', cmd, 0) }, { "mixer", K ('m', cmd, 0) }, { "export", K ('r', cmd | alt, 0) }, { "browser", K ('x', cmd | alt, 0) } } },
+        { "BandLab", { { "rec", K ('r') }, { "metro", K ('m') } } } };
+    return d;
+}
+
 struct KeyCmdEditor : juce::Component
 {
     KeyCmdEditor (std::map<juce::String, juce::KeyPress>& m, std::function<void()> onSave) : keys (m), save (std::move (onSave))
@@ -619,9 +637,30 @@ struct KeyCmdEditor : juce::Component
         resetAll.onClick = [this] { keys.clear(); waiting = -1; refresh(); save(); };
         addAndMakeVisible (status);
         addAndMakeVisible (search); search.setTextToShowWhenEmpty ("Search commands...", col::dim);
+        setTo.setTextWhenNothingSelected ("Set to: HumHouse");
+        setTo.addItem ("Set to: HumHouse (defaults)", 1);
+        for (int i = 0; i < (int) dawKeyPresets().size(); ++i) setTo.addItem (juce::String ("Set to: ") + dawKeyPresets()[(size_t) i].daw, i + 2);
+        setTo.onChange = [this] { applyDaw (setTo.getSelectedId() - 2); };
+        addAndMakeVisible (setTo);
         search.onTextChange = [this] { resized(); };
         refresh();
         setSize (540, 92 + 28 * (int) keyActions().size());
+    }
+    // someone coming from another DAW gets its key commands (Set to: Pro Tools, Logic, FL, Ableton...)
+    void applyDaw (int i)
+    {
+        keys.clear();
+        if (i >= 0 && i < (int) dawKeyPresets().size())
+        {
+            const auto& p = dawKeyPresets()[(size_t) i];
+            for (auto& [id, k] : p.keys) keys[id] = k;
+            for (auto& a : keyActions())
+                if (keys.find (a.id) == keys.end())
+                    for (auto& [id, k] : p.keys) if (k == a.def) keys[a.id] = juce::KeyPress();   // one key, one command
+            status.setText (juce::String (p.daw) + " key commands set. Anything without a key: click it to set one.", juce::dontSendNotification);
+        }
+        else status.setText ("HumHouse key commands set.", juce::dontSendNotification);
+        waiting = -1; refresh(); save();
     }
     void refresh()
     {
@@ -635,7 +674,7 @@ struct KeyCmdEditor : juce::Component
     void resized() override
     {
         auto r = getLocalBounds().reduced (6);
-        search.setBounds (r.removeFromTop (30).reduced (2));
+        { auto top = r.removeFromTop (30); setTo.setBounds (top.removeFromRight (200).reduced (2)); search.setBounds (top.reduced (2)); }
         const auto q = search.getText().trim().toLowerCase();
         for (int i = 0; i < names.size(); ++i)
         {
@@ -664,7 +703,7 @@ struct KeyCmdEditor : juce::Component
         waiting = -1; refresh(); return true;
     }
     std::map<juce::String, juce::KeyPress>& keys; std::function<void()> save;
-    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns, clearBtns; juce::TextButton resetAll; juce::TextEditor search; juce::Label status; int waiting = -1;
+    juce::OwnedArray<juce::Label> names; juce::OwnedArray<juce::TextButton> setBtns, resetBtns, clearBtns; juce::TextButton resetAll; juce::TextEditor search; juce::ComboBox setTo; juce::Label status; int waiting = -1;
 };
 
 // phone: menus taller than the screen scroll with a finger (JUCE's popup menu only scrolls by holding its edge arrows)

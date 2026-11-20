@@ -68,3 +68,5 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: HumHouse Grand/HumHouse Grand.hhkeys
 - lock: class KeysInstrument
 - lock: Show in Finder (the clip's audio file)
+- lock: Set to: HumHouse
+- lock: dawKeyPresets
