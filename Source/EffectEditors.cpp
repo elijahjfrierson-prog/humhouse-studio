@@ -186,9 +186,11 @@ private:
         }
         // ZENOLOGY: a forced window bigger than its own maxed-out UI, so a shrink never cuts the instrument off
         int fw = juce::jmax (220, cw), fh = chgt + bar;
-        if (proc.getName().containsIgnoreCase ("ZENOLOGY"))
+        auto& ds = juce::Desktop::getInstance().getDisplays();
+        const auto* disp = isShowing() ? ds.getDisplayForRect (getScreenBounds()) : ds.getPrimaryDisplay();   // the screen it's on (none: no forcing)
+        if (proc.getName().containsIgnoreCase ("ZENOLOGY") && disp != nullptr)
         {
-            const auto scr = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
+            const auto scr = disp->userArea;
             fw = juce::jmax (fw, juce::jmin (1600, scr.getWidth() - 40));
             fh = juce::jmax (fh, juce::jmin (1050, scr.getHeight() - 60));
         }
