@@ -2509,8 +2509,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             auto& lane = aproj.lanes[l];
             if (! lane.armed) continue;
             const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
-            const float* ir = c1 < numIn ? in[c1] : il;
+            // Bluetooth / output-only devices have no inputs (in may be null): never index past them with an armed track
+            const float* il = in != nullptr && c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+            const float* ir = in != nullptr && c1 >= 0 && c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;
             if (lane.autoNorm && l < normState.size() && n <= normScratch.getNumSamples())
