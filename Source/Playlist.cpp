@@ -1630,7 +1630,8 @@ public:
         if (i >= 0 && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) timeSelA = timeSelB = -1;   // picking another clip drops the old ruler range
         if (i >= 0 && p.clips[(size_t) i].isAuto() && tool != PTool::Delete && tool != PTool::Slice && tool != PTool::Mute)
         {
-            const int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (phoneUI && e.mods.isPopupMenu() && drag == Drag::AutoPt) return;   // phone hold on the dot you're dragging: keep the drag
+            int k = hitAutoPoint (p.clips[(size_t) i], e.position);
             if (const int sg = k < 0 ? hitAutoCurve (p.clips[(size_t) i], e.position) : -1; sg >= 0)
             {
                 const int uid = p.clips[(size_t) i].uid;
@@ -1928,6 +1929,7 @@ public:
         }
         if (drag == Drag::AutoPt)
         {
+            if (phoneUI && e.mods.isPopupMenu()) return;   // the phone hold's synthetic release: the finger is still down, keep dragging
             if (changed) s.edit ("Move automation point", [] (Project&) {});
             drag = Drag::None; dragClip = dragPt = -1; repaint(); return;
         }
