@@ -1632,6 +1632,12 @@ public:
         {
             if (phoneUI && e.mods.isPopupMenu() && drag == Drag::AutoPt) return;   // phone hold on the dot you're dragging: keep the drag
             int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (const int h = hitAutoCurve (p.clips[(size_t) i], e.position); k >= 0 && h >= 0)   // finger-sized point zone vs a curve handle: the nearer wins
+            {
+                const auto& c = p.clips[(size_t) i];
+                const juce::Point<float> pt { autoBeatToX (c, c.autoPts[(size_t) k].beat), autoValueToY (c, c.autoPts[(size_t) k].value) };
+                if (e.position.getDistanceFrom (autoCurveHandle (c, h)) < e.position.getDistanceFrom (pt)) k = -1;
+            }
             if (const int sg = k < 0 ? hitAutoCurve (p.clips[(size_t) i], e.position) : -1; sg >= 0)
             {
                 const int uid = p.clips[(size_t) i].uid;
