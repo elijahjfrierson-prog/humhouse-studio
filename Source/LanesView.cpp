@@ -36,7 +36,7 @@ public:
         fxBtn.onClick = autoBtn.onClick = [this] { scroll = 0; laneKey = {}; refill(); repaint(); };
         setupButton (addBtn, "+ LANE", "Automate this track: volume, pan, a send or any effect knob");
         addBtn.onClick = [this] { addMenu(); };
-        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) addAndMakeVisible (b);
+        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) if (! phoneLite || b == &fxBtn) addAndMakeVisible (b);   // stripped phone app: no automation
         laneBox.setTooltip ("LANE: one automation / effect, or all of them");
         trackBox.setTooltip ("TRACK: only what sits on this Playlist track");
         mixBox.setTooltip ("MIXER: only this mixer insert's effects and automation");
@@ -230,8 +230,7 @@ private:
         if (row.t.kind == AutoFxParam) m.addItem (1, "Open effect");
         m.addItem (2, anyOn ? "Mute automation" : "Unmute automation");
         m.addItem (3, "Delete automation (" + juce::String ((int) uids.size()) + (uids.size() == 1 ? " clip)" : " clips)"));
-        m.addSeparator();
-        m.addItem (4, "Add automation lane...");
+        if (! phoneLite) { m.addSeparator(); m.addItem (4, "Add automation lane..."); }
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
                          [safe = juce::Component::SafePointer<LanesView> (this), row, uids, anyOn] (int r)
                          {
@@ -488,6 +487,7 @@ private:
 
     void addMenu (bool atMouse = false)
     {
+        if (phoneLite) return;   // stripped phone app: no automation
         auto& p = s.p(); const int tr = track();
         if (tr >= (int) p.mixer.size()) return;
         const auto& mt = p.mixer[(size_t) tr];

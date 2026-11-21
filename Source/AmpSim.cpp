@@ -38,8 +38,21 @@ static const Cab cabs[] {
     { "4x12 Closed V-30",   65,  95, 1.6f, 5, 2600, 5.0f, 4100, 3.0f, 5600, false },
     { "4x12 Closed Green",  65,  90, 1.5f, 5, 2000, 3.5f, 3400, 2.0f, 5200, false },
     { "8x10 Bass",          40,  70, 1.2f, 4, 1800, 2.0f, 3000, 1.0f, 4500, false },
-    { "1x12 Tweed Open",    85, 120, 1.2f, 2, 1800, 2.5f, 3200, 1.5f, 5400, true } };
-constexpr int numCabs = 6;
+    { "1x12 Tweed Open",    85, 120, 1.2f, 2, 1800, 2.5f, 3200, 1.5f, 5400, true },
+    { "1x10 Open Jensen",   95, 130, 1.2f, 2, 2400, 2.5f, 4000, 1.5f, 6400, true },
+    { "1x15 Bass",          38,  65, 1.2f, 4, 1500, 1.5f, 2600, 1.0f, 4200, false },
+    { "2x10 Open Tweed",    90, 120, 1.3f, 2, 2300, 3.0f, 3900, 2.0f, 6600, true },
+    { "2x12 Closed V-30",   70, 100, 1.5f, 4, 2600, 4.5f, 4100, 2.5f, 5800, false },
+    { "2x12 Open Alnico Gold", 75, 108, 1.3f, 3, 2100, 3.0f, 3600, 1.5f, 6400, true },
+    { "2x15 Bass",          35,  60, 1.2f, 4, 1400, 1.5f, 2500, 1.0f, 4000, false },
+    { "4x10 Open Tweed",    80, 112, 1.3f, 3, 2400, 3.5f, 4000, 2.0f, 6400, true },
+    { "4x10 Bass",          45,  80, 1.2f, 4, 2000, 2.5f, 3400, 1.5f, 5200, false },
+    { "4x12 Closed Creamback", 65, 92, 1.5f, 4, 2300, 4.0f, 3700, 2.0f, 5600, false },
+    { "4x12 Slant Greenback", 68, 95, 1.5f, 5, 1900, 3.5f, 3300, 2.0f, 5000, false },
+    { "4x12 Recto Oversized", 60, 85, 1.6f, 6, 2700, 4.5f, 4200, 2.5f, 5400, false },
+    { "4x12 Closed T-75",   65,  98, 1.5f, 4, 2900, 5.0f, 4500, 2.5f, 6000, false },
+    { "6x10 Bass",          42,  75, 1.2f, 4, 1900, 2.0f, 3200, 1.0f, 4800, false } };
+constexpr int numCabs = (int) (sizeof (cabs) / sizeof (cabs[0]));
 
 struct Mic { const char* name; float lowCut, presF, presDb, hiCut, prox; };
 static const Mic mics[] {
@@ -108,23 +121,23 @@ public:
     {
         static const std::vector<ParamDef> ps = [] {
             std::vector<ParamDef> v;
-            std::vector<const char*> mn, cn, mc, pd, rm { "Studio Room A", "Live Room", "Vocal Booth", "Rehearsal Room", "Big Hall" };
+            std::vector<const char*> mn, cn, mc, pd, rm { "Studio Room A", "Live Room", "Vocal Booth", "Rehearsal Room", "Big Hall", "Chroma Room" };
             for (auto& m : amp::models) mn.push_back (m.name);
             for (auto& c : amp::cabs) cn.push_back (c.name);
             for (auto& m : amp::mics) mc.push_back (m.name);
             for (auto* p : amp::pedalNames) pd.push_back (p);
             v.push_back ({ "model", "Amp", 0, (float) amp::numModels - 1, 0, mn });
-            v.push_back ({ "gain", "Gain", 0, 10, 6.5f }); v.push_back ({ "bass", "Bass", 0, 10, 5.5f }); v.push_back ({ "mid", "Mid", 0, 10, 6 });
+            v.push_back ({ "gain", "Gain", 0, 10, 5.0f }); v.push_back ({ "bass", "Bass", 0, 10, 5.5f }); v.push_back ({ "mid", "Mid", 0, 10, 6 });
             v.push_back ({ "treble", "Treble", 0, 10, 6.5f }); v.push_back ({ "presence", "Presence", 0, 10, 7 }); v.push_back ({ "master", "Master", 0, 10, 7.5f });
             v.push_back ({ "channel", "Channel", 0, 2, 0, { "Clean", "Crunch", "Lead" } });
             v.push_back ({ "power", "Power Amp", 0, 3, 0, { "Class A", "Class AB", "Tube EL34", "Tube EL84" } });
             v.push_back ({ "bias", "Bias", 0, 10, 5 }); v.push_back ({ "sag", "Sag", 0, 10, 5 }); v.push_back ({ "response", "Response", 0, 10, 6.5f });
             v.push_back ({ "cab", "Cabinet", 0, (float) amp::numCabs - 1, 0, cn }); v.push_back ({ "cabmix", "Cab Mix", 0, 100, 100 });
             v.push_back ({ "mic", "Microphone", 0, (float) amp::numMics - 1, 0, mc });
-            v.push_back ({ "micx", "Mic X", 0, 1, 0.5f }); v.push_back ({ "micy", "Mic Y", 0, 1, 0.5f });
+            v.push_back ({ "micx", "Mic X", 0, 1, 0.68f }); v.push_back ({ "micy", "Mic Y", 0, 1, 0.68f });
             v.push_back ({ "micdist", "Distance (ft)", 0.1f, 6, 1 }); v.push_back ({ "micangle", "Angle", 0, 90, 0 });
-            v.push_back ({ "room", "Room", 0, 4, 0, rm }); v.push_back ({ "roomsize", "Room Size", 0, 100, 60 }); v.push_back ({ "reflect", "Reflection", 0, 100, 35 });
-            v.push_back ({ "damping", "Damping", 0, 100, 70 }); v.push_back ({ "roomwet", "Room Dry/Wet", 0, 100, 20 });
+            v.push_back ({ "room", "Room", 0, 5, 0, rm }); v.push_back ({ "roomsize", "Room Size", 0, 100, 60 }); v.push_back ({ "reflect", "Reflection", 0, 100, 35 });
+            v.push_back ({ "damping", "Damping", 0, 100, 70 }); v.push_back ({ "roomwet", "Room Dry/Wet", 0, 100, 12 });
             static const char* eqIds[] { "eq1", "eq2", "eq3", "eq4", "eq5" }; static const char* eqNames[] { "EQ 100", "EQ 400", "EQ 1k", "EQ 3k", "EQ 8k" };
             for (int i = 0; i < 5; ++i) v.push_back ({ eqIds[i], eqNames[i], -12, 12, 0 });
             static const char* sid[numStomps + numPost][5] { { "s1", "s1a", "s1b", "s1c", "s1on" }, { "s2", "s2a", "s2b", "s2c", "s2on" }, { "s3", "s3a", "s3b", "s3c", "s3on" },
@@ -141,13 +154,22 @@ public:
                 v.push_back ({ sid[s][4], snm[s][4], 0, 1, 1, { "Off", "On" } });
             }
             v.push_back ({ "output", "Output (dB)", -24, 12, 0 }); v.push_back ({ "input", "Input (dB)", -12, 24, 0 });
+            // mic 2 (classic two-mic combo: mic 1 top right on the cone, mic 2 bottom left, angled) + per-amp front-panel knobs
+            v.push_back ({ "mic2on", "Mic 2", 0, 1, 1, { "Off", "On" } }); v.push_back ({ "mic2", "Mic 2 Model", 0, (float) amp::numMics - 1, 1, mc });
+            v.push_back ({ "mic2x", "Mic 2 X", 0, 1, 0.3f }); v.push_back ({ "mic2y", "Mic 2 Y", 0, 1, 0.3f });
+            v.push_back ({ "mic2dist", "Mic 2 Distance (ft)", 0.1f, 6, 1.5f }); v.push_back ({ "mic2angle", "Mic 2 Angle", 0, 90, 30 });
+            v.push_back ({ "micblend", "Mic 1 / Mic 2", 0, 100, 50 });
+            v.push_back ({ "leadgain", "Lead Gain", 0, 10, 6 }); v.push_back ({ "leadmaster", "Lead Master", 0, 10, 6 });
+            v.push_back ({ "reverb", "Amp Reverb", 0, 10, 0 }); v.push_back ({ "speed", "Trem Speed", 0, 10, 5 }); v.push_back ({ "intensity", "Trem Depth", 0, 10, 0 });
+            v.push_back ({ "resonance", "Resonance / Depth", 0, 10, 5 });
             return v;
         }();
         return ps;
     }
     // param indices
     enum { pModel, pGain, pBass, pMid, pTreble, pPres, pMaster, pChan, pPower, pBias, pSag, pResp, pCab, pCabMix, pMic, pMicX, pMicY, pMicDist, pMicAngle,
-           pRoom, pRoomSize, pReflect, pDamp, pRoomWet, pEq1, pSlot0 = pEq1 + 5, pOut = pSlot0 + 5 * (numStomps + numPost), pIn };
+           pRoom, pRoomSize, pReflect, pDamp, pRoomWet, pEq1, pSlot0 = pEq1 + 5, pOut = pSlot0 + 5 * (numStomps + numPost), pIn,
+           pMic2On, pMic2, pMic2X, pMic2Y, pMic2Dist, pMic2Angle, pBlend, pLeadGain, pLeadMaster, pReverb, pSpeed, pIntensity, pReso };
 
     void prepare (double s, int maxBlock) override
     {
@@ -163,7 +185,7 @@ public:
     void reset() override
     {
         ts.clear(); for (auto& f : stageHp) f.z = 0; for (auto& f : stageLp) f.z = 0; sagEnv = 0;
-        for (auto& b : cabF) b.clear(); for (auto& b : micF) b.clear(); for (auto& b : eqF) b.clear();
+        path[0].clear(); path[1].clear(); resoF.clear(); tremPh = 0; for (auto& b : eqF) b.clear();
         for (auto& st : stomp) st = {};
         for (auto& st : postR) st = {};
         for (auto& d : dly) std::fill (d.begin(), d.end(), 0.0f);
@@ -187,15 +209,15 @@ public:
         auto up = os->processSamplesUp (sub);
         runAmp (up.getChannelPointer (0), (int) up.getNumSamples());
         os->processSamplesDown (sub);
-        // cab + mic
-        const float cm = p (pCabMix) / 100.0f;
+        // resonance / depth + amp tremolo, then cab through mic 1 and mic 2
+        const float cm = p (pCabMix) / 100.0f, bl = p (pMic2On) > 0.5f ? p (pBlend) / 100.0f : 0.0f;
+        const float tDepth = p (pIntensity) / 10.0f, tInc = (float) (2.0 * juce::MathConstants<double>::pi * (1.0 + 9.0 * p (pSpeed) / 10.0) / sr);
         for (int i = 0; i < n; ++i)
         {
-            float x = m[i], y = x;
-            for (auto& f : cabF) y = f.tick (y, 0);
-            for (auto& f : micF) y = f.tick (y, 0);
-            const float dl = combTick (y);
-            y = (y + combGain * dl) * micLevel;
+            float x = resoF.tick (m[i], 0);
+            if (tDepth > 0.0f) { x *= 1.0f - tDepth * 0.5f * (1.0f + std::sin (tremPh)); tremPh += tInc; if (tremPh > 6.2831853f) tremPh -= 6.2831853f; }
+            float y = path[0].tick (x);
+            if (bl > 0.0f) y += bl * (path[1].tick (x) - y);
             y = x + cm * (y - x);
             for (auto& f : eqF) y = f.tick (y, 0);
             if (! std::isfinite (y)) { reset(); y = 0; }
@@ -204,9 +226,10 @@ public:
         // stereo: room + post
         auto* oL = b.getWritePointer (0); auto* oR = b.getNumChannels() > 1 ? b.getWritePointer (1) : nullptr;
         for (int i = 0; i < n; ++i) { oL[i] = m[i]; if (oR) oR[i] = m[i]; }
-        if (p (pRoomWet) > 0.5f && b.getNumChannels() > 1)
+        const float wetPct = juce::jmin (100.0f, p (pRoomWet) + 4.0f * p (pReverb));   // the amp's own REVERB knob adds to the room
+        if (wetPct > 0.5f && b.getNumChannels() > 1)
         {
-            verb->setParamQuiet (0, roomSize); verb->setParamQuiet (1, p (pDamp) / 100.0f); verb->setParamQuiet (3, p (pRoomWet) / 100.0f); verb->setParamQuiet (4, 120.0f);
+            verb->setParamQuiet (0, roomSize); verb->setParamQuiet (1, p (pDamp) / 100.0f); verb->setParamQuiet (3, wetPct / 100.0f); verb->setParamQuiet (4, 120.0f);
             verb->process (b, n, ctx);
         }
         for (int s = numStomps; s < numStomps + numPost; ++s) runPost (s, b, n, ctx);
@@ -221,24 +244,48 @@ private:
     std::unique_ptr<BuiltinEffect> verb;
     ToneStack ts; float tsMakeup = 1;
     OnePole stageHp[6], stageLp[6], presHp, inHp;
-    Biquad cabF[5], micF[4], eqF[5];
-    float sagEnv = 0, key = -1, micLevel = 1, combGain = 0, roomSize = 0.5f; int combD = 1;
-    std::vector<float> comb = std::vector<float> (4096, 0.0f); int combW = 0;
+    // one mic on the cab: cone position / distance / angle shape the cab + mic response, plus its floor bounce
+    struct MicPath
+    {
+        Biquad cab[5], mic[4]; float level = 1, combGain = 0; int combD = 1, combW = 0;
+        std::vector<float> comb = std::vector<float> (4096, 0.0f);
+        void clear() { for (auto& b : cab) b.clear(); for (auto& b : mic) b.clear(); std::fill (comb.begin(), comb.end(), 0.0f); }
+        float tick (float x)
+        {
+            for (auto& f : cab) x = f.tick (x, 0);
+            for (auto& f : mic) x = f.tick (x, 0);
+            const int N = (int) comb.size(); comb[(size_t) combW] = x;
+            const float d = comb[(size_t) ((combW - combD + N) % N)]; combW = (combW + 1) % N;
+            return (x + combGain * d) * level;
+        }
+        void set (double sr, const amp::Cab& c, const amp::Mic& mc, float mx, float my, float dist, float angDeg)
+        {
+            const float dx = mx - 0.5f, dy = my - 0.5f, rad = juce::jlimit (0.0f, 1.0f, std::sqrt (dx * dx + dy * dy) * 2.0f), ang = angDeg / 90.0f;
+            const float lp = c.lp * (1.2f - 0.5f * rad) * (1.0f - 0.35f * ang) * (dist < 1 ? 1.0f : 1.0f - 0.04f * (dist - 1));
+            const float prox = 0.7f * mc.prox * juce::jlimit (0.0f, 6.0f, 6.0f / (0.6f + dist * 2.0f) - 1.0f) + (c.open ? -1.0f : 0.5f);
+            // gentler resonant peaks than before: less ringing / feedback-like whistle at high gain
+            cab[0].set (Biquad::HighPass, sr, c.hp, 0.7, 0); cab[1].set (Biquad::Peak, sr, c.resF, juce::jmin (1.2f, c.resQ), 0.7f * c.resDb + prox);
+            cab[2].set (Biquad::Peak, sr, c.pkF * (1.1f - 0.25f * rad), 0.9, 0.6f * c.pkDb * (1.0f - 0.6f * rad)); cab[3].set (Biquad::Peak, sr, c.brkF, 1.4, 0.5f * c.brkDb - 3.0f * ang);
+            cab[4].set (Biquad::LowPass, sr, juce::jlimit (1500.0f, 14000.0f, lp), 0.707, 0);
+            mic[0].set (Biquad::HighPass, sr, mc.lowCut, 0.7, 0); mic[1].set (Biquad::Peak, sr, mc.presF, 0.8, 0.6f * mc.presDb * (1.0f - 0.5f * ang));
+            mic[2].set (Biquad::LowPass, sr, mc.hiCut, 0.7, 0); mic[3].set (Biquad::Peak, sr, 300.0, 0.8, rad * 1.5f - 0.5f);
+            combD = juce::jlimit (1, 4000, (int) (sr * (0.0006 + 0.0011 * dist)));
+            combGain = juce::jlimit (0.0f, 0.22f, 0.04f * dist);
+            level = 1.0f / (0.7f + 0.3f * dist);
+        }
+    };
+    MicPath path[2];
+    Biquad resoF, eqF[5]; float tremPh = 0;
+    float sagEnv = 0, key = -1, roomSize = 0.5f;
     struct StompState { float z[6] {}; double ph = 0; float env = 0; int w = 0; };
     StompState stomp[numStomps + numPost], postR[numPost];   // postR = right-channel state of the stereo post pedals
     std::vector<float> dly[numStomps + numPost], sprBuf;   // one delay line per pedal slot
 
-    float combTick (float x)
-    {
-        const int N = (int) comb.size();
-        comb[(size_t) combW] = x;
-        const float y = comb[(size_t) ((combW - combD + N) % N)];
-        combW = (combW + 1) % N; return y;
-    }
     const amp::Model& model() const { return amp::models[juce::jlimit (0, amp::numModels - 1, (int) p (pModel))]; }
     void updateCoeffs()
     {
         float k = 0; for (int i = 0; i <= pMicAngle; ++i) k = k * 1.000173f + p (i) * (float) (i + 1);
+        for (int i = pMic2On; i <= pReso; ++i) k = k * 1.000173f + p (i) * (float) (i + 3);
         k += p (pRoomSize) * 0.37f + (float) sr;
         for (int i = 0; i < 5; ++i) k += p (pEq1 + i) * (float) (i + 17);
         if (k == key) return;
@@ -250,22 +297,11 @@ private:
         presHp.lp (fsO, 1800.0); inHp.lp (fsO, 25.0);
         const auto& c = amp::cabs[juce::jlimit (0, amp::numCabs - 1, (int) p (pCab))];
         const auto& mc = amp::mics[juce::jlimit (0, amp::numMics - 1, (int) p (pMic))];
-        // mic across the speaker: centre (dust cap) = bright and tight, edge of the cone = dark and fat
-        const float dx = p (pMicX) - 0.5f, dy = p (pMicY) - 0.5f, rad = juce::jlimit (0.0f, 1.0f, std::sqrt (dx * dx + dy * dy) * 2.0f);
-        const float dist = p (pMicDist), ang = p (pMicAngle) / 90.0f;
-        const float lp = c.lp * (1.25f - 0.55f * rad) * (1.0f - 0.35f * ang) * (dist < 1 ? 1.0f : 1.0f - 0.04f * (dist - 1));
-        const float prox = mc.prox * juce::jlimit (0.0f, 8.0f, 6.0f / (0.6f + dist * 2.0f) - 1.0f) + (c.open ? -1.0f : 1.0f);
-        cabF[0].set (Biquad::HighPass, sr, c.hp, 0.7, 0); cabF[1].set (Biquad::Peak, sr, c.resF, c.resQ, c.resDb + prox);
-        cabF[2].set (Biquad::Peak, sr, c.pkF * (1.1f - 0.25f * rad), 1.2, c.pkDb * (1.0f - 0.6f * rad)); cabF[3].set (Biquad::Peak, sr, c.brkF, 2.5, c.brkDb - 3.0f * ang);
-        cabF[4].set (Biquad::LowPass, sr, juce::jlimit (1500.0f, 16000.0f, lp), 0.75, 0);
-        micF[0].set (Biquad::HighPass, sr, mc.lowCut, 0.7, 0); micF[1].set (Biquad::Peak, sr, mc.presF, 1.0, mc.presDb * (1.0f - 0.5f * ang));
-        micF[2].set (Biquad::LowPass, sr, mc.hiCut, 0.7, 0); micF[3].set (Biquad::Peak, sr, 300.0, 0.8, rad * 1.5f - 0.5f);
-        // floor bounce: a delayed copy (comb) that grows with distance; level falls with distance
-        combD = juce::jlimit (1, 4000, (int) (sr * (0.0006 + 0.0011 * dist)));
-        combGain = juce::jlimit (0.0f, 0.45f, 0.08f * dist);
-        micLevel = 1.0f / (0.7f + 0.3f * dist);
-        static const float roomBase[] { 0.45f, 0.7f, 0.15f, 0.35f, 0.92f };
-        roomSize = juce::jlimit (0.0f, 1.0f, roomBase[juce::jlimit (0, 4, (int) p (pRoom))] * (0.4f + 1.2f * p (pRoomSize) / 100.0f));
+        path[0].set (sr, c, mc, p (pMicX), p (pMicY), p (pMicDist), p (pMicAngle));
+        path[1].set (sr, c, amp::mics[juce::jlimit (0, amp::numMics - 1, (int) p (pMic2))], p (pMic2X), p (pMic2Y), p (pMic2Dist), p (pMic2Angle));
+        resoF.set (Biquad::Peak, sr, 95.0, 0.9, (p (pReso) - 5.0f) * 1.4f);
+        static const float roomBase[] { 0.45f, 0.7f, 0.15f, 0.35f, 0.92f, 0.6f };
+        roomSize = juce::jlimit (0.0f, 1.0f, roomBase[juce::jlimit (0, 5, (int) p (pRoom))] * (0.4f + 1.2f * p (pRoomSize) / 100.0f));
         static const float eqF0[] { 100, 400, 1000, 3000, 8000 };
         for (int i = 0; i < 5; ++i) eqF[i].set (Biquad::Peak, sr, eqF0[i], 0.9, p (pEq1 + i));
     }
@@ -282,9 +318,12 @@ private:
         const auto& md = model();
         const int chan = (int) p (pChan);
         const int stages = juce::jlimit (1, 6, md.stages - (chan == 0 ? juce::jmin (2, md.stages - 1) : chan == 1 ? 1 : 0));
-        const float gdb = (p (pGain) / 10.0f) * md.maxGainDb * (chan == 0 ? 0.55f : chan == 1 ? 0.8f : 1.0f);
-        const float perStage = juce::Decibels::decibelsToGain (gdb / (float) stages) * 1.6f;
-        const float master = std::pow (p (pMaster) / 10.0f, 2.0f) * 2.5f + 0.05f;
+        const int mi = (int) p (pModel);
+        const bool leadKnobs = chan == 2 && (mi == 2 || mi == 5 || mi == 6);   // only 5150 / VX 30 / SLDN panels have separate lead gain + master
+        const float gk = leadKnobs ? p (pLeadGain) : p (pGain), mk = leadKnobs ? p (pLeadMaster) : p (pMaster);
+        const float gdb = (gk / 10.0f) * md.maxGainDb * 0.82f * (chan == 0 ? 0.55f : chan == 1 ? 0.8f : 1.0f);
+        const float perStage = juce::Decibels::decibelsToGain (gdb / (float) stages) * 1.3f;
+        const float master = std::pow (mk / 10.0f, 2.0f) * 2.5f + 0.05f;
         const int pw = (int) p (pPower);
         const float bias = p (pBias) / 10.0f, sag = p (pSag) / 10.0f, pres = p (pPres) / 10.0f, resp = p (pResp) / 10.0f;
         const float sagA = 1.0f / (float) (sr * 4.0 * 0.04), sagR = 1.0f / (float) (sr * 4.0 * 0.25);
@@ -303,7 +342,7 @@ private:
             const float lvl = std::abs (v * master);
             sagEnv += (lvl > sagEnv ? sagA : sagR) * (lvl - sagEnv);
             const float drive = master * (1.0f - 0.45f * sag * juce::jmin (1.0f, sagEnv));
-            float pv = v + pres * 1.4f * presHp.hpT (v) + (resp - 0.5f) * 0.6f * v;
+            float pv = v + pres * 0.9f * presHp.hpT (v) + (resp - 0.5f) * 0.6f * v;
             pv *= drive;
             float out = hhs::fastTanh (pv + asymP * 0.25f * pv * pv) ;
             if (pw == 1) { const float co = 0.03f * (1.0f - bias); out = out > co ? out - co : out < -co ? out + co : 0.0f; }   // class AB crossover

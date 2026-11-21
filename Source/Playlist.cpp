@@ -43,7 +43,10 @@ namespace hhs
 {
 namespace
 {
-constexpr int toolbarH = 32, headerW = 220, rulerH = 24;
+static int toolbarH = 32;   // phone portrait: 2 rows so every tool icon shows
+constexpr int rulerH = 24;
+static int headerW = phoneUI ? 110 : 220;   // phone (BandLab): a slim track list; swipe right = all options, swipe left = slim / hidden, X hides it
+constexpr int phoneHeadHidden = 0, phoneHeadSlim = 110, phoneHeadFull = 220;
 
 juce::AudioFormatManager& formats()
 {
@@ -1040,9 +1043,17 @@ struct LaneHeader : public juce::Component
     }
     LaneHeader (Studio& st, int i) : s (st), index (i)
     {
+        setOpaque (true);   // paints its whole bar: an armed track's meter redraw never repaints the Playlist under it
+        getProperties().set ("holdMenu", true);   // phone hold on any of its buttons opens this bar's track menu
         name.setEditable (false, true);
-        rightClick.f = [this] (const juce::MouseEvent& e) { mouseDown (e.getEventRelativeTo (this)); };
+        rightClick.f = [this] (const juce::MouseEvent& e) { popupAt = juce::Time::getMillisecondCounter(); const auto r = e.getEventRelativeTo (this); mouseDown (r); mouseUp (r); };   // name, knobs, boxes: the menu opens right away
         name.addMouseListener (&rightClick, false);   // right-click on the track name opens the track menu too
+        nameSwipe.f = [this] (const juce::MouseEvent& e)   // only a real sideways swipe: never a reorder or anything else
+        {
+            const int dx = e.getDistanceFromDragStartX(), dy = e.getDistanceFromDragStartY();
+            if (phoneUI && onSwipe && ! e.mods.isPopupMenu() && std::abs (dx) > 40 && std::abs (dx) > 2 * std::abs (dy)) onSwipe (dx > 0);
+        };
+        name.addMouseListener (&nameSwipe, false);    // phone: swiping across the track name opens / slims the list too
         name.setTooltip ("Track name (double-click to rename). Right-click for color, HumHouse Drummer, routing, delete");
         name.onTextChange = [this] { const auto t = name.getText(); s.edit ("Rename track", [&] (Project& p) { if (index < (int) p.lanes.size()) p.lanes[(size_t) index].name = t; }); };
         setupButton (arm, "R", "Arm for recording - every armed track records at once to its own insert (R then Space)", true);
@@ -1155,6 +1166,18 @@ struct LaneHeader : public juce::Component
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 3);
+        const bool slim = phoneUI && getWidth() < 150;   // phone slim list: name + R M S; swipe right for the rest
+        for (auto* c : std::initializer_list<juce::Component*> { &mon, &norm, &vol, &soft, &input, &insert }) c->setVisible (! slim);
+        if (slim)
+        {
+            name.setBounds (r.removeFromTop (r.getHeight() / 2));
+            r.removeFromTop (2);
+            const int bw = (r.getWidth() - 4) / 3;
+            arm.setBounds (r.removeFromLeft (bw)); r.removeFromLeft (2);
+            mute.setBounds (r.removeFromLeft (bw)); r.removeFromLeft (2);
+            solo.setBounds (r);
+            return;
+        }
         auto top = r.removeFromTop (r.getHeight() / 2);
         arm.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
         mute.setBounds (top.removeFromLeft (24)); top.removeFromLeft (3);
@@ -1170,10 +1193,11 @@ struct LaneHeader : public juce::Component
     }
     std::function<void (int lane, int height)> onHeight;
     std::function<void (int size)> onAllHeights;
+    std::function<void (bool open)> onSwipe;   // phone: swipe the track list right (open) / left (slim, then hidden)
     bool edgeDrag = false; int dragStartH = 0;
     bool nearBottomEdge (const juce::MouseEvent& e) const { return e.y >= getHeight() - 5 || grip().expanded (3).contains (e.getPosition()); }
     juce::Slider soft, vol; float softPrev = 0.0f;
-    void mouseDoubleClick (const juce::MouseEvent& e) override { if (phoneUI && ! grip().expanded (3).contains (e.getPosition())) { const auto r = asRightClick (e); mouseDown (r); mouseUp (r); return; } if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
+    void mouseDoubleClick (const juce::MouseEvent& e) override { if (phoneUI && ! grip().expanded (3).contains (e.getPosition())) return; if (grip().expanded (3).contains (e.getPosition()) && onHeight) onHeight (index, getHeight() < 60 ? 150 : 26); }
     void mouseMove (const juce::MouseEvent& e) override
     {
         setMouseCursor (nearBottomEdge (e) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
@@ -1185,6 +1209,7 @@ struct LaneHeader : public juce::Component
     }
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (e.mods.isPopupMenu()) popupAt = juce::Time::getMillisecondCounter();
         if (! e.mods.isPopupMenu() && nearBottomEdge (e)) { edgeDrag = true; dragStartH = getHeight(); return; }
         auto& sel = s.selectedLanes;
         if (e.mods.isPopupMenu()) { if (! sel.contains (index)) { sel.clear(); sel.add (index); s.laneAnchor = index; } }
@@ -1204,6 +1229,8 @@ struct LaneHeader : public juce::Component
     void mouseUp (const juce::MouseEvent& e) override
     {
         if (edgeDrag) { edgeDrag = false; return; }
+        if (phoneUI && onSwipe && std::abs (e.getDistanceFromDragStartX()) > 40 && std::abs (e.getDistanceFromDragStartX()) > 2 * std::abs (e.getDistanceFromDragStartY()))
+        { onSwipe (e.getDistanceFromDragStartX() > 0); return; }
         if (! e.mods.isPopupMenu())
         {
             // drag a track's header up/down to reorder; the tracks in between shift to make room, each keeps its mixer insert
@@ -1254,9 +1281,7 @@ struct LaneHeader : public juce::Component
         }
         m.addSeparator(); m.addItem (5, "Insert track above"); m.addItem (6, "Insert track below");
         m.addItem (11, "Duplicate track"); m.addItem (12, "Duplicate track with audio");
-       #if ! HHS_LICENSED
-        m.addItem (7, "HumHouse Drummer (turn this track into drums)");
-       #endif
+        m.addItem (7, "HumHouse Drummer (turn this track into drums)");   // every edition (owner: never lose Add drums)
         {
             juce::PopupMenu hm;
             hm.addItem (20, "Small"); hm.addItem (21, "Medium"); hm.addItem (22, "Large");
@@ -1296,7 +1321,9 @@ struct LaneHeader : public juce::Component
         });
     }
     Studio& s; int index;
-    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
+    juce::uint32 popupAt = 0;   // a right-click / phone hold just opened the track menu: the button under it must not toggle
+    struct UpListener : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; void mouseUp (const juce::MouseEvent& e) override { if (f) f (e); } } nameSwipe;
+    struct RightClick : juce::MouseListener { std::function<void (const juce::MouseEvent&)> f; juce::uint32 lastDown = 0; void mouseDown (const juce::MouseEvent& e) override { lastDown = juce::Time::getMillisecondCounter(); if (e.mods.isPopupMenu() && f) f (e); } } rightClick;
     juce::Label name; juce::TextButton arm, mute, solo, mon, norm; juce::ComboBox input, insert;
 };
 
@@ -1322,13 +1349,25 @@ public:
             s.edit ("HumHouse Drummer", [id, at] (Project& p) { insertLane (p, 0); *id = makeLaneDrummer (p, 0, at, 8); });   // always track 1
             if (*id >= 0) openChannelEditor (s, *id);
         };
-       #if ! HHS_LICENSED
         addAndMakeVisible (addDrummer);
-       #endif
         setupButton (rackPop, {}, "Channel Rack: pop it out into its own window so you can edit samples / one-shots on Rec and in full screen (click again to dock it)");
         rackPop.icon = (int) CursorIcon::Rack;
         rackPop.onClick = [] { if (rackPopOut) rackPopOut(); };
         addAndMakeVisible (rackPop);
+        tuneFinderHook = [this] {
+            for (auto& c : s.p().clips) if (c.selected && (c.isAudio() || c.patternIndex >= 0)) { const auto copy = c; findKeyForClip (copy); return; }
+            juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Tune Finder", "Select an audio or pattern clip first, then run Tune Finder. Or put the Tune Finder plug-in on a mixer insert to read it live.");
+        };
+        if (phoneUI)
+        {
+            setupButton (panelBtn, "X", "Close / open the track panel (Track 1, 2...)");
+            panelBtn.onClick = [this] { setPhoneHeader (headerW > phoneHeadHidden ? phoneHeadHidden : phoneHeadSlim); };
+            addChildComponent (panelBtn);
+            // the arrow handle on the track list's edge: slide it left to close the list all the way, right to open it; tap toggles
+            slideHandle.width = [this] { return headerW; };
+            slideHandle.set = [this] (int w, bool done) { w = juce::jlimit (0, phoneHeadFull, w); if (done && w < 60) w = phoneHeadHidden; setPhoneHeader (w); };
+            addAndMakeVisible (slideHandle);
+        }
         setupButton (addTrack, "+ Track", "New audio track with its own mixer insert (vocals, guitar...)");
         addTrack.onClick = [this] {
             s.edit ("Add track", [] (Project& p) {
@@ -1377,7 +1416,7 @@ public:
         loopRec.onClick = [this] { const bool on = loopRec.getToggleState(); s.edit ("Loop record", [on] (Project& p) { p.loopRecord = on; }); };
         setupButton (rts, "RETURN", "On stop, jump back to where playback started", true);
         rts.onClick = [this] { const bool on = rts.getToggleState(); s.edit ("Return to start", [on] (Project& p) { p.returnToStart = on; }); };
-        setupButton (qpunch, "QUICK PUNCH", "On stop after a take, the playhead jumps to the start of that take, ready for the next punch", true);
+        setupButton (qpunch, "QUICK PUNCH", "On stop after a take, the playhead jumps to the first bar of that take (took bars 9-13 -> bar 9), ready for the next punch", true);
         qpunch.onClick = [this] { const bool on = qpunch.getToggleState(); s.edit ("Quick punch", [on] (Project& p) { p.quickPunch = on; }); };
         setupButton (preroll, "PRE-ROLL", "Start 1 bar before the punch-in so you can catch the vibe", true);
         preroll.onClick = [this] { const bool on = preroll.getToggleState(); s.edit ("Pre-roll", [on] (Project& p) { p.preRollBars = on ? 1.0 : 0.0; }); };
@@ -1388,7 +1427,8 @@ public:
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
-        startTimerHz (60);   // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { timerCallback(); });   // no-skip: the playhead moves on every screen refresh (was a 60 Hz timer drifting against vsync)
+        // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
     }
     ~Playlist() override { s.removeChangeListener (this); }
 
@@ -1403,20 +1443,29 @@ public:
 
     void resized() override
     {
+        toolbarH = phoneUI && getWidth() < 900 ? 66 : 32;
         placeSplitBars();
-        laneH = juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
-        auto t = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
+        // phone: compact fixed tracks (pinch fingers above each other = taller / shorter); a few tracks no longer fill half the screen each
+        laneH = phoneUI ? col::laneMinH : juce::jmax (col::laneMinH, (getHeight() - toolbarH - rulerH - 8) / juce::jmax (1, (int) s.p().lanes.size()));
+        auto bar = getLocalBounds().removeFromTop (toolbarH).reduced (6, 4);
+        const bool twoRows = toolbarH > 40;
+        auto t = twoRows ? bar.removeFromTop ((bar.getHeight() - 4) / 2) : bar;
         addTrack.setBounds (t.removeFromLeft (80)); t.removeFromLeft (6);
         t.removeFromLeft (12);
         for (auto* b : { &loopRec, &rts, &qpunch, &preroll, &clearPunch }) { b->setBounds (t.removeFromLeft (b == &clearPunch || b == &qpunch ? 100 : 78)); t.removeFromLeft (4); }
-        t.removeFromLeft (10);
+        if (twoRows) { bar.removeFromTop (4); t = bar; } else t.removeFromLeft (10);   // portrait phone: tools, Group, Snap and the rack on row 2
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (32)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
-        if (addDrummer.isVisible()) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (120)); }
+        if (addDrummer.isVisible())   // the Channel Rack button always keeps its room: Drums shrinks, or steps aside on narrow windows
+        {
+            const int w = juce::jmin (120, t.getWidth() - 6 - 4 - 32);
+            if (w >= 56) { t.removeFromLeft (6); addDrummer.setBounds (t.removeFromLeft (w)); } else addDrummer.setBounds ({});
+        }
         t.removeFromLeft (4); rackPop.setBounds (t.removeFromLeft (32));
         vZoom.setBounds (getWidth() - 16, toolbarH + rulerH + 4, 14, juce::jmax (40, getHeight() - toolbarH - rulerH - 30));
+        vZoom.setVisible (! phoneUI);   // phone: pinch up / down sets track height
         if (phoneUI)
         {
             int y = getHeight() - hbarH - 4 - 5 * 48;
@@ -1426,6 +1475,12 @@ public:
                 addDrummer.setButtonText ("DRUMS");
                 addDrummer.setBounds (getWidth() - 56, getHeight() - hbarH - 4 - 6 * 48, 52, 44); addDrummer.toFront (false);
             }
+        }
+        if (phoneUI)
+        {
+            const int hw = headerW > phoneHeadHidden ? 34 : 16;   // closed: a thin tab, so the ruler stays usable
+            slideHandle.setBounds (juce::jmax (0, headerW - hw), toolbarH + 1, hw, rulerH - 2);   // in the ruler row's corner: never over the clips
+            slideHandle.toFront (false);
         }
         layoutHeaders();
     }
@@ -1517,7 +1572,7 @@ public:
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
         g.setColour (col::dim); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
-        drawHeadline (g, "PLAYLIST", { 8, toolbarH, headerW - 16, rulerH }, juce::Justification::centredLeft);
+        if (headerW > 40) drawHeadline (g, "PLAYLIST", { phoneUI ? 40 : 8, toolbarH, headerW - (phoneUI ? 48 : 16), rulerH }, juce::Justification::centredLeft);
     }
 
     void mouseMove (const juce::MouseEvent& e) override
@@ -1548,6 +1603,7 @@ public:
         {
             touchPos[1] = e.position; pinching = true; panTap = false;
             pinchD0 = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])); pinchPpb0 = pxPerBeat;
+            pinchDx0 = std::abs (touchPos[0].x - touchPos[1].x); pinchDy0 = std::abs (touchPos[0].y - touchPos[1].y); pinchZh0 = zoomH;
             pinchBeat = xToBeat ((touchPos[0].x + touchPos[1].x) * 0.5f); return;
         }
         if (phoneUI && e.source.getIndex() > 0)   // touch: a second finger scrolls freely up/down and side to side
@@ -1557,7 +1613,7 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH && e.x > headerW)
         {
             // handle = drag the playhead; drag on the numbers = loop range (E: also selects clips in it); click = move playhead
-            drag = std::abs (e.position.x - beatToX (s.engine.positionBeats())) < 10.0f ? Drag::Scrub
+            drag = std::abs (e.position.x - playheadX()) < 10.0f ? Drag::Scrub   // the handle where it's drawn
                  : tool == PTool::Select && ! e.mods.isShiftDown() ? Drag::TimeSel : Drag::Ruler;
             if (drag == Drag::Scrub) mouseDrag (e);
             return;
@@ -1574,7 +1630,14 @@ public:
         if (i >= 0 && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) timeSelA = timeSelB = -1;   // picking another clip drops the old ruler range
         if (i >= 0 && p.clips[(size_t) i].isAuto() && tool != PTool::Delete && tool != PTool::Slice && tool != PTool::Mute)
         {
-            const int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (phoneUI && e.mods.isPopupMenu() && drag == Drag::AutoPt) return;   // phone hold on the dot you're dragging: keep the drag
+            int k = hitAutoPoint (p.clips[(size_t) i], e.position);
+            if (const int h = hitAutoCurve (p.clips[(size_t) i], e.position); k >= 0 && h >= 0)   // finger-sized point zone vs a curve handle: the nearer wins
+            {
+                const auto& c = p.clips[(size_t) i];
+                const juce::Point<float> pt { autoBeatToX (c, c.autoPts[(size_t) k].beat), autoValueToY (c, c.autoPts[(size_t) k].value) };
+                if (e.position.getDistanceFrom (autoCurveHandle (c, h)) < e.position.getDistanceFrom (pt)) k = -1;
+            }
             if (const int sg = k < 0 ? hitAutoCurve (p.clips[(size_t) i], e.position) : -1; sg >= 0)
             {
                 const int uid = p.clips[(size_t) i].uid;
@@ -1586,9 +1649,12 @@ public:
                 drag = Drag::AutoCurve; dragClip = i; dragPt = sg; dragStart = e.position; curve0 = p.clips[(size_t) i].autoPts[(size_t) sg].curve;
                 return;
             }
-            if (k >= 0 && e.mods.isPopupMenu())   // right-click a point: delete it (FL)
+            // right-click a point: delete it (FL). Phone: a hold is a drag (it used to delete the dot you were moving);
+            // double-tap a dot deletes it
+            if (k >= 0 && (phoneUI ? e.getNumberOfClicks() >= 2 : e.mods.isPopupMenu()))
             {
                 const int uid = p.clips[(size_t) i].uid;
+                phoneDeletedPt = phoneUI;   // the double-tap that follows must not add a point back
                 s.edit ("Delete automation point", [uid, k] (Project& pr) {
                     for (auto& c : pr.clips) if (c.uid == uid && k < (int) c.autoPts.size() && c.autoPts.size() > 1) c.autoPts.erase (c.autoPts.begin() + k);
                 });
@@ -1710,6 +1776,11 @@ public:
             if (pinching)   // two-finger pinch: zoom from very close to very far, anchored between the fingers
             {
                 const float d = juce::jmax (20.0f, touchPos[0].getDistanceFrom (touchPos[1])), mid = (touchPos[0].x + touchPos[1].x) * 0.5f;
+                if (pinchDy0 > pinchDx0 && pinchDy0 >= 40.0f)   // fingers above each other: tracks get taller / shorter
+                {
+                    zoomH = juce::jlimit (0.35f, 4.0f, pinchZh0 * juce::jmax (20.0f, std::abs (touchPos[0].y - touchPos[1].y)) / pinchDy0);
+                    layoutHeaders(); lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
+                }
                 pxPerBeat = juce::jlimit (1.0f, 1600.0f, pinchPpb0 * d / pinchD0);
                 scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) headerW) / pxPerBeat);
                 lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
@@ -1770,13 +1841,20 @@ public:
         if (drag == Drag::Marquee)
         {
             if (e.position.getDistanceFrom (dragStart) < 4) return;
+            auto dirty = marquee.expanded (2.0f);
             marquee = juce::Rectangle<float> (dragStart, e.position).getIntersection (clipArea().toFloat());
-            s.live ([&] (Project& pr) {
-                for (size_t i = 0; i < pr.clips.size(); ++i)
-                    pr.clips[i].selected = (i < marqueeBase.size() && marqueeBase[i]) || clipRect (pr.clips[i]).intersects (marquee);
-                for (auto& c : pr.clips) if (c.selected && c.group > 0) for (auto& o : pr.clips) if (o.group == c.group) o.selected = true;
-            });
-            changed = true; repaint(); return;
+            dirty = dirty.getUnion (marquee.expanded (2.0f));
+            // selection is UI only: no engine copy per mouse move (published on mouse up), and only what changed redraws
+            auto& pr = s.p();
+            std::vector<char> now (pr.clips.size(), 0); std::set<int> groups;
+            for (size_t i = 0; i < pr.clips.size(); ++i)
+                if ((now[i] = (i < marqueeBase.size() && marqueeBase[i]) || clipRect (pr.clips[i]).intersects (marquee)) && pr.clips[i].group > 0) groups.insert (pr.clips[i].group);
+            for (size_t i = 0; i < pr.clips.size(); ++i)
+            {
+                if (! now[i] && pr.clips[i].group > 0 && groups.count (pr.clips[i].group) > 0) now[i] = 1;
+                if ((now[i] != 0) != pr.clips[i].selected) { pr.clips[i].selected = now[i] != 0; dirty = dirty.getUnion (clipRect (pr.clips[i]).expanded (2.0f)); }
+            }
+            changed = true; repaint (dirty.getSmallestIntegerContainer()); return;
         }
         if (drag == Drag::Move && cloneOnDrag && ! cloned && e.position.getDistanceFrom (dragStart) > 4)
         {
@@ -1792,7 +1870,9 @@ public:
         const bool noSnap = e.mods.isAltDown();
         double d = xToBeat (e.position.x) - xToBeat (dragStart.x);
         if (! noSnap && plSnap > 0 && drag != Drag::FadeIn && drag != Drag::FadeOut && drag != Drag::Curve) d = std::round (d / plSnap) * plSnap;
-        const int dLane = drag == Drag::Move ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
+        // phone: an automation clip slides along its own track (a finger wobble never drops it on another track)
+        const bool autoOnly = phoneUI && dragClip < (int) dragOrig.size() && dragOrig[(size_t) dragClip].isAuto();
+        const int dLane = drag == Drag::Move && ! autoOnly ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
         s.live ([&] (Project&) {
             for (size_t i = 0; i < p.clips.size(); ++i)
             {
@@ -1855,12 +1935,14 @@ public:
         }
         if (drag == Drag::AutoPt)
         {
+            if (phoneUI && e.mods.isPopupMenu()) return;   // the phone hold's synthetic release: the finger is still down, keep dragging
             if (changed) s.edit ("Move automation point", [] (Project&) {});
             drag = Drag::None; dragClip = dragPt = -1; repaint(); return;
         }
         if (drag == Drag::Marquee)
         {
             if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+            else s.live ([] (Project&) {});   // the drag's selection, published once
             marquee = {}; drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::TimeSel)
@@ -1897,8 +1979,10 @@ public:
         if (e.y >= toolbarH && e.y < toolbarH + rulerH) { timeSelA = timeSelB = -1; s.edit ("Clear punch", [] (Project& pr) { pr.punchIn = pr.punchOut = -1.0; }); return; }
         if (! clipArea().contains (e.getPosition())) return;
         Part part; const int i = hitClip (e.position, part);
-        if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; clipMenu (i); return; }   // phone: double tap = the right-click menu (stem split, settings...)
+        if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; return; }   // phone: double tap = the right-click menu (stem split, settings...)
+        const bool deletedPt = std::exchange (phoneDeletedPt, false);   // cleared on every double-tap, whatever it hits
         if (i >= 0 && p.clips[(size_t) i].isAuto() && hitAutoCurve (p.clips[(size_t) i], e.position) >= 0) return;   // mouseDown already straightened that curve
+        if (deletedPt) return;   // phone: this double-tap deleted a point in mouseDown
         if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
         {
             const int uid = p.clips[(size_t) i].uid;
@@ -1973,11 +2057,14 @@ public:
             scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
-            scrollX = juce::jmax (0.0, scrollX - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
+        {
+            const double to = juce::jmax (0.0, (glideX >= 0 ? glideX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
+            if (w.isSmooth) { scrollX = to; glideX = -1; } else glideX = to;
+        }
         else
         {
-            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), scrollY - (int) (w.deltaY * 420));
-            layoutHeaders();
+            const int to = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), (glideY >= 0 ? glideY : scrollY) - (int) (w.deltaY * 420));
+            if (w.isSmooth) { scrollY = to; glideY = -1; layoutHeaders(); } else glideY = to;
         }
         repaint();
     }
@@ -2051,8 +2138,9 @@ public:
         const auto lower = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode());
         if (k.getModifiers() == juce::ModifierKeys (cmd) && (lower == 'c' || lower == 'x'))
         {
-            clipboard.clear(); clipLo = 1e9;
-            for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); }
+            clipboard.clear(); clipLo = 1e9; clipHi = 0;
+            for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }
+            copyHere = lower == 'x' ? -1.0 : markerNow(); nextAfter = clipHi;   // cut: the paste always goes on the marker (the cut range is empty now)
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
             return true;
@@ -2060,7 +2148,11 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            const double at = juce::jmax (0.0, s.engine.positionBeats());   // exactly on the playhead marker: re-snapping here pulled it back a bar when the zoom (and so the grid) had changed since the click
+            // marker not moved since copying: lands right after the copy, the same way Cmd+B stacks (each paste after the last);
+            // marker moved: lands exactly on the marker
+            const double here = markerNow();
+            double at = here;
+            // simple (FL): playhead at bar 4 -> the paste lands at bar 4, every time
             const auto cb = clipboard; const double lo = clipLo;
             s.edit ("Paste clips", [cb, lo, at] (Project& p) {
                 for (auto& c : p.clips) c.selected = false;
@@ -2174,7 +2266,36 @@ public:
 private:
     enum class Drag { None, Ruler, TimeSel, Scrub, Move, Resize, Trim, FadeIn, FadeOut, Curve, Marquee, AutoPt, AutoCurve, Pan, Gain };
     float curve0 = 0.0f;
-    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f; double pinchBeat = 0;
+    juce::Point<float> panFrom; double panX0 = 0; int panY0 = 0, panSrc = 0; bool panTap = false, tapReplay = false, pinching = false; juce::Point<float> touchPos[2]; float pinchD0 = 1.0f, pinchPpb0 = 1.0f, pinchDx0 = 0, pinchDy0 = 0, pinchZh0 = 1.0f; double pinchBeat = 0;
+    juce::TextButton panelBtn;
+    struct SlideHandle : juce::Component   // phone: drag to slide the track list open / closed
+    {
+        std::function<int()> width; std::function<void (int, bool)> set;
+        int w0 = 0; bool moved = false;
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (col::panel.brighter (0.15f)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+            g.setColour (col::accent); g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+            g.drawText (width && width() > 60 ? "<" : ">", getLocalBounds(), juce::Justification::centred);
+        }
+        void mouseDown (const juce::MouseEvent&) override { w0 = width ? width() : 0; moved = false; }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (std::abs (e.getDistanceFromDragStartX()) > 4) moved = true;
+            if (moved && set) set (w0 + e.getDistanceFromDragStartX(), false);
+        }
+        void mouseUp (const juce::MouseEvent& e) override
+        {
+            if (! set) return;
+            if (moved) set (w0 + e.getDistanceFromDragStartX(), true);
+            else set (w0 > 60 ? phoneHeadHidden : phoneHeadSlim, true);
+        }
+    } slideHandle;
+    void setPhoneHeader (int w)
+    {
+        headerW = w; panelBtn.setButtonText (headerW > phoneHeadHidden ? "X" : ">");
+        resized(); layoutHeaders(); slideHandle.repaint(); repaint();
+    }
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
     void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
     void fitAll()   // whole song and every track on screen
@@ -2209,6 +2330,7 @@ private:
         return { in ? r.getX() + len * 0.5f : r.getRight() - len * 0.5f, r.getBottom() - gn * r.getHeight() };
     }
     Studio& s;
+    juce::Component headerHost;   // declared before headers: they leave it before it goes
     std::vector<std::unique_ptr<LaneHeader>> headers;
     juce::TextButton addTrack, addDrummer, loopRec, rts, qpunch, preroll, clearPunch;
     IconTextButton rackPop;
@@ -2216,10 +2338,45 @@ private:
     double plSnap = 1.0;
     float lastPx = -1.0f;
     bool wasPlaying = false;
+    double uiPos = -1.0, uiLastT = 0.0, uiEng = -1.0;
+    // No Hitch screen clock (FL / Logic): the engine position only moves once per audio block, so 60 Hz frames would
+    // see 0 or 2 blocks and the song shudders. The screen moves at the tempo every refresh and eases toward the engine.
+    double smoothPos()
+    {
+        const double eng = s.engine.positionBeats(), now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const double bps = s.p().bpm / 60.0, dt = now - uiLastT;
+        uiLastT = now;
+        const bool back = eng < uiEng - 1.0e-6;   // the engine went back (loop wrap, however short): follow it at once
+        uiEng = eng;
+        if (uiPos < 0.0 || dt > 0.25 || back || s.engine.isCountingIn()) return uiPos = eng;
+        const double pred = uiPos + dt * bps, err = eng - pred;
+        // instant: a click / seek / restart more than ~60 ms off jumps straight there; block-size jitter settles in a few frames
+        if (std::abs (err) > 0.06 * bps) return uiPos = eng;
+        return uiPos = juce::jmax (uiPos, pred + err * 0.25);
+    }
     std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
+    double glideX = -1; int glideY = -1;   // mouse-wheel targets the view glides to on each screen refresh
+    bool glideStep()
+    {
+        bool moved = false;
+        if (glideX >= 0)
+        {
+            const double d = glideX - scrollX;
+            if (std::abs (d) * pxPerBeat < 0.5) { scrollX = glideX; glideX = -1; } else scrollX += d * 0.35;
+            moved = true;
+        }
+        if (glideY >= 0)
+        {
+            const int d = glideY - scrollY;
+            if (std::abs (d) <= 1) { scrollY = glideY; glideY = -1; } else scrollY += (int) std::round (d * 0.35);
+            layoutHeaders(); moved = true;
+        }
+        if (moved) { syncHBar(); repaint(); }
+        return moved;
+    }
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
@@ -2228,7 +2385,16 @@ private:
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
     double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
-    std::vector<Clip> clipboard; double clipLo = 0; bool cloneOnDrag = false, cloned = false;
+    std::vector<Clip> clipboard; double clipLo = 0, clipHi = 0, copyHere = -1.0, nextAfter = 0;
+    // paste / copy spot: the blue playhead you see (while playing: where it is now, on the grid line it just passed;
+    // the start marker was bars behind it)
+    bool phoneDeletedPt = false;
+    double markerNow() const
+    {
+        if (! s.engine.isPlaying()) return juce::jmax (0.0, s.engine.positionBeats());
+        const double p = uiPos >= 0.0 ? uiPos : s.engine.positionBeats();
+        return juce::jmax (0.0, plSnap > 0 ? std::floor (p / plSnap + 1.0e-6) * plSnap : p);
+    } bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
     static constexpr int hbarH = phoneUI ? 26 : 12;
@@ -2242,6 +2408,7 @@ private:
         {
             const auto ca = clipArea();
             vbarP.setBounds (getWidth() - 56 - hbarH - 2, ca.getY(), hbarH, ca.getHeight());
+            vbarP.setVisible (false);   // phone: finger panning scrolls; the bar only got in the way of the side buttons
             vbarP.sync (totalLaneH() + 40.0, scrollY, ca.getHeight());
         }
     }
@@ -2310,19 +2477,24 @@ private:
             if (c.hidden) continue;
             auto r = clipRect (c);
             if (! r.contains (pt)) continue;
+            // phone: finger-sized fade / edge zones, so a touch near a fade grabs the fade, not the whole clip
+            // never more than a quarter of the clip each, so a short clip keeps both fades and a middle to move it by
+            const float q = r.getWidth() * 0.25f;
+            const float tol = juce::jmin (phoneUI ? 20.0f : 8.0f, juce::jmax (4.0f, q)), top = phoneUI ? 30.0f : 12.0f,
+                        edge = juce::jmin (phoneUI ? 14.0f : 6.0f, juce::jmax (2.0f, q));
             if (c.isAudio())
             {
-                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
-                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
+                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
+                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
             }
-            if (c.isAudio() && pt.y < r.getY() + 12)
+            if (c.isAudio() && pt.y < r.getY() + top)
             {
                 const float fi = r.getX() + (float) (c.fadeIn * pxPerBeat), fo = r.getRight() - (float) (c.fadeOut * pxPerBeat);
-                if (std::abs (pt.x - fi) < 8) { part = Part::FadeIn; return i; }
-                if (std::abs (pt.x - fo) < 8) { part = Part::FadeOut; return i; }
+                if (std::abs (pt.x - fi) < tol) { part = Part::FadeIn; return i; }
+                if (std::abs (pt.x - fo) < tol) { part = Part::FadeOut; return i; }
             }
-            if (pt.x > r.getRight() - 6) part = Part::Right;
-            else if ((c.isAudio() || c.isAuto()) && pt.x < r.getX() + 6) part = Part::Left;
+            if (pt.x > r.getRight() - edge) part = Part::Right;
+            else if ((c.isAudio() || c.isAuto()) && pt.x < r.getX() + edge) part = Part::Left;
             return i;
         }
         return -1;
@@ -2352,7 +2524,7 @@ private:
     float autoBeatToX (const Clip& c, double b) const { return beatToX (c.start + b - c.patOffset); }
     int hitAutoPoint (const Clip& c, juce::Point<float> pt) const
     {
-        int best = -1; float bd = 8.0f;
+        int best = -1; float bd = phoneUI ? 18.0f : 8.0f;   // finger-sized on the phone
         for (int k = 0; k < (int) c.autoPts.size(); ++k)
         {
             const float d = pt.getDistanceFrom ({ autoBeatToX (c, c.autoPts[(size_t) k].beat), autoValueToY (c, c.autoPts[(size_t) k].value) });
@@ -2429,8 +2601,9 @@ private:
             const bool roomy = qi + 1 >= pts.size() || autoBeatToX (c, pts[qi + 1].beat) - x > 24.0f;
             const bool held = (drag == Drag::AutoPt || drag == Drag::AutoCurve) && dragPt == (int) qi && dragClip >= 0 && dragClip < (int) s.p().clips.size() && s.p().clips[(size_t) dragClip].uid == c.uid;
             lastDot = x;
-            g.setColour (juce::Colours::white); g.fillEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f);
-            g.setColour (colour.darker (0.3f)); g.drawEllipse (x - 3.5f, y - 3.5f, 7.0f, 7.0f, 1.2f);
+            const float dr = phoneUI ? 5.5f : 3.5f;   // phone: bigger dots
+            g.setColour (juce::Colours::white); g.fillEllipse (x - dr, y - dr, dr * 2, dr * 2);
+            g.setColour (colour.darker (0.3f)); g.drawEllipse (x - dr, y - dr, dr * 2, dr * 2, 1.2f);
             if ((roomy && body.getHeight() >= 22.0f) || held)   // Logic-style 0-127 value next to every point
             {
                 g.setColour (held ? juce::Colours::white : colour.brighter (0.7f).withAlpha (0.9f));
@@ -2639,7 +2812,7 @@ private:
     }
     // Logic / Reaper style: the clip layer is drawn once into a picture two screens wide, then scrolling and the
     // playhead only slide / copy that picture. It's redrawn when the song, zoom, size or theme changes.
-    juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0;
+    juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0; int tileScrollY = 0;
     juce::Rectangle<int> tileArea; float paintRight = -1.0f; juce::uint32 lastKeyMiss = 0;
     float contentRight() const { return paintRight > 0 ? paintRight : (float) getWidth(); }
     juce::uint64 contentKey (juce::Rectangle<int> area)
@@ -2649,7 +2822,7 @@ private:
         auto str = [&add] (const juce::String& t) { add (t.hashCode64()); };
         auto& p = s.p();
         add (tileGen); add (pxPerBeat); add (area.getWidth()); add (area.getHeight()); add (area.getX()); add (area.getY());
-        add (scrollY); add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
+        add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
         add (p.punchIn); add (p.punchOut); add (p.hasPunch()); add (timeSelA); add (timeSelB);
         for (auto c : { col::bg, col::panel, col::grid, col::gridBar, col::accent, col::accent2, col::text, col::dim }) add (c.getARGB());
         for (auto& [k, v] : laneMul) { add (k); add (v); }
@@ -2666,51 +2839,100 @@ private:
             add (c.gain); add (c.muted); add (c.selected); add (c.reversed); add (c.mixerTrack); add (c.fadeIn); add (c.fadeOut);
             add (c.fadeCurve); add (c.takeGroup); add (c.hidden); add (c.colour.getARGB()); add (c.drummer); add (c.autoTarget.kind);
             str (c.autoTarget.name); str (c.audioFile.getFullPathName());
-            for (auto& q : c.autoPts) { add (q.beat); add (q.value); }
+            for (auto& q : c.autoPts) { add (q.beat); add (q.value); add (q.curve); }
             if (c.isDrummer())
                 for (auto& ch : p.channels)
                     if (ch.id == c.drummer) add (ch.drum.performanceKey().hashCode64());
         }
         return h;
     }
+    // No Hitch (Logic / Pro Tools tiled backing store): the clip layer is cached in strips half a screen wide on a fixed
+    // beat grid, two screens tall. Scrolling and following only slide them; the strip just ahead is drawn on a quiet
+    // screen refresh (prefetchStrip), so no frame ever redraws a whole screen at once.
+    struct Strip { juce::Image img; int k = 0; };
+    std::vector<Strip> strips; int stripW = 0;
+    double stripBeats() const { return stripW / (double) pxPerBeat; }
+    Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
+    size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
+    {
+        const double stripBytes = (double) stripW * tileScale * tileArea.getHeight() * 2 * tileScale * 4.0;
+        return (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));
+    }
+    void renderStrip (int k)
+    {
+        const auto area = tileArea; const float scale = tileScale;
+        const int th = area.getHeight() * 2;
+        if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
+        while (strips.size() >= maxStrips())   // keep the strips nearest the view
+        {
+            const int here = (int) std::floor (scrollX / stripBeats());
+            auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
+            strips.erase (far);
+        }
+        Strip st; st.k = k;
+        st.img = juce::Image (juce::Image::RGB, juce::roundToInt ((float) stripW * scale), juce::roundToInt ((float) th * scale), false);
+        {
+            juce::Graphics ig (st.img);
+            ig.addTransform (juce::AffineTransform::scale (scale));
+            ig.setOrigin ({ -area.getX(), -area.getY() });
+            const auto tr = area.withWidth (stripW).withHeight (th);
+            ig.reduceClipRegion (tr);
+            ig.setColour (col::bg); ig.fillRect (tr);
+            const double keep = scrollX; const int keepY = scrollY;
+            scrollX = k * stripBeats(); scrollY = tileScrollY; paintRight = (float) tr.getRight();
+            paintContent (ig, tr);
+            scrollX = keep; scrollY = keepY; paintRight = -1.0f;
+        }
+        strips.push_back (std::move (st));
+    }
+    // one strip per screen refresh, just past the edge the view is heading to
+    void prefetchStrip()
+    {
+        if (strips.empty() || stripW <= 0 || drag != Drag::None) return;
+        const double sb = stripBeats(), viewBeats = tileArea.getWidth() / (double) pxPerBeat;
+        const int k0 = (int) std::floor (scrollX / sb), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
+        if (strips.size() >= maxStrips())   // full: only a strip well behind the view makes room, never one in or ahead of it (no redraw loop)
+        {
+            auto behind = std::find_if (strips.begin(), strips.end(), [k0] (const Strip& st) { return st.k < k0 - 1; });
+            if (behind == strips.end() || findStrip (k1 + 1) != nullptr) return;
+            strips.erase (behind);
+        }
+        for (int k : { k1 + 1, k1 + 2, k0 - 1 })
+            if (k >= 0 && findStrip (k) == nullptr) { renderStrip (k); return; }
+    }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
-        const int tw = area.getWidth() * 2;
-        if (area.isEmpty() || scale <= 0 || (double) tw * area.getHeight() * scale * scale > 24.0e6) return false;   // ~100 MB cap
+        const int th = area.getHeight() * 2;   // half a screen above and below: up / down scrolling slides it too
+        if (area.isEmpty() || scale <= 0 || (double) area.getWidth() * th * scale * scale > 16.0e6) return false;
         const auto key = contentKey (area);
-        const double viewBeats = area.getWidth() / (double) pxPerBeat, tileBeats = tw / (double) pxPerBeat;
-        const bool same = tile.isValid() && key == tileKey && scale == tileScale && area == tileArea;
-        if (! same || scrollX < tileScroll - 1.0e-9 || scrollX + viewBeats > tileScroll + tileBeats + 1.0e-9)
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea;
+        if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + th)
         {
             const auto now = juce::Time::getMillisecondCounter();
-            if (! same && key != tileKey)
+            if (key != tileKey)
             {
-                // content changing every frame (a live edit): drawing it straight is cheaper than re-rendering the picture
+                // content changing every frame (a live edit): drawing it straight is cheaper than re-rendering the strips
                 const bool hot = now - lastKeyMiss < 300;
                 lastKeyMiss = now;
-                if (hot) return false;
+                if (hot) { tileKey = key; strips.clear(); return false; }
             }
-            const int pw = juce::roundToInt ((float) tw * scale), ph = juce::roundToInt ((float) area.getHeight() * scale);
-            if (! tile.isValid() || tile.getWidth() != pw || tile.getHeight() != ph) tile = juce::Image (juce::Image::RGB, pw, ph, false);
-            const double keep = scrollX;
-            tileScroll = scrollX - viewBeats * 0.5;   // half a screen of room on each side
-            {
-                juce::Graphics ig (tile);
-                ig.addTransform (juce::AffineTransform::scale (scale));
-                ig.setOrigin ({ -area.getX(), -area.getY() });
-                const auto tr = area.withWidth (tw);
-                ig.reduceClipRegion (tr);
-                ig.setColour (col::bg); ig.fillRect (tr);
-                scrollX = tileScroll; paintRight = (float) tr.getRight();
-                paintContent (ig, tr);
-                scrollX = keep; paintRight = -1.0f;
-            }
+            strips.clear();
             tileKey = key; tileScale = scale; tileArea = area;
+            stripW = juce::jmax (64, area.getWidth() / 2);
+            tileScrollY = juce::jmax (0, scrollY - area.getHeight() / 2);
         }
-        const float dx = std::round ((float) ((tileScroll - scrollX) * pxPerBeat) * scale) / scale;
+        const double sb = stripBeats(), viewBeats = area.getWidth() / (double) pxPerBeat;
+        const int k0 = juce::jmax (0, (int) std::floor (scrollX / sb)), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
         g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
-        g.drawImageTransformed (tile, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) area.getY()));
+        for (int k = k0; k <= k1; ++k)
+        {
+            auto* st = findStrip (k);
+            if (st == nullptr) { renderStrip (k); st = findStrip (k); }
+            if (st == nullptr) return false;
+            const float dx = std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale;
+            g.drawImageTransformed (st->img, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+        }
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)
@@ -3132,6 +3354,13 @@ private:
         m.addItem (917, "Perfect Pitch: SNAP all selected clips", clip.isAudio());
         m.addItem (18, "HumLab: edit the audio (cut, fade, normalize, clean noise, spectrum)...", clip.isAudio());
         m.addItem (19, "Clip settings: Clip / Shape / Wave View...", clip.isAudio());
+        m.addItem (920, "Tune Finder: key / BPM / tune of this clip", clip.isAudio() || clip.patternIndex >= 0);
+       #if JUCE_IOS
+       #elif JUCE_WINDOWS
+        m.addItem (919, "Show in Explorer (the clip's audio file)", clip.isAudio() && clip.audioFile.existsAsFile());
+       #else
+        m.addItem (919, "Show in Finder (the clip's audio file)", clip.isAudio() && clip.audioFile.existsAsFile());
+       #endif
         {
             juce::PopupMenu tm;
             tm.addItem (344, "Open HumTime (pick grid + strength, hear it while it plays)...");
@@ -3168,7 +3397,7 @@ private:
        #endif
        #endif
         std::vector<AutoTarget> autoT;
-        if (! clip.isAuto())
+        if (! clip.isAuto() && ! phoneLite)
         {
             juce::PopupMenu am;
             if (clip.isAudio()) am = automateMenu (s, autoT, 2000, p.clipInsert (clip), 0, -1);
@@ -3206,6 +3435,8 @@ private:
                 return;
             }
             if (r == 15) { consolidate (uid); return; }
+            if (r == 920) { for (auto& o : s.p().clips) if (o.uid == uid) { const auto copy = o; findKeyForClip (copy); break; } return; }   // right-click Tune Finder
+            if (r == 919) { for (auto& o : s.p().clips) if (o.uid == uid && o.audioFile.existsAsFile()) { o.audioFile.revealToUser(); break; } return; }   // right-click Show in Finder
             if (r == 17) { new ToolWindow ("Perfect Pitch - pitch of each note", new HumToneView (s, uid)); return; }
             if (r == 917) { perfectPitchSnapAll (s, uid); return; }
             if (r == 18) { new ToolWindow ("HumLab - audio editor", new HumLabView (s, uid)); return; }
@@ -3355,11 +3586,33 @@ private:
     }
     void layoutHeaders()
     {
+        const int top = toolbarH + rulerH;   // headers live below the toolbar + ruler: a half-scrolled track never covers the tools
+        headerHost.setBounds (0, top, juce::jmax (0, headerW), juce::jmax (0, getHeight() - top));
         for (size_t i = 0; i < headers.size(); ++i)
         {
+            auto& h = *headers[i];
+            if (! h.getProperties().contains ("rcAll"))   // right-click / hold anywhere on the track bar opens the track menu (Delete...)
+            {
+                h.getProperties().set ("rcAll", true);
+                for (auto* c : h.getChildren())
+                {
+                    if (c == &h.name) continue;
+                    c->addMouseListener (&h.rightClick, true);   // R M S L N, knobs, boxes, the gaps: the whole bar opens the track menu
+                    if (auto* b = dynamic_cast<juce::Button*> (c))
+                    {
+                        auto orig = b->onClick; auto* hp = &h;
+                        b->onClick = [hp, b, orig]
+                        {
+                            if (hp->popupAt != 0 && hp->popupAt >= hp->rightClick.lastDown)   // this press opened the menu (right-click or hold): no toggle
+                            { if (b->getClickingTogglesState()) b->setToggleState (! b->getToggleState(), juce::dontSendNotification); return; }
+                            if (orig) orig();
+                        };
+                    }
+                }
+            }
             const int y = laneY ((int) i);
-            headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
-            headers[i]->setVisible (y + laneHOf ((int) i) > toolbarH + rulerH);
+            headers[i]->setBounds (0, y - top, headerW, laneHOf ((int) i));
+            headers[i]->setVisible (headerW > 40 && y + laneHOf ((int) i) > toolbarH + rulerH);
         }
     }
     void refresh()
@@ -3368,6 +3621,7 @@ private:
         if (headers.size() != p.lanes.size())
         {
             headers.clear();
+            if (headerHost.getParentComponent() == nullptr) { headerHost.setInterceptsMouseClicks (false, true); addAndMakeVisible (headerHost); }
             for (size_t i = 0; i < p.lanes.size(); ++i) 
             {
                 headers.push_back (std::make_unique<LaneHeader> (s, (int) i));
@@ -3376,6 +3630,10 @@ private:
                     laneMul[lane] = juce::jlimit (0.3f, 8.0f, (float) h / (float) juce::jmax (1.0f, (float) laneH * zoomH));
                     layoutHeaders(); repaint();
                 };
+                headers.back()->onSwipe = [this] (bool open)
+                {
+                    setPhoneHeader (open ? (headerW < phoneHeadSlim ? phoneHeadSlim : phoneHeadFull) : (headerW > phoneHeadSlim ? phoneHeadSlim : phoneHeadHidden));
+                };
                 headers.back()->onAllHeights = [this] (int size)
                 {
                     laneMul.clear();
@@ -3383,7 +3641,7 @@ private:
                     vZoom.setValue (zoomH, juce::dontSendNotification);
                     layoutHeaders(); repaint();
                 };
-                addAndMakeVisible (*headers.back());
+                headerHost.addAndMakeVisible (*headers.back());
             }
             layoutHeaders();
         }
@@ -3399,18 +3657,32 @@ private:
         ++tileGen;   // song edit or a waveform finished loading
         if (src == &s) refresh(); else repaint();
     }
+    std::unique_ptr<juce::VBlankAttachment> vblank;
     void timerCallback() override
     {
+        glideStep();
+        prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
-        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; return; }
+        if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = uiEng = -1.0; return; }
         wasPlaying = true;
-        const double pos = s.engine.positionBeats();
+        const double pos = smoothPos();
         float px = beatToX (pos);
-        if ((px > getWidth() - 40 || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500) { scrollX = juce::jmax (0.0, pos - 2.0); repaint(); lastPx = beatToX (pos); }
+        // follow: no page jumps. Past a third of the view the song slides under a still playhead on every screen refresh
+        // (Logic / Pro Tools continuous scroll); the clips are a pre-drawn picture, so the slide only moves that picture
+        const float anchor = (float) headerW + (float) clipArea().getWidth() * 0.33f;
+        if ((px > anchor || px < headerW) && juce::Time::getMillisecondCounter() - lastUserView > 1500)
+        {
+            const double to = juce::jmax (0.0, pos - (anchor - (float) headerW) / pxPerBeat);
+            if (std::abs (to - scrollX) * pxPerBeat < 0.25) return;   // slow songs / zoomed out: no redraw until it moves a quarter pixel, so spectrums keep their frames
+            scrollX = to;
+            // only the ruler + clips slide: the track bars, toolbar and their knobs don't move, so they aren't redrawn 60x a second
+            syncHBar(); repaint (headerW, toolbarH, getWidth() - headerW, getHeight() - toolbarH); lastPx = beatToX (pos);
+        }
         else
         {
             // only redraw what moves: the old + new playhead strips, and the growing take while recording
             auto strip = [this] (float x) { if (x >= 0) repaint ((int) x - 8, toolbarH, 16, getHeight() - toolbarH); };
+            if (std::abs (px - lastPx) < 0.25f && ! s.engine.isRecording()) return;   // hasn't moved a quarter pixel: nothing to redraw
             strip (lastPx); strip (px);
             if (s.engine.isRecording())
             {
@@ -3421,7 +3693,8 @@ private:
             }
             lastPx = px;
         }
-        for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();
+        static int armTick = 0;
+        if ((++armTick & 1) == 0) for (auto& h : headers) if (h->arm.getToggleState()) h->repaint();   // armed meters at 30 Hz: the playhead + scrolling keep the full 60
     }
 };
 }

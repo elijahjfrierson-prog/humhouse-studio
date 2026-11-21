@@ -1,0 +1,4 @@
+HumHouse Grand uses samples from the Salamander Grand Piano V3 (Yamaha C5),
+recorded by Alexander Holm, assembled for FreePats (freepats.zenvoid.org).
+License: Creative Commons Attribution 3.0 - http://creativecommons.org/licenses/by/3.0/
+Changes: 4 of 16 velocity layers, trimmed with fade-out, 44.1 kHz 16-bit FLAC.

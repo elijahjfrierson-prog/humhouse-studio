@@ -310,6 +310,68 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main (int argc, char** argv)
 {
+    {   // the owner's real songs (one zlib, one plain XML) always open: a build that can't open them never ships
+        int opened = 0;
+        for (auto& f : juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs").findChildFiles (juce::File::findFiles, false, "*.hhs"))
+        {
+            hhs::Project q; const bool ok = hhs::loadProject (q, f);
+            CHECK (ok && ! q.channels.empty());
+            if (ok) ++opened;
+            CHECK (hhs::unreadableReason (f).isEmpty());
+        }
+        CHECK (opened >= 2);
+        CHECK (hhs::unreadableReason (juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs/missing.hhs")).isNotEmpty());
+    }
+    {   // HumHouse Grand: the recorded piano plays every key, and a released note dies away
+        auto map = juce::File::getCurrentWorkingDirectory().getChildFile ("Sounds/HumHouse Grand/HumHouse Grand.hhkeys");
+        if (map.existsAsFile())
+        {
+            hhs::Channel c; c.type = hhs::ChannelType::Sampler; c.sampleFile = map;
+            auto inst = hhs::createInstrument (c, nullptr, 44100.0);
+            CHECK (inst != nullptr);
+            juce::AudioBuffer<float> o (2, 4410);
+            for (int k : { 21, 40, 60, 84, 108 })
+            {
+                o.clear(); inst->noteOn (k, 0.8f, false); inst->render (o, 0, 4410);
+                CHECK (o.getMagnitude (0, 4410) > 0.01f && std::isfinite (o.getSample (0, 100)));
+                inst->noteOff (k);
+            }
+            for (int b = 0; b < 40 && inst->isActive(); ++b) { o.clear(); inst->render (o, 0, 4410); }
+            CHECK (! inst->isActive());
+        }
+    }
+    if (auto* lp = std::getenv ("HHS_LOAD"))   // HHS_LOAD=song.hhs HHSTests: does this song open?
+    {
+        hhs::Project q; const bool ok = hhs::loadProject (q, juce::File (lp));
+        std::printf ("load %s: %s  channels=%d clips=%d\n", lp, ok ? "OK" : "FAILED", (int) q.channels.size(), (int) q.clips.size());
+        return ok ? 0 : 1;
+    }
+    // offline AutoPitch render for A/B against references: HHS_AP_IN=in.wav HHS_AP_OUT=out.wav HHSTests
+    if (auto* inPath = std::getenv ("HHS_AP_IN"))
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (juce::String (inPath))));
+        if (rd == nullptr) return 2;
+        const int N = (int) rd->lengthInSamples; juce::AudioBuffer<float> all (2, N); rd->read (&all, 0, N, 0, true, true);
+        auto ap = hhs::createBuiltinEffect ("autopitch"); ap->prepare (rd->sampleRate, 512);
+        if (auto* st = std::getenv ("HHS_AP_STYLE")) ap->setParam ("style", (float) std::atoi (st));
+        ap->setParam ("retune", 0.0f); ap->setParam ("key", (float) (std::getenv ("HHS_AP_KEY") ? std::atoi (std::getenv ("HHS_AP_KEY")) : 0) + 1.0f);
+        ap->setParam ("scale", std::getenv ("HHS_AP_SCALE") ? (float) std::atoi (std::getenv ("HHS_AP_SCALE")) : 16.0f);
+        hhs::PlayContext ctx; juce::AudioBuffer<float> b (2, 512);
+        for (int at = 0; at < N; at += 512)
+        {
+            const int n = std::min (512, N - at);
+            for (int c = 0; c < 2; ++c) b.copyFrom (c, 0, all, c, at, n);
+            ap->process (b, n, ctx);
+            if (auto* lg = std::getenv ("HHS_AP_LOG")) { static FILE* f = std::fopen (lg, "w"); if (f) std::fprintf (f, "%d %.3f %.3f\n", at, ap->meter (100), ap->meter (101)); }
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, 0 + c, 0, n);
+        }
+        juce::File out (juce::String (std::getenv ("HHS_AP_OUT") ? std::getenv ("HHS_AP_OUT") : "/tmp/ap_out.wav")); out.deleteFile();
+        juce::WavAudioFormat wav; std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (out), rd->sampleRate, 2, 24, {}, 0));
+        if (w) w->writeFromAudioSampleBuffer (all, 0, N);
+        std::printf ("autopitch render: %d samples -> %s\n", N, out.getFullPathName().toRawUTF8());
+        return 0;
+    }
     // CI crash triage: print where a crash happened instead of a bare SEGFAULT
     juce::SystemStats::setApplicationCrashHandler ([] (void*)
     {
@@ -3051,6 +3113,18 @@ int main (int argc, char** argv)
         auto t2 = hhs::unpackTemplate (pack, inbox);   // received twice: kept side by side, nothing overwritten
         CHECK (t2.existsAsFile() && t2 != t);
         CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
+        {   // a template named with dots, and one re-zipped by Finder (song at the top + __MACOSX junk), both open
+            auto dots = tmp.getChildFile ("Vibes....hhpack");
+            CHECK (hhs::packTemplate (p, "Vibes...", dots));
+            CHECK (hhs::unpackTemplate (dots, inbox).existsAsFile());
+            juce::ZipFile::Builder z; auto songFile = tmp.getChildFile ("Loose.hhs");
+            CHECK (hhs::saveProject (q, songFile));
+            z.addFile (songFile, 9, "Loose.hhs"); z.addFile (songFile, 9, "__MACOSX/._Loose.hhs");
+            auto loose = tmp.getChildFile ("Loose.hhpack");
+            { juce::FileOutputStream os (loose); CHECK (os.openedOk() && z.writeToStream (os, nullptr)); }
+            auto lt = hhs::unpackTemplate (loose, inbox);
+            CHECK (lt.existsAsFile() && lt.getFileNameWithoutExtension() == lt.getParentDirectory().getFileName());
+        }
         std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
         tmp.deleteRecursively();
     }

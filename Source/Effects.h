@@ -55,6 +55,8 @@ protected:
 struct EffectInfo { const char* id; const char* name; const char* category; };
 const std::vector<EffectInfo>& builtinEffects();
 std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& typeId);
+std::unique_ptr<BuiltinEffect> createIsoRoom();   // HumHouse Iso Room: zero-latency vocal isolation (from the IsoRoom app)
+std::unique_ptr<BuiltinEffect> createChromaVerb();   // dense reverb with slapback (Reeverb-style table)
 std::unique_ptr<BuiltinEffect> createAmpRig();   // Amp House amp rig (desktop only)
 void migrateFxParams (const juce::String& type, std::map<juce::String, float>& params);   // old saved param ids / directions -> current
 

@@ -12,6 +12,8 @@ int shrinkSongs (const juce::File& folder);  // re-saves every .hhs under folder
 bool loadProject (Project&, const juce::File&);
 juce::File writeBackup (const Project&, int keep = 50);
 // one file to email / AirDrop / text: the project as a template, with every sound it uses inside
+// why a file can't be read ("" = readable): missing, empty iCloud placeholder, or blocked by Mac / iPhone privacy
+juce::String unreadableReason (const juce::File&);
 bool packTemplate (const Project&, const juce::String& name, const juce::File& outPack);
 // unpacks a .hhpack into templatesDir/<name>/ and returns the template (.hhs) inside, or {} if it isn't one
 juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDir);   // timestamped copy in <project>/Backup or ~/Music/HumHouse Studio/Backup

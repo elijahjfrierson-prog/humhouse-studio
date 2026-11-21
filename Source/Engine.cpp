@@ -659,11 +659,54 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
        #if JUCE_IOS
         if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
        #else
-        if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // about 5 ms: record through FX on time; raise it in Audio settings if a big session crackles
        #endif
     }
+    applyNoLatencyDriver();   // every launch, also on existing installs
     if (dualOut.load()) setDualOutput (true);
     deviceManager.addAudioCallback (this);
+}
+
+// Why old laptops lag: without an ASIO card, Windows apps land on DirectSound (~60-100 ms) or plain shared WASAPI
+// (10 ms engine period + a big buffer). Our built-in driver is WASAPI low-latency shared mode (the IAudioClient3 smallest
+// period, OBS and other apps still play), falling back to exclusive mode, and back to the old driver if neither opens.
+bool Engine::applyNoLatencyDriver()
+{
+   #if JUCE_WINDOWS
+    if (! noLatencyDriver.load()) return false;
+    const auto cur = deviceManager.getCurrentAudioDeviceType();
+    if (cur == "ASIO" || cur == "Windows Audio (Low Latency Mode)") return false;
+    const auto before = deviceManager.getAudioDeviceSetup();
+    for (const char* want : { "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+    {
+        bool has = false;
+        for (auto* t : deviceManager.getAvailableDeviceTypes()) has = has || t->getTypeName() == want;
+        if (! has) continue;
+        deviceManager.setCurrentAudioDeviceType (want, true);
+        auto setup = deviceManager.getAudioDeviceSetup();
+        const auto fallback = setup;
+        // keep the user's interface + channels when the new driver lists them
+        setup.outputDeviceName = before.outputDeviceName; setup.inputDeviceName = before.inputDeviceName;
+        setup.inputChannels = before.inputChannels; setup.outputChannels = before.outputChannels;
+        setup.useDefaultInputChannels = before.useDefaultInputChannels; setup.useDefaultOutputChannels = before.useDefaultOutputChannels;
+        if (deviceManager.setAudioDeviceSetup (setup, true).isNotEmpty()) { setup = fallback; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen())
+        {
+            int best = 0;   // the largest size at or under 256, else the smallest the driver offers
+            for (int b : d->getAvailableBufferSizes()) if (b <= 256 ? (best == 0 || best > 256 || b > best) : (best == 0 || (best > 256 && b < best))) best = b;
+            if (best > 0 && best != setup.bufferSize)
+            {
+                const auto working = deviceManager.getAudioDeviceSetup();
+                auto s2 = working; s2.bufferSize = best;
+                if (deviceManager.setAudioDeviceSetup (s2, true).isNotEmpty()) deviceManager.setAudioDeviceSetup (working, true);   // driver refused: keep the open stream
+            }
+            if (auto* d2 = deviceManager.getCurrentAudioDevice(); d2 != nullptr && d2->isOpen()) return true;
+        }
+    }
+    deviceManager.setCurrentAudioDeviceType (cur, true);   // neither opened on this card: keep what worked
+    deviceManager.setAudioDeviceSetup (before, true);
+   #endif
+    return false;
 }
 
 void Engine::setDualOutput (bool on)
@@ -763,7 +806,7 @@ void Engine::sync()
         else
         {
             SharedSample s;
-            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile())
+            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile() && ! ch.sampleFile.hasFileExtension ("hhkeys"))
             {
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
@@ -1273,6 +1316,7 @@ double Engine::loopLengthOf (const Project& proj)
 }
 
 static double startBeat = 0.0;
+double Engine::markerBeats() const { return startBeat; }
 
 // Audio clips stream from disk with no wait on the audio thread; load the audio at the play position
 // (and each later clip's start) before playback, so the first beat isn't silent.
@@ -1297,6 +1341,7 @@ void Engine::primeClipReaders (double beat)
 void Engine::play()
 {
     if (playing.load()) return;
+    tookThisRun = false;
     publishProject();   // start from the song as it is right now (armed lanes, punch, loop)
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
     const double here = position.load();
@@ -1343,9 +1388,13 @@ void Engine::stop()
         playing = false; countingIn = false;
         panicPending = true;   // the audio thread silences every voice at its next block
     }
-    lastTakeStart = -1.0;
     finishRecordingWriters();
-    if (proj.quickPunch && lastTakeStart >= 0.0) position = startBeat = lastTakeStart;
+    if (proj.quickPunch && tookThisRun && lastTakeStart >= 0.0)
+    {
+        // Quick Punch: back to the first bar of the last take (took bars 9-13 -> bar 9), ready to go again
+        const double bar = juce::jmax (1.0, (double) proj.beatsPerBar);
+        position = startBeat = std::floor (lastTakeStart / bar + 1.0e-6) * bar;
+    }
     else if (proj.returnToStart) position = startBeat;
 }
 
@@ -1466,6 +1515,7 @@ void Engine::finishRecordingWriters()
         std::swap (done, takes);
     }
     if (done.empty()) return;
+    bool batchTake = false;
     bool added = false;
     for (auto& t : done)
     {
@@ -1487,9 +1537,12 @@ void Engine::finishRecordingWriters()
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
             // latency compensation: what you sang at beat b reaches the file `lat` samples later
-            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, written / 2, (juce::int64) t->latency);   // < 0: a negative Recording offset reads from earlier in the file
+            // < 0: a negative Recording offset reads from earlier in the file; past the file's start (or end) the clip itself
+            // moves by the rest, so the full -5000..+5000 ms offset always lands
+            const juce::int64 want = (juce::int64) t->latency;
+            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, std::max<juce::int64> (0, written - 1), want);
             const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
-            double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
+            double b0 = passes[i].second + (double) (lat - want) / spb, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
             if (proj.songMode && proj.hasPunch())
             {
@@ -1503,6 +1556,7 @@ void Engine::finishRecordingWriters()
             c.sourceOffset = srcOff; c.mixerTrack = insert; c.takeGroup = group;
             c.fadeIn = c.fadeOut = 0.02;
             newClips.push_back (c);
+            if (std::find (proj.audioPool.begin(), proj.audioPool.end(), t->file) == proj.audioPool.end()) proj.audioPool.push_back (t->file);   // a take stays in Audio Clips even after its clip is deleted
         }
         if (newClips.empty()) continue;
         if (t->surprise)
@@ -1515,7 +1569,8 @@ void Engine::finishRecordingWriters()
             added = true;
             continue;
         }
-        if (! newClips.empty()) lastTakeStart = lastTakeStart < 0.0 ? newClips.front().start : std::min (lastTakeStart, newClips.front().start);
+        if (! batchTake || newClips.front().start < lastTakeStart) lastTakeStart = newClips.front().start;   // the latest punch counts, also after a punch-out with the rec button
+        batchTake = tookThisRun = true;
         if (! proj.hasPunch())
         {
             // a new take never records over an earlier one: if the track is busy there it drops to the next free track
@@ -2454,8 +2509,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             auto& lane = aproj.lanes[l];
             if (! lane.armed) continue;
             const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
-            const float* ir = c1 < numIn ? in[c1] : il;
+            // Bluetooth / output-only devices have no inputs (in may be null): never index past them with an armed track
+            const float* il = in != nullptr && c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+            const float* ir = in != nullptr && c1 >= 0 && c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;
             if (lane.autoNorm && l < normState.size() && n <= normScratch.getNumSamples())
@@ -2478,7 +2534,7 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                 }
                 il = nl; ir = nr;
             }
-            if (lane.monitor && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
+            if (lane.monitor && ! speakerOut.load() && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;
                 dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n);

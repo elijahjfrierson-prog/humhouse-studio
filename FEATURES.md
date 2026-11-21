@@ -1,0 +1,120 @@
+# HumHouse Studio feature log + lock
+
+Every feature the owner asked for is listed here. `scripts/feature_lock.py` (run in CI) fails the build
+if one of the locked strings below disappears from `Source/`. Remove a line only when the owner says so.
+
+## Removed on purpose (owner's call)
+- Crash protection (out-of-process plug-in sandbox toggle): removed on all platforms (2026-11-18)
+- Phone: Hum Verse, plug-in scanner, EXPORT ALL video button
+- Subscription phone app: master plug-ins, spectrums/Scope, Glitch Gate, automation, Patch Bay, Drummer, stem split
+
+## Locked (must stay in the code)
+<!-- lock: one string per line, as it appears in Source/ -->
+- lock: Set to master
+- lock: HumHouse No Latency Driver
+- lock: Drocetti Verb
+- lock: Amp House
+- lock: VID POP
+- lock: EXPORT ALL
+- lock: Shrink
+- lock: Warp Stabilizer
+- lock: Separate audio
+- lock: Find key
+- lock: Hum Verse
+- lock: Patch Bay
+- lock: HumHouse Drummer
+- lock: Split stems
+- lock: Low Latency Mode
+- lock: Recording offset
+- lock: Retro Record
+- lock: PUSH
+- lock: Glitch Gate
+- lock: Scope
+- lock: Studio EQ
+- lock: AutoPitch
+- lock: Purify
+- lock: Audio to MIDI
+- lock: Freeze
+- lock: Plugin House
+- lock: HUMHOUSE VIEW
+- lock: Stem Splitter
+- lock: InSequence
+- lock: Key Finder
+- lock: Peak Controller
+- lock: Patch Method
+- lock: Templates
+- lock: Auto-backup
+- lock: Typing keyboard
+- lock: Multithreaded mixer
+- lock: Smart disable
+- lock: RAM disk cache
+- lock: Bezier
+- lock: Metronome
+- lock: Color wheel
+- lock: Speed ramp
+- lock: Optical
+- lock: Low Latency
+- lock: Flex-Tune
+- lock: Harmony
+- lock: Coat (vocal compression)
+- lock: PAGE
+- lock: Templates on this phone
+- lock: Tune Finder
+- lock: Recording offset slider
+- lock: Iso Room
+- lock: AUDIO CLIPS
+- lock: BEAT PATTERNS
+- lock: always closable, also while streaming
+- lock: HumHouse Grand/HumHouse Grand.hhkeys
+- lock: class KeysInstrument
+- lock: Show in Finder (the clip's audio file)
+- lock: Set to: HumHouse
+- lock: dawKeyPresets
+- lock: Tune Finder: key / BPM / tune of this clip
+- lock: Tune Finder: key / BPM / tune of the selected clip
+- lock: selection is UI only: no engine copy per mouse move
+- lock: any HumHouse template zip
+- lock: juce::String unreadableReason
+- lock: void claimFileTypes()
+- lock: name, knobs, boxes: the menu opens right away
+- lock: HumHouse Drummer (turn this track into drums)
+- lock: Drummer section the Drummer rows show and edit
+- lock: first edit keeps what the drummer was playing
+- lock: the same way Cmd+B stacks (each paste after the last)
+- lock: follow: no page jumps
+- lock: mouse-wheel targets the view glides to
+- lock: half a screen above and below: up / down scrolling slides it too
+- lock: Background picture (behind the UI, from Downloads)
+- lock: phone: compact fixed tracks
+- lock: phone slim list: name + R M S; swipe right for the rest
+- lock: the arrow handle on the track list
+- lock: the pop-out opens inside it (pop Mixer)
+
+## No Hitch Policy (owner's word)
+A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at once, or skips instead of moving smoothly (scrolling, follow-playhead, zoom, selection, meters, recording). Every hitch is a bug: big drawing jobs are split into small pieces done ahead of time, never in one frame.
+- lock: No Hitch (Logic / Pro Tools tiled backing store)
+- lock: phone portrait: 2 rows so every tool icon shows
+- lock: phone: start / play / stop / record in the bottom middle
+- lock: R M S L N, knobs, boxes, the gaps: the whole bar opens the track menu
+- lock: BEAT / REC / MIX: one tap each
+- lock: Quick Punch: back to the first bar of the last take
+- lock: phone transport: as tall as a track, easy to hit
+- lock: No Hitch screen clock (FL / Logic)
+- lock: a newer push to the same PR cancels the older, now-outdated build
+- lock: Build cache: files that didn't change since the last run aren't compiled again
+- lock: only the ruler + clips slide
+- lock: CADisableMinimumFrameDurationOnPhone
+- lock: bgPicture pre-scaled to the window (No Hitch)
+- lock: Poly (glide multiple notes)
+- lock: no redraw until it moves a quarter pixel
+- lock: whole frame painted: no stale picture shows around a plug-in view
+- lock: paste / copy spot: the blue playhead you see
+- lock: one-shots / kit samples are always glued in
+- lock: Phone: a hold is a drag (it used to delete the dot you were moving)
+- lock: clip bar: STAMP / PAINT only (copy / paste)
+- lock: phone: finger-sized fade / edge zones
+- lock: phone: an automation clip slides along its own track
+- lock: instant: a click / seek / restart more than ~60 ms off jumps straight there
+- lock: a note anywhere inside the step's slot lights it
+- lock: paste spot: song mode with the playhead past this pattern's clips used to give -1
+- lock: Bluetooth / output-only devices have no inputs (in may be null)

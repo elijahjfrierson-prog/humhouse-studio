@@ -217,7 +217,7 @@ struct Strip : public juce::Component
                 else if (r == 5) s.edit ("Set to master", [this] (Project& p) {
                     auto& mt = p.mixer[(size_t) index];
                     mt.direct = ! mt.direct;
-                    if (mt.direct) { mt.sends.clear(); mt.routesToMaster = true; }   // only the master, so no bus can add delay
+                    if (mt.direct) mt.routesToMaster = true;   // master path is unaligned (no latency); bus sends and routes stay
                 });
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
                 else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
@@ -678,7 +678,7 @@ private:
         m.addItem (1, "Open editor"); m.addItem (2, fx[(size_t) i].bypass ? "Turn on" : "Bypass");
         m.addItem (3, "Replace (Plugin House)..."); m.addItem (4, "Move up", i > 0); m.addItem (5, "Move down", i + 1 < (int) fx.size());
         std::vector<AutoTarget> targets;
-        m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
+        if (! phoneLite) m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
         m.addSeparator(); m.addItem (6, "Remove");
         m.showMenuAsync ({}, [this, t, i, uid, targets] (int r) {
             if (r >= 100)
@@ -917,6 +917,7 @@ private:
                 for (auto* id : ch.fx)
                 {
                     if (p.mixer[(size_t) t].fx.size() >= (size_t) maxSlots) break;
+                    if (! std::all_of (builtinEffects().begin(), builtinEffects().end(), [id] (const EffectInfo& e) { return juce::String (e.id) != id || fxOffered (e.id, e.category); })) continue;
                     auto& f = p.addFx (t, id);
                     if (juce::String (id) == "peakctl") ctl = f.uid;
                     if (juce::String (id) == "filter") flt = f.uid;

@@ -66,7 +66,7 @@ void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
     std::map<juce::String, juce::PopupMenu> cats, makers;
     const auto& fx = builtinEffects();
     for (size_t i = 0; i < fx.size(); ++i)
-        if (! (phoneUI && juce::String (fx[i].id) == "hhamp"))   // amp rig is desktop only: the phone stays light on CPU
+        if (fxOffered (fx[i].id, fx[i].category))
             cats[fx[i].category].addItem ((int) i + 1, fx[i].name);
     for (auto& [c, sub] : cats) builtins.addSubMenu (c, sub);
     auto types = s.engine.knownPlugins.getTypes();
@@ -84,8 +84,7 @@ void showPluginHouseMenu (Studio& s, int track, int replaceSlotUid)
     juce::PopupMenu third;
     for (auto& [maker, sub] : makers) third.addSubMenu (maker, sub);
     m.addSubMenu ("Third-party plugins", third, third.getNumItems() > 0);
-    m.addSeparator();
-    m.addItem (9999, "Scan / manage plugins...");
+    if (! phoneUI) { m.addSeparator(); m.addItem (9999, "Scan / manage plugins..."); }
     m.showMenuAsync ({}, [&s, track, replaceSlotUid, types] (int r) {
         const auto& all = builtinEffects();
         if (r >= 1 && r <= (int) all.size()) addEffect (s, track, all[(size_t) r - 1].id, {}, replaceSlotUid);
@@ -113,7 +112,7 @@ public:
         addAndMakeVisible (list);
         setupButton (scan, "Scan plugins", "Find every VST3 / AU plugin on this computer");
         scan.onClick = [this] { showPluginScanner (s); };
-        addAndMakeVisible (scan);
+        if (! phoneUI) addAndMakeVisible (scan);   // no plug-in scanner on the phone
         s.engine.knownPlugins.addChangeListener (this);
         rebuild();
     }
@@ -122,7 +121,7 @@ public:
     {
         auto r = getLocalBounds().reduced (4);
         search.setBounds (r.removeFromTop (26)); r.removeFromTop (4);
-        scan.setBounds (r.removeFromBottom (28)); r.removeFromBottom (4);
+        if (! phoneUI) { scan.setBounds (r.removeFromBottom (28)); r.removeFromBottom (4); }
         list.setBounds (r);
     }
 
@@ -143,7 +142,7 @@ private:
         juce::String lastCat;
         entries.push_back ({ "HUMHOUSE BUILT-INS", {}, 0, {}, -1 });
         for (auto& f : builtinEffects())
-            if (match (f.name, f.category)) entries.push_back ({ f.name, f.category, 1, f.id, -1 });
+            if (fxOffered (f.id, f.category) && match (f.name, f.category)) entries.push_back ({ f.name, f.category, 1, f.id, -1 });
         types = s.engine.knownPlugins.getTypes();
         for (int pass = 0; pass < 3; ++pass)
         {
@@ -519,7 +518,6 @@ private:
     void browserRootChanged (const juce::File&) override {}
 };
 
-#if ! HHS_LICENSED
 // PATTERNS tab (FL-style pool): beat patterns + audio clips, split by channel / track, drag onto the Playlist
 class PoolBrowser : public juce::Component, private juce::ListBoxModel, private juce::Timer
 {
@@ -599,6 +597,7 @@ private:
             std::map<juce::String, std::vector<Row>> groups;   // split by track
             for (auto& f : p.audioPool)
             {
+                if (! f.existsAsFile()) continue;   // a discarded (silent) take is never listed
                 int n = 0; juce::String lane;
                 for (auto& c : p.clips) if (c.patternIndex < 0 && c.audioFile == f) { ++n; if (lane.isEmpty() && c.lane >= 0 && c.lane < (int) p.lanes.size()) lane = p.lanes[(size_t) c.lane].name; }
                 Row r; r.name = f.getFileNameWithoutExtension(); r.file = f; r.colour = col::accent2;
@@ -608,7 +607,7 @@ private:
             for (auto& [g, rs] : groups) { Row h; h.header = true; h.name = g; next.push_back (h); next.insert (next.end(), rs.begin(), rs.end()); }
         }
         juce::String sg (audio ? "A" : "P"); sg << p.currentPattern;
-        for (auto& r : next) sg << "|" << r.name << r.sub << (int) r.header;
+        for (auto& r : next) sg << "|" << r.name << r.sub << (int) r.header << ":" << r.index << ":" << r.file.getFullPathName();   // a new project with same-named rows still refreshes
         if (sg == sig) return;
         sig = sg; rows = std::move (next);
         list.updateContent(); list.repaint();
@@ -628,12 +627,14 @@ private:
             int filled = 0;
             for (auto& [id, nl] : src.notes) if (! nl.empty()) ++filled;
             if (filled < 2) return;
+            // the source already plays on the Playlist: the per-channel copies wait in the pool (never auto-placed on top of it)
+            const bool srcPlaced = std::any_of (p.clips.begin(), p.clips.end(), [idx] (const Clip& c) { return c.patternIndex == idx; });
             int after = idx;
             for (auto& ch : p.channels)
             {
                 auto it = src.notes.find (ch.id);
                 if (it == src.notes.end() || it->second.empty()) continue;
-                Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour; one.notes[ch.id] = it->second;
+                Pattern one; one.name = src.name + " - " + ch.name; one.colour = ch.colour; one.notes[ch.id] = it->second; one.placed = srcPlaced;
                 after = p.insertPatternAfter (after, one);
             }
             juce::ignoreUnused (this);
@@ -715,25 +716,20 @@ private:
         dc->startDragging (desc, &list, juce::ScaledImage (img), false);
     }
 };
-#endif
 
 class Browser : public juce::Component
 {
 public:
     explicit Browser (Studio& st) : plugins (st), samples (st)
-       #if ! HHS_LICENSED
         , pool (st)
-       #endif
     {
         setupButton (pTab, "PLUGIN HOUSE", "Built-in effects, HumHouse plugins and every third-party plugin you own");
         setupButton (sTab, "SAMPLES / KITS", "Browse your samples and drum kits");
         for (auto* t : { &pTab, &sTab }) { t->setRadioGroupId (7); t->setClickingTogglesState (true); addAndMakeVisible (t); }
-       #if ! HHS_LICENSED
         setupButton (aTab, "PATTERNS", "Every beat pattern and audio clip in the project");
         aTab.setRadioGroupId (7); aTab.setClickingTogglesState (true); addAndMakeVisible (aTab);
         aTab.onClick = [this] { show (2); };
         addChildComponent (pool);
-       #endif
         pTab.onClick = [this] { show (0); };
         sTab.onClick = [this] { show (1); };
         addChildComponent (plugins); addChildComponent (samples);
@@ -745,13 +741,9 @@ public:
     {
         auto r = getLocalBounds().withTrimmedRight (1);
         auto tabs = r.removeFromTop (30).reduced (4, 3);
-       #if ! HHS_LICENSED
         const int w3 = tabs.getWidth() / 3;
         pTab.setBounds (tabs.removeFromLeft (w3).reduced (1, 0)); sTab.setBounds (tabs.removeFromLeft (w3).reduced (1, 0)); aTab.setBounds (tabs.reduced (1, 0));
         pool.setBounds (r);
-       #else
-        pTab.setBounds (tabs.removeFromLeft (tabs.getWidth() / 2).reduced (1, 0)); sTab.setBounds (tabs.reduced (1, 0));
-       #endif
         plugins.setBounds (r); samples.setBounds (r);
     }
 
@@ -759,16 +751,12 @@ private:
     juce::TextButton pTab, sTab;
     PluginList plugins;
     SampleBrowser samples;
-   #if ! HHS_LICENSED
     juce::TextButton aTab;
     PoolBrowser pool;
-   #endif
     void show (int i)
     {
         plugins.setVisible (i == 0); samples.setVisible (i == 1);
-       #if ! HHS_LICENSED
         pool.setVisible (i == 2);
-       #endif
     }
 };
 }

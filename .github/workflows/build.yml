@@ -11,6 +11,11 @@ on:
 permissions:
   contents: write
 
+# a newer push to the same PR cancels the older, now-outdated build (main + releases always finish)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -31,6 +36,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Feature lock (nothing the owner asked for disappears)
+        run: python3 scripts/feature_lock.py
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -66,13 +73,21 @@ jobs:
           Move-Item $d.FullName ffmpeg
           Get-ChildItem ffmpeg/lib, ffmpeg/bin
 
+      # Build cache: files that didn't change since the last run aren't compiled again (small fixes ship in minutes)
+      - name: Compiler cache (macOS, Linux)
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639   # v1.2
+        with:
+          key: ${{ matrix.artifact }}
+          max-size: 2G
+
       - name: Configure (macOS, universal)
         if: runner.os == 'macOS'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DFFMPEG_DIR="$HOME/ffmpeg-lgpl"
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DFFMPEG_DIR="$HOME/ffmpeg-lgpl" -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Configure (Linux)
         if: runner.os == 'Linux'
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
@@ -173,8 +188,10 @@ jobs:
           cmake -S . -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
-      - name: Build (HumHouse Studio Master for iPhone)
-        run: cmake --build build-ios --config Release --target HumHouseStudioMaster -- -sdk iphoneos -jobs 2
+      - name: Build (HumHouse Studio Master + stripped subscription app for iPhone)
+        run: |
+          cmake --build build-ios --config Release --target HumHouseStudioMaster -- -sdk iphoneos -jobs 2
+          cmake --build build-ios --config Release --target HumHouseStudio -- -sdk iphoneos -jobs 2
       - name: Package .ipa
         run: |
           APP=$(find build-ios/HumHouseStudioMaster_artefacts -maxdepth 2 -type d -name "*.app" | head -1)
@@ -182,6 +199,10 @@ jobs:
           mkdir -p Payload artifacts
           cp -R "$APP" Payload/
           zip -qry artifacts/HumHouse-Studio-iPhone.ipa Payload
+          LITE=$(find build-ios/HumHouseStudio_artefacts -maxdepth 2 -type d -name "*.app" | head -1)
+          echo "lite app: $LITE"; test -n "$LITE"
+          rm -rf Payload && mkdir Payload && cp -R "$LITE" Payload/
+          zip -qry artifacts/HumHouse-Studio-iPhone-Subscription.ipa Payload
           ls -la artifacts
       - uses: actions/upload-artifact@v4
         with:

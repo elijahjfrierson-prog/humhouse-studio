@@ -1522,6 +1522,7 @@ public:
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
+    float meter (int i) const override { return i == 100 ? detectedMidi.load() : i == 101 ? correctedMidi.load() : 0.0f; }   // pitch readout for offline analysis
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         const int style = (int) p (0);
@@ -1599,7 +1600,7 @@ public:
                     const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
                     bool rough = false; int wn = 512; float hz = 0, aper = 1;
                     auto detect = [&] (int len) {
-                        const bool low = lastMidi == 0 || lastMidi < 50;   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
+                        const bool low = lastMidi == 0 || lastMidi < 53;   // up to F3: low notes get ~3 full cycles, so they lock as hard as high ones   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
                         len = juce::jlimit (256, low ? 1536 : 1024, len);
                         std::array<float, 1536> win {};
                         for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
@@ -1624,6 +1625,8 @@ public:
                     // sung vowel too, so the tune cups it from the first hop instead of waiting for the rasp to settle
                     const bool push = lvl > 0.01f && (voiceLvl > 0 ? lvl > 1.3f * voiceLvl : lvl > 0.03f);
                     const bool belt = push || (heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f);
+                    const bool holding = heldNote > 0 && style != 0;   // inside a sung note, darker / breathier timbres and low inflections keep being read (Antares holds there)
+                    juce::ignoreUnused (holding);
                     if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
@@ -1655,7 +1658,9 @@ public:
                     if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
                     {
                         const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < ((rough || pendingRough) && ! belt ? 0.35f : 0.6f);   // a scream wobbles: the 2nd read may be a bit off
-                        if (same) pendingMidi = 0;
+                        // Hard Tune: a clean, clearly pitched word start is tuned from its first reading (Antares catches the
+                        // first cycle; waiting for a 2nd read let low word starts through untuned)
+                        if (same || (hard && lastMidi == 0 && ! rough && aper < 0.15f)) pendingMidi = 0;
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
                     else if (midi != -1.0f) pendingMidi = 0;
@@ -1697,7 +1702,7 @@ public:
                         // above / below, and holding the note that first reading picked put short words a half step off
                         const bool young = hard && (float) youngHops * hopSec < youngSec;
                         const int prevHeld = heldNote; bool restart = onset;
-                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : 0.12f)));
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : hard ? 0.05f : 0.12f)));
                         int target = nearestScaleNote (centre, root, scale);
                         if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
@@ -2012,6 +2017,70 @@ KeyGuess findKey (const float* x, int n, double sr)
     return g;
 }
 
+// ------------------------------------------------------------ Tune Finder (plug-in)
+// listens to its insert and shows the key / scale, tempo and tuning (cents off A440); the audio passes through untouched.
+// The analysis runs on its own thread every 1.5 s, never on the audio thread.
+class TuneFinder : public BuiltinEffect, private juce::Thread
+{
+public:
+    TuneFinder() : juce::Thread ("Tune Finder") { initDefaults(); ring.assign ((size_t) (20 * aRate), 0.0f); startThread (juce::Thread::Priority::low); }
+    ~TuneFinder() override { stopThread (3000); }
+    const char* typeId() const override { return "tunefinder"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<const char*> keys = [] {
+            static std::vector<juce::String> names;
+            for (int sc = 0; sc < 2; ++sc) for (int r = 0; r < 12; ++r) names.push_back (KeyGuess::keyName (r, sc));
+            std::vector<const char*> v { "Listening..." };
+            for (auto& n : names) v.push_back (n.toRawUTF8());
+            return v; }();
+        static const std::vector<ParamDef> ps { { "key", "Detected key", 0, 24, 0, keys }, { "bpm", "Detected BPM", 0, 300, 0 },
+                                                { "cents", "Tuning (cents off A440)", -50, 50, 0 }, { "listen", "Listen (seconds)", 4, 20, 8 } };
+        return ps;
+    }
+    void prepare (double s, int) override { ds = juce::jmax (1, juce::roundToInt (s / aRate)); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const juce::SpinLock::ScopedTryLockType tl (ringLock);
+        if (! tl.isLocked()) return;
+        const auto* l = b.getReadPointer (0); const auto* r = b.getNumChannels() > 1 ? b.getReadPointer (1) : l;
+        int w = wpos.load (std::memory_order_relaxed), f = filled.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i)
+        {
+            acc += 0.5f * (l[i] + r[i]);
+            if (++accN >= ds) { ring[(size_t) w] = acc / (float) accN; w = (w + 1) % (int) ring.size(); acc = 0; accN = 0; f = std::min (f + 1, (int) ring.size()); }
+        }
+        filled.store (f, std::memory_order_relaxed); wpos.store (w, std::memory_order_release);
+    }
+private:
+    static constexpr double aRate = 11025.0;
+    std::vector<float> ring; std::atomic<int> wpos { 0 }, filled { 0 }; int ds = 4, accN = 0; float acc = 0;
+    juce::SpinLock ringLock;   // the analyser copies under it; the audio thread only try-locks (skips a block, never waits)
+    void run() override
+    {
+        std::vector<float> buf;
+        while (! threadShouldExit())
+        {
+            wait (1500);
+            const int len = juce::jlimit (4 * (int) aRate, (int) ring.size(), (int) (p (3) * aRate));
+            const int have = filled.load();
+            if (have < 4 * (int) aRate) continue;
+            const int use = std::min (len, have), N = (int) ring.size();
+            buf.resize ((size_t) use);
+            float e = 0;
+            {
+                const juce::SpinLock::ScopedLockType sl (ringLock);   // ~1 ms copy: the audio thread skips that block's capture instead of racing it
+                const int w = wpos.load (std::memory_order_acquire);
+                for (int k = 0; k < use; ++k) { const float v = ring[(size_t) ((w - use + k + N) % N)]; buf[(size_t) k] = v; e += v * v; }
+            }
+            if (std::sqrt (e / (float) use) < 1.0e-4f) continue;   // silence: keep the last answer
+            const auto g = findKey (buf.data(), use, aRate);
+            setParamQuiet (0, (float) (1 + g.root + 12 * g.scaleIndex));
+            setParamQuiet (1, (float) g.bpm); setParamQuiet (2, g.cents);
+        }
+    }
+};
+
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
 std::unique_ptr<BuiltinEffect> createPurify();
@@ -2026,16 +2095,16 @@ const std::vector<EffectInfo>& builtinEffects()
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
         { "hhmaster", "Hum House Master", "Mastering" }, { "hhcurves", "HumHouse Curves Master (0 latency)", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
         { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" },
-        { "vroom", "HumHouse Vocal Room", "Vocal" },
+        { "vroom", "HumHouse Vocal Room", "Vocal" }, { "isoroom", "HumHouse Iso Room (vocal isolation)", "Vocal" },
         { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
         { "pump", "Pump (Sidechain)", "Dynamics" }, { "clip", "Soft Clipper", "Dynamics" },
-        { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
+        { "verb", "Room Verb", "Space" }, { "chromaverb", "Drocetti Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
         { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
         { "hhamp", "Amp House (amp rig)", "Guitar" },
-        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" }, { "tunefinder", "Tune Finder (key / BPM / tune)", "Utility" } };
     return fx;
 }
 
@@ -2093,6 +2162,7 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "comp") return std::make_unique<Compressor>();
     if (id == "limiter") return std::make_unique<Limiter>();
     if (id == "verb") return std::make_unique<RoomVerb>();
+    if (id == "chromaverb") return createChromaVerb();
     if (id == "delay") return std::make_unique<EchoTape>();
     if (id == "chorus") return std::make_unique<Chorus>();
     if (id == "flanger") return std::make_unique<Flanger>();
@@ -2102,6 +2172,8 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();
     if (id == "glitch") return std::make_unique<GlitchGate>();
+    if (id == "tunefinder") return std::make_unique<TuneFinder>();
+    if (id == "isoroom") return createIsoRoom();
     if (id == "hhmaster") return std::make_unique<HumHouseMaster>();
     if (id == "wide") return std::make_unique<StereoWide>();
     if (id == "clip") return std::make_unique<SoftClip>();

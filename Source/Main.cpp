@@ -65,8 +65,8 @@ struct WelcomeWindow : public juce::DocumentWindow
         setUsingNativeTitleBar (true);
         setContentOwned (p, true);
         centreWithSize (getWidth(), getHeight());
-        setAlwaysOnTop (true);
         setVisible (true);
+        toFront (true);   // in front, never glued on top of other apps (streaming)
     }
     std::function<void()> onClose;
     void closeButtonPressed() override { if (onClose) onClose(); }
@@ -238,6 +238,7 @@ public:
             quit();
             return;
         }
+        hhs::claimFileTypes();   // macOS: HumHouse files open in the app you're running, never an old copy
        #if ! JUCE_IOS
         if (hhs::isPluginHostChild (commandLine))   // crash-protected plug-in helper: no window, runs until the host closes it
         {
