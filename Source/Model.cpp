@@ -75,9 +75,11 @@ bool Pattern::stepOn (int channelId, int step, double stepLen) const
 {
     auto it = notes.find (channelId);
     if (it == notes.end()) return false;
+    // a note anywhere inside the step's slot lights it (off-grid notes from the Piano Roll / recording / 1/32),
+    // so tapping it turns it off instead of stacking a second note on top
     const double t = step * stepLen;
     for (auto& n : it->second)
-        if (std::abs (n.start - t) < 1.0e-6) return true;
+        if (n.start > t - 1.0e-6 && n.start < t + stepLen - 1.0e-6) return true;
     return false;
 }
 
@@ -85,8 +87,8 @@ void Pattern::toggleStep (int channelId, int step, int rootKey, double stepLen)
 {
     auto& list = notes[channelId];
     const double t = step * stepLen;
-    for (auto it = list.begin(); it != list.end(); ++it)
-        if (std::abs (it->start - t) < 1.0e-6) { list.erase (it); return; }
+    const auto inSlot = [t, stepLen] (const Note& q) { return q.start > t - 1.0e-6 && q.start < t + stepLen - 1.0e-6; };
+    if (std::any_of (list.begin(), list.end(), inSlot)) { list.erase (std::remove_if (list.begin(), list.end(), inSlot), list.end()); return; }
     Note n; n.key = rootKey; n.start = t; n.length = stepLen; n.velocity = 0.78f;
     list.push_back (n);
 }
