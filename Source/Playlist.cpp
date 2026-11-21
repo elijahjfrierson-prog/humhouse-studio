@@ -2466,7 +2466,10 @@ private:
             auto r = clipRect (c);
             if (! r.contains (pt)) continue;
             // phone: finger-sized fade / edge zones, so a touch near a fade grabs the fade, not the whole clip
-            const float tol = phoneUI ? 20.0f : 8.0f, top = phoneUI ? 30.0f : 12.0f, edge = phoneUI ? 14.0f : 6.0f;
+            // never more than a quarter of the clip each, so a short clip keeps both fades and a middle to move it by
+            const float q = r.getWidth() * 0.25f;
+            const float tol = juce::jmin (phoneUI ? 20.0f : 8.0f, juce::jmax (4.0f, q)), top = phoneUI ? 30.0f : 12.0f,
+                        edge = juce::jmin (phoneUI ? 14.0f : 6.0f, juce::jmax (2.0f, q));
             if (c.isAudio())
             {
                 if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
