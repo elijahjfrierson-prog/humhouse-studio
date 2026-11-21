@@ -665,7 +665,8 @@ int shrinkSongs (const juce::File& folder)
         const auto keep = f.getSiblingFile (f.getFileName() + ".shrinking");
         if (! f.copyFileTo (keep)) continue;
         Project back;
-        const bool ok = saveProject (p, f) && loadProject (back, f) && missingAudio (back) <= missingBefore && back.clips.size() == p.clips.size();
+        const bool ok = saveProject (p, f) && loadProject (back, f) && missingAudio (back) <= missingBefore && back.clips.size() == p.clips.size()
+                        && f.getSize() <= before;   // never keep a "shrunk" song that grew (one-shots now ride inside)
         if (! ok) { f.deleteFile(); keep.moveFileTo (f); continue; }   // anything off: the original song comes back untouched
         keep.deleteFile();
         if (f.getSize() < before) ++n;
