@@ -116,3 +116,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: phone: an automation clip slides along its own track
 - lock: instant: a click / seek / restart more than ~60 ms off jumps straight there
 - lock: a note anywhere inside the step's slot lights it
+- lock: paste spot: song mode with the playhead past this pattern's clips used to give -1
