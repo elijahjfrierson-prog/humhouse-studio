@@ -1862,7 +1862,9 @@ public:
         const bool noSnap = e.mods.isAltDown();
         double d = xToBeat (e.position.x) - xToBeat (dragStart.x);
         if (! noSnap && plSnap > 0 && drag != Drag::FadeIn && drag != Drag::FadeOut && drag != Drag::Curve) d = std::round (d / plSnap) * plSnap;
-        const int dLane = drag == Drag::Move ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
+        // phone: an automation clip slides along its own track (a finger wobble never drops it on another track)
+        const bool autoOnly = phoneUI && dragClip < (int) dragOrig.size() && dragOrig[(size_t) dragClip].isAuto();
+        const int dLane = drag == Drag::Move && ! autoOnly ? laneAt (e.position.y) - laneAt (dragStart.y) : 0;
         s.live ([&] (Project&) {
             for (size_t i = 0; i < p.clips.size(); ++i)
             {
@@ -2462,19 +2464,21 @@ private:
             if (c.hidden) continue;
             auto r = clipRect (c);
             if (! r.contains (pt)) continue;
+            // phone: finger-sized fade / edge zones, so a touch near a fade grabs the fade, not the whole clip
+            const float tol = phoneUI ? 20.0f : 8.0f, top = phoneUI ? 30.0f : 12.0f, edge = phoneUI ? 14.0f : 6.0f;
             if (c.isAudio())
             {
-                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
-                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < 8) { part = Part::Curve; return i; }
+                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
+                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
             }
-            if (c.isAudio() && pt.y < r.getY() + 12)
+            if (c.isAudio() && pt.y < r.getY() + top)
             {
                 const float fi = r.getX() + (float) (c.fadeIn * pxPerBeat), fo = r.getRight() - (float) (c.fadeOut * pxPerBeat);
-                if (std::abs (pt.x - fi) < 8) { part = Part::FadeIn; return i; }
-                if (std::abs (pt.x - fo) < 8) { part = Part::FadeOut; return i; }
+                if (std::abs (pt.x - fi) < tol) { part = Part::FadeIn; return i; }
+                if (std::abs (pt.x - fo) < tol) { part = Part::FadeOut; return i; }
             }
-            if (pt.x > r.getRight() - 6) part = Part::Right;
-            else if ((c.isAudio() || c.isAuto()) && pt.x < r.getX() + 6) part = Part::Left;
+            if (pt.x > r.getRight() - edge) part = Part::Right;
+            else if ((c.isAudio() || c.isAuto()) && pt.x < r.getX() + edge) part = Part::Left;
             return i;
         }
         return -1;
