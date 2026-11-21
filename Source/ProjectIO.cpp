@@ -693,6 +693,8 @@ bool saveProject (const Project& p, const juce::File& f)
         auto glue = [&] (const juce::File& a, bool kitSound = false)
         {
             if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
+            // only audio ever rides inside a song: a received song naming some other local file can't carry it back out
+            if (! a.hasFileExtension ("wav;aif;aiff;flac;mp3;ogg;m4a;caf;wv")) return;
             // built-in sounds ship with every HumHouse app; kit one-shots still ride along (a few hundred KB) so the other device always has them
             if (! kitSound && bundled != juce::File() && a.isAChildOf (bundled)) return;
             const auto size = a.getSize();
