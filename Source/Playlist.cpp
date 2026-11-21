@@ -1647,6 +1647,7 @@ public:
             if (k >= 0 && (phoneUI ? e.getNumberOfClicks() >= 2 : e.mods.isPopupMenu()))
             {
                 const int uid = p.clips[(size_t) i].uid;
+                phoneDeletedPt = phoneUI;   // the double-tap that follows must not add a point back
                 s.edit ("Delete automation point", [uid, k] (Project& pr) {
                     for (auto& c : pr.clips) if (c.uid == uid && k < (int) c.autoPts.size() && c.autoPts.size() > 1) c.autoPts.erase (c.autoPts.begin() + k);
                 });
@@ -1972,6 +1973,7 @@ public:
         Part part; const int i = hitClip (e.position, part);
         if (phoneUI && i >= 0 && ! p.clips[(size_t) i].isAuto()) { drag = Drag::None; return; }   // phone: double tap = the right-click menu (stem split, settings...)
         if (i >= 0 && p.clips[(size_t) i].isAuto() && hitAutoCurve (p.clips[(size_t) i], e.position) >= 0) return;   // mouseDown already straightened that curve
+        if (std::exchange (phoneDeletedPt, false)) return;   // phone: this double-tap deleted a point in mouseDown
         if (i >= 0 && p.clips[(size_t) i].isAuto())   // FL: double-click the envelope to add a point
         {
             const int uid = p.clips[(size_t) i].uid;
@@ -2377,6 +2379,7 @@ private:
     std::vector<Clip> clipboard; double clipLo = 0, clipHi = 0, copyHere = -1.0, nextAfter = 0;
     // paste / copy spot: the blue playhead you see (while playing: where it is now, on the grid line it just passed;
     // the start marker was bars behind it)
+    bool phoneDeletedPt = false;
     double markerNow() const
     {
         if (! s.engine.isPlaying()) return juce::jmax (0.0, s.engine.positionBeats());
