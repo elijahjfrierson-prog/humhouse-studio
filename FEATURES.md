@@ -127,3 +127,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Frame meter (Options menu)
 - lock: just the %, no late count
 - lock: the header is a cached picture: redraw it only when what paint() shows changed
+- lock: the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off

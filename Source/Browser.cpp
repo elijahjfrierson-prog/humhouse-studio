@@ -179,10 +179,13 @@ private:
             g.setColour (row == previewRow ? col::accent : col::dim); g.fillPath (tri);
             x = 28;
         }
+        // the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off
+        const juce::Font subF (juce::FontOptions (10.0f));
+        const int subW = e.sub.isEmpty() ? 0 : juce::jmin (104, juce::GlyphArrangement::getStringWidthInt (subF, e.sub) + 4);
         g.setColour (col::text); g.setFont (juce::FontOptions (phoneUI ? 16.0f : 13.0f));
-        g.drawText (e.label, x, 0, w - 100 - (x - 14), h, juce::Justification::centredLeft, true);
-        g.setColour (col::dim); g.setFont (juce::FontOptions (10.0f));
-        g.drawText (e.sub, w - 110, 0, 104, h, juce::Justification::centredRight, true);
+        g.drawFittedText (e.label, x, 0, w - x - subW - 8, h, juce::Justification::centredLeft, phoneUI ? 2 : 1, 0.75f);
+        g.setColour (col::dim); g.setFont (subF);
+        g.drawText (e.sub, w - subW - 6, 0, subW, h, juce::Justification::centredRight, true);
     }
     void preview (int row)
     {
@@ -500,7 +503,7 @@ private:
         if (sel) { g.setColour (col::accent.withAlpha (0.35f)); g.fillRoundedRectangle (2, 1, (float) w - 4, (float) h - 2, 4.0f); }
         g.setColour (col::accent); g.fillEllipse (8, h * 0.5f - 3, 6, 6);
         g.setColour (col::text); g.setFont (juce::FontOptions (13.0f));
-        g.drawText (hits[row].getFileNameWithoutExtension(), 20, 0, w - 24, h, juce::Justification::centredLeft, true);
+        g.drawFittedText (hits[row].getFileNameWithoutExtension(), 20, 0, w - 24, h, juce::Justification::centredLeft, phoneUI ? 2 : 1, 0.75f);
     }
     void selectedRowsChanged (int row) override { if (row >= 0 && row < hits.size()) s.engine.previewFile (hits[row]); }
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override { if (row >= 0 && row < hits.size()) addSampleChannels (s, { hits[row] }, {}); }
@@ -536,7 +539,7 @@ public:
         splitBtn.onClick = [this] { split(); };
         unusedBtn.onClick = [this] { askClear (false); };
         allBtn.onClick = [this] { askClear (true); };
-        list.setModel (this); list.setRowHeight (24);
+        list.setModel (this); list.setRowHeight (phoneUI ? 36 : 24);
         list.setColour (juce::ListBox::backgroundColourId, col::panel);
         addAndMakeVisible (list);
         if (phoneUI) list.addMouseListener (this, true);   // phone: slide a row sideways to drag it into REC (up/down still scrolls)
@@ -675,10 +678,12 @@ private:
         if (selected) g.fillAll (col::accent.withAlpha (0.25f));
         if (! audio && r.index == s.p().currentPattern) { g.setColour (col::accent2); g.drawRect (0, 0, w, h, 1); }
         g.setColour (r.colour); g.fillRoundedRectangle (8.0f, 5.0f, 6.0f, (float) h - 10.0f, 2.0f);
-        g.setColour (col::text); g.setFont (juce::Font (juce::FontOptions (13.0f)));
-        g.drawText (r.name, 20, 0, w - 80, h, juce::Justification::centredLeft, true);
+        const juce::Font f (juce::FontOptions (13.0f));
+        const int subW = juce::jmin (56, juce::GlyphArrangement::getStringWidthInt (f, r.sub) + 4);
+        g.setColour (col::text); g.setFont (f);
+        g.drawFittedText (r.name, 20, 0, w - 20 - subW - 10, h, juce::Justification::centredLeft, phoneUI ? 2 : 1, 0.75f);
         g.setColour (r.sub == "unused" ? col::dim.withAlpha (0.6f) : col::dim);
-        g.drawText (r.sub, w - 62, 0, 56, h, juce::Justification::centredRight);
+        g.drawText (r.sub, w - subW - 6, 0, subW, h, juce::Justification::centredRight);
     }
     void listBoxItemClicked (int row, const juce::MouseEvent&) override
     {
