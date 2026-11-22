@@ -684,7 +684,6 @@ bool saveProject (const Project& p, const juce::File& f)
     // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
     // one-shots / kit samples are always glued in (small), so a song moved computer <-> phone never loses its drums,
     // even when the song otherwise only points at its audio files (KB mode)
-    const bool packAll = packAudioInSong().load();
     if (f.getParentDirectory().getFileName() != "Backup")
     {
         const Project& src = local ? kb : p;   // the paths the song stores
@@ -708,12 +707,11 @@ bool saveProject (const Project& p, const juce::File& f)
             g.setProperty ("data", packGlued (mb), nullptr);
             glued.appendChild (g, nullptr);
         };
+        // every song carries all its audio (clips, takes, imports, one-shots, frozen tracks): phone <-> computer opens complete
         for (auto& c : src.channels) { glue (c.sampleFile, true); glue (c.smpLayerFile, true); }
-        if (packAll)
-        {
-            for (auto& c : src.clips) glue (c.audioFile);
-            for (auto& a : src.audioPool) glue (a);
-        }
+        for (auto& c : src.clips) glue (c.audioFile);
+        for (auto& a : src.audioPool) glue (a);
+        for (auto& m : src.mixer) glue (m.frozenFile);
         if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
     }
     auto xml = tree.createXml();
