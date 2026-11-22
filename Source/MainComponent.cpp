@@ -1565,6 +1565,7 @@ if (phoneUI)
             m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
             if (! phoneUI) m.addItem (4718, "EXPORT ALL: video + Record timeline mix (one video file)...");
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
+            m.addItem (4724, "Frame meter (frame time, dropped frames)", true, frameMeterOn().load());
             if (! phoneUI)
             {
                 m.addItem (4722, "Background picture...");   // Background picture (behind the UI, from Downloads)
@@ -1891,6 +1892,7 @@ if (phoneUI)
                 });
                 break;
             case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
+            case 4724: frameMeterOn() = ! frameMeterOn().load(); if (playlist != nullptr) playlist->repaint(); break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();
                 studio.settings->setValue ("packAudioInSong", packAudioInSong().load());

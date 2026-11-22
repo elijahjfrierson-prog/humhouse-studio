@@ -262,6 +262,8 @@ inline constexpr bool floatWithTopmost = false;
 #else
 inline constexpr bool floatWithTopmost = true;
 #endif
+// Frame meter (Options menu): frame time, refresh interval and dropped frames on the Playlist, to measure hitches
+inline std::atomic<bool>& frameMeterOn() { static std::atomic<bool> on { false }; return on; }
 // horizontal scroll bar for the Playlist / Piano Roll (drag it, or use the wheel)
 struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
 {
@@ -489,7 +491,8 @@ struct Studio : public juce::ChangeBroadcaster
     std::function<void (int view)> showView;   // 0 beat, 1 record, 2 mix
 
     Project& p() { return engine.project(); }
-    template <typename F> void live (F&& f) { f (p()); engine.publishProject(); }   // the audio has its own copy: no lock
+    std::uint64_t rev = 0;   // bumps on every song edit: UI caches compare this instead of re-hashing the song every frame
+    template <typename F> void live (F&& f) { f (p()); ++rev; engine.publishProject(); }   // the audio has its own copy: no lock
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
     static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves

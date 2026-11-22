@@ -82,8 +82,8 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: first edit keeps what the drummer was playing
 - lock: the same way Cmd+B stacks (each paste after the last)
 - lock: follow: no page jumps
-- lock: mouse-wheel targets the view glides to
-- lock: half a screen above and below: up / down scrolling slides it too
+- lock: moves on the next screen refresh: many trackpad events in one frame cost one redraw
+- lock: else two screens
 - lock: Background picture (behind the UI, from Downloads)
 - lock: phone: compact fixed tracks
 - lock: phone slim list: name + R M S; swipe right for the rest
@@ -119,3 +119,9 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: paste spot: song mode with the playhead past this pattern's clips used to give -1
 - lock: Bluetooth / output-only devices have no inputs (in may be null)
 - lock: every song carries all its audio (clips, takes, imports, one-shots, frozen tracks)
+- lock: Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target
+- lock: every track bar at its song height; up / down scroll moves only this one component
+- lock: a cached picture: scrolling slides it, knobs and buttons aren't redrawn
+- lock: strips as tall as the whole song when the memory budget allows
+- lock: O(1) per frame: the full song hash only runs when the song
+- lock: Frame meter (Options menu)

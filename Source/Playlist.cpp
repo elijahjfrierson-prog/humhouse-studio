@@ -1333,11 +1333,11 @@ class Playlist : public juce::Component, public juce::FileDragAndDropTarget, pub
 public:
     explicit Playlist (Studio& st) : s (st)
     {
-        hbar.onMove = [this] (double v) { lastUserView = juce::Time::getMillisecondCounter(); scrollX = juce::jmax (0.0, v); repaint(); };
+        hbar.onMove = [this] (double v) { scrollTo (juce::jmax (0.0, v), -1.0, 0.0); };
         addAndMakeVisible (hbar);
         if (phoneUI)
         {
-            vbarP.onMove = [this] (double v) { scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), (int) v); layoutHeaders(); repaint(); };
+            vbarP.onMove = [this] (double v) { scrollTo (-1.0, v, 0.0); };
             addAndMakeVisible (vbarP);
         }
         s.addChangeListener (this);
@@ -1486,6 +1486,17 @@ public:
     }
 
     void paint (juce::Graphics& g) override
+    {
+        const double paintT0 = juce::Time::getMillisecondCounterHiRes();
+        paintBody (g);
+        if (frameMeterOn().load (std::memory_order_relaxed))
+        {
+            hudPaint = (float) (juce::Time::getMillisecondCounterHiRes() - paintT0);
+            hudPaintMax = juce::jmax (hudPaintMax * 0.995f, hudPaint);
+            drawHud (g);
+        }
+    }
+    void paintBody (juce::Graphics& g)
     {
         syncHBar();
         auto& p = s.p();
@@ -1786,10 +1797,8 @@ public:
                 lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
             }
             if (e.source.getIndex() != panSrc) return;
-            scrollX = juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat);
-            scrollY = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), panY0 - (int) (e.position.y - panFrom.y));
-            layoutHeaders();
-            lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
+            scrollTo (juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat), juce::jmax (0.0, (double) panY0 - (e.position.y - panFrom.y)), 0.0);   // finger pan: lands on the next refresh
+            return;
         }
         if (drag == Drag::Scrub)
         {
@@ -2058,13 +2067,13 @@ public:
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
         {
-            const double to = juce::jmax (0.0, (glideX >= 0 ? glideX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat);
-            if (w.isSmooth) { scrollX = to; glideX = -1; } else glideX = to;
+            scrollTo (juce::jmax (0.0, (tgtX >= 0 ? tgtX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat), -1.0, w.isSmooth ? 0.0 : 0.06);
+            return;   // moves on the next screen refresh: many trackpad events in one frame cost one redraw
         }
         else
         {
-            const int to = juce::jlimit (0, juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40), (glideY >= 0 ? glideY : scrollY) - (int) (w.deltaY * 420));
-            if (w.isSmooth) { scrollY = to; glideY = -1; layoutHeaders(); } else glideY = to;
+            scrollTo (-1.0, (tgtY >= 0 ? tgtY : (double) scrollY) - w.deltaY * 420.0, w.isSmooth ? 0.0 : 0.06);
+            return;
         }
         repaint();
     }
@@ -2331,6 +2340,7 @@ private:
     }
     Studio& s;
     juce::Component headerHost;   // declared before headers: they leave it before it goes
+    juce::Component headerStrip;  // every track bar at its song height; up / down scroll moves only this one component
     std::vector<std::unique_ptr<LaneHeader>> headers;
     juce::TextButton addTrack, addDrummer, loopRec, rts, qpunch, preroll, clearPunch;
     IconTextButton rackPop;
@@ -2358,24 +2368,49 @@ private:
     std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
     std::map<const juce::AudioThumbnail*, float> thumbPeak;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
-    double glideX = -1; int glideY = -1;   // mouse-wheel targets the view glides to on each screen refresh
+    // Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target; the view moves once per screen
+    // refresh, with dt-based easing (same feel at 60 or 120 Hz), and redraws only the part that moved
+    double tgtX = -1, tgtY = -1, scrollYf = 0, scrollTau = 0, lastFrameT = 0; int lastDir = 1;
+    double maxScrollY() const { return (double) juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40); }
+    void scrollTo (double x, double y, double tau)   // -1 = keep that axis; tau 0 = land on the next refresh
+    {
+        lastUserView = juce::Time::getMillisecondCounter();
+        if (x >= 0) tgtX = juce::jmax (0.0, x);
+        if (y != -1.0) { if (tgtY < 0) scrollYf = scrollY; tgtY = juce::jlimit (0.0, maxScrollY(), y); }
+        scrollTau = tau;
+    }
     bool glideStep()
     {
-        bool moved = false;
-        if (glideX >= 0)
+        const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const double dt = juce::jlimit (0.0, 0.1, lastFrameT > 0 ? now - lastFrameT : 1.0 / 60.0);
+        lastFrameT = now;
+        if (tgtX < 0 && tgtY < 0) return false;
+        const double a = scrollTau <= 0 ? 1.0 : 1.0 - std::exp (-dt / scrollTau);
+        bool mx = false, my = false;
+        if (tgtX >= 0)
         {
-            const double d = glideX - scrollX;
-            if (std::abs (d) * pxPerBeat < 0.5) { scrollX = glideX; glideX = -1; } else scrollX += d * 0.35;
-            moved = true;
+            double nx = scrollX + (tgtX - scrollX) * a;
+            if (std::abs (tgtX - nx) * pxPerBeat < 0.25) { nx = tgtX; tgtX = -1; }
+            if (nx != scrollX) { lastDir = nx > scrollX ? 1 : -1; scrollX = nx; mx = true; }
         }
-        if (glideY >= 0)
+        if (tgtY >= 0)
         {
-            const int d = glideY - scrollY;
-            if (std::abs (d) <= 1) { scrollY = glideY; glideY = -1; } else scrollY += (int) std::round (d * 0.35);
-            layoutHeaders(); moved = true;
+            scrollYf += (tgtY - scrollYf) * a;
+            if (std::abs (tgtY - scrollYf) < 0.5) { scrollYf = tgtY; tgtY = -1; }
+            if (const int iy = (int) std::lround (scrollYf); iy != scrollY) { scrollY = iy; my = true; }
         }
-        if (moved) { syncHBar(); repaint(); }
-        return moved;
+        if (mx || my) viewMoved (my);
+        return mx || my;
+    }
+    void viewMoved (bool vertical)
+    {
+        syncHBar();
+        if (vertical)
+        {
+            placeHeaderStrip();   // one move: the cached track bars slide, nothing inside them redraws
+            repaint (0, toolbarH + rulerH, getWidth(), getHeight() - toolbarH - rulerH);   // clips + track bars (the ruler doesn't move)
+        }
+        repaint (headerW, toolbarH, getWidth() - headerW, getHeight() - toolbarH);   // ruler + clips; never the toolbar
     }
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
@@ -2813,7 +2848,22 @@ private:
     // Logic / Reaper style: the clip layer is drawn once into a picture two screens wide, then scrolling and the
     // playhead only slide / copy that picture. It's redrawn when the song, zoom, size or theme changes.
     juce::Image tile; juce::uint64 tileKey = 0, tileGen = 0; double tileScroll = 0; float tileScale = 0; int tileScrollY = 0;
-    juce::Rectangle<int> tileArea; float paintRight = -1.0f; juce::uint32 lastKeyMiss = 0;
+    juce::Rectangle<int> tileArea; float paintRight = -1.0f; juce::uint32 lastKeyMiss = 0; int tileH = 0;
+    // O(1) per frame: the full song hash only runs when the song (rev / change message), zoom, size or a view setting
+    // changed, and at most every 250 ms otherwise (catches anything edited outside Studio::live)
+    juce::uint64 memoKey = 0, memoView = 0; std::uint64_t memoRev = ~(std::uint64_t) 0; double memoT = 0;
+    juce::uint64 cachedContentKey (juce::Rectangle<int> area)
+    {
+        juce::uint64 h = 1469598103934665603ull;
+        auto add = [&h] (auto v) { const auto* b = reinterpret_cast<const unsigned char*> (&v); for (size_t i = 0; i < sizeof (v); ++i) { h ^= b[i]; h *= 1099511628211ull; } };
+        add (tileGen); add (pxPerBeat); add (area.getX()); add (area.getY()); add (area.getWidth()); add (area.getHeight()); add (laneH); add (zoomH);
+        add (plSnap); add (timeSelA); add (timeSelB); add (s.p().punchIn); add (s.p().punchOut); add (s.p().clips.size()); add (s.p().lanes.size());
+        for (auto& [k, v] : laneMul) { add (k); add (v); }
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (h == memoView && memoRev == s.rev && now - memoT < 250.0) return memoKey;
+        memoKey = contentKey (area); memoView = h; memoRev = s.rev; memoT = now;
+        return memoKey;
+    }
     float contentRight() const { return paintRight > 0 ? paintRight : (float) getWidth(); }
     juce::uint64 contentKey (juce::Rectangle<int> area)
     {
@@ -2855,13 +2905,13 @@ private:
     Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
     size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
     {
-        const double stripBytes = (double) stripW * tileScale * tileArea.getHeight() * 2 * tileScale * 4.0;
+        const double stripBytes = (double) stripW * tileScale * tileH * tileScale * 4.0;
         return (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));
     }
     void renderStrip (int k)
     {
         const auto area = tileArea; const float scale = tileScale;
-        const int th = area.getHeight() * 2;
+        const int th = tileH;
         if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
         while (strips.size() >= maxStrips())   // keep the strips nearest the view
         {
@@ -2893,21 +2943,26 @@ private:
         const int k0 = (int) std::floor (scrollX / sb), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
         if (strips.size() >= maxStrips())   // full: only a strip well behind the view makes room, never one in or ahead of it (no redraw loop)
         {
-            auto behind = std::find_if (strips.begin(), strips.end(), [k0] (const Strip& st) { return st.k < k0 - 1; });
-            if (behind == strips.end() || findStrip (k1 + 1) != nullptr) return;
+            const int ahead = lastDir < 0 ? k0 - 1 : k1 + 1;   // the way the view is moving
+            auto behind = std::find_if (strips.begin(), strips.end(), [this, k0, k1] (const Strip& st) { return lastDir < 0 ? st.k > k1 + 1 : st.k < k0 - 1; });
+            if (behind == strips.end() || ahead < 0 || findStrip (ahead) != nullptr) return;
             strips.erase (behind);
         }
-        for (int k : { k1 + 1, k1 + 2, k0 - 1 })
+        for (int k : lastDir < 0 ? std::initializer_list<int> { k0 - 1, k0 - 2, k1 + 1 } : std::initializer_list<int> { k1 + 1, k1 + 2, k0 - 1 })
             if (k >= 0 && findStrip (k) == nullptr) { renderStrip (k); return; }
     }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
-        const int th = area.getHeight() * 2;   // half a screen above and below: up / down scrolling slides it too
-        if (area.isEmpty() || scale <= 0 || (double) area.getWidth() * th * scale * scale > 16.0e6) return false;
-        const auto key = contentKey (area);
-        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea;
-        if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + th)
+        if (area.isEmpty() || scale <= 0) return false;
+        // strips as tall as the whole song when the memory budget allows (up / down scrolling never re-renders), else two screens
+        const int sw = juce::jmax (64, area.getWidth() / 2);
+        const int capH = (int) (96.0e6 / (4.0 * 4.0 * sw * (double) scale * scale));   // 4 strips of 4-byte pixels in 96 MB
+        const int th = juce::jmax (area.getHeight() + 2, juce::jmin (capH, juce::jmax (area.getHeight() * 2, totalLaneH() + area.getHeight())));
+        if ((double) sw * th * scale * scale * 4.0 > 48.0e6) return false;
+        const auto key = cachedContentKey (area);
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH;
+        if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + tileH)
         {
             const auto now = juce::Time::getMillisecondCounter();
             if (key != tileKey)
@@ -2918,9 +2973,9 @@ private:
                 if (hot) { tileKey = key; strips.clear(); return false; }
             }
             strips.clear();
-            tileKey = key; tileScale = scale; tileArea = area;
-            stripW = juce::jmax (64, area.getWidth() / 2);
-            tileScrollY = juce::jmax (0, scrollY - area.getHeight() / 2);
+            tileKey = key; tileScale = scale; tileArea = area; tileH = th;
+            stripW = sw;
+            tileScrollY = th >= totalLaneH() + area.getHeight() ? 0 : juce::jmax (0, scrollY - (th - area.getHeight()) / 2);
         }
         const double sb = stripBeats(), viewBeats = area.getWidth() / (double) pxPerBeat;
         const int k0 = juce::jmax (0, (int) std::floor (scrollX / sb)), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
@@ -3610,18 +3665,24 @@ private:
                     }
                 }
             }
-            const int y = laneY ((int) i);
-            headers[i]->setBounds (0, y - top, headerW, laneHOf ((int) i));
-            headers[i]->setVisible (headerW > 40 && y + laneHOf ((int) i) > toolbarH + rulerH);
+            const int y = laneY ((int) i) - top + scrollY;   // song height inside the strip (scroll moves the strip)
+            headers[i]->setBounds (0, y, headerW, laneHOf ((int) i));
+            headers[i]->setVisible (headerW > 40);
         }
+        placeHeaderStrip();
     }
+    void placeHeaderStrip() { headerStrip.setBounds (0, -scrollY, juce::jmax (0, headerW), juce::jmax (1, totalLaneH())); }
     void refresh()
     {
         auto& p = s.p();
         if (headers.size() != p.lanes.size())
         {
             headers.clear();
-            if (headerHost.getParentComponent() == nullptr) { headerHost.setInterceptsMouseClicks (false, true); addAndMakeVisible (headerHost); }
+            if (headerHost.getParentComponent() == nullptr)
+            {
+                headerHost.setInterceptsMouseClicks (false, true); addAndMakeVisible (headerHost);
+                headerStrip.setInterceptsMouseClicks (false, true); headerHost.addAndMakeVisible (headerStrip);
+            }
             for (size_t i = 0; i < p.lanes.size(); ++i) 
             {
                 headers.push_back (std::make_unique<LaneHeader> (s, (int) i));
@@ -3641,7 +3702,8 @@ private:
                     vZoom.setValue (zoomH, juce::dontSendNotification);
                     layoutHeaders(); repaint();
                 };
-                headerHost.addAndMakeVisible (*headers.back());
+                headers.back()->setBufferedToImage (true);   // a cached picture: scrolling slides it, knobs and buttons aren't redrawn
+                headerStrip.addAndMakeVisible (*headers.back());
             }
             layoutHeaders();
         }
@@ -3658,8 +3720,44 @@ private:
         if (src == &s) refresh(); else repaint();
     }
     std::unique_ptr<juce::VBlankAttachment> vblank;
+    // Frame meter: the screen-refresh callbacks run on the message thread, so a late one means a frame was missed
+    double hudLastT = 0, hudPeriod = 1000.0 / 60.0; float hudIv[128] {}; int hudN = 0, hudDrops = 0; float hudPaint = 0, hudPaintMax = 0;
+    void hudTick()
+    {
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        if (hudLastT > 0)
+        {
+            const float iv = (float) (now - hudLastT);
+            hudIv[hudN++ & 127] = iv;
+            if (hudN > 8)
+            {
+                std::array<float, 128> v {}; const int n = juce::jmin (hudN, 128);
+                std::copy (hudIv, hudIv + n, v.begin()); std::nth_element (v.begin(), v.begin() + n / 2, v.begin() + n);
+                hudPeriod = juce::jlimit (4.0, 34.0, (double) v[(size_t) n / 2]);
+            }
+            if (iv > 1.5 * hudPeriod && iv < 1000.0f) hudDrops += (int) std::floor (iv / hudPeriod) - 1;
+        }
+        hudLastT = now;
+        repaint (hudRect());
+    }
+    juce::Rectangle<int> hudRect() const { const auto ca = clipArea(); return { ca.getRight() - 300, ca.getY() + 6, 290, 44 }; }
+    void drawHud (juce::Graphics& g)
+    {
+        const int n = juce::jmin (hudN, 128);
+        std::array<float, 128> v {}; std::copy (hudIv, hudIv + n, v.begin()); std::sort (v.begin(), v.begin() + n);
+        const float p99 = n > 0 ? v[(size_t) juce::jmin (n - 1, (int) (n * 0.99f))] : 0.0f, jit = n > 0 ? p99 - (float) hudPeriod : 0.0f;
+        const auto r = hudRect();
+        g.setColour (juce::Colours::black.withAlpha (0.75f)); g.fillRoundedRectangle (r.toFloat(), 6.0f);
+        g.setColour (jit < 2.0f && hudPaintMax < (float) hudPeriod * 0.5f ? juce::Colours::lightgreen : juce::Colours::orange);
+        g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        g.drawText ("paint " + juce::String (hudPaint, 1) + " ms (max " + juce::String (hudPaintMax, 1) + ")   refresh " + juce::String (hudPeriod, 1) + " ms",
+                    r.reduced (8, 4).removeFromTop (18), juce::Justification::centredLeft, false);
+        g.drawText ("p99 frame " + juce::String (p99, 1) + " ms   jitter " + juce::String (juce::jmax (0.0f, jit), 1) + " ms   dropped " + juce::String (hudDrops),
+                    r.reduced (8, 4).removeFromBottom (18), juce::Justification::centredLeft, false);
+    }
     void timerCallback() override
     {
+        if (frameMeterOn().load (std::memory_order_relaxed)) hudTick(); else if (hudN != 0) { hudN = hudDrops = 0; hudLastT = 0; hudPaintMax = 0; repaint(); }
         glideStep();
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
