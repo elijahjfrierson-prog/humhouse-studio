@@ -125,3 +125,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: strips as tall as the whole song when the memory budget allows
 - lock: O(1) per frame: the full song hash only runs when the song
 - lock: Frame meter (Options menu)
+- lock: just the %, no late count
+- lock: the header is a cached picture: redraw it only when what paint() shows changed

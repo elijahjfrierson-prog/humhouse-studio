@@ -1163,6 +1163,15 @@ struct LaneHeader : public juce::Component
         g.fillRect (gr.reduced (2.5f, 3.0f));
     }
     juce::Rectangle<int> grip() const { return { getWidth() - 19, getHeight() - 10, 11, 8 }; }
+    // the header is a cached picture: redraw it only when what paint() shows changed (selection, colour, recording)
+    juce::uint64 shownKey = 0;
+    void repaintIfChanged()
+    {
+        const auto& p = s.p();
+        const juce::uint64 k = 1 + (s.selectedLanes.contains (index) ? 2u : 0u) + (arm.getToggleState() && s.engine.isRecording() ? 4u : 0u)
+                             + ((juce::uint64) (index < (int) p.lanes.size() ? p.lanes[(size_t) index].colour.getARGB() : 0u) << 8);
+        if (k != shownKey) { shownKey = k; repaint(); }
+    }
     void resized() override
     {
         auto r = getLocalBounds().reduced (4, 3);
@@ -3740,7 +3749,11 @@ private:
         hudLastT = now;
         repaint (hudRect());
     }
-    juce::Rectangle<int> hudRect() const { const auto ca = clipArea(); return { ca.getRight() - 300, ca.getY() + 6, 290, 44 }; }
+    juce::Rectangle<int> hudRect() const   // inside the clip area, clear of the track list on narrow (phone) screens
+    {
+        const auto ca = clipArea(); const int w = juce::jmin (290, ca.getWidth() - 8);
+        return { juce::jmax (ca.getX() + 4, ca.getRight() - w - 10), ca.getY() + 6, w, 44 };
+    }
     void drawHud (juce::Graphics& g)
     {
         const int n = juce::jmin (hudN, 128);
@@ -3757,6 +3770,7 @@ private:
     }
     void timerCallback() override
     {
+        for (auto& h : headers) h->repaintIfChanged();
         if (frameMeterOn().load (std::memory_order_relaxed)) hudTick(); else if (hudN != 0) { hudN = hudDrops = 0; hudLastT = 0; hudPaintMax = 0; repaint(); }
         glideStep();
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
