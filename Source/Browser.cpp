@@ -741,7 +741,11 @@ public:
         pTab.setToggleState (true, juce::dontSendNotification);
         show (0);
     }
-    void paint (juce::Graphics& g) override { g.fillAll (col::panel); g.setColour (col::gridBar); g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight()); }
+    void paint (juce::Graphics& g) override
+    {
+        if (col::neon && ! col::lightMode) { col::metal (g, getLocalBounds().toFloat(), 0.0f); return; }   // Neon 3D iron: browser side panel in brushed gunmetal
+        g.fillAll (col::panel); g.setColour (col::gridBar); g.drawVerticalLine (getWidth() - 1, 0.0f, (float) getHeight());
+    }
     void resized() override
     {
         auto r = getLocalBounds().withTrimmedRight (1);

@@ -160,3 +160,14 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D: a boosted / cut band throws sparks while audio runs
 - lock: Neon 3D: glossy lit spectrum
 - lock: Neon 3D: specular shine on the curve
+- lock: Neon 3D materials (iron look): brushed gunmetal, chrome bevels, recessed wells, purple seams
+- lock: Neon 3D iron: brushed gunmetal key with a chrome bevel
+- lock: Neon 3D iron: machined cap, concentric turning rings + anisotropic sheen + chrome rim
+- lock: Neon 3D iron: brushed gunmetal top bar
+- lock: Neon 3D iron: graphs sit in a recessed screen
+- lock: Neon 3D iron: FX faceplate
+- lock: Neon 3D iron: meter in a recessed slot
+- lock: Neon 3D iron: each strip is a brushed gunmetal module
+- lock: Neon 3D iron: dropdown sits in a recessed slot
+- lock: Neon 3D iron: each track header is a brushed gunmetal module
+- lock: Neon 3D iron: browser side panel in brushed gunmetal

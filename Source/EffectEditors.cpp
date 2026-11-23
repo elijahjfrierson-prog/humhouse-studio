@@ -687,6 +687,7 @@ private:
 // ---- visual editors: EQ curve with draggable bands, compressor transfer curve + GR, effect pictures
 static void drawPanelBg (juce::Graphics& g, juce::Rectangle<float> a)
 {
+    if (col::neon && ! col::lightMode) { col::well (g, a, 6.0f); return; }   // Neon 3D iron: graphs sit in a recessed screen
     g.setColour (col::bg.darker (0.35f)); g.fillRoundedRectangle (a, 6.0f);
     g.setColour (col::grid.withAlpha (0.6f)); g.drawRoundedRectangle (a, 6.0f, 1.0f);
 }
@@ -2044,7 +2045,7 @@ public:
         const bool scroll = vh + gridH > maxH;
         setSize (juce::jmax (640, grid->getWidth() + (scroll ? vp.getScrollBarThickness() : 0)), juce::jmin (maxH, vh + gridH));
     }
-    void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void paint (juce::Graphics& g) override { if (col::neon && ! col::lightMode) col::metal (g, getLocalBounds().toFloat(), 0.0f); else g.fillAll (col::panel); }   // Neon 3D iron: FX faceplate
     void paintOverChildren (juce::Graphics& g) override   // Neon 3D: every FX window sits in a lit frame
     {
         if (! col::neon || col::lightMode) return;

@@ -52,7 +52,7 @@ void HHLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool down, in
     {
         const auto b = juce::Rectangle<int> (0, 0, w, h).toFloat().reduced (0.5f);
         const float rr = juce::jmin (6.0f, b.getHeight() * 0.3f);
-        g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.15f), 0.0f, 0.0f, col::bg, 0.0f, (float) h, false)); g.fillRoundedRectangle (b, rr);
+        col::well (g, b, rr);   // Neon 3D iron: dropdown sits in a recessed slot
         g.setColour (col::accent.withAlpha (box.hasKeyboardFocus (true) || down ? 0.9f : 0.35f)); g.drawRoundedRectangle (b, rr, 1.0f);
         const float cx = (float) w - 12.0f, cy = (float) h * 0.5f;
         juce::Path a; a.startNewSubPath (cx - 4.0f, cy - 2.0f); a.lineTo (cx, cy + 2.0f); a.lineTo (cx + 4.0f, cy - 2.0f);
@@ -189,8 +189,19 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     {
         const auto fill = s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim;
         g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillEllipse (body.expanded (2.0f).translated (0.0f, 2.5f));
-        juce::ColourGradient dome (col::panel2.brighter (0.55f), body.getX() + br * 0.6f, body.getY() + br * 0.45f, juce::Colour (0xff04050a), body.getRight(), body.getBottom(), true);
+        juce::ColourGradient dome (juce::Colour (0xff3a3f4e), body.getX() + br * 0.6f, body.getY() + br * 0.45f, juce::Colour (0xff05060b), body.getRight(), body.getBottom(), true);
         g.setGradientFill (dome); g.fillEllipse (body);
+        {   // Neon 3D iron: machined cap, concentric turning rings + anisotropic sheen + chrome rim
+            const auto cc = body.getCentre();
+            for (int i = 1; i <= 3; ++i) { g.setColour (juce::Colours::white.withAlpha (0.045f)); g.drawEllipse (body.reduced (br * 0.2f * (float) i), 0.8f); }
+            for (float a : { 0.0f, juce::MathConstants<float>::pi })
+            {
+                juce::Path sheen; sheen.addPieSegment (body.reduced (1.0f), a - 0.45f, a + 0.45f, 0.15f);
+                g.setColour (juce::Colours::white.withAlpha (a == 0.0f ? 0.13f : 0.06f)); g.fillPath (sheen);
+            }
+            g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.5f), cc.x, body.getY(), juce::Colours::black.withAlpha (0.7f), cc.x, body.getBottom(), false));
+            g.drawEllipse (body.reduced (0.5f), 1.2f);
+        }
         g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.22f), body.getCentreX(), body.getY(), juce::Colours::transparentWhite, body.getCentreX(), body.getCentreY(), false));
         g.fillEllipse (body.reduced (br * 0.12f).withTrimmedBottom (br * 0.7f));   // specular highlight
         g.setColour (fill.withAlpha (0.35f)); g.drawEllipse (body, 1.0f);
@@ -236,10 +247,8 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
         const float rr = juce::jmin (7.0f, r.getHeight() * 0.3f);
         if (on) base = col::panel2.interpolatedWith (col::accent, 0.28f);   // ON = dark glass lit from inside, not a flat fill
         g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (r.translated (0.0f, 1.5f), rr);
-        g.setGradientFill (juce::ColourGradient (base.brighter (0.22f), 0.0f, r.getY(), base.darker (0.35f), 0.0f, r.getBottom(), false));
-        g.fillRoundedRectangle (r, rr);
-        if (on) { g.setColour (col::accent.withAlpha (0.20f)); g.fillRoundedRectangle (r, rr); }
-        g.setColour (juce::Colours::white.withAlpha (0.10f)); g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + rr, r.getRight() - rr);
+        col::metal (g, r, rr, down ? 0.0f : over ? 0.15f : 0.05f);   // Neon 3D iron: brushed gunmetal key with a chrome bevel
+        if (on) { g.setColour (col::accent.withAlpha (0.26f)); g.fillRoundedRectangle (r, rr); }
         g.setColour (on ? col::accent : col::accent.withAlpha (over ? 0.55f : 0.22f)); g.drawRoundedRectangle (r.reduced (0.5f), rr, on ? 1.5f : 1.0f);
         if (on) { g.setColour (col::accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.reduced (1.5f), rr, 3.0f); }
         return;
@@ -1268,8 +1277,8 @@ public:
             }
             if (bgScaled.isValid()) g.drawImage (bgScaled, 0, 0, getWidth(), getHeight(), 0, 0, bgScaled.getWidth(), bgScaled.getHeight());
         }
-        g.setColour (col::panel);
-        g.fillRect (topBar);
+        if (col::neon && ! col::lightMode) col::metal (g, topBar.toFloat(), 0.0f, 0.02f);   // Neon 3D iron: brushed gunmetal top bar
+        else { g.setColour (col::panel); g.fillRect (topBar); }
         if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
     }
 

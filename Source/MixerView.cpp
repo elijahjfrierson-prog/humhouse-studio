@@ -86,9 +86,17 @@ struct Strip : public juce::Component
     {
         auto& p = s.p();
         const bool sel = s.selectedTrack == index;
-        g.setColour (sel ? col::panel2.brighter (0.1f) : col::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
-        if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
+        if (col::neon && ! col::lightMode)   // Neon 3D iron: each strip is a brushed gunmetal module, the selected one lit at the seam
+        {
+            col::metal (g, getLocalBounds().toFloat().reduced (2), 4, sel ? 0.12f : 0.0f);
+            if (sel) col::seam (g, getLocalBounds().toFloat().reduced (2.5f), 4);
+        }
+        else
+        {
+            g.setColour (sel ? col::panel2.brighter (0.1f) : col::panel);
+            g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
+            if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
+        }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
         fitText (g, index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].colour != juce::Colour (0xff2a2f36))
@@ -108,7 +116,7 @@ struct Strip : public juce::Component
         paintScope (g);
         // meter
         auto m = meterArea();
-        g.setColour (col::bg); g.fillRect (m);
+        if (col::neon && ! col::lightMode) col::well (g, m.toFloat().expanded (1.0f), 2.0f); else { g.setColour (col::bg); g.fillRect (m); }   // Neon 3D iron: meter in a recessed slot
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
         g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));

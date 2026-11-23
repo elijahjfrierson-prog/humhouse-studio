@@ -123,6 +123,53 @@ namespace col
         gr.addColour (0.22, gradMid.withMultipliedAlpha (alpha)); gr.addColour (0.5, gradLo.withMultipliedAlpha (alpha)); gr.addColour (0.78, gradMid.withMultipliedAlpha (alpha));
         return gr;
     }
+    // Neon 3D materials (iron look): brushed gunmetal, chrome bevels, recessed wells, purple seams.
+    // The brushed grain is generated once into a small tile and reused, so a panel costs one image fill.
+    inline const juce::Image& brushedTile()
+    {
+        static juce::Image img;
+        if (img.isNull())
+        {
+            img = juce::Image (juce::Image::ARGB, 512, 64, true);
+            juce::Random rng (0x484855);
+            juce::Image::BitmapData d (img, juce::Image::BitmapData::writeOnly);
+            float row = 0.0f;
+            for (int y = 0; y < img.getHeight(); ++y)
+            {
+                row = row * 0.55f + (rng.nextFloat() - 0.5f) * 0.45f;
+                float nx = 0.0f;
+                for (int x = 0; x < img.getWidth(); ++x)
+                {
+                    nx = nx * 0.93f + (rng.nextFloat() - 0.5f) * 0.3f;
+                    const float v = row + nx;
+                    d.setPixelColour (x, y, (v > 0 ? juce::Colours::white : juce::Colours::black).withAlpha (juce::jmin (1.0f, std::abs (v)) * 0.14f));
+                }
+            }
+        }
+        return img;
+    }
+    inline void metal (juce::Graphics& g, juce::Rectangle<float> r, float corner, float lift = 0.0f)   // brushed gunmetal lit from above, chrome bevel
+    {
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2b2f3c).brighter (lift), 0.0f, r.getY(), juce::Colour (0xff0b0d14), 0.0f, r.getBottom(), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setTiledImageFill (brushedTile(), 0, 0, 1.0f); g.fillRoundedRectangle (r, corner);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.38f), 0.0f, r.getY(), juce::Colours::black.withAlpha (0.6f), 0.0f, r.getBottom(), false));
+        g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.22f)); g.drawLine (r.getX() + corner + 1.0f, r.getY() + 1.5f, r.getRight() - corner - 1.0f, r.getY() + 1.5f, 1.0f);
+    }
+    inline void well (juce::Graphics& g, juce::Rectangle<float> r, float corner)   // recessed cavity: inner shadow under the lip, lit lower lip
+    {
+        g.setColour (juce::Colour (0xff030409)); g.fillRoundedRectangle (r, corner);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.85f), 0.0f, r.getY(), juce::Colours::transparentBlack, 0.0f, r.getY() + juce::jmin (10.0f, r.getHeight() * 0.4f), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setColour (juce::Colours::white.withAlpha (0.13f)); g.drawLine (r.getX() + corner, r.getBottom() - 0.5f, r.getRight() - corner, r.getBottom() - 0.5f, 1.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.7f)); g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+    }
+    inline void seam (juce::Graphics& g, juce::Rectangle<float> r, float corner)   // purple light leaking from a panel seam
+    {
+        g.setColour (accent.withAlpha (0.12f)); g.drawRoundedRectangle (r.expanded (1.5f), corner + 1.5f, 3.0f);
+        g.setColour (accent.withAlpha (0.7f)); g.drawRoundedRectangle (r, corner, 1.0f);
+    }
     // font gradient (Theme > Font: Gradient): headline text gets a left-to-right lo -> mid -> hi fill
     inline bool fontGradient = false;
     inline juce::Colour fontLo (0xff3ddc84), fontMid (0xffffd23d), fontHi (0xffff3b57);

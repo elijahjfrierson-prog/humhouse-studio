@@ -1145,8 +1145,16 @@ struct LaneHeader : public juce::Component
     }
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (col::panel);
-        if (s.selectedLanes.contains (index))
+        const bool neonIron = col::neon && ! col::lightMode;
+        if (neonIron) col::metal (g, getLocalBounds().toFloat().reduced (1.0f, 0.5f), 3.0f);   // Neon 3D iron: each track header is a brushed gunmetal module
+        else g.fillAll (col::panel);
+        if (s.selectedLanes.contains (index) && neonIron)
+        {
+            g.setColour (col::accent.withAlpha (0.22f)); g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f, 0.5f), 3.0f);
+            col::seam (g, getLocalBounds().toFloat().reduced (1.5f, 1.0f), 3.0f);
+            g.setColour (col::accent); g.fillRoundedRectangle (getLocalBounds().removeFromLeft (4).toFloat().reduced (0.0f, 2.0f), 2.0f);
+        }
+        else if (s.selectedLanes.contains (index))
         {
             g.setColour (col::accent.withAlpha (0.38f)); g.fillRect (getLocalBounds());   // the track you're on: clearly brighter, own color
             g.setColour (col::accent); g.fillRect (getLocalBounds().removeFromLeft (5));
