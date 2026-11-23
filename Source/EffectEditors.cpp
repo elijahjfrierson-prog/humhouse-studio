@@ -123,7 +123,7 @@ private:
         if (it != lastPos().end() && juce::Desktop::getInstance().getDisplays().getDisplayForPoint (it->second) != nullptr)
         {
             r.setPosition (it->second);
-            setTopLeftPosition (clampTo (r, pluginWorkspace (nullptr).getUnion (juce::Desktop::getInstance().getDisplays().getDisplayForPoint (it->second)->userArea)));
+            setTopLeftPosition (clampTo (r, juce::Desktop::getInstance().getDisplays().getDisplayForPoint (it->second)->userArea));   // the screen it was left on
             return;
         }
         r = r.withCentre (ws.getCentre());
