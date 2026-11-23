@@ -2165,7 +2165,7 @@ public:
             for (auto& c : s.p().clips) if (c.selected && ! c.hidden) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }   // only what you see: a hidden take never moves the anchor
             copyHere = lower == 'x' ? -1.0 : markerNow(); nextAfter = clipHi;   // cut: the paste always goes on the marker (the cut range is empty now)
             if (lower == 'x' && ! clipboard.empty())
-                s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
+                s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected && ! c.hidden; }), p.clips.end()); });   // cut removes only what it copied: hidden takes stay
             return true;
         }
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
