@@ -257,6 +257,21 @@ void HHLookAndFeel::drawTabButton (juce::TabBarButton& b, juce::Graphics& g, boo
 {
     auto r = b.getActiveArea().toFloat();
     const bool front = b.isFrontTab();
+    if (col::neon && ! col::lightMode)   // Neon 3D: the open tab is a lit glass pill
+    {
+        const auto pill = r.reduced (3.0f, 3.0f);
+        g.setColour (col::panel); g.fillRect (r);
+        if (front || over)
+        {
+            g.setGradientFill (juce::ColourGradient (col::panel2.interpolatedWith (col::accent, front ? 0.3f : 0.12f).brighter (0.1f), 0.0f, pill.getY(), col::panel2, 0.0f, pill.getBottom(), false));
+            g.fillRoundedRectangle (pill, 5.0f);
+            g.setColour (col::accent.withAlpha (front ? 0.9f : 0.4f)); g.drawRoundedRectangle (pill, 5.0f, 1.0f);
+        }
+        g.setColour (front ? col::text : col::dim);
+        g.setFont (juce::FontOptions (phoneUI ? 15.0f : 12.0f, juce::Font::bold));
+        g.drawText (b.getButtonText(), b.getTextArea(), juce::Justification::centred, false);
+        return;
+    }
     g.setColour (front ? col::panel2 : over ? col::panel2.withAlpha (0.5f) : col::panel);
     g.fillRect (r);
     if (front) { g.setColour (col::accent); g.fillRect (r.removeFromBottom (2.0f).reduced (8.0f, 0.0f)); }
@@ -277,6 +292,13 @@ juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
 {
     if (! phoneUI) return LookAndFeel_V4::getTextButtonFont (b, h);
     return juce::Font (juce::FontOptions (juce::jmin (18.0f, (float) h * 0.5f), juce::Font::bold));
+}
+
+void HHLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
+{
+    if (! col::neon || col::lightMode) { LookAndFeel_V4::drawPopupMenuBackground (g, w, h); return; }
+    g.setGradientFill (juce::ColourGradient (col::panel2, 0.0f, 0.0f, col::bg, 0.0f, (float) h, false)); g.fillAll();
+    g.setColour (col::accent.withAlpha (0.6f)); g.drawRect (0, 0, w, h, 1);
 }
 
 juce::Font HHLookAndFeel::getPopupMenuFont()

@@ -151,3 +151,8 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D: glossy clip, lit title strip, glowing rim
 - lock: Neon 3D: glass dropdown with a lit rim and chevron
 - lock: Neon 3D: lit groove and a glass fader cap
+- lock: Neon 3D: the open tab is a lit glass pill
+- lock: Neon 3D: purple-lit LANES cards
+- lock: Neon 3D: lit meter housing
+- lock: Neon 3D: dark glass menu with a lit rim
+- lock: Neon 3D: every FX window sits in a lit frame

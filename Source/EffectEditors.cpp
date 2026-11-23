@@ -2005,6 +2005,14 @@ public:
         setSize (juce::jmax (640, grid->getWidth() + (scroll ? vp.getScrollBarThickness() : 0)), juce::jmin (maxH, vh + gridH));
     }
     void paint (juce::Graphics& g) override { g.fillAll (col::panel); }
+    void paintOverChildren (juce::Graphics& g) override   // Neon 3D: every FX window sits in a lit frame
+    {
+        if (! col::neon || col::lightMode) return;
+        const auto b = getLocalBounds().toFloat().reduced (0.5f);
+        if (b.reduced (4.0f).contains (g.getClipBounds().toFloat())) return;
+        g.setColour (col::accent.withAlpha (0.16f)); g.drawRoundedRectangle (b.reduced (1.0f), 6.0f, 3.0f);
+        g.setColour (col::accent.withAlpha (0.6f)); g.drawRoundedRectangle (b, 6.0f, 1.0f);
+    }
     void resized() override
     {
         auto r = getLocalBounds(); visual->setBounds (r.removeFromTop (vh).reduced (10, 8)); vp.setBounds (r);

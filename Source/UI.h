@@ -454,6 +454,7 @@ public:
     void drawTabbedButtonBarBackground (juce::TabbedButtonBar&, juce::Graphics&) override;
     void drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int w, int h) override;   // phone: a bit bigger
     juce::Font getPopupMenuFont() override;
+    void drawPopupMenuBackground (juce::Graphics&, int w, int h) override;   // Neon 3D: dark glass menu with a lit rim
     void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;

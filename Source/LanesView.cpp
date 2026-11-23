@@ -435,7 +435,7 @@ private:
         bool muted = true; for (int ci : row.clips) muted = muted && p.clips[(size_t) ci].muted;
         auto card = b.reduced (4).toFloat();
         g.setColour (col::panel); g.fillRoundedRectangle (card, 6.0f);
-        g.setColour (v >= 0.0f ? autoRed : col::accent2.withAlpha (0.8f)); g.drawRoundedRectangle (card, 6.0f, v >= 0.0f ? 2.0f : 1.2f);
+        g.setColour (v >= 0.0f ? autoRed : (col::neon && ! col::lightMode ? col::accent : col::accent2).withAlpha (0.8f)); g.drawRoundedRectangle (card, 6.0f, v >= 0.0f ? 2.0f : 1.2f);   // Neon 3D: purple-lit LANES cards
         auto in = card.reduced (8.0f, 5.0f);
         g.setColour (muted ? col::dim : col::text); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         fitText (g, f != nullptr ? slotLabel (s, *f) : row.t.name.isNotEmpty() ? row.t.name : juce::String ("Automation"), in.removeFromTop (15.0f), juce::Justification::centredLeft, false);

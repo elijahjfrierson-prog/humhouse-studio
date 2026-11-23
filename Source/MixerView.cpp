@@ -113,6 +113,7 @@ struct Strip : public juce::Component
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
         g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
+        if (col::neon && ! col::lightMode) { g.setColour (col::accent.withAlpha (0.35f)); g.drawRect (m.toFloat().expanded (1.0f), 1.0f); }   // Neon 3D: lit meter housing
         const int nfx = index < (int) p.mixer.size() ? (int) std::count_if (p.mixer[(size_t) index].fx.begin(), p.mixer[(size_t) index].fx.end(), [] (const FxSlot& f) { return f.type.isNotEmpty(); }) : 0;
         if (nfx > 0)
         {
