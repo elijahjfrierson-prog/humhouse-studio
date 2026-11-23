@@ -605,7 +605,7 @@ struct Row : public juce::Component
         hw.addItem (12, "Picture to sound (any image becomes a wavetable)...");
         hw.addItem (13, "Turn this sample into a wavetable", c->type == ChannelType::Sampler && c->sampleFile.existsAsFile());
         hw.addItem (14, "Load a sample / kit one-shot as wavetable...");
-        m.addSubMenu ("HumWave", hw);
+        if (! phoneLite) m.addSubMenu ("HumWave", hw);
         m.addSeparator();
         m.addItem (1, "Open in Piano Roll");
         m.addItem (2, c->type == ChannelType::Plugin ? "Open plugin editor" : "Channel settings (synth / sampler)...");
@@ -726,6 +726,7 @@ struct Row : public juce::Component
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
             if (instrumentPool()[(size_t) i].cat != nullptr) continue;
+            if (phoneLite && juce::String (instrumentPool()[(size_t) i].name).startsWith ("HumWave")) continue;   // subscription phone: no HumWave
             if (i == 6) pool.addSectionHeader ("Live instruments");
             if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
                 pool.addSectionHeader ("3x Oscillation");
@@ -733,7 +734,7 @@ struct Row : public juce::Component
                 pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
-        addSerumPackMenu (pool, instrumentPool());
+        if (! phoneLite) addSerumPackMenu (pool, instrumentPool());
         m.addSubMenu ("Instrument Pool", pool);
         auto types = s.engine.knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");
@@ -1178,6 +1179,7 @@ private:
         for (int i = 0; i < (int) instrumentPool().size(); ++i)
         {
             if (instrumentPool()[(size_t) i].cat != nullptr) continue;
+            if (phoneLite && juce::String (instrumentPool()[(size_t) i].name).startsWith ("HumWave")) continue;   // subscription phone: no HumWave
             if (i == 6) pool.addSectionHeader ("Live instruments");
             if (juce::String (instrumentPool()[(size_t) i].name).startsWith ("3x ") && ! juce::String (instrumentPool()[(size_t) (i - 1)].name).startsWith ("3x "))
                 pool.addSectionHeader ("3x Oscillation");
@@ -1185,7 +1187,7 @@ private:
                 pool.addSectionHeader ("HumWave (wavetable)");
             pool.addItem (2000 + i, instrumentPool()[(size_t) i].name);
         }
-        addSerumPackMenu (pool, instrumentPool());
+        if (! phoneLite) addSerumPackMenu (pool, instrumentPool());
         m.addSubMenu ("Instrument Pool", pool);
         auto types = s.engine.knownPlugins.getTypes();
         for (int i = 0; i < types.size(); ++i) if (types.getReference (i).isInstrument) inst.addItem (1000 + i, types.getReference (i).name + " (" + types.getReference (i).manufacturerName + ")");

@@ -23,7 +23,8 @@ inline constexpr bool phoneLite = false;
 inline bool fxOffered (const juce::String& id, const juce::String& category)
 {
     if (phoneUI && id == "hhamp") return false;   // amp rig is desktop only
-    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "glitch" || id == "scope");
+    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "glitch" || id == "scope"
+                             || id == "chromaverb" || id == "stvocal" || id == "vroom");   // subscription phone: no Drocetti Verb, Studio Vocal, HumHouse Vocal Room
 }
 // phone: two fingers pinch-zoom whatever is inside (plug-in windows, dialogs); one finger still works the controls,
 // a drag scrolls once it's bigger than the screen. Takes ownership of c.
@@ -104,6 +105,7 @@ namespace col
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
     inline int laneMinH = 60;                               // Layout: smallest Playlist track height
     inline bool lightMode = false;                          // White theme: light backgrounds, dark text
+    inline bool neon = true;                                // Neon 3D look (default): deep blue-black, glowing 3D knobs / buttons, glass-prism House
     inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
     // meters + scopes gradient (quiet -> loud), set in Theme
     inline juce::Colour gradLo (0xff3ddc84), gradMid (0xffffd23d), gradHi (0xffff3b57);

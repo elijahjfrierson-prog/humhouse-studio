@@ -129,11 +129,20 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: strips as tall as the whole song when the memory budget allows
 - lock: O(1) per frame: the full song hash only runs when the song
 - lock: Frame meter (Options menu)
+- lock: audio deadline meter: device callback time / buffer period, 2.5% buckets
 - lock: just the %, no late count
 - lock: the header is a cached picture: redraw it only when what paint() shows changed
 - lock: the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off
 - lock: OBS / screen capture can't throttle our refreshes or the UI thread
 - lock: frame p50
 - lock: Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom
-- lock: mid-zoom (up to 2x in / 1.5x out of the strips' zoom) the strips are stretched, not redrawn
+- lock: Zoom Engine (no stalls): mid-zoom the strips stretch; past 1.25x either way a new set at the current zoom is drawn
+- lock: one strip this refresh, never the whole view
+- lock: a hidden comp take is never pasted
+- lock: subscription phone: no HumWave
+- lock: subscription phone: no Drocetti Verb, Studio Vocal, HumHouse Vocal Room
 - lock: Zoom around the playhead (else the pointer)
+- lock: audio: no device callbacks
+- lock: Neon 3D look (HumHouse future)
+- lock: Neon 3D: a lit glass dome on a dark well, the value arc glows
+- lock: Neon 3D: a raised glass key, lit from above

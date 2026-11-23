@@ -1201,6 +1201,22 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 }
 void Engine::audioDeviceStopped() { antForceRealtime(); }
 
+float Engine::callbackPercentile (float q) const
+{
+    uint64_t total = 0;
+    for (auto& b : cbHist) total += b.load (std::memory_order_relaxed);
+    if (total == 0) return 0.0f;
+    const uint64_t want = (uint64_t) std::ceil ((double) total * q);
+    uint64_t acc = 0;
+    for (size_t i = 0; i < cbHist.size(); ++i)
+        if ((acc += cbHist[i].load (std::memory_order_relaxed)) >= want) return (float) (i + 1) / 40.0f;
+    return 1.6f;
+}
+void Engine::resetCallbackMeter()
+{
+    for (auto& b : cbHist) b.store (0, std::memory_order_relaxed);
+    lateCallbacks.store (0, std::memory_order_relaxed);
+}
 double Engine::cpuLoad() const { return std::max ((double) deviceManager.getCpuUsage(), (double) renderLoad.load()); }   // render-ahead does the work off the device callback
 
 void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
@@ -1668,6 +1684,18 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
                                                const juce::AudioIODeviceCallbackContext&)
 {
     callbackMs = juce::Time::getMillisecondCounterHiRes();
+    struct CbMeter   // audio deadline meter: wait-free, fixed buckets, no allocation
+    {
+        Engine& e; int n; double t0;
+        ~CbMeter()
+        {
+            if (n <= 0 || e.sampleRate <= 0) return;
+            const double raw = (juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / e.sampleRate);
+            e.cbHist[(size_t) juce::jlimit (0, 63, (int) (raw * 40.0))].fetch_add (1, std::memory_order_relaxed);
+            if (raw >= 1.0) e.lateCallbacks.fetch_add (1, std::memory_order_relaxed);
+            e.cbBlock.store (n, std::memory_order_relaxed);
+        }
+    } cbMeter { *this, n, callbackMs.load() };
     int st = antState.load();
     if (st == 3) { antPrimed = false; antState.store (1); st = 1; antWake.signal(); }
     if (st == 1 || st == 2)

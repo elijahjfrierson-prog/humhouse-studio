@@ -306,6 +306,15 @@ void applyTheme (juce::Colour accent, float tint, bool black)
         refreshAll();
         return;
     }
+    if (col::neon)   // Neon 3D: deep blue-black studio glass, the chosen color glows (purple by default), cyan second accent
+    {
+        col::accent = accent; col::accent2 = juce::Colour (0xff38d1ff);
+        col::bg = juce::Colour (0xff06080f); col::panel = juce::Colour (0xff0b0e19); col::panel2 = juce::Colour (0xff111526);
+        col::grid = juce::Colour (0xff141a2b); col::gridBeat = juce::Colour (0xff1a2137); col::gridBar = juce::Colour (0xff27314d);
+        col::scale = col::bg.interpolatedWith (accent, 0.10f); col::root = col::bg.interpolatedWith (accent, 0.2f);
+        refreshAll();
+        return;
+    }
     const float h = accent.getHue(), sat = juce::jlimit (0.0f, 0.4f, accent.getSaturation() * 0.4f * juce::jlimit (0.0f, 1.0f, tint));
     auto shade = [h, sat] (float b) { return juce::Colour::fromHSV (h, sat, b, 1.0f); };
     col::accent = accent;
@@ -422,6 +431,7 @@ void applyLayoutDesc (const juce::String& d)
     auto v = parseLayout (d);
     auto c = [&v] (const char* k, juce::Colour def) { auto it = v.find (k); const auto x = it != v.end() ? juce::Colour::fromString (it->second) : def; return x.getAlpha() == 0 ? def : x.withAlpha (1.0f); };
     col::lightMode = v["light"] == "1";
+    col::neon = v["neon"] == "1";
     applyTextColours();
     col::bg = c ("bg", col::bg); col::panel = c ("panel", col::panel); col::panel2 = c ("panel2", col::panel2);
     col::gridBar = c ("gridBar", col::gridBar); col::accent = c ("accent", col::accent); col::text = c ("text", col::text);
@@ -508,6 +518,7 @@ struct LayoutPanel : juce::Component
             col::laneMinH = 60;
             if (s.settings) { s.settings->removeValue ("layout"); s.settings->setValue ("layoutName", label); }
             col::lightMode = false; if (build::font.isNotEmpty()) juce::Typeface::clearTypefaceCache();
+            col::neon = s.settings == nullptr || s.settings->getBoolValue ("themeNeon", true);
             build::reset(); applyTheme (juce::Colour (0xff9b5cff), 0.15f, false); relayout();
         }
         else

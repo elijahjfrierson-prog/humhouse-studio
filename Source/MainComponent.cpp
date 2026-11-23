@@ -174,6 +174,29 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     const auto body = c.reduced (size * 0.17f);
     const float br = body.getWidth() * 0.5f;
     const juce::PathStrokeType ring (2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+    if (col::neon && ! col::lightMode)   // Neon 3D: a lit glass dome on a dark well, the value arc glows
+    {
+        const auto fill = s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim;
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillEllipse (body.expanded (2.0f).translated (0.0f, 2.5f));
+        juce::ColourGradient dome (col::panel2.brighter (0.55f), body.getX() + br * 0.6f, body.getY() + br * 0.45f, juce::Colour (0xff04050a), body.getRight(), body.getBottom(), true);
+        g.setGradientFill (dome); g.fillEllipse (body);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.22f), body.getCentreX(), body.getY(), juce::Colours::transparentWhite, body.getCentreX(), body.getCentreY(), false));
+        g.fillEllipse (body.reduced (br * 0.12f).withTrimmedBottom (br * 0.7f));   // specular highlight
+        g.setColour (fill.withAlpha (0.35f)); g.drawEllipse (body, 1.0f);
+        juce::Path track, arc;
+        track.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, a1, true);
+        g.setColour (juce::Colour (0xff1a1f33)); g.strokePath (track, ring);
+        arc.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, ang, true);
+        g.setColour (fill.withAlpha (0.10f)); g.strokePath (arc, juce::PathStrokeType (11.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (fill.withAlpha (0.25f)); g.strokePath (arc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (fill.brighter (0.25f)); g.strokePath (arc, ring);
+        const auto tip = c.getCentre().getPointOnCircumference (rad, ang);
+        g.setColour (fill.withAlpha (0.4f)); g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (tip));
+        g.setColour (juce::Colours::white); g.fillEllipse (juce::Rectangle<float> (3.5f, 3.5f).withCentre (tip));
+        juce::Path ptr; ptr.startNewSubPath (c.getCentre().getPointOnCircumference (br * 0.35f, ang)); ptr.lineTo (c.getCentre().getPointOnCircumference (br - 3.0f, ang));
+        g.setColour (juce::Colours::white.withAlpha (0.9f)); g.strokePath (ptr, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
     g.setColour (juce::Colours::black.withAlpha (0.4f)); g.fillEllipse (body.translated (0.0f, 1.5f));   // machined cap with drop shadow
     g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.3f), body.getCentreX(), body.getY(), col::panel2.darker (0.35f), body.getCentreX(), body.getBottom(), false));
     g.fillEllipse (body);
@@ -196,6 +219,20 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     auto base = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : b.findColour (juce::TextButton::buttonColourId);
     if (down) base = base.brighter (0.15f);
     else if (over) base = base.brighter (0.06f);
+    if (col::neon && ! col::lightMode)   // Neon 3D: a raised glass key, lit from above; ON glows in the accent
+    {
+        const bool on = b.getToggleState();
+        const float rr = juce::jmin (7.0f, r.getHeight() * 0.3f);
+        if (on) base = col::panel2.interpolatedWith (col::accent, 0.28f);   // ON = dark glass lit from inside, not a flat fill
+        g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (r.translated (0.0f, 1.5f), rr);
+        g.setGradientFill (juce::ColourGradient (base.brighter (0.22f), 0.0f, r.getY(), base.darker (0.35f), 0.0f, r.getBottom(), false));
+        g.fillRoundedRectangle (r, rr);
+        if (on) { g.setColour (col::accent.withAlpha (0.20f)); g.fillRoundedRectangle (r, rr); }
+        g.setColour (juce::Colours::white.withAlpha (0.10f)); g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + rr, r.getRight() - rr);
+        g.setColour (on ? col::accent : col::accent.withAlpha (over ? 0.55f : 0.22f)); g.drawRoundedRectangle (r.reduced (0.5f), rr, on ? 1.5f : 1.0f);
+        if (on) { g.setColour (col::accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.reduced (1.5f), rr, 3.0f); }
+        return;
+    }
     g.setGradientFill (juce::ColourGradient (base.brighter (0.07f), 0.0f, r.getY(), base.darker (0.07f), 0.0f, r.getBottom(), false));   // studio console look: soft top light
     g.fillRoundedRectangle (r, 3.0f);
     g.setColour (juce::Colours::black.withAlpha (0.35f));
@@ -796,6 +833,7 @@ public:
         if (studio.settings->containsKey ("uiScale"))
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, phoneUI ? 1.5 : 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));   // phone: 150% max, bigger never fits
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
+        col::neon = studio.settings->getBoolValue ("themeNeon", true);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
        #if JUCE_IOS
@@ -1649,6 +1687,7 @@ if (phoneUI)
             }
             m.addSeparator();
             add (mTheme, "Theme color wheel...");
+            m.addItem (4790, "Neon 3D look (HumHouse future)", ! col::lightMode, col::neon);
             m.addItem (4712, "Layout...");
             m.addItem (4713, "Mini keyboard (pop-out)", true, miniKb != nullptr);
             m.addItem (4714, "Dual outputs: hear 1-2 and 3-4 together (monitor controllers)", true, engine.dualOut.load());
@@ -1856,6 +1895,12 @@ if (phoneUI)
             case mAudio: showAudioSettings(); break;
             case mPlugins: showPluginScanner (studio); break;
             case mTheme: showThemeDialog (studio); break;
+            case 4790:
+                col::neon = ! col::neon; studio.settings->setValue ("themeNeon", col::neon); studio.settings->saveIfNeeded();
+                if (col::neon) { studio.settings->removeValue ("layout"); studio.settings->setValue ("layoutName", "HumHouse (default)"); col::lightMode = false; }
+                applyTheme (studio.settings->containsKey ("themeColour") ? juce::Colour::fromString (studio.settings->getValue ("themeColour")) : juce::Colour (0xff9b5cff),
+                            (float) studio.settings->getDoubleValue ("themeTint", 0.15), studio.settings->getBoolValue ("themeBlack", false));
+                repaint(); break;
             case 4711: showKeyCommands(); break;
             case 4712: showLayoutDialog (studio); break;
             case 4713: toggleMiniKeyboard(); break;
@@ -1893,7 +1938,7 @@ if (phoneUI)
                 });
                 break;
             case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
-            case 4724: frameMeterOn() = ! frameMeterOn().load(); if (playlist != nullptr) playlist->repaint(); break;
+            case 4724: frameMeterOn() = ! frameMeterOn().load(); if (frameMeterOn().load()) engine.resetCallbackMeter(); if (playlist != nullptr) playlist->repaint(); break;
             case 4725: zoomAtPlayhead() = ! zoomAtPlayhead().load(); break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();

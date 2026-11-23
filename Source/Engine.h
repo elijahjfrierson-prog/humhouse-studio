@@ -63,6 +63,10 @@ public:
     void publishProject();
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
+    std::array<std::atomic<uint32_t>, 64> cbHist {};   // audio deadline meter: device callback time / buffer period, 2.5% buckets
+    std::atomic<int> lateCallbacks { 0 }, cbBlock { 0 };
+    float callbackPercentile (float q) const;           // 0..1.6 of the buffer period
+    void resetCallbackMeter();
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
     std::atomic<bool> noLatencyDriver { true };   // HumHouse No Latency Driver (Windows): never run on DirectSound / plain WASAPI when no ASIO card is in use
     bool applyNoLatencyDriver();                  // switch to WASAPI low-latency shared mode (fallback: exclusive), true if it changed

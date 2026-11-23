@@ -528,12 +528,14 @@ int pasteClips (Project& p, const std::vector<Clip>& clipboard, double origin, d
     at = std::max (0.0, at);
     for (auto& c : p.clips) c.selected = false;
     const int lastLane = std::max (0, (int) p.lanes.size() - 1);
+    int pasted = 0;
     for (auto c : clipboard)
     {
-        c.uid = p.newUid(); c.start = at + (c.start - origin); c.selected = true; c.group = 0;
+        if (c.hidden) continue;   // a hidden comp take is never pasted (it would land unseen and own the anchor)
+        c.uid = p.newUid(); c.start = at + (c.start - origin); c.selected = true; c.group = 0; c.takeGroup = 0;
         c.lane = juce::jlimit (0, lastLane, c.lane);
-        p.clips.push_back (c);
+        p.clips.push_back (c); ++pasted;
     }
-    return (int) clipboard.size();
+    return pasted;
 }
 }

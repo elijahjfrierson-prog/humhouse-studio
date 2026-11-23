@@ -1766,7 +1766,7 @@ public:
         s.live ([&] (Project&) {
             if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) for (auto& c : p.clips) c.selected = false;
             p.clips[(size_t) i].selected = true;
-            if (const int g = p.clips[(size_t) i].group; g > 0) for (auto& c : p.clips) if (c.group == g) c.selected = true;
+            if (const int g = p.clips[(size_t) i].group; g > 0) for (auto& c : p.clips) if (c.group == g && ! c.hidden) c.selected = true;
         });
         lastClipUid = p.clips[(size_t) i].uid;
         dragClip = i; dragOrig = p.clips;
@@ -1865,10 +1865,10 @@ public:
             auto& pr = s.p();
             std::vector<char> now (pr.clips.size(), 0); std::set<int> groups;
             for (size_t i = 0; i < pr.clips.size(); ++i)
-                if ((now[i] = (i < marqueeBase.size() && marqueeBase[i]) || clipRect (pr.clips[i]).intersects (marquee)) && pr.clips[i].group > 0) groups.insert (pr.clips[i].group);
+                if ((now[i] = (i < marqueeBase.size() && marqueeBase[i]) || (! pr.clips[i].hidden && clipRect (pr.clips[i]).intersects (marquee))) && pr.clips[i].group > 0) groups.insert (pr.clips[i].group);
             for (size_t i = 0; i < pr.clips.size(); ++i)
             {
-                if (! now[i] && pr.clips[i].group > 0 && groups.count (pr.clips[i].group) > 0) now[i] = 1;
+                if (! now[i] && ! pr.clips[i].hidden && pr.clips[i].group > 0 && groups.count (pr.clips[i].group) > 0) now[i] = 1;
                 if ((now[i] != 0) != pr.clips[i].selected) { pr.clips[i].selected = now[i] != 0; dirty = dirty.getUnion (clipRect (pr.clips[i]).expanded (2.0f)); }
             }
             changed = true; repaint (dirty.getSmallestIntegerContainer()); return;
@@ -2153,7 +2153,7 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && (lower == 'c' || lower == 'x'))
         {
             clipboard.clear(); clipLo = 1e9; clipHi = 0;
-            for (auto& c : s.p().clips) if (c.selected) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }
+            for (auto& c : s.p().clips) if (c.selected && ! c.hidden) { clipboard.push_back (c); clipLo = std::min (clipLo, c.start); clipHi = std::max (clipHi, c.start + c.length); }   // only what you see: a hidden take never moves the anchor
             copyHere = lower == 'x' ? -1.0 : markerNow(); nextAfter = clipHi;   // cut: the paste always goes on the marker (the cut range is empty now)
             if (lower == 'x' && ! clipboard.empty())
                 s.edit ("Cut clips", [] (Project& p) { p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [] (const Clip& c) { return c.selected; }), p.clips.end()); });
@@ -2183,7 +2183,7 @@ public:
             });
             return true;
         }
-        if (k == juce::KeyPress ('a', cmd, 0)) { s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = true; }); repaint(); return true; }
+        if (k == juce::KeyPress ('a', cmd, 0)) { s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = ! c.hidden; }); repaint(); return true; }
         return false;
     }
 
@@ -2924,18 +2924,23 @@ private:
     struct Strip { juce::Image img; int k = 0; };
     std::vector<Strip> strips; int stripW = 0;
     double stripBeats() const { return stripW / (double) (tilePpb > 0 ? tilePpb : pxPerBeat); }
-    Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
+    static Strip* findIn (std::vector<Strip>& gen, int k) { for (auto& st : gen) if (st.k == k) return &st; return nullptr; }
+    Strip* findStrip (int k) { return findIn (strips, k); }
+    // Zoom Engine (no stalls): the next set of strips at the new zoom, drawn one strip per refresh while the old set stretches
+    std::vector<Strip> nextStrips; float nextPpb = 0; bool tilePending = false;
     size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
     {
         const double stripBytes = (double) stripW * tileScale * tileH * tileScale * 4.0;
         return (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));
     }
-    void renderStrip (int k)
+    void renderStrip (int k, std::vector<Strip>* into = nullptr, float ppb = 0)
     {
         const auto area = tileArea; const float scale = tileScale;
         const int th = tileH;
         if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
-        while (strips.size() >= maxStrips())   // keep the strips nearest the view
+        const float zoomOf = into != nullptr ? ppb : tilePpb;
+        if (zoomOf <= 0) return;
+        while (into == nullptr && strips.size() >= maxStrips())   // keep the strips nearest the view
         {
             const int here = (int) std::floor (scrollX / stripBeats());
             auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
@@ -2951,16 +2956,16 @@ private:
             ig.reduceClipRegion (tr);
             ig.setColour (col::bg); ig.fillRect (tr);
             const double keep = scrollX; const int keepY = scrollY; const float keepPpb = pxPerBeat;
-            scrollX = k * stripBeats(); scrollY = tileScrollY; paintRight = (float) tr.getRight(); pxPerBeat = tilePpb;   // the strips' own zoom
+            scrollX = k * (stripW / (double) zoomOf); scrollY = tileScrollY; paintRight = (float) tr.getRight(); pxPerBeat = zoomOf;   // the strips' own zoom
             paintContent (ig, tr);
             scrollX = keep; scrollY = keepY; paintRight = -1.0f; pxPerBeat = keepPpb;
         }
-        strips.push_back (std::move (st));
+        (into != nullptr ? *into : strips).push_back (std::move (st));
     }
     // one strip per screen refresh, just past the edge the view is heading to
     void prefetchStrip()
     {
-        if (strips.empty() || stripW <= 0 || drag != Drag::None) return;
+        if (strips.empty() || stripW <= 0 || drag != Drag::None || nextPpb > 0) return;
         const double sb = stripBeats(), viewBeats = tileArea.getWidth() / (double) pxPerBeat;
         const int k0 = (int) std::floor (scrollX / sb), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
         if (strips.size() >= maxStrips())   // full: only a strip well behind the view makes room, never one in or ahead of it (no redraw loop)
@@ -2983,10 +2988,11 @@ private:
         const int th = juce::jmax (area.getHeight() + 2, juce::jmin (capH, juce::jmax (area.getHeight() * 2, totalLaneH() + area.getHeight())));
         if ((double) sw * th * scale * scale * 4.0 > 48.0e6) return false;
         const auto key = cachedContentKey (area);
-        // mid-zoom (up to 2x in / 1.5x out of the strips' zoom) the strips are stretched, not redrawn: zoom never redraws per frame
+        // Zoom Engine (no stalls): mid-zoom the strips stretch; past 1.25x either way a new set at the current zoom is drawn
+        // one strip per refresh (holes first) while the old set keeps stretching, then the two swap. No zoom tier, no frame
+        // that redraws the whole view, and the sharp redraw after a zoom is spread over frames the same way.
         const double ratio = tilePpb > 0 ? pxPerBeat / (double) tilePpb : 0.0;
-        const bool zoomOk = ratio == 1.0 || (juce::Time::getMillisecondCounter() - lastZoomMs < 160 && ratio > 0.67 && ratio < 2.0);
-        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH && zoomOk;
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH && ratio > 0.2 && ratio < 5.0;
         if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + tileH)
         {
             const auto now = juce::Time::getMillisecondCounter();
@@ -2999,21 +3005,51 @@ private:
             }
             strips.clear();
             tileKey = key; tileScale = scale; tileArea = area; tileH = th; tilePpb = pxPerBeat;
-            stripW = sw;
+            stripW = sw; nextStrips.clear(); nextPpb = 0;
             tileScrollY = th >= totalLaneH() + area.getHeight() ? 0 : juce::jmax (0, scrollY - (th - area.getHeight()) / 2);
         }
-        const double sb = stripBeats(), viewBeats = area.getWidth() / (double) pxPerBeat;
-        const int k0 = juce::jmax (0, (int) std::floor (scrollX / sb)), k1 = (int) std::floor ((scrollX + viewBeats) / sb);
-        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
-        for (int k = k0; k <= k1; ++k)
+        const bool zooming = juce::Time::getMillisecondCounter() - lastZoomMs < 160;
+        if (pxPerBeat != tilePpb && nextPpb <= 0 && (! zooming || ratio < 0.8 || ratio > 1.25)) { nextPpb = pxPerBeat; nextStrips.clear(); }
+        const double viewBeats = area.getWidth() / (double) pxPerBeat;
+        auto range = [&] (float ppb) { const double sb = stripW / (double) ppb; return std::pair<int, int> { juce::jmax (0, (int) std::floor (scrollX / sb)), (int) std::floor ((scrollX + viewBeats) / sb) }; };
+        bool pending = false;
+        if (nextPpb > 0)
         {
-            auto* st = findStrip (k);
-            if (st == nullptr) { renderStrip (k); st = findStrip (k); }
-            if (st == nullptr) return false;
-            const float zx = pxPerBeat / tilePpb;   // 1 except while you zoom
-            const float dx = zx == 1.0f ? std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale : (float) ((k * sb - scrollX) * pxPerBeat);
-            g.drawImageTransformed (st->img, juce::AffineTransform::scale (zx / scale, 1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+            const auto [n0, n1] = range (nextPpb);
+            const double sbN = stripW / (double) nextPpb, sbO = stripBeats();
+            auto oldCovers = [&] (int k) {
+                const int a = (int) std::floor (k * sbN / sbO), b = (int) std::floor (((k + 1) * sbN - 1.0e-9) / sbO);
+                for (int j = a; j <= b; ++j) if (findStrip (j) == nullptr) return false;
+                return true;
+            };
+            int pick = -1;
+            for (int k = n0; k <= n1 && pick < 0; ++k) if (findIn (nextStrips, k) == nullptr && ! oldCovers (k)) pick = k;   // a hole first
+            for (int k = n0; k <= n1 && pick < 0; ++k) if (findIn (nextStrips, k) == nullptr) pick = k;
+            if (pick >= 0) renderStrip (pick, &nextStrips, nextPpb);   // one strip this refresh, never the whole view
+            bool done = true;
+            for (int k = n0; k <= n1; ++k) done = done && findIn (nextStrips, k) != nullptr;
+            if (done) { strips = std::move (nextStrips); nextStrips.clear(); tilePpb = nextPpb; nextPpb = 0; }
+            else pending = true;
         }
+        tilePending = pending;
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+        if (pending) { g.setColour (col::bg); g.fillRect (area); }
+        auto drawSet = [&] (std::vector<Strip>& gen, float ppb, bool fill) {
+            const double sb = stripW / (double) ppb;
+            const auto [k0, k1] = range (ppb);
+            const float zx = (float) (pxPerBeat / (double) ppb);   // 1 except while you zoom
+            for (int k = k0; k <= k1; ++k)
+            {
+                auto* st = findIn (gen, k);
+                if (st == nullptr && fill) { renderStrip (k); st = findStrip (k); }   // scrolling into new song: one strip, as before
+                if (st == nullptr) { if (fill) return false; continue; }
+                const float dx = zx == 1.0f ? std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale : (float) ((k * sb - scrollX) * pxPerBeat);
+                g.drawImageTransformed (st->img, juce::AffineTransform::scale (zx / scale, 1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+            }
+            return true;
+        };
+        if (! drawSet (strips, tilePpb, ! pending)) return false;
+        if (pending) drawSet (nextStrips, nextPpb, false);   // the new set on top as it fills in
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)
@@ -3769,7 +3805,7 @@ private:
     juce::Rectangle<int> hudRect() const   // inside the clip area, clear of the track list on narrow (phone) screens
     {
         const auto ca = clipArea(); const int w = juce::jmin (290, ca.getWidth() - 8);
-        return { juce::jmax (ca.getX() + 4, ca.getRight() - w - 10), ca.getY() + 6, w, 44 };
+        return { juce::jmax (ca.getX() + 4, ca.getRight() - w - 10), ca.getY() + 6, w, 62 };
     }
     void drawHud (juce::Graphics& g)
     {
@@ -3784,6 +3820,14 @@ private:
         g.drawText ("paint " + juce::String (hudPaint, 1) + " ms (max " + juce::String (hudPaintMax, 1) + ")   refresh " + juce::String (hudPeriod, 1) + " ms",
                     r.reduced (8, 4).removeFromTop (18), juce::Justification::centredLeft, false);
         g.drawText ("frame p50 " + juce::String (p50, 1) + " / p95 " + juce::String (p95, 1) + " / p99 " + juce::String (p99, 1) + " ms   jitter " + juce::String (juce::jmax (0.0f, jit), 1) + "   dropped " + juce::String (hudDrops),
+                    r.reduced (8, 4).withTrimmedTop (18).removeFromTop (18), juce::Justification::centredLeft, false);
+        auto pc = [this] (float q) { return juce::String (juce::roundToInt (s.engine.callbackPercentile (q) * 100.0f)) + "%"; };
+        const int late = s.engine.lateCallbacks.load (std::memory_order_relaxed);
+        g.setColour (late == 0 && s.engine.callbackPercentile (0.99f) < 0.8f ? juce::Colours::lightgreen : juce::Colours::orange);
+        const int blk = s.engine.cbBlock.load (std::memory_order_relaxed);
+        if (blk <= 0) { g.setColour (juce::Colours::orange); g.drawText ("audio: no device callbacks (check Options > Audio settings)", r.reduced (8, 4).removeFromBottom (18), juce::Justification::centredLeft, false); return; }
+        g.drawText ("audio @" + juce::String (blk) + ": p50 " + pc (0.5f) + " / p95 " + pc (0.95f) + " / p99 " + pc (0.99f)
+                        + " of deadline   late " + juce::String (late),
                     r.reduced (8, 4).removeFromBottom (18), juce::Justification::centredLeft, false);
     }
     void timerCallback() override
@@ -3793,6 +3837,7 @@ private:
         glideStep();
         if (zoomDirty && tgtPpb < 0 && juce::Time::getMillisecondCounter() - lastZoomMs >= 160)   // zoom done: redraw the strips sharp
         { zoomDirty = false; repaint (headerW, toolbarH + rulerH, getWidth() - headerW, getHeight() - toolbarH - rulerH); }
+        if (tilePending) repaint (headerW, toolbarH + rulerH, getWidth() - headerW, getHeight() - toolbarH - rulerH);   // the next zoom strip
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
         if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = uiEng = -1.0; return; }

@@ -791,6 +791,51 @@ int main (int argc, char** argv)
         for (size_t i = 0; i < cb.size(); ++i) CHECK (p.clips[i].start == cb[i].start);   // the originals never move
     }
 
+    for (int blk : { 256, 512 })
+    {   // audio deadline meter: every device callback lands in the histogram, the block size is shown, reset clears it
+        Engine e; e.prepare (48000, blk);
+        e.newProject (Project::createDemo()); e.sync(); e.resetCallbackMeter();
+        juce::AudioBuffer<float> out (2, blk);
+        juce::AudioIODeviceCallbackContext cc {};
+        for (int b = 0; b < 300; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.audioDeviceIOCallbackWithContext (nullptr, 0, o, 2, blk, cc);
+        }
+        uint64_t total = 0; for (auto& h : e.cbHist) total += h.load();
+        CHECK (total == 300 && e.cbBlock.load() == blk);
+        CHECK (e.callbackPercentile (0.5f) > 0.0f && e.callbackPercentile (0.5f) < 1.0f);
+        e.resetCallbackMeter();
+        total = 0; for (auto& h : e.cbHist) total += h.load();
+        CHECK (total == 0 && e.lateCallbacks.load() == 0 && e.callbackPercentile (0.99f) == 0.0f);
+    }
+    {   // paste at the playhead: bars 5/10/15/20 -> 100/105/110/115; a hidden comp take never owns the anchor or gets pasted
+        Project p; p.bpm = 140.0; p.beatsPerBar = 4;
+        for (int l = 0; l < 10; ++l) { Lane ln; ln.name = "T" + juce::String (l); p.lanes.push_back (ln); }
+        auto bar = [] (double b) { return (b - 1.0) * 4.0; };
+        std::vector<Clip> cb;
+        for (int i = 0; i < 4; ++i) { Clip c; c.uid = p.newUid(); c.lane = i; c.start = bar (5.0 + 5.0 * i); c.length = 4.0; c.takeGroup = 7; p.clips.push_back (c); cb.push_back (c); }
+        Clip hid; hid.uid = p.newUid(); hid.lane = 1; hid.start = bar (1.0); hid.length = 8.0; hid.hidden = true; hid.takeGroup = 7;
+        p.clips.push_back (hid);
+        std::vector<Clip> copied; double lo = 1e9;
+        for (auto c : cb) { copied.push_back (c); lo = std::min (lo, c.start); }
+        copied.push_back (hid);   // even if a hidden take slipped in, it is skipped
+        const auto before = p.clips.size();
+        CHECK (pasteClips (p, copied, lo, bar (100.0)) == 4);
+        CHECK (p.clips.size() == before + 4);
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto& n = p.clips[before + (size_t) i];
+            CHECK (std::abs (n.start - bar (100.0 + 5.0 * i)) < 1.0e-9 && n.lane == i && ! n.hidden && n.takeGroup == 0);
+        }
+        for (double at : { bar (50.0), bar (10.5), 1.2345, bar (45.0), bar (60.0) })   // five pastes, each on its own playhead
+        {
+            const auto b0 = p.clips.size();
+            pasteClips (p, copied, lo, at);
+            CHECK (std::abs (p.clips[b0].start - at) < 1.0e-12);
+        }
+    }
+
     // scales
     CHECK (inScale (60, 0, 0) && ! inScale (61, 0, 0));
     CHECK (snapToScale (61, 0, 0) == 60 || snapToScale (61, 0, 0) == 62);
