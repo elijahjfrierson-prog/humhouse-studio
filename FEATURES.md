@@ -156,3 +156,7 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D: lit meter housing
 - lock: Neon 3D: dark glass menu with a lit rim
 - lock: Neon 3D: every FX window sits in a lit frame
+- lock: Neon 3D sparks: a fixed pool (no allocation)
+- lock: Neon 3D: a boosted / cut band throws sparks while audio runs
+- lock: Neon 3D: glossy lit spectrum
+- lock: Neon 3D: specular shine on the curve

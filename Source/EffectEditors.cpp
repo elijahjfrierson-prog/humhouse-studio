@@ -3,6 +3,7 @@
 #include "Instruments.h"
 #include "Drummer/DrummerCore.h"
 #include <complex>
+#include <array>
 #include <map>
 
 namespace hhs
@@ -690,6 +691,34 @@ static void drawPanelBg (juce::Graphics& g, juce::Rectangle<float> a)
     g.setColour (col::grid.withAlpha (0.6f)); g.drawRoundedRectangle (a, 6.0f, 1.0f);
 }
 
+// Neon 3D sparks: a fixed pool (no allocation), stepped + drawn on the UI side only. strength 0..1 sets size, speed and rate.
+struct Sparks
+{
+    struct P { float x = 0, y = 0, vx = 0, vy = 0, life = 0, size = 0; juce::Colour c; };
+    std::array<P, 64> p {};
+    int next = 0;
+    juce::Random rng;
+    void emit (juce::Point<float> at, float strength, juce::Colour c, bool up)
+    {
+        if (! col::neon || col::lightMode || rng.nextFloat() > 0.15f + 0.6f * strength) return;
+        for (int n = strength > 0.6f ? 2 : 1; --n >= 0;)
+        {
+            auto& q = p[(size_t) next]; next = (next + 1) % (int) p.size();
+            const float sp = 0.6f + 2.2f * strength, ang = (rng.nextFloat() - 0.5f) * 2.2f;
+            q = { at.x, at.y, sp * std::sin (ang), (up ? -1.0f : 1.0f) * sp * std::cos (ang), 1.0f, 1.0f + 2.5f * strength, c };
+        }
+    }
+    void step() { for (auto& q : p) if (q.life > 0) { q.x += q.vx; q.y += q.vy; q.vy += 0.06f; q.vx *= 0.97f; q.life -= 0.04f; } }
+    void draw (juce::Graphics& g) const
+    {
+        for (auto& q : p) if (q.life > 0)
+        {
+            g.setColour (q.c.withAlpha (0.25f * q.life)); g.fillEllipse (q.x - q.size * 1.6f, q.y - q.size * 1.6f, q.size * 3.2f, q.size * 3.2f);
+            g.setColour (q.c.brighter (0.8f).withAlpha (q.life)); g.fillEllipse (q.x - q.size * 0.5f, q.y - q.size * 0.5f, q.size, q.size);
+        }
+    }
+};
+
 class EqGraph : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
     juce::VBlankAttachment vblankPump { this, [this] { timerCallback(); } };   // no-skip: visuals update on every screen refresh, never behind a timer
@@ -764,7 +793,7 @@ public:
                 if (! started) { sp.startNewSubPath (xOf (f), a.getBottom()); started = true; }
                 sp.lineTo (xOf (f), y);
             }
-            if (started) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp); }
+            if (started) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); if (col::neon && ! col::lightMode) { g.setGradientFill (juce::ColourGradient (col::accent.withAlpha (0.38f), 0.0f, sp.getBounds().getY(), col::accent.withAlpha (0.02f), 0.0f, sp.getBounds().getBottom(), false)); g.fillPath (sp); g.setColour (col::accent.brighter (0.4f).withAlpha (0.55f)); g.strokePath (sp, juce::PathStrokeType (1.0f)); } else { g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp); } /* Neon 3D: glossy lit spectrum */ }
         }
         if (model)
         {
@@ -788,7 +817,7 @@ public:
                 for (auto& d : model->params()) model->setParam (d.id, grid.valueOf (d.id));
             }
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
-            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
+            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); if (col::neon && ! col::lightMode) { g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (c, juce::PathStrokeType (0.8f), juce::AffineTransform::translation (0.0f, -0.8f)); } /* Neon 3D: specular shine on the curve */
         }
         auto* fx = live ? live() : nullptr;
         for (int k = 0; k < bands; ++k)
@@ -1002,6 +1031,14 @@ private:
             const int w = t->heard();   // no new audio (stopped): stop redrawing a still curve
             if (w == lastHeard && drag < 0 && ++idleTicks > 30) return;
             if (w != lastHeard) idleTicks = 0;
+            if (w != lastHeard && model)   // Neon 3D: a boosted / cut band throws sparks while audio runs (1 dB tiny, 8 dB+ big)
+                for (int k = 0; k < bands; ++k)
+                    if (isOn (k) && hasGain (k))
+                    {
+                        const auto pt = dotOf (k);
+                        const float db = dbAt (pt.y);
+                        if (std::abs (db) >= 1.0f) sparks.emit (pt, juce::jlimit (0.0f, 1.0f, (std::abs (db) - 1.0f) / 7.0f), colourOf (k), db > 0);
+                    }
             lastHeard = w;
             t->read (snap.data(), fftN, w);
             std::fill (fftBuf.begin(), fftBuf.end(), 0.0f);
@@ -1014,8 +1051,11 @@ private:
             }
         }
         if (drag < 0) syncBar();
+        sparks.step();
         repaint();
     }
+    void paintOverChildren (juce::Graphics& g) override { sparks.draw (g); }
+    Sparks sparks;
     static constexpr int fftOrder = 11, fftN = 1 << fftOrder;
     ParamGrid& grid;
     std::function<BuiltinEffect*()> live;
@@ -1228,7 +1268,7 @@ public:
             if (in == -60.0f) c.startNewSubPath (px (in), py (out)); else c.lineTo (px (in), py (out));
         }
         g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
-        g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
+        g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); if (col::neon && ! col::lightMode) { g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (c, juce::PathStrokeType (0.8f), juce::AffineTransform::translation (0.0f, -0.8f)); } /* Neon 3D: specular shine on the curve */
         g.setColour (col::accent2.withAlpha (0.7f)); g.drawVerticalLine ((int) px (th), sq.getY(), sq.getBottom());
         g.setColour (col::text); g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         fitText (g, "THRESH " + juce::String (th, 1) + " dB   RATIO " + juce::String (ratio, 1) + ":1", sq.toNearestInt().removeFromTop (16), juce::Justification::centredLeft);
@@ -1338,7 +1378,7 @@ public:
                 if (x == 0) c.startNewSubPath (a.getX() + x, y); else c.lineTo (a.getX() + x, y);
             }
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
-            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f));
+            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); if (col::neon && ! col::lightMode) { g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (c, juce::PathStrokeType (0.8f), juce::AffineTransform::translation (0.0f, -0.8f)); } /* Neon 3D: specular shine on the curve */
             g.setColour (col::text); fitText (g, "FILTER  " + juce::String (cut >= 1000 ? juce::String (cut / 1000, 1) + " kHz" : juce::String ((int) cut) + " Hz"), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
     }
