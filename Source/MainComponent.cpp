@@ -1973,9 +1973,10 @@ if (phoneUI)
             case mTheme: showThemeDialog (studio); break;
             case 4790:
                 col::neon = ! col::neon; studio.settings->setValue ("themeNeon", col::neon); studio.settings->saveIfNeeded();
-                if (col::neon) { studio.settings->removeValue ("layout"); studio.settings->setValue ("layoutName", "HumHouse (default)"); col::lightMode = false; }
+                if (col::neon) col::lightMode = false;
                 applyTheme (studio.settings->containsKey ("themeColour") ? juce::Colour::fromString (studio.settings->getValue ("themeColour")) : juce::Colour (0xff9b5cff),
                             (float) studio.settings->getDoubleValue ("themeTint", 0.15), studio.settings->getBoolValue ("themeBlack", false));
+                resaveLayout (studio);
                 repaint(); break;
             case 4711: showKeyCommands(); break;
             case 4712: showLayoutDialog (studio); break;

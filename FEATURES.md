@@ -175,3 +175,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D: halo + bright core + specular shine
 - lock: Neon 3D: curve glows in the chosen color / gradient
 - lock: col::gradCustom = t.size() == 3;
+- lock: layouts saved before Neon keep the current Neon setting
+- lock: void resaveLayout (Studio& s)

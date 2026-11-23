@@ -661,6 +661,7 @@ void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex,
 void showThemeDialog (Studio&);
 void showLayoutDialog (Studio&);   // Options > Layout: DAW-style looks + your own
 void applySavedLayout (Studio&);
+void resaveLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
 {

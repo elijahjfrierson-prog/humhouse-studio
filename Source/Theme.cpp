@@ -424,7 +424,7 @@ void relayout() { if (relayoutMain) relayoutMain(); }
 juce::String currentLayout()
 {
     return joinLayout ({ { "bg", col::bg.toString() }, { "panel", col::panel.toString() }, { "panel2", col::panel2.toString() }, { "gridBar", col::gridBar.toString() },
-                         { "text", col::text.toString() }, { "accent", col::accent.toString() }, { "light", col::lightMode ? "1" : "0" }, { "laneH", juce::String (col::laneMinH) } });
+                         { "text", col::text.toString() }, { "accent", col::accent.toString() }, { "light", col::lightMode ? "1" : "0" }, { "neon", col::neon ? "1" : "0" }, { "laneH", juce::String (col::laneMinH) } });
 }
 juce::String currentLayoutWithBuild() { auto v = parseLayout (currentLayout()); putBuild (v); return joinLayout (v); }
 void applyLayoutDesc (const juce::String& d)
@@ -432,7 +432,7 @@ void applyLayoutDesc (const juce::String& d)
     auto v = parseLayout (d);
     auto c = [&v] (const char* k, juce::Colour def) { auto it = v.find (k); const auto x = it != v.end() ? juce::Colour::fromString (it->second) : def; return x.getAlpha() == 0 ? def : x.withAlpha (1.0f); };
     col::lightMode = v["light"] == "1";
-    col::neon = v["neon"] == "1";
+    if (v.find ("neon") != v.end()) col::neon = v["neon"] == "1";   // layouts saved before Neon keep the current Neon setting
     applyTextColours();
     col::bg = c ("bg", col::bg); col::panel = c ("panel", col::panel); col::panel2 = c ("panel2", col::panel2);
     col::gridBar = c ("gridBar", col::gridBar); col::accent = c ("accent", col::accent); col::text = c ("text", col::text);
@@ -912,6 +912,11 @@ struct LayoutTabs : juce::TabbedComponent
 void applySavedLayout (Studio& s)
 {
     if (s.settings != nullptr && s.settings->containsKey ("layout")) applyLayoutDesc (s.settings->getValue ("layout"));
+}
+
+void resaveLayout (Studio& s)   // Neon toggled: the saved layout keeps its sizes and picks up the new look
+{
+    if (s.settings != nullptr && s.settings->containsKey ("layout")) { s.settings->setValue ("layout", currentLayoutWithBuild()); s.settings->saveIfNeeded(); }
 }
 
 void showLayoutDialog (Studio& s)
