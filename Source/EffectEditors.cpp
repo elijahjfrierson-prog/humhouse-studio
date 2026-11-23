@@ -794,7 +794,7 @@ public:
                 if (! started) { sp.startNewSubPath (xOf (f), a.getBottom()); started = true; }
                 sp.lineTo (xOf (f), y);
             }
-            if (started) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); if (col::neon && ! col::lightMode) { g.setGradientFill (juce::ColourGradient (col::accent.withAlpha (0.38f), 0.0f, sp.getBounds().getY(), col::accent.withAlpha (0.02f), 0.0f, sp.getBounds().getBottom(), false)); g.fillPath (sp); g.setColour (col::accent.brighter (0.4f).withAlpha (0.55f)); g.strokePath (sp, juce::PathStrokeType (1.0f)); } else { g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp); } /* Neon 3D: glossy lit spectrum */ }
+            if (started) { sp.lineTo (a.getRight(), a.getBottom()); sp.closeSubPath(); if (col::neon && ! col::lightMode) { col::neonFill (g, a.getY(), a.getBottom()); g.fillPath (sp); col::neonLine (g, sp, a.getY(), a.getBottom(), 1.0f); } else { g.setColour (col::text.withAlpha (0.08f)); g.fillPath (sp); } /* Neon 3D: glossy lit spectrum */ }
         }
         if (model)
         {
@@ -817,8 +817,9 @@ public:
                 g.setColour (colourOf (sel).withAlpha (0.28f)); g.fillPath (bs);
                 for (auto& d : model->params()) model->setParam (d.id, grid.valueOf (d.id));
             }
+            if (col::neon && ! col::lightMode) col::neonLine (g, c, a.getY(), a.getBottom(), 2.0f); else {   // Neon 3D: curve glows in the chosen color / gradient
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
-            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); if (col::neon && ! col::lightMode) { g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (c, juce::PathStrokeType (0.8f), juce::AffineTransform::translation (0.0f, -0.8f)); } /* Neon 3D: specular shine on the curve */
+            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); }
         }
         auto* fx = live ? live() : nullptr;
         for (int k = 0; k < bands; ++k)
@@ -1378,8 +1379,9 @@ public:
                 const float y = juce::jmap (db, -36.0f, 18.0f, a.getBottom(), a.getY() + 16);
                 if (x == 0) c.startNewSubPath (a.getX() + x, y); else c.lineTo (a.getX() + x, y);
             }
+            if (col::neon && ! col::lightMode) col::neonLine (g, c, a.getY(), a.getBottom(), 2.0f); else {   // Neon 3D: curve glows in the chosen color / gradient
             g.setColour (col::accent.withAlpha (0.35f)); g.strokePath (c, juce::PathStrokeType (5.0f));
-            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); if (col::neon && ! col::lightMode) { g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (c, juce::PathStrokeType (0.8f), juce::AffineTransform::translation (0.0f, -0.8f)); } /* Neon 3D: specular shine on the curve */
+            g.setColour (col::accent); g.strokePath (c, juce::PathStrokeType (2.0f)); }
             g.setColour (col::text); fitText (g, "FILTER  " + juce::String (cut >= 1000 ? juce::String (cut / 1000, 1) + " kHz" : juce::String ((int) cut) + " Hz"), a.toNearestInt().removeFromTop (14), juce::Justification::centredLeft);
         }
     }

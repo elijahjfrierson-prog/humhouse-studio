@@ -168,6 +168,12 @@ private:
             p.lineTo (a.getX() + (float) x, yFor (spec[(size_t) bin]));
         }
         p.lineTo (a.getRight(), a.getBottom()); p.closeSubPath();
+        if (col::neon && ! col::lightMode)   // Neon 3D: purple glossy spectrum, lit edge + specular shine (real FFT data, nothing faked)
+        {
+            col::neonFill (g, a.getY(), a.getBottom()); g.fillPath (p);
+            col::neonLine (g, p, a.getY(), a.getBottom(), 1.4f);
+            return;
+        }
         g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom(), 0.45f));
         g.fillPath (p);
         g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom())); g.strokePath (p, juce::PathStrokeType (1.4f));

@@ -328,6 +328,7 @@ void applyTheme (juce::Colour accent, float tint, bool black)
 void applyGradient (const juce::String& colours)
 {
     auto t = juce::StringArray::fromTokens (colours, " ", "");
+    col::gradCustom = t.size() == 3;
     if (t.size() == 3) { col::gradLo = juce::Colour::fromString (t[0]); col::gradMid = juce::Colour::fromString (t[1]); col::gradHi = juce::Colour::fromString (t[2]); }
     else { col::gradLo = juce::Colour (0xff3ddc84); col::gradMid = juce::Colour (0xffffd23d); col::gradHi = juce::Colour (0xffff3b57); }
     refreshAll();

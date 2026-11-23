@@ -165,6 +165,24 @@ namespace col
         g.setColour (juce::Colours::white.withAlpha (0.13f)); g.drawLine (r.getX() + corner, r.getBottom() - 0.5f, r.getRight() - corner, r.getBottom() - 0.5f, 1.0f);
         g.setColour (juce::Colours::black.withAlpha (0.7f)); g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
     }
+    inline bool gradCustom = false;   // a spectrum gradient was picked in Theme: neon lines glow in it instead of the accent
+    inline void neonFill (juce::Graphics& g, float yTop, float yBottom)   // Neon 3D: area under a curve, lit in the chosen color / gradient
+    {
+        if (gradCustom) g.setGradientFill (levelGradient (0.0f, yTop, yBottom, 0.5f));
+        else g.setGradientFill (juce::ColourGradient (accent.withAlpha (0.55f), 0.0f, yTop, accent.withAlpha (0.03f), 0.0f, yBottom, false));
+    }
+    inline void neonLine (juce::Graphics& g, const juce::Path& p, float yTop, float yBottom, float core = 1.6f)   // Neon 3D: halo + bright core + specular shine
+    {
+        auto paint = [&] (float alpha, float brighten)
+        {
+            if (gradCustom) { auto gr = levelGradient (0.0f, yTop, yBottom, alpha); for (int i = 0; i < gr.getNumColours(); ++i) gr.setColour (i, gr.getColour (i).brighter (brighten)); g.setGradientFill (gr); }
+            else g.setColour (accent.brighter (brighten).withAlpha (alpha));
+        };
+        paint (0.10f, 0.0f); g.strokePath (p, juce::PathStrokeType (core * 5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        paint (0.28f, 0.1f); g.strokePath (p, juce::PathStrokeType (core * 2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        paint (1.0f, 0.35f); g.strokePath (p, juce::PathStrokeType (core, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (p, juce::PathStrokeType (core * 0.4f), juce::AffineTransform::translation (0.0f, -0.6f));
+    }
     inline void seam (juce::Graphics& g, juce::Rectangle<float> r, float corner)   // purple light leaking from a panel seam
     {
         g.setColour (accent.withAlpha (0.12f)); g.drawRoundedRectangle (r.expanded (1.5f), corner + 1.5f, 3.0f);

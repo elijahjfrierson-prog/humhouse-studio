@@ -171,3 +171,7 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D iron: dropdown sits in a recessed slot
 - lock: Neon 3D iron: each track header is a brushed gunmetal module
 - lock: Neon 3D iron: browser side panel in brushed gunmetal
+- lock: Neon 3D: purple glossy spectrum, lit edge + specular shine
+- lock: Neon 3D: halo + bright core + specular shine
+- lock: Neon 3D: curve glows in the chosen color / gradient
+- lock: col::gradCustom = t.size() == 3;
