@@ -1411,6 +1411,13 @@ public:
             setupButton (groupBtn, "GROUP", "Group the selected clips so they select and move together (Ctrl/Cmd+G, ungroup Ctrl/Cmd+Shift+G)");
             groupBtn.onClick = [this] { groupSelected (true); };
             addAndMakeVisible (groupBtn);
+            setupButton (toPlayheadBtn, "COPY>PH", "Copy the selected clips and paste them at the playhead in one click (same as Cmd+C then Cmd+V)");
+            toPlayheadBtn.onClick = [this]   // copy to playhead marker: one click, same paste path as the keys
+            {
+                const auto cmd = juce::ModifierKeys::commandModifier;
+                if (keyPressed (juce::KeyPress ('c', cmd, 0))) keyPressed (juce::KeyPress ('v', cmd, 0));
+            };
+            addAndMakeVisible (toPlayheadBtn);
             for (int i = 0; i < kNumSnaps; ++i) snapBox.addItem (juce::String ("Snap: ") + kSnapNames[i], i + 1);
             snapBox.setSelectedItemIndex (9, juce::dontSendNotification);
             snapBox.setTooltip ("Playlist snap: (none) = free placement; 1/2, 1/3, 1/6 step or beat for meticulous edits (hold Alt while dragging to bypass)");
@@ -1474,6 +1481,7 @@ public:
         for (auto* b : toolBtns) { b->setBounds (t.removeFromLeft (32)); t.removeFromLeft (2); }
         t.removeFromLeft (6);
         groupBtn.setBounds (t.removeFromLeft (60)); t.removeFromLeft (8);
+        toPlayheadBtn.setBounds (t.removeFromLeft (72)); t.removeFromLeft (8);
         snapBox.setBounds (t.removeFromLeft (120));
         if (addDrummer.isVisible())   // the Channel Rack button always keeps its room: Drums shrinks, or steps aside on narrow windows
         {
@@ -2322,7 +2330,7 @@ private:
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
     juce::OwnedArray<juce::TextButton> toolBtns;
-    juce::TextButton groupBtn;
+    juce::TextButton groupBtn, toPlayheadBtn;
     int lastClipUid = 0;
     void groupSelected (bool on)
     {

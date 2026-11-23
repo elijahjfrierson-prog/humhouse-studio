@@ -178,3 +178,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: layouts saved before Neon keep the current Neon setting
 - lock: void resaveLayout (Studio& s)
 - lock: the Neon look it opened with is saved too
+- lock: copy to playhead marker: one click, same paste path as the keys
