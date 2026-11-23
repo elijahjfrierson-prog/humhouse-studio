@@ -525,7 +525,8 @@ struct LayoutPanel : juce::Component
         else
         {
             applyLayoutDesc (desc);
-            if (s.settings) { s.settings->setValue ("layout", desc); s.settings->setValue ("layoutName", label); }
+            auto saved = parseLayout (desc); saved["neon"] = col::neon ? "1" : "0";   // the Neon look it opened with is saved too, so a restart opens the same look
+            if (s.settings) { s.settings->setValue ("layout", joinLayout (saved)); s.settings->setValue ("layoutName", label); }
         }
         if (withKeys.getToggleState() && applyKeySet) applyKeySet (keySet);
         if (s.settings) s.settings->saveIfNeeded();
