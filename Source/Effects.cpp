@@ -1753,21 +1753,24 @@ public:
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
-            if (style == 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
-            if (style == 3)
+            static const int apExp = [] { const char* e = std::getenv ("HHS_AP_EXP"); return e ? std::atoi (e) : 0; }();
+            const bool useSplice = style == 3 && apExp != 1;
+            if (useSplice) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            if (useSplice && apExp == 2) {}
+            else if (useSplice)
             {
                 // Antares-clean: on a settled held note (and its breathy stretches), blend each tuned cycle with the one
                 // before, so rasp / breath noise cancels and the note rings clean; never on hard consonants or glides
                 constexpr float ca = 0.7f;
                 const double po = juce::jlimit (16.0, 2000.0, (double) period / juce::jmax (0.25, (double) (1.0f + (ratio - 1.0f) * wetG)));
-                poS = poS <= 0.0 ? po : poS + 0.002 * (po - poS);   // the blend delay glides (a jumping delay = clicks)
+                poS = poS <= 0.0 ? po : poS + (apExp == 9 ? 0.002 : 0.01) * (po - poS);   // follows a new note within ~2 ms, so the clean blend locks its first cycles too   // the blend delay glides (a jumping delay = clicks)
                 const double rp = (double) cbW - poS; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
                 auto rd = [&] (const std::vector<float>& b) { return b[(size_t) (i0 & 4095)] * (1 - t) + b[(size_t) ((i0 + 1) & 4095)] * t; };
                 const float dl = rd (cbL), dr = rd (cbR);
                 cbL[(size_t) (cbW & 4095)] = wl; cbR[(size_t) (cbW & 4095)] = wr; ++cbW;
                 const bool steady = std::abs (po - poS) < 0.01 * po;
                 const float want = steady && (! consonant || breathy) && heldNote > 0 ? ca * wetG : 0.0f;
-                combG += (want - combG) * (want > combG ? (float) (1.0 / (0.03 * sr)) : 0.02f);
+                combG += (want - combG) * (want > combG ? (float) (1.0 / ((apExp == 9 ? 0.03 : 0.008) * sr)) : 0.02f);
                 wl += combG * (dl - wl); wr += combG * (dr - wr);
             }
             else
