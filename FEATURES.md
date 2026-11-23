@@ -109,6 +109,9 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Poly (glide multiple notes)
 - lock: no redraw until it moves a quarter pixel
 - lock: whole frame painted: no stale picture shows around a plug-in view
+- lock: the frame never asks for more than the screen holds
+- lock: FL-style: a plug-in window reopens where you left it, and never sits off screen
+- lock: several plug-ins open: cascade, never stacked exactly
 - lock: paste / copy spot: the blue playhead you see
 - lock: one-shots / kit samples are always glued in
 - lock: Phone: a hold is a drag (it used to delete the dot you were moving)

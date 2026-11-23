@@ -1525,6 +1525,7 @@ public:
     float meter (int i) const override { return i == 100 ? detectedMidi.load() : i == 101 ? correctedMidi.load() : 0.0f; }   // pitch readout for offline analysis
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
+        static const int apExp = [] { const char* e = std::getenv ("HHS_AP_EXP"); return e ? std::atoi (e) : 0; }();
         const int style = (int) p (0);
         float speed = 1.0f - p (1);                            // Retune knob, Antares way: 0 = fastest, 1 = slowest
         const float snap = juce::jlimit (0.0f, 3.0f, -p (12));   // MetaTune-style negative retune: 0 = instant, -3 = hardest step
@@ -1609,6 +1610,7 @@ public:
                         return h > 0.0f && h < 55.0f && (rough || aper > 0.2f) ? 0.0f : h;   // below 55 Hz only a clean baritone read counts (noise / consonants never)
                     };
                     if (lastMidi > 0) hz = detect ((int) ((3.2 - 0.3 * snap) * dsr / (ref * std::pow (2.0, (lastMidi - 69.0) / 12.0))));
+                    if (hz <= 0 && lastMidi == 0 && (apExp == 6 || apExp == 8)) hz = detect (256);
                     if (hz <= 0) hz = detect (512);
                     if (hz <= 0) hz = detect (1024);
                     float midi = hz > 0 ? 69.0f + 12.0f * std::log2 (hz / ref) : 0.0f;
@@ -1627,7 +1629,7 @@ public:
                     const bool belt = push || (heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f);
                     const bool holding = heldNote > 0 && style != 0;   // inside a sung note, darker / breathier timbres and low inflections keep being read (Antares holds there)
                     juce::ignoreUnused (holding);
-                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
+                    if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? (apExp >= 10 ? 0.65f : 0.5f) : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
                     // a rough reading inside a held note keeps the tune locked as-is (noise must not bend the target)
@@ -1660,14 +1662,14 @@ public:
                         const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < ((rough || pendingRough) && ! belt ? 0.35f : 0.6f);   // a scream wobbles: the 2nd read may be a bit off
                         // Hard Tune: a clean, clearly pitched word start is tuned from its first reading (Antares catches the
                         // first cycle; waiting for a 2nd read let low word starts through untuned)
-                        if (same || (hard && lastMidi == 0 && ! rough && aper < 0.15f)) pendingMidi = 0;
+                        if (same || (hard && lastMidi == 0 && (! rough || apExp == 11) && aper < ((apExp == 7 || apExp == 8 || apExp == 11) ? 0.3f : 0.15f))) pendingMidi = 0;
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
                     else if (midi != -1.0f) pendingMidi = 0;
                     // only the clearly sung (vowel) part is tuned: consonants, breaths, rough edges and word starts pass
                     // through untouched, so enunciation and punch survive (shifting them was the plastic, mashed sound)
                     const bool wasWet = wetTarget > 0.5f;
-                    wetTarget = midi > 0 && (hard || ! rough || belt || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
+                    wetTarget = midi > 0 && (hard || ! rough || belt || (style != 0 && heldNote > 0)) && aper < (belt ? 0.65f : hard ? (apExp >= 10 ? 0.65f : wetTarget > 0.5f ? 0.55f : 0.5f) : style == 0 ? (wetTarget > 0.5f ? 0.3f : 0.2f) : (wetTarget > 0.5f ? 0.45f : 0.28f)) ? 1.0f : 0.0f;   // Antares-style: once a note is held, breathy / raspy voicing stays tuned too   // Hard Tune tunes the rough edges too: no natural voice
                     // Hard Tune (Antares-style): a rough patch inside a held note stays fully locked to the note, so the
                     // natural pitch never leaks back in mid-word (that leak was the softer, Waves-like snap)
                     if (midi == -1.0f && heldNote > 0 && (hard || (style != 0 && wasWet && std::abs (roughMidi - (float) heldNote) < 1.0f))) wetTarget = 1.0f;   // rasp / breath on the held note stays tuned (Antares tunes it too)   // other styles: a breathy stretch right on the held note stays tuned for the sustain time
@@ -1753,7 +1755,6 @@ public:
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
-            static const int apExp = [] { const char* e = std::getenv ("HHS_AP_EXP"); return e ? std::atoi (e) : 0; }();
             const bool useSplice = style == 3 && apExp != 1;
             if (useSplice) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
             if (useSplice && apExp == 2) {}

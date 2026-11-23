@@ -49,6 +49,18 @@ struct PhoneFxFrame : public juce::Component, private juce::ComponentListener
     bool laying = false;
 };
 
+// Plug-in window geometry: the usable area of the screen a window is on (or the app's screen when it isn't shown yet)
+juce::Rectangle<int> pluginWorkspace (const juce::Component* c)
+{
+    auto& ds = juce::Desktop::getInstance().getDisplays();
+    const juce::Displays::Display* d = nullptr;
+    if (c != nullptr && c->isShowing()) d = ds.getDisplayForRect (c->getScreenBounds());
+    if (d == nullptr) if (auto* tl = juce::TopLevelWindow::getActiveTopLevelWindow()) d = ds.getDisplayForRect (tl->getScreenBounds());
+    if (d == nullptr) d = ds.getPrimaryDisplay();
+    return d != nullptr ? d->userArea : juce::Rectangle<int> (0, 0, 1280, 800);
+}
+constexpr int pluginTitleRoom = 32;   // the window's own title bar sits outside its bounds on macOS / Windows
+
 class EditorWindow : public juce::DocumentWindow, private juce::Timer
 {
 public:
@@ -67,7 +79,7 @@ public:
         setResizable (resizable, false);
         auto area = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()->userArea;
         if (phoneUI) centreWithSize (juce::jmin (getWidth(), area.getWidth()), juce::jmin (getHeight(), area.getHeight()));
-        else centreWithSize (getWidth(), getHeight());
+        else placeOnScreen();
         // set before the window exists so it is never rebuilt around a hosted plug-in view
         if (floatWithTopmost) setOnTopSafely (*this, true);
         setVisible (true);
@@ -79,6 +91,9 @@ public:
         startTimer (300);
     }
     void closeButtonPressed() override { close (this); }
+    // FL-style: a plug-in window reopens where you left it, and never sits off screen or under the menu bar
+    void moved() override { juce::DocumentWindow::moved(); if (isShowing() && ! phoneUI) lastPos()[posKey()] = getPosition(); }
+    void childBoundsChanged (juce::Component* c) override { juce::DocumentWindow::childBoundsChanged (c); if (isShowing() && ! phoneUI) keepOnScreen(); }
     bool keyPressed (const juce::KeyPress& k) override
     {
         if (k == juce::KeyPress::escapeKey || k == juce::KeyPress ('w', juce::ModifierKeys::commandModifier, 0)) { close (this); return true; }   // always closable, also while streaming / full screen
@@ -92,6 +107,34 @@ public:
 private:
     std::function<bool()> valid;
     bool modalRaised = false;
+    static std::map<juce::String, juce::Point<int>>& lastPos() { static std::map<juce::String, juce::Point<int>> m; return m; }
+    juce::String posKey() const { return proc != nullptr ? "plug:" + proc->getName() : key; }
+    static juce::Point<int> clampTo (juce::Rectangle<int> r, juce::Rectangle<int> ws)
+    {
+        ws = ws.withTrimmedTop (pluginTitleRoom).reduced (4);
+        return { juce::jlimit (ws.getX(), juce::jmax (ws.getX(), ws.getRight() - r.getWidth()), r.getX()),
+                 juce::jlimit (ws.getY(), juce::jmax (ws.getY(), ws.getBottom() - r.getHeight()), r.getY()) };
+    }
+    void placeOnScreen()
+    {
+        const auto ws = pluginWorkspace (nullptr);
+        juce::Rectangle<int> r (getWidth(), getHeight());
+        const auto it = lastPos().find (posKey());
+        if (it != lastPos().end() && juce::Desktop::getInstance().getDisplays().getDisplayForPoint (it->second) != nullptr)
+        {
+            r.setPosition (it->second);
+            setTopLeftPosition (clampTo (r, pluginWorkspace (nullptr).getUnion (juce::Desktop::getInstance().getDisplays().getDisplayForPoint (it->second)->userArea)));
+            return;
+        }
+        r = r.withCentre (ws.getCentre());
+        for (auto* w : windows()) if (w->getPosition() == clampTo (r, ws)) r.translate (28, 28);   // several plug-ins open: cascade, never stacked exactly
+        setTopLeftPosition (clampTo (r, ws));
+    }
+    void keepOnScreen()
+    {
+        const auto p = clampTo (getBounds(), pluginWorkspace (this));
+        if (p != getPosition()) setTopLeftPosition (p);
+    }
     void timerCallback() override
     {
         if (valid && ! valid()) { stopTimer(); close (this); return; }
@@ -162,7 +205,20 @@ private:
             native->setSize (want.x, want.y);   // collapsed rescue
             fit();
         }
-        else if (getHeight() != native->getHeight() + bar || getWidth() < native->getWidth()) fit();
+        else if (getBounds().getBottomRight() != frameSize()) fit();   // only when the wanted size changed: never fights the OS or the plug-in
+    }
+    // the frame never asks for more than the screen holds: an oversized window is shrunk by macOS, re-grown by us and
+    // shrunk again (the 1 ms flash of the cut-off part). Resizable editors are fitted inside it, keeping their shape.
+    juce::Point<int> maxFrame() const
+    {
+        const auto ws = pluginWorkspace (this);
+        return { juce::jmax (220, ws.getWidth() - 16), juce::jmax (bar + 100, ws.getHeight() - 16 - pluginTitleRoom) };
+    }
+    juce::Point<int> frameSize()
+    {
+        auto* c = current();
+        const auto m = maxFrame();
+        return { juce::jlimit (220, m.x, c->getWidth()), juce::jmin (m.y, c->getHeight() + bar) };
     }
     void fit()
     {
@@ -176,7 +232,16 @@ private:
             const auto want = it != lastGood().end() ? it->second : juce::Point<int> (1200, 800);
             cw = want.x; chgt = want.y; native->setBounds (0, bar, cw, chgt);
         }
-        setSize (juce::jmax (220, cw), chgt + bar);
+        const auto m = maxFrame();
+        if (c == native.get() && ! collapsed() && (cw > m.x || chgt + bar > m.y) && fitTries < 3)
+            if (auto* ed = dynamic_cast<juce::AudioProcessorEditor*> (native.get()); ed != nullptr && ed->isResizable())
+            {
+                ++fitTries;
+                const double k = juce::jmin ((double) m.x / cw, (double) (m.y - bar) / chgt);
+                ed->setSize (juce::roundToInt (cw * k), juce::roundToInt (chgt * k));   // fit to workspace: resizable editors only, aspect kept
+            }
+        const auto fs = frameSize();
+        setSize (fs.x, fs.y);
         resized();
     }
     static constexpr int bar = 28;
@@ -185,7 +250,7 @@ private:
     std::unique_ptr<juce::GenericAudioProcessorEditor> ours;
     juce::TextButton toggle { "HUMHOUSE VIEW" };
     bool fitting = false;
-    int ticks = 0;
+    int ticks = 0, fitTries = 0;
 };
 
 // Tune Finder plug-in window: reads the running effect (key / BPM / tune) live, 4 times a second
