@@ -28,7 +28,7 @@ void claimFileTypes()
 // user-interactive QoS so capture and encoder work can't starve it. The audio threads keep their real-time workgroup.
 void keepUiResponsive()
 {
-    static id<NSObject> activity = [[NSProcessInfo processInfo] beginActivityWithOptions: (NSActivityUserInitiated | NSActivityLatencyCritical)
+    static id<NSObject> activity = [[NSProcessInfo processInfo] beginActivityWithOptions: (NSActivityUserInitiatedAllowingIdleSystemSleep | NSActivityLatencyCritical)
                                                                                   reason: @"Real-time audio and live UI"];
    #if ! __has_feature (objc_arc)
     [activity retain];   // held for the app's lifetime
