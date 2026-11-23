@@ -290,10 +290,12 @@ inline void setOnTopSafely (juce::Component& c, bool onTop)
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
 #if JUCE_MAC
 void joinFullScreen (juce::Component&);   // MacWindows.mm: pop-outs / plug-in windows live inside the app's full-screen space
+void keepUiResponsive();                   // MacWindows.mm: no App Nap / timer coalescing, UI thread at user-interactive QoS (OBS)
 void claimFileTypes();                     // MacWindows.mm: double-clicked .hhs / .hhpack / .hhpreset / .hhchain open in THIS app, not an older copy
 #else
 inline void joinFullScreen (juce::Component&) {}
 inline void claimFileTypes() {}
+inline void keepUiResponsive() {}
 #endif
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()

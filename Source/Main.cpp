@@ -246,6 +246,7 @@ public:
             return;
         }
        #endif
+        hhs::keepUiResponsive();   // OBS / screen capture can't throttle our refreshes or the UI thread
         juce::LookAndFeel::setDefaultLookAndFeel (&laf);
        #if JUCE_IOS   // phone / tablet: scale so the full top bar (~1600 px wide) fits the screen
         if (auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())

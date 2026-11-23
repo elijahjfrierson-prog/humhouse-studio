@@ -2166,21 +2166,10 @@ public:
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'v')
         {
             if (clipboard.empty()) return true;
-            // marker not moved since copying: lands right after the copy, the same way Cmd+B stacks (each paste after the last);
-            // marker moved: lands exactly on the marker
-            const double here = markerNow();
-            double at = here;
-            // simple (FL): playhead at bar 4 -> the paste lands at bar 4, every time
+            // the spot is captured once, right now: playhead at bar 4 -> every clip lands at bar 4 + its own offset, never rounded
+            const double at = markerNow();
             const auto cb = clipboard; const double lo = clipLo;
-            s.edit ("Paste clips", [cb, lo, at] (Project& p) {
-                for (auto& c : p.clips) c.selected = false;
-                for (auto c : cb)
-                {
-                    c.uid = p.newUid(); c.start = c.start - lo + at; c.selected = true; c.group = 0;
-                    c.lane = juce::jlimit (0, juce::jmax (0, (int) p.lanes.size() - 1), c.lane);
-                    p.clips.push_back (c);
-                }
-            });
+            s.edit ("Paste clips", [cb, lo, at] (Project& p) { pasteClips (p, cb, lo, at); });   // one undo step for the whole paste
             return true;
         }
         if (k.getModifiers() == juce::ModifierKeys (cmd) && lower == 'd') { timeSelA = timeSelB = -1; s.live ([] (Project& p) { for (auto& c : p.clips) c.selected = false; }); repaint(); return true; }
@@ -2430,14 +2419,12 @@ private:
     juce::Rectangle<float> marquee; std::vector<bool> marqueeBase;
     double timeSelA = -1, timeSelB = -1;   // ruler time selection (beats)
     std::vector<Clip> clipboard; double clipLo = 0, clipHi = 0, copyHere = -1.0, nextAfter = 0;
-    // paste / copy spot: the blue playhead you see (while playing: where it is now, on the grid line it just passed;
-    // the start marker was bars behind it)
+    // paste / copy spot: the blue playhead you see, exactly (while playing: where it is now; the start marker was bars behind it)
     bool phoneDeletedPt = false;
     double markerNow() const
     {
         if (! s.engine.isPlaying()) return juce::jmax (0.0, s.engine.positionBeats());
-        const double p = uiPos >= 0.0 ? uiPos : s.engine.positionBeats();
-        return juce::jmax (0.0, plSnap > 0 ? std::floor (p / plSnap + 1.0e-6) * plSnap : p);
+        return juce::jmax (0.0, uiPos >= 0.0 ? uiPos : s.engine.positionBeats());   // exactly where you see it, no grid rounding
     } bool cloneOnDrag = false, cloned = false;
 
     juce::Rectangle<int> clipArea() const { return getLocalBounds().withTrimmedTop (toolbarH + rulerH).withTrimmedLeft (headerW).withTrimmedBottom (hbarH); }
@@ -3758,14 +3745,15 @@ private:
     {
         const int n = juce::jmin (hudN, 128);
         std::array<float, 128> v {}; std::copy (hudIv, hudIv + n, v.begin()); std::sort (v.begin(), v.begin() + n);
-        const float p99 = n > 0 ? v[(size_t) juce::jmin (n - 1, (int) (n * 0.99f))] : 0.0f, jit = n > 0 ? p99 - (float) hudPeriod : 0.0f;
+        auto pct = [&] (float q) { return n > 0 ? v[(size_t) juce::jmin (n - 1, (int) (n * q))] : 0.0f; };
+        const float p50 = pct (0.5f), p95 = pct (0.95f), p99 = pct (0.99f), jit = n > 0 ? p99 - (float) hudPeriod : 0.0f;
         const auto r = hudRect();
         g.setColour (juce::Colours::black.withAlpha (0.75f)); g.fillRoundedRectangle (r.toFloat(), 6.0f);
         g.setColour (jit < 2.0f && hudPaintMax < (float) hudPeriod * 0.5f ? juce::Colours::lightgreen : juce::Colours::orange);
         g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         g.drawText ("paint " + juce::String (hudPaint, 1) + " ms (max " + juce::String (hudPaintMax, 1) + ")   refresh " + juce::String (hudPeriod, 1) + " ms",
                     r.reduced (8, 4).removeFromTop (18), juce::Justification::centredLeft, false);
-        g.drawText ("p99 frame " + juce::String (p99, 1) + " ms   jitter " + juce::String (juce::jmax (0.0f, jit), 1) + " ms   dropped " + juce::String (hudDrops),
+        g.drawText ("frame p50 " + juce::String (p50, 1) + " / p95 " + juce::String (p95, 1) + " / p99 " + juce::String (p99, 1) + " ms   jitter " + juce::String (juce::jmax (0.0f, jit), 1) + "   dropped " + juce::String (hudDrops),
                     r.reduced (8, 4).removeFromBottom (18), juce::Justification::centredLeft, false);
     }
     void timerCallback() override
