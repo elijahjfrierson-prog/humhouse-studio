@@ -523,4 +523,17 @@ int Project::pushLane (int from, double start, double end, const juce::String& n
     lanes.push_back (l);
     return (int) lanes.size() - 1;
 }
+int pasteClips (Project& p, const std::vector<Clip>& clipboard, double origin, double at)
+{
+    at = std::max (0.0, at);
+    for (auto& c : p.clips) c.selected = false;
+    const int lastLane = std::max (0, (int) p.lanes.size() - 1);
+    for (auto c : clipboard)
+    {
+        c.uid = p.newUid(); c.start = at + (c.start - origin); c.selected = true; c.group = 0;
+        c.lane = juce::jlimit (0, lastLane, c.lane);
+        p.clips.push_back (c);
+    }
+    return (int) clipboard.size();
+}
 }

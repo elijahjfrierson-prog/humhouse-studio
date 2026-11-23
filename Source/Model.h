@@ -395,4 +395,7 @@ double secondsToBeats (double secs, double bpm);
 // hi-hat style roll on audio clips: inside [rangeA, rangeB) (whole clip if no range) the hit at the
 // range start repeats every `div` beats; audio outside the range is kept. Returns clips rolled.
 int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA = -1, double rangeB = -1);
+// clipboard paste, one exact rule for 1 or 500 clips: start = at + (clip start - origin). Never snapped or rounded;
+// tracks, lengths, offsets, gain and fades kept; only the pasted clips end up selected. Returns how many were pasted.
+int pasteClips (Project& p, const std::vector<Clip>& clipboard, double origin, double at);
 }

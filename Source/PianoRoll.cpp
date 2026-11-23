@@ -846,7 +846,7 @@ private:
     double markerLocal() const { return dropValid() ? dropAt : playheadLocal(); }
     // paste spot: song mode with the playhead past this pattern's clips used to give -1 -> the paste landed at beat 0;
     // now it is measured from the last clip of this pattern before the playhead (the pattern grows to reach it).
-    // While playing it lands on the grid line the playhead just passed.
+    // Exactly where the playhead is, never rounded to the grid.
     double pasteSpot() const
     {
         if (dropValid()) return dropAt;
@@ -860,7 +860,6 @@ private:
             for (auto& c : p.clips)
                 if (c.patternIndex == p.currentPattern && c.start <= pos && c.start > best) { best = c.start; at = pos - c.start + juce::jmax (0.0, c.patOffset); }
         }
-        if (s.engine.isPlaying() && p.snap > 0) at = std::floor (at / p.snap + 1.0e-6) * p.snap;
         return juce::jmax (0.0, at);
     }
     bool dropValid() const { return dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropPos) < 1.0e-6; }

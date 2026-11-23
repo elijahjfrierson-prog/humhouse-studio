@@ -80,7 +80,8 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: HumHouse Drummer (turn this track into drums)
 - lock: Drummer section the Drummer rows show and edit
 - lock: first edit keeps what the drummer was playing
-- lock: the same way Cmd+B stacks (each paste after the last)
+- lock: every clip lands at bar 4 + its own offset, never rounded
+- lock: one exact rule for 1 or 500 clips
 - lock: follow: no page jumps
 - lock: moves on the next screen refresh: many trackpad events in one frame cost one redraw
 - lock: else two screens
@@ -128,3 +129,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: just the %, no late count
 - lock: the header is a cached picture: redraw it only when what paint() shows changed
 - lock: the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off
+- lock: OBS / screen capture can't throttle our refreshes or the UI thread
+- lock: frame p50

@@ -760,6 +760,37 @@ int main (int argc, char** argv)
         CHECK (laneIns.size() == pr.lanes.size());
     }
 
+    // clipboard paste: destination = playhead + each clip's own offset, exact for 1 / 10 / 100 / 500 clips across tracks
+    for (int count : { 1, 10, 100, 500 })
+    {
+        Project p; p.bpm = 87.0 + count; p.beatsPerBar = count % 2 ? 4 : 3;
+        for (int l = 0; l < 6; ++l) { Lane ln; ln.name = "T" + juce::String (l); p.lanes.push_back (ln); }
+        std::vector<Clip> cb; double lo = 1e9; juce::Random r (count);
+        for (int i = 0; i < count; ++i)
+        {
+            Clip c; c.uid = p.newUid(); c.lane = i % 6; c.start = 3.37 + i * 1.913 + r.nextDouble() * 0.71;   // between bars, irregular
+            c.length = 0.25 + r.nextDouble() * 3.0; c.sourceOffset = r.nextDouble(); c.gain = 0.7f; c.fadeIn = 0.1; c.selected = true;
+            p.clips.push_back (c); cb.push_back (c); lo = std::min (lo, c.start);
+        }
+        for (double at : { 16.0, 17.3333, 0.0 })   // on a bar, between bars, at zero
+        {
+            const auto before = p.clips.size();
+            CHECK (pasteClips (p, cb, lo, at) == count);
+            CHECK (p.clips.size() == before + (size_t) count);
+            for (int i = 0; i < count; ++i)
+            {
+                const auto& o = cb[(size_t) i]; const auto& n = p.clips[before + (size_t) i];
+                CHECK (std::abs (n.start - (at + (o.start - lo))) < 1.0e-9);
+                CHECK (n.lane == o.lane && n.length == o.length && n.sourceOffset == o.sourceOffset && n.gain == o.gain && n.fadeIn == o.fadeIn);
+                CHECK (n.selected && n.uid != o.uid);
+            }
+            CHECK (std::abs (p.clips[before].start - at) < 1.0e-9 || count > 1);
+            int sel = 0; for (auto& c : p.clips) sel += c.selected ? 1 : 0;
+            CHECK (sel == count);   // only the new paste is selected
+        }
+        for (size_t i = 0; i < cb.size(); ++i) CHECK (p.clips[i].start == cb[i].start);   // the originals never move
+    }
+
     // scales
     CHECK (inScale (60, 0, 0) && ! inScale (61, 0, 0));
     CHECK (snapToScale (61, 0, 0) == 60 || snapToScale (61, 0, 0) == 62);
