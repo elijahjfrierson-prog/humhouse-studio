@@ -264,6 +264,7 @@ inline constexpr bool floatWithTopmost = true;
 #endif
 // Frame meter (Options menu): frame time, refresh interval and dropped frames on the Playlist, to measure hitches
 inline std::atomic<bool>& frameMeterOn() { static std::atomic<bool> on { false }; return on; }
+inline std::atomic<bool>& zoomAtPlayhead() { static std::atomic<bool> on { false }; return on; }   // Playlist zoom anchors on the playhead instead of the pointer
 // horizontal scroll bar for the Playlist / Piano Roll (drag it, or use the wheel)
 struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
 {

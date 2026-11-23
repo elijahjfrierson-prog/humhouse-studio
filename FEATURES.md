@@ -131,3 +131,6 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off
 - lock: OBS / screen capture can't throttle our refreshes or the UI thread
 - lock: frame p50
+- lock: Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom
+- lock: mid-zoom (up to 2x in / 1.5x out of the strips' zoom) the strips are stretched, not redrawn
+- lock: Zoom around the playhead (else the pointer)

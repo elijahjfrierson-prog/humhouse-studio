@@ -1801,9 +1801,8 @@ public:
                     zoomH = juce::jlimit (0.35f, 4.0f, pinchZh0 * juce::jmax (20.0f, std::abs (touchPos[0].y - touchPos[1].y)) / pinchDy0);
                     layoutHeaders(); lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
                 }
-                pxPerBeat = juce::jlimit (1.0f, 1600.0f, pinchPpb0 * d / pinchD0);
-                scrollX = juce::jmax (0.0, pinchBeat - (mid - (float) headerW) / pxPerBeat);
-                lastUserView = juce::Time::getMillisecondCounter(); repaint(); return;
+                zoomTo (pinchPpb0 * d / pinchD0, mid, 0.0, pinchBeat, 1.0, 1600.0);   // anchored between the fingers, on the next refresh
+                return;
             }
             if (e.source.getIndex() != panSrc) return;
             scrollTo (juce::jmax (0.0, panX0 - (e.position.x - panFrom.x) / pxPerBeat), juce::jmax (0.0, (double) panY0 - (e.position.y - panFrom.y)), 0.0);   // finger pan: lands on the next refresh
@@ -2052,11 +2051,8 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         if (e.position.x < headerW) return;
-        const double at = xToBeat (e.position.x);
-        lastUserView = juce::Time::getMillisecondCounter();   // playhead follow waits while you zoom
-        pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * juce::jlimit (0.85f, 1.18f, scale));   // capped per event: no jumpy pinch
-        scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
-        repaint();
+        // continuous: every pinch event multiplies the target; the view takes it on the next screen refresh, under your fingers
+        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, 0.0);
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
@@ -2070,9 +2066,9 @@ public:
         }
         if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
-            const double at = xToBeat (e.position.x);
-            pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * std::pow (1.15f, juce::jlimit (-4.0f, 4.0f, w.deltaY * 8.0f)));
-            scrollX = juce::jmax (0.0, at - (e.position.x - headerW) / pxPerBeat);
+            zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * 8.0)),
+                    e.position.x, w.isSmooth ? 0.0 : 0.07);   // trackpad: direct; mouse wheel notches: a short glide, no steps
+            return;
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
         {
@@ -2304,12 +2300,12 @@ private:
         resized(); layoutHeaders(); slideHandle.repaint(); repaint();
     }
     juce::TextButton zoomInBtn { "+" }, zoomOutBtn { "-" }, tallBtn { "TALL" }, slimBtn { "SLIM" }, fitBtn { "FIT" };
-    void zoomBy (float f) { const double at = xToBeat ((float) (headerW + clipArea().getWidth() / 2)); pxPerBeat = juce::jlimit (2.0f, 1200.0f, pxPerBeat * f); scrollX = juce::jmax (0.0, at - clipArea().getWidth() / 2.0 / pxPerBeat); lastUserView = juce::Time::getMillisecondCounter(); repaint(); }
+    void zoomBy (float f) { zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * f, (float) (headerW + clipArea().getWidth() / 2), 0.08); }
     void fitAll()   // whole song and every track on screen
     {
         const auto ca = clipArea();
         pxPerBeat = juce::jlimit (1.0f, 1600.0f, (float) (ca.getWidth() / juce::jmax (4.0 * s.p().beatsPerBar, s.p().songLengthBeats() + 1.0)));
-        scrollX = 0; scrollY = 0;
+        scrollX = 0; scrollY = 0; tgtX = tgtY = tgtPpb = -1;
         heightBy ((float) juce::jmax (40, ca.getHeight() - 8) / (float) juce::jmax (1, totalLaneH()));
     }
     void heightBy (float f) { zoomH = juce::jlimit (0.35f, 4.0f, zoomH * f); vZoom.setValue (zoomH, juce::dontSendNotification); layoutHeaders(); repaint(); }
@@ -2369,6 +2365,22 @@ private:
     // Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target; the view moves once per screen
     // refresh, with dt-based easing (same feel at 60 or 120 Hz), and redraws only the part that moved
     double tgtX = -1, tgtY = -1, scrollYf = 0, scrollTau = 0, lastFrameT = 0; int lastDir = 1;
+    // Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom (log scale, fractional, no fixed steps) and the beat that
+    // stays under the pointer; the clip strips are stretched on screen while you zoom and redrawn sharp once you stop
+    double tgtPpb = -1, zoomTau = 0, zoomAnchorBeat = 0; float zoomAnchorX = 0, tilePpb = 0;
+    juce::uint32 lastZoomMs = 0; bool zoomDirty = false;
+    void zoomTo (double ppb, float anchorX, double tau, double anchorBeat = -1.0, double lo = 2.0, double hi = 1200.0)
+    {
+        lastUserView = juce::Time::getMillisecondCounter();   // playhead follow waits while you zoom
+        if (anchorBeat < 0.0 && zoomAtPlayhead().load())   // Options: the playhead stays still (when it's on screen)
+        {
+            const double ph = s.engine.positionBeats(); const float px = beatToX (ph);
+            if (px >= (float) headerW && px <= (float) getWidth()) { anchorX = px; anchorBeat = ph; }
+        }
+        zoomAnchorX = juce::jlimit ((float) headerW, (float) getWidth(), anchorX);
+        zoomAnchorBeat = anchorBeat >= 0.0 ? anchorBeat : xToBeat (zoomAnchorX);
+        tgtPpb = juce::jlimit (lo, hi, ppb); zoomTau = tau; tgtX = -1;
+    }
     double maxScrollY() const { return (double) juce::jmax (0, totalLaneH() - clipArea().getHeight() + 40); }
     void scrollTo (double x, double y, double tau)   // -1 = keep that axis; tau 0 = land on the next refresh
     {
@@ -2382,9 +2394,21 @@ private:
         const double now = juce::Time::getMillisecondCounterHiRes() * 0.001;
         const double dt = juce::jlimit (0.0, 0.1, lastFrameT > 0 ? now - lastFrameT : 1.0 / 60.0);
         lastFrameT = now;
-        if (tgtX < 0 && tgtY < 0) return false;
+        if (tgtX < 0 && tgtY < 0 && tgtPpb < 0) return false;
         const double a = scrollTau <= 0 ? 1.0 : 1.0 - std::exp (-dt / scrollTau);
         bool mx = false, my = false;
+        if (tgtPpb > 0)
+        {
+            const double az = zoomTau <= 0 ? 1.0 : 1.0 - std::exp (-dt / zoomTau);
+            double np = std::exp (std::log ((double) pxPerBeat) + (std::log (tgtPpb) - std::log ((double) pxPerBeat)) * az);
+            if (std::abs (std::log (tgtPpb / np)) < 0.002) { np = tgtPpb; tgtPpb = -1; }
+            if ((float) np != pxPerBeat)
+            {
+                pxPerBeat = (float) np;
+                scrollX = juce::jmax (0.0, zoomAnchorBeat - (zoomAnchorX - (float) headerW) / pxPerBeat);
+                lastZoomMs = juce::Time::getMillisecondCounter(); zoomDirty = true; mx = true;
+            }
+        }
         if (tgtX >= 0)
         {
             double nx = scrollX + (tgtX - scrollX) * a;
@@ -2852,7 +2876,7 @@ private:
     {
         juce::uint64 h = 1469598103934665603ull;
         auto add = [&h] (auto v) { const auto* b = reinterpret_cast<const unsigned char*> (&v); for (size_t i = 0; i < sizeof (v); ++i) { h ^= b[i]; h *= 1099511628211ull; } };
-        add (tileGen); add (pxPerBeat); add (area.getX()); add (area.getY()); add (area.getWidth()); add (area.getHeight()); add (laneH); add (zoomH);
+        add (tileGen); add (area.getX()); add (area.getY()); add (area.getWidth()); add (area.getHeight()); add (laneH); add (zoomH);
         add (plSnap); add (timeSelA); add (timeSelB); add (s.p().punchIn); add (s.p().punchOut); add (s.p().clips.size()); add (s.p().lanes.size());
         for (auto& [k, v] : laneMul) { add (k); add (v); }
         const double now = juce::Time::getMillisecondCounterHiRes();
@@ -2867,7 +2891,7 @@ private:
         auto add = [&h] (auto v) { const auto* b = reinterpret_cast<const unsigned char*> (&v); for (size_t i = 0; i < sizeof (v); ++i) { h ^= b[i]; h *= 1099511628211ull; } };
         auto str = [&add] (const juce::String& t) { add (t.hashCode64()); };
         auto& p = s.p();
-        add (tileGen); add (pxPerBeat); add (area.getWidth()); add (area.getHeight()); add (area.getX()); add (area.getY());
+        add (tileGen); add (area.getWidth()); add (area.getHeight()); add (area.getX()); add (area.getY());
         add (laneH); add (zoomH); add (plSnap); add (p.bpm); add (p.beatsPerBar); add (p.currentPattern);
         add (p.punchIn); add (p.punchOut); add (p.hasPunch()); add (timeSelA); add (timeSelB);
         for (auto c : { col::bg, col::panel, col::grid, col::gridBar, col::accent, col::accent2, col::text, col::dim }) add (c.getARGB());
@@ -2897,7 +2921,7 @@ private:
     // screen refresh (prefetchStrip), so no frame ever redraws a whole screen at once.
     struct Strip { juce::Image img; int k = 0; };
     std::vector<Strip> strips; int stripW = 0;
-    double stripBeats() const { return stripW / (double) pxPerBeat; }
+    double stripBeats() const { return stripW / (double) (tilePpb > 0 ? tilePpb : pxPerBeat); }
     Strip* findStrip (int k) { for (auto& st : strips) if (st.k == k) return &st; return nullptr; }
     size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
     {
@@ -2924,10 +2948,10 @@ private:
             const auto tr = area.withWidth (stripW).withHeight (th);
             ig.reduceClipRegion (tr);
             ig.setColour (col::bg); ig.fillRect (tr);
-            const double keep = scrollX; const int keepY = scrollY;
-            scrollX = k * stripBeats(); scrollY = tileScrollY; paintRight = (float) tr.getRight();
+            const double keep = scrollX; const int keepY = scrollY; const float keepPpb = pxPerBeat;
+            scrollX = k * stripBeats(); scrollY = tileScrollY; paintRight = (float) tr.getRight(); pxPerBeat = tilePpb;   // the strips' own zoom
             paintContent (ig, tr);
-            scrollX = keep; scrollY = keepY; paintRight = -1.0f;
+            scrollX = keep; scrollY = keepY; paintRight = -1.0f; pxPerBeat = keepPpb;
         }
         strips.push_back (std::move (st));
     }
@@ -2957,7 +2981,10 @@ private:
         const int th = juce::jmax (area.getHeight() + 2, juce::jmin (capH, juce::jmax (area.getHeight() * 2, totalLaneH() + area.getHeight())));
         if ((double) sw * th * scale * scale * 4.0 > 48.0e6) return false;
         const auto key = cachedContentKey (area);
-        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH;
+        // mid-zoom (up to 2x in / 1.5x out of the strips' zoom) the strips are stretched, not redrawn: zoom never redraws per frame
+        const double ratio = tilePpb > 0 ? pxPerBeat / (double) tilePpb : 0.0;
+        const bool zoomOk = ratio == 1.0 || (juce::Time::getMillisecondCounter() - lastZoomMs < 160 && ratio > 0.67 && ratio < 2.0);
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH && zoomOk;
         if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + tileH)
         {
             const auto now = juce::Time::getMillisecondCounter();
@@ -2969,7 +2996,7 @@ private:
                 if (hot) { tileKey = key; strips.clear(); return false; }
             }
             strips.clear();
-            tileKey = key; tileScale = scale; tileArea = area; tileH = th;
+            tileKey = key; tileScale = scale; tileArea = area; tileH = th; tilePpb = pxPerBeat;
             stripW = sw;
             tileScrollY = th >= totalLaneH() + area.getHeight() ? 0 : juce::jmax (0, scrollY - (th - area.getHeight()) / 2);
         }
@@ -2981,8 +3008,9 @@ private:
             auto* st = findStrip (k);
             if (st == nullptr) { renderStrip (k); st = findStrip (k); }
             if (st == nullptr) return false;
-            const float dx = std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale;
-            g.drawImageTransformed (st->img, juce::AffineTransform::scale (1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+            const float zx = pxPerBeat / tilePpb;   // 1 except while you zoom
+            const float dx = zx == 1.0f ? std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale : (float) ((k * sb - scrollX) * pxPerBeat);
+            g.drawImageTransformed (st->img, juce::AffineTransform::scale (zx / scale, 1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
         }
         return true;
     }
@@ -3761,6 +3789,8 @@ private:
         for (auto& h : headers) h->repaintIfChanged();
         if (frameMeterOn().load (std::memory_order_relaxed)) hudTick(); else if (hudN != 0) { hudN = hudDrops = 0; hudLastT = 0; hudPaintMax = 0; repaint(); }
         glideStep();
+        if (zoomDirty && tgtPpb < 0 && juce::Time::getMillisecondCounter() - lastZoomMs >= 160)   // zoom done: redraw the strips sharp
+        { zoomDirty = false; repaint (headerW, toolbarH + rulerH, getWidth() - headerW, getHeight() - toolbarH - rulerH); }
         prefetchStrip();   // No Hitch: the next strip is ready before the view gets there
         const bool playing = s.engine.isPlaying();
         if (! playing) { if (wasPlaying) repaint(); wasPlaying = false; lastPx = -1.0f; uiPos = uiEng = -1.0; return; }
