@@ -146,3 +146,8 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Neon 3D look (HumHouse future)
 - lock: Neon 3D: a lit glass dome on a dark well, the value arc glows
 - lock: Neon 3D: a raised glass key, lit from above
+- lock: Neon 3D: every page panel sits in a thin lit frame
+- lock: Neon 3D: the playhead glows
+- lock: Neon 3D: glossy clip, lit title strip, glowing rim
+- lock: Neon 3D: glass dropdown with a lit rim and chevron
+- lock: Neon 3D: lit groove and a glass fader cap

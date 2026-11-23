@@ -48,6 +48,17 @@ void setFontStyle (int st)
 // combo boxes marked "smallArrow" (Playlist track routing) get a slim arrow so the name gets the room
 void HHLookAndFeel::drawComboBox (juce::Graphics& g, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox& box)
 {
+    if (col::neon && ! col::lightMode && ! box.getProperties().contains ("smallArrow"))   // Neon 3D: glass dropdown with a lit rim and chevron
+    {
+        const auto b = juce::Rectangle<int> (0, 0, w, h).toFloat().reduced (0.5f);
+        const float rr = juce::jmin (6.0f, b.getHeight() * 0.3f);
+        g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.15f), 0.0f, 0.0f, col::bg, 0.0f, (float) h, false)); g.fillRoundedRectangle (b, rr);
+        g.setColour (col::accent.withAlpha (box.hasKeyboardFocus (true) || down ? 0.9f : 0.35f)); g.drawRoundedRectangle (b, rr, 1.0f);
+        const float cx = (float) w - 12.0f, cy = (float) h * 0.5f;
+        juce::Path a; a.startNewSubPath (cx - 4.0f, cy - 2.0f); a.lineTo (cx, cy + 2.0f); a.lineTo (cx + 4.0f, cy - 2.0f);
+        g.setColour (col::text.withAlpha (box.isEnabled() ? 0.9f : 0.3f)); g.strokePath (a, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        return;
+    }
     if (! box.getProperties().contains ("smallArrow")) { LookAndFeel_V4::drawComboBox (g, w, h, down, bx, by, bw, bh, box); return; }
     const auto b = juce::Rectangle<int> (0, 0, w, h).toFloat();
     g.setColour (box.findColour (juce::ComboBox::backgroundColourId)); g.fillRoundedRectangle (b, 2.0f);
@@ -342,6 +353,20 @@ void HHLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, in
         return;
     }
     const float cx = (float) x + (float) w * 0.5f;
+    if (col::neon && ! col::lightMode)   // Neon 3D: lit groove and a glass fader cap with a glowing line
+    {
+        g.setColour (juce::Colour (0xff04050a)); g.fillRoundedRectangle (cx - 2.5f, (float) y, 5.0f, (float) h, 2.5f);
+        g.setColour (col::accent.withAlpha (0.18f)); g.fillRoundedRectangle (cx - 4.5f, pos, 9.0f, (float) (y + h) - pos, 4.5f);
+        g.setGradientFill (juce::ColourGradient (col::accent.brighter (0.3f), 0.0f, pos, col::accent.darker (0.3f), 0.0f, (float) (y + h), false));
+        g.fillRoundedRectangle (cx - 2.0f, pos, 4.0f, (float) (y + h) - pos, 2.0f);
+        juce::Rectangle<float> cap (cx - 13.0f, pos - 8.0f, 26.0f, 16.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (cap.translated (0.0f, 2.0f), 4.0f);
+        g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.6f), 0.0f, cap.getY(), col::panel2.darker (0.3f), 0.0f, cap.getBottom(), false));
+        g.fillRoundedRectangle (cap, 4.0f);
+        g.setColour (col::accent.withAlpha (0.5f)); g.drawRoundedRectangle (cap, 4.0f, 1.0f);
+        g.setColour (col::accent.brighter (0.5f)); g.drawLine (cap.getX() + 4, pos, cap.getRight() - 4, pos, 1.5f);
+        return;
+    }
     g.setColour (col::bg);
     g.fillRoundedRectangle (cx - 2.5f, (float) y, 5.0f, (float) h, 2.5f);
     g.setColour (col::accent.withAlpha (0.65f));
@@ -1224,6 +1249,26 @@ public:
         g.setColour (col::panel);
         g.fillRect (topBar);
         if (! logoArea.isEmpty()) drawLogo (g, logoArea.toFloat(), true);
+    }
+
+    void paintOverChildren (juce::Graphics& g) override   // Neon 3D: every page panel sits in a thin lit frame (strokes only, clipped to what repaints)
+    {
+        if (! col::neon || col::lightMode) return;
+        const auto lit = topBar.getBottom();
+        {
+            juce::ColourGradient line (col::accent.withAlpha (0.0f), (float) topBar.getX(), 0.0f, col::accent.withAlpha (0.0f), (float) topBar.getRight(), 0.0f, false);
+            line.addColour (0.5, col::accent.withAlpha (0.8f));
+            g.setGradientFill (line); g.fillRect (topBar.getX(), lit - 1, topBar.getWidth(), 1);
+        }
+        for (auto* c : { browser.get(), playlist.get(), mixer.get(), rack.get(), piano.get(), lanes.get(), patchView.get(), videoView.get() })
+        {
+            if (c == nullptr || ! c->isVisible() || c->getParentComponent() != this || c->getWidth() < 40 || c->getHeight() < 40) continue;
+            const auto b = c->getBounds().toFloat().reduced (0.5f);
+            const auto clip = g.getClipBounds().toFloat();
+            if (! clip.intersects (b.expanded (2.0f)) || b.reduced (4.0f).contains (clip)) continue;   // a repaint inside the panel never touches its frame
+            g.setColour (col::accent.withAlpha (0.16f)); g.drawRoundedRectangle (b.reduced (1.0f), 6.0f, 3.0f);
+            g.setColour (col::accent.withAlpha (0.55f)); g.drawRoundedRectangle (b, 6.0f, 1.0f);
+        }
     }
 
     void resized() override

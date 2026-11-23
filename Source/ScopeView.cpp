@@ -43,7 +43,7 @@ public:
         auto area = getLocalBounds().reduced (10).withTrimmedTop (34).toFloat();
         g.setGradientFill (juce::ColourGradient (col::panel.brighter (0.05f), 0.0f, area.getY(), col::panel.darker (0.15f), 0.0f, area.getBottom(), false));
         g.fillRoundedRectangle (area, 8);
-        g.setColour (juce::Colours::black.withAlpha (0.4f)); g.drawRoundedRectangle (area.reduced (0.5f), 8, 1.0f);
+        g.setColour (col::neon && ! col::lightMode ? col::accent.withAlpha (0.6f) : juce::Colours::black.withAlpha (0.4f)); g.drawRoundedRectangle (area.reduced (0.5f), 8, 1.0f);   // Neon 3D: lit frame
         auto a = area.reduced (8);
         g.setColour (col::grid.withAlpha (0.55f));
         for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8), a.getY(), a.getBottom());

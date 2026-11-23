@@ -1546,7 +1546,8 @@ public:
                 }
             });
             const float px = playheadX();
-            const auto phc = s.engine.isRecording() ? col::rec : col::accent2;
+            const auto phc = s.engine.isRecording() ? col::rec : col::neon && ! col::lightMode ? col::accent.brighter (0.35f) : col::accent2;
+            if (col::neon && ! col::lightMode) { g.setColour (phc.withAlpha (0.10f)); g.fillRect (px - 5.5f, (float) area.getY(), 11.0f, (float) area.getHeight()); }   // Neon 3D: the playhead glows
             g.setColour (phc.withAlpha (0.22f)); g.fillRect (px - 2.5f, (float) area.getY(), 5.0f, (float) area.getHeight());
             g.setColour (phc); g.fillRect (px - 0.75f, (float) area.getY(), 1.5f, (float) area.getHeight());
         }
@@ -1587,7 +1588,7 @@ public:
         if (px >= headerW)
         {
             juce::Path tri; tri.addTriangle (px - 7, (float) toolbarH + 1, px + 7, (float) toolbarH + 1, px, (float) (toolbarH + 13));
-            g.setColour (col::accent2); g.fillPath (tri);
+            g.setColour (col::neon && ! col::lightMode ? col::accent.brighter (0.35f) : col::accent2); g.fillPath (tri);
             g.fillRect (px - 0.75f, (float) toolbarH + 10, 1.5f, (float) (getHeight() - toolbarH - 10));   // line from the handle down through the tracks
         }
         g.setColour (col::panel); g.fillRect (0, toolbarH, headerW, rulerH);
@@ -2711,8 +2712,18 @@ private:
         if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
         if (! c.colour.isTransparent()) colour = c.colour;
         if (c.muted) colour = col::dim;
-        g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
-        g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);
+        if (col::neon && ! col::lightMode)   // Neon 3D: glossy clip, lit title strip, glowing rim
+        {
+            g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.42f), 0.0f, r.getY(), colour.withAlpha (0.16f), 0.0f, r.getBottom(), false)); g.fillRoundedRectangle (r, 4);
+            g.setGradientFill (juce::ColourGradient (colour.brighter (0.35f), 0.0f, r.getY(), colour.darker (0.15f), 0.0f, r.getY() + 14.0f, false)); g.fillRoundedRectangle (r.withHeight (14), 4);
+            g.setColour (juce::Colours::white.withAlpha (0.25f)); g.drawHorizontalLine ((int) r.getY() + 1, r.getX() + 3, r.getRight() - 3);
+            g.setColour (colour.brighter (0.3f).withAlpha (0.7f)); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.0f);
+        }
+        else
+        {
+            g.setColour (colour.withAlpha (0.28f)); g.fillRoundedRectangle (r, 4);
+            g.setColour (colour.withAlpha (0.9f)); g.fillRoundedRectangle (r.withHeight (14), 4);
+        }
         auto body = r.withTrimmedTop (14).reduced (1, 2);
         if (c.isAudio())
         {
