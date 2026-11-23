@@ -2402,10 +2402,12 @@ private:
             const double az = zoomTau <= 0 ? 1.0 : 1.0 - std::exp (-dt / zoomTau);
             double np = std::exp (std::log ((double) pxPerBeat) + (std::log (tgtPpb) - std::log ((double) pxPerBeat)) * az);
             if (std::abs (std::log (tgtPpb / np)) < 0.002) { np = tgtPpb; tgtPpb = -1; }
-            if ((float) np != pxPerBeat)
+            // the anchor can move with the zoom unchanged (two-finger pan at the zoom limit): the beat still follows the fingers
+            const double nsx = juce::jmax (0.0, zoomAnchorBeat - (zoomAnchorX - (float) headerW) / (float) np);
+            if ((float) np != pxPerBeat || nsx != scrollX)
             {
                 pxPerBeat = (float) np;
-                scrollX = juce::jmax (0.0, zoomAnchorBeat - (zoomAnchorX - (float) headerW) / pxPerBeat);
+                scrollX = nsx;
                 lastZoomMs = juce::Time::getMillisecondCounter(); zoomDirty = true; mx = true;
             }
         }
