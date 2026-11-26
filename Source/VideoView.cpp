@@ -1,3 +1,4 @@
+#include <regex>
 #include "UI.h"
 #if JUCE_MAC || JUCE_WINDOWS || JUCE_IOS
  #include <juce_video/juce_video.h>
@@ -156,7 +157,12 @@ private:
     static juce::File linkDir() { return hhsHome().getChildFile ("Video Tracks").getChildFile ("Routed"); }
     static juce::String linkPrefix (const juce::String& key) { return "V-" + key + " "; }
     static bool isLinkClip (const Clip& c, const juce::String& key)
-    { return key.isNotEmpty() && c.audioFile.getFileName().startsWith (linkPrefix (key)); }   // by name: saving copies it into the song's folder, keeping the name
+    {   // by exact name ("V-key <time>", plus a save copy's "-hash"): stems or edits made from it on REC aren't it
+        static const std::regex rendered (R"(\d{4}-\d\d-\d\d \d\d-\d\d-\d\d( ?\(\d+\))?(-[0-9a-fA-F]{1,16})?)");
+        const auto name = c.audioFile.getFileNameWithoutExtension();
+        return key.isNotEmpty() && name.startsWith (linkPrefix (key))
+            && std::regex_match (name.substring (linkPrefix (key).length()).toStdString(), rendered);
+    }
     int trackOfKey (const juce::String& key) const
     {
         const auto& tr = ed->sequence().tracks;
