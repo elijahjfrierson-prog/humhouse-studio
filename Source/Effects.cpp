@@ -733,7 +733,7 @@ public:
         return ps;
     }
     int latencySamples() const override { return engaged() ? (int) std::lround (centre) : 0; }   // at 440 Hz / 0 cents: no delay at all
-    double tailSeconds() const override { return p (7) > 0.001f ? (p (11) > 0.5f ? 30.0 : 20.0) : 0.1; }
+    double tailSeconds() const override { return 30.0; }   // read once at sync: Weird Verb / Freeze turned up later must not be cut by Smart Disable
     void prepare (double s, int) override
     {
         sr = s; centre = 0.022 * s;
