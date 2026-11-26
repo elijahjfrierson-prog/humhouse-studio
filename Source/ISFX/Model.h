@@ -147,6 +147,7 @@ struct Track
     juce::String name;
     TrackKind kind = TrackKind::Video;
     bool mute = false, hidden = false, locked = false, solo = false;
+    int recLane = -1;        // HumHouse REC track (0 = Track 1) this audio track plays on, -1 = not routed
     int height = 64;
     juce::String id;         // set when the track first gets plug-ins
     juce::var plugins;       // track plug-in chain (descriptions + state)

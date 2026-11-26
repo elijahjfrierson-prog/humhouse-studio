@@ -303,8 +303,7 @@ static void addSerumPackMenu (juce::PopupMenu& pool, const std::vector<PoolInstr
         evoPack.addSubMenu (folder, sub);
     }
     pack.addSubMenu ("Evolve Pack (200 granular / glitter)", evoPack);
-    pool.addSeparator();
-    pool.addSubMenu ("HumWave Serum Pack", pack);
+    if (! phoneLite) { pool.addSeparator(); pool.addSubMenu ("HumWave Serum Pack", pack); }   // Subscription iPhone app: no Serum / Evolve packs
     juce::PopupMenu store;
     for (auto* folder : { "Pianos", "Keys", "Organs", "Guitars", "Basses", "Synths", "Pads", "Strings & Brass", "Bells & Mallets", "FX" })
     {
@@ -314,7 +313,7 @@ static void addSerumPackMenu (juce::PopupMenu& pool, const std::vector<PoolInstr
             if (all[(size_t) i].cat != nullptr && tag == all[(size_t) i].cat) sub.addItem (2000 + i, all[(size_t) i].name);
         store.addSubMenu (folder, sub);
     }
-    pool.addSubMenu ("Sonic Store", store);
+    if (! phoneLite) pool.addSubMenu ("Sonic Store", store);   // Subscription iPhone app: no Sonic Store (songs that use its sounds still load)
     juce::PopupMenu hit;
     for (int i = 0; i < (int) all.size(); ++i)
         if (all[(size_t) i].cat != nullptr && juce::String ("HM") == all[(size_t) i].cat) hit.addItem (2000 + i, all[(size_t) i].name);

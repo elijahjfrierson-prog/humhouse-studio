@@ -995,6 +995,7 @@ public:
             juce::Desktop::getInstance().setGlobalScaleFactor ((float) juce::jlimit (0.75, phoneUI ? 1.5 : 2.0, studio.settings->getDoubleValue ("uiScale", 1.0)));   // phone: 150% max, bigger never fits
         col::lightMode = studio.settings->getBoolValue ("themeLight", false);
         col::neon = studio.settings->getBoolValue ("themeNeon", true);
+        playheadLock() = studio.settings->getBoolValue ("playheadLock", false);
         engine.setDualOutput (studio.settings->getBoolValue ("dualOut", false));
         engine.pluginSandbox = false;   // crash protection removed: plug-ins always load directly
        #if JUCE_IOS
@@ -1791,6 +1792,7 @@ if (phoneUI)
             m.addItem (4717, "Pack audio inside songs (MB, opens on any computer)", true, packAudioInSong().load());
             m.addItem (4724, "Frame meter (frame time, dropped frames)", true, frameMeterOn().load());
             m.addItem (4725, "Zoom around the playhead (else the pointer)", true, zoomAtPlayhead().load());
+            m.addItem (4726, "Lock playhead (clicks in the Playlist don't move it; the ruler still does)", true, playheadLock().load());
             if (! phoneUI)
             {
                 m.addItem (4722, "Background picture...");   // Background picture (behind the UI, from Downloads)
@@ -2137,6 +2139,7 @@ if (phoneUI)
             case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
             case 4724: frameMeterOn() = ! frameMeterOn().load(); if (frameMeterOn().load()) engine.resetCallbackMeter(); if (playlist != nullptr) playlist->repaint(); break;
             case 4725: zoomAtPlayhead() = ! zoomAtPlayhead().load(); break;
+            case 4726: playheadLock() = ! playheadLock().load(); studio.settings->setValue ("playheadLock", playheadLock().load()); break;
             case 4717:
                 packAudioInSong() = ! packAudioInSong().load();
                 studio.settings->setValue ("packAudioInSong", packAudioInSong().load());

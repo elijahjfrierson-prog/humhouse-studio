@@ -162,7 +162,7 @@ juce::var toVar (const Project& p)
         {
             auto* to = new juce::DynamicObject();
             to->setProperty ("name", t.name); to->setProperty ("kind", (int) t.kind); to->setProperty ("mute", t.mute);
-            to->setProperty ("hidden", t.hidden); to->setProperty ("solo", t.solo); to->setProperty ("locked", t.locked); to->setProperty ("height", t.height);
+            to->setProperty ("hidden", t.hidden); to->setProperty ("solo", t.solo); to->setProperty ("locked", t.locked); to->setProperty ("height", t.height); to->setProperty ("recLane", t.recLane);
             if (t.id.isNotEmpty()) to->setProperty ("id", t.id);
             if (t.plugins.isArray()) to->setProperty ("plugins", t.plugins);
             tr.add (juce::var (to));
@@ -259,6 +259,7 @@ bool fromVar (const juce::var& v, Project& p, juce::String& error)
                     Track t; t.name = tv["name"].toString(); t.kind = (TrackKind) (int) tv["kind"];
                     t.mute = (bool) tv["mute"]; t.hidden = (bool) tv["hidden"]; t.solo = (bool) tv["solo"]; t.locked = (bool) tv["locked"];
                     t.height = tv.hasProperty ("height") ? (int) tv["height"] : 64;
+                    t.recLane = tv.hasProperty ("recLane") ? (int) tv["recLane"] : -1;
                     t.id = tv["id"].toString(); t.plugins = tv["plugins"];
                     s.tracks.push_back (t);
                 }

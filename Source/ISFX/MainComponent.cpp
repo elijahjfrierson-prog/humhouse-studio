@@ -294,7 +294,7 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
     genBtn.setTooltip ("Builds three separate editable sequences from your synced takes: Cinematic / Atmospheric, Underground / Experimental and High-Energy / Performance. Rules-based and repeatable, every cut stays editable.");
     chopBtn.setTooltip ("Switches camera angles on the chosen grid or detected drum hits inside the selected range (or the whole song). All angles stay in sync.");
     styleBox.setTooltip ("Style mode used by GENERATE 3 EDITS for the base treatment.");
-    snapBox.setTooltip ("Snap grid for moving, trimming, cutting and painting."); snapBtn.setTooltip ("S: snapping on/off");
+    snapBox.setTooltip ("Snap grid for moving, trimming, cutting and painting."); snapBtn.setTooltip ("AUTO SNAP (S): moving, trimming and dropping clips snaps to the playhead, other clip edges and the grid");
     rippleBtn.setTooltip ("R: ripple delete closes the gap"); gridBtn.setTooltip ("B: show the beat grid");
     aspectBox.setTooltip ("Output aspect ratio. Clips reframe with Fill, Fit or Blur Fill (clip inspector).");
     seqBox.setTooltip ("Sequences in this project (generated edits appear here)");
@@ -305,7 +305,8 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
     status.setColour (juce::Label::textColourId, theme::dim); status.setFont (12.0f);
 
     hscroll.addListener (this); hscroll.setAutoHide (false);
-    timeline.onEdited = [this] { refresh (true); };
+    timeline.onEdited = [this] { refresh (true); if (onProjectEdited) onProjectEdited(); };
+    timeline.onTrackLink = [this] (int tr) { if (onTrackLink) onTrackLink (tr); };
     fxlib.onApply = [this] (const juce::String& d, int scope, int side) { timeline.applyLibraryItem (d, scope, side); };
     timeline.onSeek = [this] (Ticks t) { seek (t); };
     timeline.onAskText = [this] (const juce::String& t, const juce::String& d, std::function<void (juce::String)> cb) { askText (t, d, cb); };
@@ -480,7 +481,7 @@ void MainComponent::resized()
     auto bar = bottom.removeFromTop (36).reduced (6, 5);
     for (int i = 0; i < 4; ++i) place (bar, toolBtn[i], 76);
     bar.removeFromLeft (8);
-    place (bar, snapBox, 80); place (bar, snapBtn, 64); place (bar, rippleBtn, 76); place (bar, magnetBtn, 70); place (bar, gridBtn, 64);
+    place (bar, snapBox, 80); place (bar, snapBtn, 84); place (bar, rippleBtn, 76); place (bar, magnetBtn, 70); place (bar, gridBtn, 64);
     bar.removeFromLeft (8);
     place (bar, chopBox, 104); place (bar, chopBtn, 64);
     bar.removeFromLeft (8);
@@ -583,6 +584,50 @@ std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce:
         out.push_back ({ name, f, (double) total / kMixRate });
     }
     return out;
+}
+
+void MainComponent::setTrackRecLane (int t, int lane)
+{
+    auto& seq = st.project.seq();
+    if (t < 0 || t >= (int) seq.tracks.size() || seq.tracks[(size_t) t].recLane == lane) return;
+    st.edit ("Route track to REC");
+    seq.tracks[(size_t) t].recLane = lane;
+}
+
+void MainComponent::renderTrackAsync (int t, const juce::File& f, std::function<void (double)> done)
+{
+    if (st.project.sequences.empty()) return;
+    Sequence one = st.project.seq();
+    if (t < 0 || t >= (int) one.tracks.size()) return;
+    for (int k = 0; k < (int) one.tracks.size(); ++k) { one.tracks[(size_t) k].solo = false; one.tracks[(size_t) k].mute = k != t; }
+    auto cache = std::make_shared<AudioCache>();   // just this track's decoded audio, shared (not copied), so the thread owns what it reads
+    for (auto& c : one.clips) if (c.track == t) if (auto a = st.audio.get (c.mediaId)) cache->put (c.mediaId, a);
+    juce::Thread::launch ([one = std::move (one), cache, f, done = std::move (done), safe = juce::Component::SafePointer<MainComponent> (this)]
+    {
+        const juce::int64 total = (juce::int64) std::llround ((double) one.duration() * kMixRate / (double) kFlicks);
+        double secs = 0.0;
+        bool any = false;
+        for (auto& c : one.clips) any = any || (c.track >= 0 && ! one.tracks[(size_t) c.track].mute && c.enabled && cache->has (c.mediaId));
+        if (any && total > 0 && f.getParentDirectory().createDirectory())
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), kMixRate, 2, 24, {}, 0));
+            if (w != nullptr)
+            {
+                constexpr int blk = 8192;
+                std::vector<float> L (blk), R (blk);
+                for (juce::int64 pos = 0; pos < total; pos += blk)
+                {
+                    const int n = (int) std::min<juce::int64> (blk, total - pos);
+                    mixSequence (one, *cache, pos, n, L.data(), R.data(), nullptr);
+                    const float* ch[2] { L.data(), R.data() };
+                    w->writeFromFloatArrays (ch, 2, n);
+                }
+                secs = (double) total / kMixRate;
+            }
+        }
+        juce::MessageManager::callAsync ([safe, done, secs] { if (safe != nullptr) done (secs); });
+    });
 }
 
 std::vector<MainComponent::ClipRender> MainComponent::renderClips (const juce::File& dir, bool selectedOnly)

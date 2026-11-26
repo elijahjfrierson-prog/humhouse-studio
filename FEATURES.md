@@ -137,7 +137,7 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: frame p50
 - lock: Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom
 - lock: Zoom Engine (no stalls): mid-zoom the strips stretch; past 1.25x either way a new set at the current zoom is drawn
-- lock: one strip this refresh, never the whole view
+- lock: one strip a refresh once the zoom stops, never mid-zoom
 - lock: a hidden comp take is never pasted
 - lock: subscription phone: no HumWave
 - lock: subscription phone: no Drocetti Verb, Studio Vocal, HumHouse Vocal Room
@@ -208,3 +208,8 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: costs one image copy per control
 - lock: a long take never turns into a full Playlist redraw every frame
 - lock: loading waveforms redraw the clips 4x a second, not on every chunk
+- lock: no frame of a zoom draws a clip
+- lock: the click that brings HumHouse to the front never moves the playhead
+- lock: Route to REC track / Mixer...
+- lock: AUTO SNAP
+- lock: Subscription iPhone app: no Sonic Store

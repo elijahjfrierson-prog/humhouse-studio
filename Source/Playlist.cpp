@@ -4,6 +4,7 @@
 #include "StemSplit.h"
 #include "Instruments.h"
 #include "HumLab.h"
+#include "WavePeaks.h"
 
 // FL-style clip stretch: renders the clip's audio to its own WAV in the song's Recordings folder (glued with the song).
 // Resample = tape (speed and pitch together), Stretch = length only, pitch kept
@@ -1447,10 +1448,11 @@ public:
         setupButton (clearPunch, "CLEAR PUNCH", "Remove the punch-in / out range (or double-click the ruler)");
         clearPunch.onClick = [this] { s.edit ("Clear punch", [] (Project& p) { p.punchIn = p.punchOut = -1.0; }); };
         for (auto* b : { &addTrack, &loopRec, &rts, &qpunch, &preroll, &clearPunch }) addAndMakeVisible (b);
-        thumbCache = std::make_unique<juce::AudioThumbnailCache> (256);
         setWantsKeyboardFocus (true);
         refresh();
         setOpaque (true);   // paints its whole area: repaints never fall through to the window behind
+        if (auto* e = std::getenv ("HHS_ZOOMBENCH"))   // dev: after N s, time real frames while zooming + scrolling -> zoombench.txt
+        { juce::Component::SafePointer<Playlist> sp (this); juce::Timer::callAfterDelay (juce::jmax (1, std::atoi (e)) * 1000, [sp] { if (sp) sp->runZoomBench(); }); }
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { timerCallback(); });   // no-skip: the playhead moves on every screen refresh (was a 60 Hz timer drifting against vsync)
         // phone too: same smooth playhead as desktop (message thread only, repaints just the playhead strip)
     }
@@ -1776,7 +1778,7 @@ public:
         {
             timeSelA = timeSelB = -1;
             s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
-            s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+            if (clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
             repaint();
             return;
         }
@@ -1975,17 +1977,17 @@ public:
         }
         if (drag == Drag::Marquee)
         {
-            if (! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
-            else s.live ([] (Project&) {});   // the drag's selection, published once
+            if (! changed && clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+            else if (changed) s.live ([] (Project&) {});   // the drag's selection, published once
             marquee = {}; drag = Drag::None; repaint(); return;
         }
         if (drag == Drag::TimeSel)
         {
-            if (! changed) { timeSelA = timeSelB = -1; s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
+            if (! changed) { timeSelA = timeSelB = -1; if (clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
             else if (timeSelB > timeSelA) s.edit ("Loop range", [a = timeSelA, b = timeSelB] (Project& pr) { pr.punchIn = a; pr.punchOut = b; });   // FL: playback loops the selection
             drag = Drag::None; repaint(); return;
         }
-        if (drag == Drag::Ruler && ! changed) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+        if (drag == Drag::Ruler && ! changed) { if (clickMaySeek (true)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
         else if (changed)
         {
             if (drag == Drag::Move) timeSelA = timeSelB = -1;   // moved clips no longer match the ruler range
@@ -2376,9 +2378,7 @@ private:
         if (std::abs (err) > 0.06 * bps) return uiPos = eng;
         return uiPos = juce::jmax (uiPos, pred + err * 0.25);
     }
-    std::unique_ptr<juce::AudioThumbnailCache> thumbCache;
-    std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbs;
-    std::map<const juce::AudioThumbnail*, float> thumbPeak;
+    WaveCache waves; juce::uint32 lastWaveProgress = 0;
     double scrollX = 0; int scrollY = 0; float pxPerBeat = 24.0f; juce::uint32 lastUserView = 0;
     // Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target; the view moves once per screen
     // refresh, with dt-based easing (same feel at 60 or 120 Hz), and redraws only the part that moved
@@ -2560,8 +2560,8 @@ private:
                         edge = juce::jmin (phoneUI ? 14.0f : 6.0f, juce::jmax (2.0f, q));
             if (c.isAudio())
             {
-                if (c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
-                if (c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
+                if (! phoneLite && c.fadeIn * pxPerBeat > 10 && fadeHandle (c, r, true).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
+                if (! phoneLite && c.fadeOut * pxPerBeat > 10 && fadeHandle (c, r, false).getDistanceFrom (pt) < tol) { part = Part::Curve; return i; }
             }
             if (c.isAudio() && pt.y < r.getY() + top)
             {
@@ -2574,25 +2574,6 @@ private:
             return i;
         }
         return -1;
-    }
-    // getApproximatePeak walks the whole thumbnail: once per loaded file, not on every 30 Hz playhead repaint
-    float peakOf (juce::AudioThumbnail& t)
-    {
-        if (auto it = thumbPeak.find (&t); it != thumbPeak.end()) return it->second;
-        const float pk = t.getApproximatePeak();
-        if (t.isFullyLoaded()) thumbPeak[&t] = pk;
-        return pk;
-    }
-    juce::AudioThumbnail* thumb (const juce::File& f)
-    {
-        auto key = f.getFullPathName();
-        auto it = thumbs.find (key);
-        if (it != thumbs.end()) return it->second.get();
-        if (! f.existsAsFile()) return nullptr;
-        auto t = std::make_unique<juce::AudioThumbnail> (512, formats(), *thumbCache);
-        t->setSource (new juce::FileInputSource (f));
-        t->addChangeListener (this);
-        return (thumbs[key] = std::move (t)).get();
     }
     juce::Rectangle<float> autoBody (const Clip& c) const { return clipRect (c).withTrimmedTop (14).reduced (1, 4); }
     float autoValueToY (const Clip& c, float v) const { auto b = autoBody (c); return b.getBottom() - v * b.getHeight(); }
@@ -2745,7 +2726,7 @@ private:
         auto body = r.withTrimmedTop (14).reduced (1, 2);
         if (c.isAudio())
         {
-            if (auto* t = thumb (c.audioFile))
+            if (auto* w = waves.find (c.audioFile))
             {
                 double secs = beatsToSeconds (c.length, p.bpm), stretchK = 1.0;
                 if (stretchDrag)   // Alt+drag stretch: squeeze the original audio into the new length so you see it stretch live
@@ -2755,7 +2736,9 @@ private:
                 const auto vis = body.getIntersection ({ (float) headerW, body.getY(), contentRight() - (float) headerW, body.getHeight() });   // deep zoom: draw only the on-screen slice, not a 100k-px clip
                 const double t0 = c.sourceOffset + secs * (vis.getX() - body.getX()) / juce::jmax (1.0f, body.getWidth());
                 const double t1 = c.sourceOffset + secs * (vis.getRight() - body.getX()) / juce::jmax (1.0f, body.getWidth());
-                if (vis.getWidth() >= 1.0f) t->drawChannels (g, vis.toNearestInt(), t0, t1, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, peakOf (*t))));   // quiet takes stay visible
+                const double wT0 = benching ? juce::Time::getMillisecondCounterHiRes() : 0.0;
+                if (vis.getWidth() >= 1.0f) w->draw (g, vis, t0, t1, c.gain * juce::jlimit (1.0f, 8.0f, 0.6f / juce::jmax (0.01f, w->peak.load (std::memory_order_relaxed))));   // quiet takes stay visible
+                if (benching) benchWaveMs += juce::Time::getMillisecondCounterHiRes() - wT0;
                 if (stretchK != 1.0)
                 {
                     const double add = c.length - c.length / stretchK;
@@ -2950,21 +2933,22 @@ private:
     // No Hitch (Logic / Pro Tools tiled backing store): the clip layer is cached in strips half a screen wide on a fixed
     // beat grid, two screens tall. Scrolling and following only slide them; the strip just ahead is drawn on a quiet
     // screen refresh (prefetchStrip), so no frame ever redraws a whole screen at once.
-    struct Strip { juce::Image img; int k = 0; };
+    struct Strip { juce::Image img; int k = 0; float sc = 1.0f; };   // sc: pixels per point it was drawn at
     std::vector<Strip> strips; int stripW = 0;
     double stripBeats() const { return stripW / (double) (tilePpb > 0 ? tilePpb : pxPerBeat); }
     static Strip* findIn (std::vector<Strip>& gen, int k) { for (auto& st : gen) if (st.k == k) return &st; return nullptr; }
     Strip* findStrip (int k) { return findIn (strips, k); }
     // Zoom Engine (no stalls): the next set of strips at the new zoom, drawn one strip per refresh while the old set stretches
     std::vector<Strip> nextStrips; float nextPpb = 0; bool tilePending = false;
+    std::vector<Strip> overStrips; float overPpb = 0;
     size_t maxStrips() const   // ~96 MB at most, 4 strips minimum
     {
         const double stripBytes = (double) stripW * tileScale * tileH * tileScale * 4.0;
         return (size_t) juce::jlimit (4, 12, (int) (96.0e6 / juce::jmax (1.0, stripBytes)));
     }
-    void renderStrip (int k, std::vector<Strip>* into = nullptr, float ppb = 0)
+    void renderStrip (int k, std::vector<Strip>* into = nullptr, float ppb = 0, float draftScale = 0)
     {
-        const auto area = tileArea; const float scale = tileScale;
+        const auto area = tileArea; const float scale = draftScale > 0 ? draftScale : tileScale;
         const int th = tileH;
         if (stripW <= 0 || scale <= 0 || area.isEmpty() || k < 0) return;
         const float zoomOf = into != nullptr ? ppb : tilePpb;
@@ -2975,7 +2959,8 @@ private:
             auto far = std::max_element (strips.begin(), strips.end(), [here] (const Strip& a, const Strip& b) { return std::abs (a.k - here) < std::abs (b.k - here); });
             strips.erase (far);
         }
-        Strip st; st.k = k;
+        const double benchT0 = benching ? juce::Time::getMillisecondCounterHiRes() : 0.0;
+        Strip st; st.k = k; st.sc = scale;
         st.img = juce::Image (juce::Image::RGB, juce::roundToInt ((float) stripW * scale), juce::roundToInt ((float) th * scale), false);
         {
             juce::Graphics ig (st.img);
@@ -2990,6 +2975,7 @@ private:
             scrollX = keep; scrollY = keepY; paintRight = -1.0f; pxPerBeat = keepPpb;
         }
         (into != nullptr ? *into : strips).push_back (std::move (st));
+        if (benching) { ++benchStrips; benchStripMs += juce::Time::getMillisecondCounterHiRes() - benchT0; }
     }
     // one strip per screen refresh, just past the edge the view is heading to
     void prefetchStrip()
@@ -3007,6 +2993,13 @@ private:
         for (int k : lastDir < 0 ? std::initializer_list<int> { k0 - 1, k0 - 2, k1 + 1 } : std::initializer_list<int> { k1 + 1, k1 + 2, k0 - 1 })
             if (k >= 0 && findStrip (k) == nullptr) { renderStrip (k); return; }
     }
+    // the click that brings HumHouse to the front never moves the playhead; with the lock on only the ruler does
+    juce::uint32 activatedMs = 0;
+    bool clickMaySeek (bool ruler) const
+    {
+        if (juce::Time::getMillisecondCounter() - activatedMs < 400) return false;
+        return ruler || ! playheadLock().load();
+    }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
     {
         const float scale = g.getInternalContext().getPhysicalPixelScaleFactor();
@@ -3021,7 +3014,8 @@ private:
         // one strip per refresh (holes first) while the old set keeps stretching, then the two swap. No zoom tier, no frame
         // that redraws the whole view, and the sharp redraw after a zoom is spread over frames the same way.
         const double ratio = tilePpb > 0 ? pxPerBeat / (double) tilePpb : 0.0;
-        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH && ratio > 0.2 && ratio < 5.0;
+        const bool zooming = tgtPpb > 0 || juce::Time::getMillisecondCounter() - lastZoomMs < 160;
+        const bool same = ! strips.empty() && key == tileKey && scale == tileScale && area == tileArea && th == tileH && ratio > 0.0;
         if (! same || scrollY < tileScrollY || scrollY + area.getHeight() > tileScrollY + tileH)
         {
             const auto now = juce::Time::getMillisecondCounter();
@@ -3034,11 +3028,10 @@ private:
             }
             strips.clear();
             tileKey = key; tileScale = scale; tileArea = area; tileH = th; tilePpb = pxPerBeat;
-            stripW = sw; nextStrips.clear(); nextPpb = 0;
+            stripW = sw; nextStrips.clear(); nextPpb = 0; overStrips.clear(); overPpb = 0;
             tileScrollY = th >= totalLaneH() + area.getHeight() ? 0 : juce::jmax (0, scrollY - (th - area.getHeight()) / 2);
         }
-        const bool zooming = juce::Time::getMillisecondCounter() - lastZoomMs < 160;
-        if (pxPerBeat != tilePpb && nextPpb <= 0 && (! zooming || ratio < 0.8 || ratio > 1.25)) { nextPpb = pxPerBeat; nextStrips.clear(); }
+        if (pxPerBeat != tilePpb && nextPpb <= 0 && ! zooming) { nextPpb = pxPerBeat; nextStrips.clear(); }
         const double viewBeats = area.getWidth() / (double) pxPerBeat;
         auto range = [&] (float ppb) { const double sb = stripW / (double) ppb; return std::pair<int, int> { juce::jmax (0, (int) std::floor (scrollX / sb)), (int) std::floor ((scrollX + viewBeats) / sb) }; };
         bool pending = false;
@@ -3054,15 +3047,23 @@ private:
             int pick = -1;
             for (int k = n0; k <= n1 && pick < 0; ++k) if (findIn (nextStrips, k) == nullptr && ! oldCovers (k)) pick = k;   // a hole first
             for (int k = n0; k <= n1 && pick < 0; ++k) if (findIn (nextStrips, k) == nullptr) pick = k;
-            if (pick >= 0) renderStrip (pick, &nextStrips, nextPpb);   // one strip this refresh, never the whole view
+            if (pick >= 0 && ! zooming) renderStrip (pick, &nextStrips, nextPpb);   // one strip a refresh once the zoom stops, never mid-zoom
             bool done = true;
             for (int k = n0; k <= n1; ++k) done = done && findIn (nextStrips, k) != nullptr;
             if (done) { strips = std::move (nextStrips); nextStrips.clear(); tilePpb = nextPpb; nextPpb = 0; }
             else pending = true;
         }
-        tilePending = pending;
+        // Overview: the whole song in 4 low-res strips, drawn on quiet refreshes. Mid-zoom it fills whatever the sharp strips
+        // don't cover, so a pinch only ever stretches pictures that already exist: no frame of a zoom draws a clip.
+        bool overBuilt = false;
+        if (overPpb <= 0) { double songEnd = 0.0; for (auto& c : s.p().clips) songEnd = juce::jmax (songEnd, c.start + c.length);
+                            overPpb = (float) juce::jmin ((double) tilePpb, stripW * 4.0 / juce::jmax (16.0, songEnd + 16.0)); }
+        if (! zooming && ! pending && overStrips.size() < 4)
+            for (int k = 0; k < 4 && ! overBuilt; ++k)
+                if (findIn (overStrips, k) == nullptr) { renderStrip (k, &overStrips, overPpb, 1.0f); overBuilt = true; }
+        tilePending = pending || overBuilt;
         g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
-        if (pending) { g.setColour (col::bg); g.fillRect (area); }
+        if (pending || zooming) { g.setColour (col::bg); g.fillRect (area); }
         auto drawSet = [&] (std::vector<Strip>& gen, float ppb, bool fill) {
             const double sb = stripW / (double) ppb;
             const auto [k0, k1] = range (ppb);
@@ -3073,11 +3074,12 @@ private:
                 if (st == nullptr && fill) { renderStrip (k); st = findStrip (k); }   // scrolling into new song: one strip, as before
                 if (st == nullptr) { if (fill) return false; continue; }
                 const float dx = zx == 1.0f ? std::round ((float) ((k * sb - scrollX) * pxPerBeat) * scale) / scale : (float) ((k * sb - scrollX) * pxPerBeat);
-                g.drawImageTransformed (st->img, juce::AffineTransform::scale (zx / scale, 1.0f / scale).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
+                g.drawImageTransformed (st->img, juce::AffineTransform::scale (zx / st->sc, 1.0f / st->sc).translated ((float) area.getX() + dx, (float) (area.getY() + tileScrollY - scrollY)));
             }
             return true;
         };
-        if (! drawSet (strips, tilePpb, ! pending)) return false;
+        if (pending || zooming) drawSet (overStrips, overPpb, false);
+        if (! drawSet (strips, tilePpb, ! pending && ! zooming)) return false;
         if (pending) drawSet (nextStrips, nextPpb, false);   // the new set on top as it fills in
         return true;
     }
@@ -3808,10 +3810,96 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster* src) override
     {
         if (src == &s) { ++tileGen; refresh(); return; }   // song edit
-        thumbsDirty = true;   // a waveform loaded more: a take that just finished recording sends this many times while it loads
     }
-    bool thumbsDirty = false; juce::uint32 lastThumbMs = 0; float liveTakeScales = 0.0f;
+    juce::uint32 lastThumbMs = 0; float liveTakeScales = 0.0f;
     std::unique_ptr<juce::VBlankAttachment> vblank;
+    // dev bench: whole Playlist frames at 2x pixels (Retina), paced at 60 Hz, while pinch-zooming in/out and scrolling
+    bool benching = false; double benchStripMs = 0, benchWaveMs = 0; int benchStrips = 0;
+    void runZoomBench (int waited = 0)
+    {
+        if (! isShowing() || getWidth() < 200)   // only the Playlist on screen
+        { if (waited < 300) { juce::Component::SafePointer<Playlist> sp (this); juce::Timer::callAfterDelay (200, [sp, waited] { if (sp) sp->runZoomBench (waited + 1); }); } return; }
+        if (waited == 0 && std::getenv ("HHS_ZOOMBENCH_GEN") != nullptr)   // a song like a vocal session: 12 tracks of 3-min takes
+        {
+            auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio/zoombench_audio"); dir.createDirectory();
+            juce::Random rnd (7);
+            std::vector<juce::File> files;
+            for (int k = 0; k < 6; ++k)
+            {
+                auto f = dir.getChildFile ("take" + juce::String (k) + ".wav"); files.push_back (f);
+                if (f.existsAsFile()) continue;
+                std::unique_ptr<juce::AudioFormatWriter> w (juce::WavAudioFormat().createWriterFor (new juce::FileOutputStream (f), 44100.0, 2, 16, {}, 0));
+                if (w == nullptr) continue;
+                juce::AudioBuffer<float> b (2, 44100);
+                for (int sec = 0; sec < 180; ++sec)
+                {
+                    for (int i = 0; i < b.getNumSamples(); ++i)
+                    {
+                        const float env = 0.5f + 0.5f * std::sin ((float) (sec * 44100 + i) * 0.0003f * (float) (k + 1));
+                        b.setSample (0, i, env * (rnd.nextFloat() * 2.0f - 1.0f) * 0.7f);
+                        b.setSample (1, i, env * (rnd.nextFloat() * 2.0f - 1.0f) * 0.6f);
+                    }
+                    w->writeFromAudioSampleBuffer (b, 0, b.getNumSamples());
+                }
+            }
+            s.edit ("Zoom bench song", [files] (Project& p) {
+                const double beats = 180.0 * p.bpm / 60.0;
+                for (int l = 0; l < 12; ++l)
+                {
+                    while ((int) p.lanes.size() <= l) { Lane nl; nl.name = "Track " + juce::String ((int) p.lanes.size() + 1); p.lanes.push_back (nl); }
+                    for (int part = 0; part < 3; ++part)
+                    {
+                        Clip c; c.uid = p.newUid(); c.lane = l; c.audioFile = files[(size_t) ((l + part) % 6)];
+                        c.start = part * beats * 0.4 + l * 2.0; c.length = beats * 0.35; c.sourceOffset = part * 20.0;
+                        p.clips.push_back (c);
+                    }
+                }
+            });
+        }
+        bool loading = false;
+        for (auto& c : s.p().clips) if (c.isAudio() && ! c.hidden) if (auto* w = waves.find (c.audioFile)) loading = loading || ! w->done.load();
+        if (loading && waited < 150)
+        { juce::Component::SafePointer<Playlist> sp (this); juce::Timer::callAfterDelay (200, [sp, waited] { if (sp) sp->runZoomBench (waited + 1); }); return; }
+        juce::Image img (juce::Image::RGB, getWidth() * 2, getHeight() * 2, false);
+        benching = true;
+        juce::String out;
+        out << getWidth() << "x" << getHeight() << " @2x, " << (int) s.p().clips.size() << " clips, " << (int) s.p().lanes.size() << " tracks\n";
+        auto frame = [&] (std::vector<double>& ms) {
+            const double t0 = juce::Time::getMillisecondCounterHiRes();
+            timerCallback();
+            { juce::Graphics g (img); g.addTransform (juce::AffineTransform::scale (2.0f)); g.reduceClipRegion (getLocalBounds().withTrimmedLeft (headerW).withTrimmedTop (toolbarH)); paintEntireComponent (g, true); }   // what a zoom repaints: ruler + clips
+            const double t1 = juce::Time::getMillisecondCounterHiRes();
+            ms.push_back (t1 - t0);
+            if (t1 - t0 < 1000.0 / 60.0) juce::Thread::sleep ((int) (1000.0 / 60.0 - (t1 - t0)));
+        };
+        auto stats = [&] (const char* name, std::vector<double> v) {
+            std::sort (v.begin(), v.end());
+            auto q = [&] (double p) { return v[(size_t) (p * (double) (v.size() - 1))]; };
+            int over = 0; for (double x : v) over += x > 1000.0 / 60.0;
+            out << name << ": p50 " << juce::String (q (0.5), 2) << "  p95 " << juce::String (q (0.95), 2) << "  p99 " << juce::String (q (0.99), 2)
+                << "  max " << juce::String (v.back(), 2) << " ms   over 16.7 ms: " << over << "/" << (int) v.size()
+                << "   strips drawn " << benchStrips << " (" << juce::String (benchStripMs, 1) << " ms), waveforms " << juce::String (benchWaveMs, 1) << " ms\n";
+            benchStrips = 0; benchStripMs = benchWaveMs = 0;
+        };
+        const float ax = (float) headerW + (float) clipArea().getWidth() * 0.5f;
+        std::vector<double> zoom, settle, scroll;
+        for (int f = 0; f < 30; ++f) frame (settle);
+        settle.clear(); benchStrips = 0; benchStripMs = benchWaveMs = 0;
+        for (int f = 0; f < 360; ++f)   // pinch in and out twice, 3 s each way and back
+        {
+            const double ph = std::fmod (f / 180.0, 1.0), tri = ph < 0.5 ? ph * 2.0 : 2.0 - ph * 2.0;
+            zoomTo (std::exp (std::log (3.0) + (std::log (160.0) - std::log (3.0)) * tri), ax, 0.0);
+            frame (zoom);
+        }
+        stats ("zoom  ", zoom);
+        for (int f = 0; f < 120; ++f) frame (settle);   // includes the sharp redraw after the zoom
+        stats ("settle", settle);
+        for (int f = 0; f < 240; ++f) { scrollTo (scrollX + 30.0 / pxPerBeat, -1.0, 0.0); frame (scroll); }
+        stats ("scroll", scroll);
+        benching = false;
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory).getChildFile ("HumHouse Studio/zoombench.txt").replaceWithText (out);
+        if (std::getenv ("HHS_ZOOMBENCH_QUIT") != nullptr) juce::JUCEApplicationBase::quit();
+    }
     // Frame meter: the screen-refresh callbacks run on the message thread, so a late one means a frame was missed
     double hudLastT = 0, hudPeriod = 1000.0 / 60.0; float hudIv[128] {}; int hudN = 0, hudDrops = 0; float hudPaint = 0, hudPaintMax = 0;
     void hudTick()
@@ -3862,12 +3950,13 @@ private:
     }
     void timerCallback() override
     {
+        if (! juce::Process::isForegroundProcess()) activatedMs = juce::Time::getMillisecondCounter();
         for (auto& h : headers) h->repaintIfChanged();
         if (frameMeterOn().load (std::memory_order_relaxed)) hudTick(); else if (hudN != 0) { hudN = hudDrops = 0; hudLastT = 0; hudPaintMax = 0; repaint(); }
         glideStep();
-        if (thumbsDirty && juce::Time::getMillisecondCounter() - lastThumbMs >= 250)   // loading waveforms redraw the clips 4x a second, not on every chunk
+        if (waves.progress.load (std::memory_order_relaxed) != lastWaveProgress && juce::Time::getMillisecondCounter() - lastThumbMs >= 250)   // loading waveforms redraw the clips 4x a second, not on every chunk
         {
-            thumbsDirty = false; lastThumbMs = juce::Time::getMillisecondCounter();
+            lastWaveProgress = waves.progress.load (std::memory_order_relaxed); lastThumbMs = juce::Time::getMillisecondCounter();
             ++tileGen; repaint();
         }
         if (zoomDirty && tgtPpb < 0 && juce::Time::getMillisecondCounter() - lastZoomMs >= 160)   // zoom done: redraw the strips sharp

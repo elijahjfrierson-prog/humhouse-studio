@@ -638,11 +638,12 @@ void Timeline::mouseDown (const juce::MouseEvent& e)
             m.addSeparator();
             m.addItem (6, audio ? "Add audio track" : "Add video track");
             m.addItem (7, "Delete track (and its clips)", ! hasSong && sameKind > 1);
-            if (audio) { m.addSeparator(); m.addItem (3, "Plug-ins..."); }
+            if (audio) { m.addSeparator(); m.addItem (8, "Route to REC track / Mixer..."); m.addItem (3, "Plug-ins..."); }
             m.showMenuAsync (juce::PopupMenu::Options(), [this, tr, audio] (int r)
             {
                 auto& sq = st.project.seq();
                 if (r == 3) { if (onTrackPlugins) onTrackPlugins (tr); return; }
+                if (r == 8) { if (onTrackLink) onTrackLink (tr); return; }
                 if (tr < 0 || tr >= (int) sq.tracks.size()) return;
                 const auto kind = sq.tracks[(size_t) tr].kind;
                 auto same = [&] (int o) { return o >= 0 && o < (int) sq.tracks.size() && sq.tracks[(size_t) o].kind == kind; };
