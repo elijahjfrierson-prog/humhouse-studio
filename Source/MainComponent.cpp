@@ -35,6 +35,27 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
+static void writePaintCost()   // ms per full paint of each view, including its children (10-frame average)
+{
+    struct Row { double ms; juce::String name; };
+    std::vector<Row> rows;
+    std::function<void (juce::Component&, int, const juce::String&)> walk = [&] (juce::Component& c, int depth, const juce::String& path)
+    {
+        if (! c.isShowing() || c.getWidth() < 40 || c.getHeight() < 20) return;
+        const auto name = path + "/" + (c.getName().isNotEmpty() ? c.getName() : juce::String (typeid (c).name()));
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 10; ++i) (void) c.createComponentSnapshot (c.getLocalBounds(), true, 1.0f);
+        rows.push_back ({ (juce::Time::getMillisecondCounterHiRes() - t0) / 10.0,
+                          name + "  " + juce::String (c.getWidth()) + "x" + juce::String (c.getHeight()) });
+        if (depth < 3) for (auto* k : c.getChildren()) walk (*k, depth + 1, name);
+    };
+    auto& d = juce::Desktop::getInstance();
+    for (int i = 0; i < d.getNumComponents(); ++i) if (auto* c = d.getComponent (i)) walk (*c, 0, {});
+    std::sort (rows.begin(), rows.end(), [] (const Row& a, const Row& b) { return a.ms > b.ms; });
+    juce::String out;
+    for (auto& r : rows) out << juce::String (r.ms, 2) << " ms  " << r.name << "\n";
+    appDataFile ("paintcost.txt").replaceWithText (out);
+}
 bool& humhouseTitleBars() { static bool on = ! appDataFile ("titlebars.txt").existsAsFile() || appDataFile ("titlebars.txt").loadFileAsString().getIntValue() != 0; return on; }
 int& fontStyle() { static int st = 3; return st; }   // Pro is the only clean one: Tattoo / Flash / System drew odd characters
 void setFontStyle (int st)
@@ -1300,6 +1321,8 @@ public:
         };
         enableMidiInputs();
         engine.deviceManager.addMidiInputDeviceCallback ({}, &liveMidi);
+        if (auto* e = std::getenv ("HHS_PAINTBENCH"))   // dev: after N s, time the paint of every visible view -> paintcost.txt
+            juce::Timer::callAfterDelay (juce::jmax (1, std::atoi (e)) * 1000, [] { writePaintCost(); });
         startTimerHz (30);
     }
 
