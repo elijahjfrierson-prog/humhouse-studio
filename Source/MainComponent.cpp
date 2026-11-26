@@ -2600,11 +2600,6 @@ private:
 
     void timerCallback() override
     {
-        if (phoneUI)
-        {
-            const bool any = view == 1 && std::any_of (studio.p().clips.begin(), studio.p().clips.end(), [] (const Clip& c) { return c.selected; });
-            if (any != clipBarShown) { clipBarShown = any; for (auto* b : { &cbStamp, &cbPaint }) { b->setVisible (any); if (any) b->toFront (false); } }
-        }
         if (savedFlash > 0 && --savedFlash == 0) { saveBtn.setButtonText ("SAVE"); saveBtn.setToggleState (false, juce::dontSendNotification); }
         const double pos = engine.positionBeats();
         const int bpb = juce::jmax (1, engine.project().beatsPerBar);
