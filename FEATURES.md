@@ -187,3 +187,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: trackpadZoomTau
 - lock: struct SwipeLock
 - lock: phone: touching the fader to scroll never jumps the volume
+- lock: plug-in windows always stay in front of it

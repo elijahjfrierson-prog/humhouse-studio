@@ -388,12 +388,13 @@ inline void raiseFloatingWindows()
     auto& d = juce::Desktop::getInstance();
     juce::Component* active = nullptr;
     if (auto* f = juce::Component::getCurrentlyFocusedComponent()) active = f->getTopLevelComponent();
-    for (int pass = 0; pass < 3; ++pass)
+    // a focused Mixer / tool window is raised above the other tool windows only: plug-in windows always stay in front of it
+    for (int pass = 0; pass < 4; ++pass)
         for (int i = 0; i < d.getNumComponents(); ++i)
             if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
             {
                 const bool plug = c->getProperties().contains ("noHold");
-                if ((pass == 0 && ! plug && c != active) || (pass == 1 && plug && c != active) || (pass == 2 && c == active)) { joinFullScreen (*c); c->toFront (false); }
+                if (pass == (plug ? 2 : 0) + (c == active ? 1 : 0)) { joinFullScreen (*c); c->toFront (false); }
             }
 }
 inline void updateFloating (juce::Component& c)
