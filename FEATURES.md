@@ -197,3 +197,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: close every open window (OBS: one key, from any window)
 - lock: anti-ring monitor gate
 - lock: the gain only rises on a real voice (> -40 dBFS)
+- lock: a section with your STEPS is yours for every drum

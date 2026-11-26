@@ -1908,8 +1908,10 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     double ss = 0, sl = 32.0;
                     const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
-                    if (auto ms = src->steps.find (sec); ms != src->steps.end() && ms->second[(size_t) g] != 0
-                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
+                    // a section with your STEPS is yours for every drum (an empty row is silent, no stray toms / cymbals from
+                    // the groove); the groove only plays the bar-8 fill
+                    if (auto ms = src->steps.find (sec); ms != src->steps.end()
+                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;
                     Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
