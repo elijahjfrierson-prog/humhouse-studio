@@ -148,6 +148,7 @@ struct Track
     TrackKind kind = TrackKind::Video;
     bool mute = false, hidden = false, locked = false, solo = false;
     int recLane = -1;        // HumHouse REC track (0 = Track 1) this audio track plays on, -1 = not routed
+    int recInsert = 0;       // Mixer insert its REC clip plays on (0 = the REC track's own)
     juce::String routeKey;   // names its rendered REC clips, so they follow the track through reorders
     int height = 64;
     juce::String id;         // set when the track first gets plug-ins

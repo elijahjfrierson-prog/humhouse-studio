@@ -17,6 +17,7 @@ namespace isfx
 {
 // the host is recording: background video renders wait so audio + UI get the machine
 inline std::atomic<bool>& hostBusy() { static std::atomic<bool> b { false }; return b; }
+inline std::atomic<bool>& hostPlaying() { static std::atomic<bool> b { false }; return b; }   // HumHouse REC is playing (routed tracks sound from there)
 // ---- theme
 namespace theme
 {

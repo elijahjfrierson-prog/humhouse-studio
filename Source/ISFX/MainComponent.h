@@ -41,7 +41,7 @@ public:
     // Route to REC: one track's sound -> WAV on a background thread (the UI never waits); done (seconds, 0 = no sound) on the message thread
     void renderTrackAsync (int track, const juce::File& f, std::function<void (double seconds)> done);
     const Sequence& sequence() const { return st.project.seq(); }
-    void setTrackRecLane (int track, int lane);
+    void setTrackRoute (int track, int lane, int insert = -1);   // insert -1 keeps the track's insert
     juce::StringArray trackSignatures() const;   // per track: its clips + mute as JSON (what a routed render depends on)
     Sequence playbackSequence() const;           // tracks routed to REC are heard from REC, not twice
     std::function<void (int track)> onTrackLink;   // right-click an audio track header   // each audible track with sound -> its own stereo WAV

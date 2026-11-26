@@ -586,12 +586,14 @@ std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce:
     return out;
 }
 
-void MainComponent::setTrackRecLane (int t, int lane)
+void MainComponent::setTrackRoute (int t, int lane, int insert)
 {
     auto& seq = st.project.seq();
-    if (t < 0 || t >= (int) seq.tracks.size() || seq.tracks[(size_t) t].recLane == lane) return;
+    if (t < 0 || t >= (int) seq.tracks.size()) return;
+    const int ins = lane < 0 ? 0 : insert >= 0 ? insert : seq.tracks[(size_t) t].recInsert;
+    if (seq.tracks[(size_t) t].recLane == lane && seq.tracks[(size_t) t].recInsert == ins) return;
     st.edit ("Route track to REC");
-    seq.tracks[(size_t) t].recLane = lane;
+    seq.tracks[(size_t) t].recLane = lane; seq.tracks[(size_t) t].recInsert = ins;
     if (seq.tracks[(size_t) t].routeKey.isEmpty()) seq.tracks[(size_t) t].routeKey = juce::Uuid().toString().substring (0, 8);
     player.setSequence (playbackSequence());
 }
@@ -599,7 +601,7 @@ void MainComponent::setTrackRecLane (int t, int lane)
 Sequence MainComponent::playbackSequence() const
 {
     Sequence q = st.project.seq();
-    for (auto& t : q.tracks) if (t.recLane >= 0) t.mute = true;
+    if (hostPlaying().load()) for (auto& t : q.tracks) if (t.recLane >= 0) t.mute = true;   // VIDEO's own Play still hears them
     return q;
 }
 
@@ -613,9 +615,11 @@ juce::StringArray MainComponent::trackSignatures() const
         for (auto& x : *seqs) if (x["id"].toString() == seq.id) sv = &x;
     for (int t = 0; t < (int) seq.tracks.size(); ++t)
     {
-        juce::String sig = seq.tracks[(size_t) t].mute ? "M" : "-";
+        // mute | media decoded per clip | auto-duck | the clips: everything the render reads
+        juce::String sig = seq.tracks[(size_t) t].mute ? "M|" : "-|", clips;
         if (sv != nullptr) if (auto* cl = (*sv)["clips"].getArray())
-            for (auto& c : *cl) if ((int) c["track"] == t) sig << juce::JSON::toString (c, true);
+            for (auto& c : *cl) if ((int) c["track"] == t) { sig << (st.audio.has (c["media"].toString()) ? "A" : "-"); clips << juce::JSON::toString (c, true); }
+        sig << "|" << seq.duckDb << seq.duckKey << "|" << clips;
         out.add (sig);
     }
     return out;
@@ -635,6 +639,7 @@ void MainComponent::renderTrackAsync (int t, const juce::File& f, std::function<
         double secs = 0.0;
         bool any = false;
         for (auto& c : one.clips) any = any || (c.track >= 0 && ! one.tracks[(size_t) c.track].mute && c.enabled && cache->has (c.mediaId));
+        if (any && total > 0) secs = -1.0;   // a failure unless the WAV below gets written
         if (any && total > 0 && f.getParentDirectory().createDirectory())
         {
             juce::WavAudioFormat wav;
