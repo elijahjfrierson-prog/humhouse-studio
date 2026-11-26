@@ -3148,12 +3148,19 @@ private:
         Clip part = *cp;
         if (! in) { part.sourceOffset += beatsToSeconds (cp->length - F, bpm); part.start += cp->length - F; }
         part.length = F;
+        // pre-roll back to the beat's start (from the clip's own audio) so stutters have the history Glitch Gate repeats from
+        const double avail = in ? secondsToBeats (juce::jmax (0.0, cp->sourceOffset), bpm) : cp->length - F;
+        const double pre = juce::jlimit (0.0, avail, part.start - std::floor (part.start));
+        part.start -= pre; part.sourceOffset -= beatsToSeconds (pre, bpm); part.length += pre;
         const auto f = s.p().recordingsFolder().getChildFile ("Glitch").getNonexistentChildFile (cp->audioFile.getFileNameWithoutExtension() + "_glitch", ".wav");
         juce::Component::SafePointer<Playlist> safe (this);
-        juce::Thread::launch ([safe, part, fx, in, bpm, f, uid] {
+        juce::Thread::launch ([safe, part, fx, in, bpm, f, uid, pre] {
             juce::AudioBuffer<float> b; double sr = 0;
             if (! readClipAudio (part, bpm, b, sr)) return;
-            const auto out = humlab::glitchSlice (b, sr, bpm, part.start, fx);
+            const auto full = humlab::glitchSlice (b, sr, bpm, part.start, fx);
+            const int skip = juce::jlimit (0, full.getNumSamples() - 1, (int) std::lround (beatsToSeconds (pre, bpm) * sr));
+            juce::AudioBuffer<float> out (full.getNumChannels(), full.getNumSamples() - skip);
+            for (int ch = 0; ch < full.getNumChannels(); ++ch) out.copyFrom (ch, 0, full, ch, skip, out.getNumSamples());
             if (! writeClipAudio (f, out, sr)) return;
             const double got = secondsToBeats (out.getNumSamples() / sr, bpm);
             juce::MessageManager::callAsync ([safe, uid, in, f, got] {
