@@ -428,7 +428,7 @@ void keepUiResponsive();                   // MacWindows.mm: no App Nap / timer 
 void claimFileTypes();                     // MacWindows.mm: double-clicked .hhs / .hhpack / .hhpreset / .hhchain open in THIS app, not an older copy
 bool windowHidden (juce::Component&);     // MacWindows.mm: its window is fully covered / on another space: nothing of it can be seen
 #else
-inline bool windowHidden (juce::Component&) { return false; }
+inline bool windowHidden (juce::Component& c) { auto* p = c.getPeer(); return p != nullptr && p->isMinimised(); }   // Windows / Linux: minimized
 inline void joinFullScreen (juce::Component&) {}
 inline void claimFileTypes() {}
 inline void keepUiResponsive() {}
