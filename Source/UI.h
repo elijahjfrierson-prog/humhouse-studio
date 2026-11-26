@@ -428,13 +428,23 @@ void keepUiResponsive();                   // MacWindows.mm: no App Nap / timer 
 void claimFileTypes();                     // MacWindows.mm: double-clicked .hhs / .hhpack / .hhpreset / .hhchain open in THIS app, not an older copy
 bool windowHidden (juce::Component&);     // MacWindows.mm: its window is fully covered / on another space: nothing of it can be seen
 #else
-inline bool windowHidden (juce::Component& c) { auto* p = c.getPeer(); return p != nullptr && p->isMinimised(); }   // Windows / Linux: minimized
+inline bool windowHidden (juce::Component&) { return false; }
 inline void joinFullScreen (juce::Component&) {}
 inline void claimFileTypes() {}
 inline void keepUiResponsive() {}
 #endif
-// live views redraw only when some of them can be seen: stacked / covered windows cost nothing while streaming
-inline bool drawsOnScreen (juce::Component& c) { return c.isShowing() && ! windowHidden (c); }
+// live views: stacked / covered windows cost little while streaming. Minimized = no drawing; a fully covered macOS window
+// still draws at ~30 fps, because an OBS Window Capture keeps showing it.
+inline bool drawsOnScreen (juce::Component& c)
+{
+    if (! c.isShowing()) return false;
+    if (auto* p = c.getPeer(); p != nullptr && p->isMinimised()) return false;
+    if (! windowHidden (c)) return true;
+    const int now = (int) juce::Time::getMillisecondCounter(), prev = c.getProperties()["hhsDrawMs"];
+    if (now - prev < 30) return false;
+    c.getProperties().set ("hhsDrawMs", now);
+    return true;
+}
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
@@ -445,7 +455,8 @@ inline void raiseFloatingWindows()
     // a focused Mixer / tool window is raised above the other tool windows only: plug-in windows always stay in front of it
     for (int pass = 0; pass < 4; ++pass)
         for (int i = 0; i < d.getNumComponents(); ++i)
-            if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
+            if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent()
+                && ! (c->getPeer() != nullptr && c->getPeer()->isMinimised()))   // a minimized window stays minimized
             {
                 const bool plug = c->getProperties().contains ("noHold");
                 if (pass == (plug ? 2 : 0) + (c == active ? 1 : 0)) { joinFullScreen (*c); c->toFront (false); }
