@@ -2935,7 +2935,7 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
         tpdfDither (v, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (v, 0, n);
     };
     const float quietLevel = 1.0e-4f;   // -80 dBFS
-    const int quietNeeded = (int) (0.3 * sr);
+    const int quietNeeded = (int) (2.0 * sr);   // 2 s of quiet: a long echo repeat (e.g. a 1/4 note at 60 BPM) still lands; the silent end is trimmed below
     juce::int64 done = 0;
     int tailLen = 0, quietRun = 0;
     for (; done < total; done += block)
