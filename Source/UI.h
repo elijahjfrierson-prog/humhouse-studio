@@ -61,7 +61,7 @@ inline juce::File pickedFolder (const juce::FileChooser& fc)
     if (local.isAChildOf (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)) && local.isDirectory()) return local;
     auto name = juce::File::createLegalFileName (juce::URL::removeEscapeChars (u.getFileName()));
     if (name.isEmpty()) name = "Kit";
-    const auto dest = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Kits").getChildFile (name);
+    const auto dest = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Kits").getNonexistentChildFile (name, {}, false);   // same name twice: a new folder, the first kit stays
     if (hhsCopyPickedFolder (getURLBookmark (u), u.toString (false).toRawUTF8(), dest.getFullPathName().toRawUTF8()) && dest.isDirectory()) return dest;
     return {};
    #else
