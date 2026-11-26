@@ -471,6 +471,7 @@ void setupButton (juce::Button& b, const juce::String& text, const juce::String&
     b.setButtonText (text);
     b.setTooltip (tooltip);
     b.setClickingTogglesState (toggle);
+    b.setWantsKeyboardFocus (false);   // Space / Return go to the transport, never re-press the last clicked button
 }
 
 void askText (const juce::String& title, const juce::String& initial, std::function<void (juce::String)> done)
@@ -990,6 +991,7 @@ public:
             t->setTooltip (tips[i]);
             t->setRadioGroupId (100);
             t->setClickingTogglesState (true);
+            t->setWantsKeyboardFocus (false);   // a tab never keeps focus: keys from a plug-in window (Space, Return) can't flip to VIDEO
             const int v = i++;
             t->onClick = [this, v] { setView (v); };
             addAndMakeVisible (t);

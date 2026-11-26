@@ -778,7 +778,7 @@ public:
         {
             fxSlide.full = fxPanelW; fxSlide.panelOnRight = true;
             fxSlide.width = [this] { return fxW; };
-            fxSlide.set = [this] (int w, bool done) { w = juce::jlimit (0, fxPanelW, w); if (done && w < 60) w = 0; fxW = w; resized(); fxSlide.repaint(); };
+            fxSlide.set = [this] (int w, bool done) { w = juce::jlimit (0, fxPanelW, w); if (done && w < 60) w = 0; fxW = w; fxUserSet = true; resized(); fxSlide.repaint(); };
             addAndMakeVisible (fxSlide);
         }
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
@@ -795,6 +795,8 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
+        // phone: until you slide it, the FX box follows the screen: open on a wide screen (unfolded / landscape), closed on a narrow one
+        if (phoneUI && ! fxUserSet) fxW = getWidth() >= 700 ? fxPanelW : 0;
         fx.setBounds (r.removeFromRight (phoneUI ? fxW : fxPanelW));
         fx.setVisible (fx.getWidth() > 0);
         auto top = r.removeFromTop (30);
@@ -815,7 +817,7 @@ private:
     juce::Component holder;
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
-    EdgeSlide fxSlide; int fxW = fxPanelW;
+    EdgeSlide fxSlide; int fxW = fxPanelW; bool fxUserSet = false;
     juce::TextButton addBtn, wiresBtn;
     WireOverlay wires { s, stripW };
 
