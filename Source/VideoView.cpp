@@ -1,4 +1,3 @@
-#include <regex>
 #include "UI.h"
 #if JUCE_MAC || JUCE_WINDOWS || JUCE_IOS
  #include <juce_video/juce_video.h>
@@ -156,13 +155,7 @@ private:
     std::map<juce::String, int> linkGen;            // routeKey -> newest render; older renders finishing late are dropped
     static juce::File linkDir() { return hhsHome().getChildFile ("Video Tracks").getChildFile ("Routed"); }
     static juce::String linkPrefix (const juce::String& key) { return "V-" + key + " "; }
-    static bool isLinkClip (const Clip& c, const juce::String& key)
-    {   // by exact name ("V-key <time>", plus a save copy's "-hash"): stems or edits made from it on REC aren't it
-        static const std::regex rendered (R"(\d{4}-\d\d-\d\d \d\d-\d\d-\d\d( ?\(\d+\))?(-[0-9a-fA-F]{1,16})?)");
-        const auto name = c.audioFile.getFileNameWithoutExtension();
-        return key.isNotEmpty() && name.startsWith (linkPrefix (key))
-            && std::regex_match (name.substring (linkPrefix (key).length()).toStdString(), rendered);
-    }
+    static bool isLinkClip (const Clip& c, const juce::String& key) { return key.isNotEmpty() && c.videoRoute == key; }
     int trackOfKey (const juce::String& key) const
     {
         const auto& tr = ed->sequence().tracks;
@@ -269,7 +262,7 @@ private:
                     l.mixerTrack = p.addMixerTrack (l.name);
                     p.lanes.push_back (l);
                 }
-                Clip c; c.uid = p.newUid(); c.lane = lane; c.audioFile = f; c.patternIndex = -1;
+                Clip c; c.uid = p.newUid(); c.lane = lane; c.audioFile = f; c.patternIndex = -1; c.videoRoute = key;
                 if (keepInsert > 0 && keepInsert < (int) p.mixer.size()) c.mixerTrack = keepInsert;   // only this clip: the lane's other audio keeps its insert
                 c.start = 0.0; c.length = secondsToBeats (secs, p.bpm);
                 p.clips.push_back (c);

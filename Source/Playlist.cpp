@@ -3289,7 +3289,7 @@ private:
                         insertLane (p, at);
                         auto& l = p.lanes[(size_t) at]; l.name = stemName (set, k); l.colour = juce::Colour (stemColour (set, k));
                         Clip n = c; n.uid = p.newUid(); n.lane = at; n.audioFile = files[(size_t) k]; n.sourceOffset = 0;
-                        n.selected = false; n.group = 0; n.takeGroup = 0; n.colour = {}; n.mixerTrack = -1; n.muted = false;
+                        n.selected = false; n.group = 0; n.takeGroup = 0; n.colour = {}; n.mixerTrack = -1; n.muted = false; n.videoRoute = {};
                         p.clips.push_back (n);
                     }
                     for (auto& o : p.clips) if (o.uid == c.uid) o.muted = true;   // the original stays, muted

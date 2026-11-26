@@ -265,6 +265,7 @@ struct Clip
     int    group = 0;               // FL-style clip group: grouped clips select / move together
     juce::Colour colour {};         // own clip colour (transparent = track colour)
     int    drummer = -1;            // Drummer region: the drummer channel id it plays
+    juce::String videoRoute;        // rendered from this VIDEO track (its routeKey); survives renames, copies and Reverse
     AutoTarget autoTarget;          // automation clip if autoTarget.kind > 0 (patOffset = beats into the envelope)
     std::vector<AutoPoint> autoPts;
     bool isAuto() const { return autoTarget.kind > AutoNone; }
