@@ -2554,11 +2554,14 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                     const float x = 0.5f * (il[i] + ir[i]);
                     ns.rms = ns.rms * 0.9995f + 0.0005f * x * x;
                     const float level = std::sqrt (ns.rms);
-                    if (level > 0.001f)
+                    // the gain only rises on a real voice (> -40 dBFS). In the pauses it settles back to unity,
+                    // so earbud / room leakage is never pushed up 16x into a feedback ring (monitor and take)
+                    if (level > 0.01f)
                     {
                         const float tg = juce::jlimit (0.5f, 16.0f, 0.25f / level);
                         ns.gain += (tg - ns.gain) * (tg < ns.gain ? 0.002f : 0.0002f);
                     }
+                    else if (level < 0.004f) ns.gain += (1.0f - ns.gain) * 0.0005f;
                     nl[i] = ceil (il[i] * ns.gain); nr[i] = ceil (ir[i] * ns.gain);
                 }
                 il = nl; ir = nr;
@@ -2566,7 +2569,24 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             if (lane.monitor && ! speakerOut.load() && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;
-                dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n);
+                if (l < normState.size() && dest.getNumSamples() >= n && dest.getNumChannels() >= 2)
+                {
+                    // anti-ring monitor gate: when the voice stops (< -45 dBFS for 120 ms) the monitor fades to -30 dB, so the
+                    // mic -> earbuds -> mic loop is broken before it can ring; it opens again in ~2 ms on the next word
+                    auto& gs = normState[l];
+                    auto* dl = dest.getWritePointer (0); auto* dr = dest.getWritePointer (1);
+                    const int hold = (int) (0.12 * sampleRate);
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const float a = std::max (std::abs (il[i]), std::abs (ir[i]));
+                        gs.gateEnv = a > gs.gateEnv ? a : gs.gateEnv * 0.9995f;
+                        if (gs.gateEnv > 0.0056f) gs.gateHold = hold; else if (gs.gateHold > 0) --gs.gateHold;
+                        const float tg = gs.gateHold > 0 ? 1.0f : 0.03f;
+                        gs.gateGain += (tg - gs.gateGain) * (tg > gs.gateGain ? 0.01f : 0.0006f);
+                        dl[i] += il[i] * gs.gateGain; dr[i] += ir[i] * gs.gateGain;
+                    }
+                }
+                else { dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n); }
             }
             if (rolling && tl.isLocked())
                 for (auto& tk : takes)

@@ -193,3 +193,7 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: phone: tap = hear it, hold ~0.35 s then move = drag it
 - lock: phone: slide the FX box closed to see more of the mixer
 - lock: on iPhone a Files folder is copied into the app first (JUCE drops its access)
+- lock: phone: panels always dock into the page (no floating windows to lose behind it)
+- lock: close every open window (OBS: one key, from any window)
+- lock: anti-ring monitor gate
+- lock: the gain only rises on a real voice (> -40 dBFS)

@@ -301,7 +301,7 @@ private:
     std::atomic<int> retroWrite { 0 }, retroLane { 0 };
     std::atomic<juce::int64> retroTotal { 0 }, retroRunFrom { 0 };   // runFrom: retroTotal when the current straight playback run began
     std::atomic<double> retroEndBeat { -1.0 };   // beat where the newest retro sample was heard (-1: stopped)
-    struct NormState { float rms = 0.0f, gain = 1.0f; };
+    struct NormState { float rms = 0.0f, gain = 1.0f, gateEnv = 0.0f, gateGain = 1.0f; int gateHold = 0; };   // gate*: monitor anti-ring gate
     std::array<NormState, 256> normState {};
     juce::AudioBuffer<float> normScratch { 2, 8192 };
     int idleThresholdBlocks = 0;

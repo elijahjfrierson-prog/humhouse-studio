@@ -1583,6 +1583,7 @@ if (phoneUI)
         }
         if (is ('r', 0)) { engine.setRecording (! engine.isRecording()); return true; }
         if (is ('l', 0)) { songBtn.setToggleState (! songBtn.getToggleState(), juce::sendNotificationSync); return true; }
+        if (k == juce::KeyPress ('w', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)) { closeEverything(); return true; }   // close every open window (OBS: one key, from any window)
         if (is (juce::KeyPress::F5Key, 0)) { setView (1); return true; }
         if (is (juce::KeyPress::F6Key, 0) || is (juce::KeyPress::F7Key, 0)) { setView (0); if (k.getKeyCode() == juce::KeyPress::F7Key) piano->grabKeyboardFocus(); return true; }
         if (is (juce::KeyPress::F8Key, 0)) { browserBtn.setToggleState (! showBrowser, juce::sendNotificationSync); return true; }
@@ -1817,6 +1818,7 @@ if (phoneUI)
                     pm.addSubMenu ("Recording offset (" + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms)", om);
                 }
                 pm.addItem (4720, "Recording offset slider (-5000 to +5000 ms, like Logic)...");
+                pm.addItem (4721, "Close all windows (plug-ins, Mixer, settings)  Cmd/Ctrl+Shift+W");
                 pm.addItem (474, "RAM disk cache (clips play from memory, like Pro Tools)", true, engine.ramCache.load());
                 m.addSubMenu ("Performance", pm);
                #if JUCE_WINDOWS
@@ -1894,6 +1896,7 @@ if (phoneUI)
             flash ("Recording offset " + juce::String (juce::roundToInt (engine.recordOffsetMs.load())) + " ms: new takes move by this much");
             return;
         }
+        if (id == 4721) { closeEverything(); return; }
         if (id == 4720)
         {
             auto* sl = new juce::Slider (juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight);
@@ -2403,6 +2406,12 @@ private:
     void toggleDetach (juce::Component* c, const juce::String& title)
     {
         if (popouts.count (c) > 0) { reattach (c); return; }
+        if (phoneUI)   // phone: panels always dock into the page (no floating windows to lose behind it)
+        {
+            if (c == mixer.get()) setView (2);
+            else if (c == lanes.get()) { showLanes = true; laneBtn.setToggleState (true, juce::dontSendNotification); resized(); }
+            return;
+        }
         auto w = std::make_unique<PopOut> (title);
         w->setUsingNativeTitleBar (! phoneUI);
         w->setContentNonOwned (c, false);
