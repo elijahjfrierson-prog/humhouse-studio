@@ -30,7 +30,8 @@ void hhsUnwatchPhoneRoute (void* token)   // before the engine goes away
 
 // a folder picked in Files lives outside the app and JUCE drops access to it right after the pick:
 // reopen it from its bookmark and copy it into the app (kits / sample folders then always load, offline too)
-bool hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath)
+namespace hhs { bool hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath); }   // declared in UI.h inside namespace hhs
+bool hhs::hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath)
 {
     NSURL* url = nil;
     if (bookmark != nullptr)
