@@ -30,6 +30,44 @@ struct SwipeLock
         return mode == 1;
     }
 };
+// phone: a tab on a side panel's edge: drag it to slide the panel open / closed, tap toggles (like the Playlist track list)
+struct EdgeSlide : juce::Component
+{
+    std::function<int()> width; std::function<void (int, bool)> set; int full = 280; bool panelOnRight = true;
+    int w0 = 0; bool moved = false;
+    void paint (juce::Graphics& g) override
+    {
+        const bool open = width && width() > 60;
+        g.setColour (juce::Colour (0xff2a2d36)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+        g.setColour (juce::Colour (0xffb070ff)); g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+        g.drawText (panelOnRight == open ? ">" : "<", getLocalBounds(), juce::Justification::centred);
+    }
+    int delta (const juce::MouseEvent& e) const { return e.getDistanceFromDragStartX() * (panelOnRight ? -1 : 1); }
+    void mouseDown (const juce::MouseEvent&) override { w0 = width ? width() : 0; moved = false; }
+    void mouseDrag (const juce::MouseEvent& e) override { if (std::abs (e.getDistanceFromDragStartX()) > 4) moved = true; if (moved && set) set (w0 + delta (e), false); }
+    void mouseUp (const juce::MouseEvent& e) override { if (! set) return; if (moved) set (w0 + delta (e), true); else set (w0 > 60 ? 0 : full, true); }
+};
+#if JUCE_IOS
+bool hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath);   // IosRoute.mm
+#endif
+// the folder a chooser picked, readable: on iPhone a Files folder is copied into the app first (JUCE drops its access)
+inline juce::File pickedFolder (const juce::FileChooser& fc)
+{
+   #if JUCE_IOS
+    auto urls = fc.getURLResults();
+    if (urls.isEmpty()) return {};
+    auto u = urls[0];
+    const auto local = u.getLocalFile();
+    if (local.isAChildOf (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)) && local.isDirectory()) return local;
+    auto name = juce::File::createLegalFileName (juce::URL::removeEscapeChars (u.getFileName()));
+    if (name.isEmpty()) name = "Kit";
+    const auto dest = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Kits").getChildFile (name);
+    if (hhsCopyPickedFolder (getURLBookmark (u), u.toString (false).toRawUTF8(), dest.getFullPathName().toRawUTF8()) && dest.isDirectory()) return dest;
+    return {};
+   #else
+    return fc.getResult();
+   #endif
+}
 #if JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
 inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
 #else

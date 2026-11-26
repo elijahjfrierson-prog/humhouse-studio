@@ -774,6 +774,13 @@ public:
         viewport.setScrollBarsShown (false, true);
         addAndMakeVisible (viewport);
         addAndMakeVisible (fx);
+        if (phoneUI)   // phone: slide the FX box closed to see more of the mixer
+        {
+            fxSlide.full = fxPanelW; fxSlide.panelOnRight = true;
+            fxSlide.width = [this] { return fxW; };
+            fxSlide.set = [this] (int w, bool done) { w = juce::jlimit (0, fxPanelW, w); if (done && w < 60) w = 0; fxW = w; resized(); fxSlide.repaint(); };
+            addAndMakeVisible (fxSlide);
+        }
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
         addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Track " + juce::String (p.mixer.size())); }); };
         addAndMakeVisible (addBtn);
@@ -788,8 +795,10 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        fx.setBounds (r.removeFromRight (fxPanelW));
+        fx.setBounds (r.removeFromRight (phoneUI ? fxW : fxPanelW));
+        fx.setVisible (fx.getWidth() > 0);
         auto top = r.removeFromTop (30);
+        if (phoneUI) { fxSlide.setBounds (top.removeFromRight (34).reduced (3)); fxSlide.toFront (false); }
         addBtn.setBounds (top.removeFromLeft (100).reduced (4));
         wiresBtn.setBounds (top.removeFromLeft (80).reduced (4));
         viewport.setBounds (r);
@@ -806,6 +815,7 @@ private:
     juce::Component holder;
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
+    EdgeSlide fxSlide; int fxW = fxPanelW;
     juce::TextButton addBtn, wiresBtn;
     WireOverlay wires { s, stripW };
 

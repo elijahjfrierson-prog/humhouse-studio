@@ -191,3 +191,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: phone menu covers the page: no Channel Rack / panel frame drawn over it
 - lock: phone: X on each song deletes it (asks first)
 - lock: phone: tap = hear it, hold ~0.35 s then move = drag it
+- lock: phone: slide the FX box closed to see more of the mixer
+- lock: on iPhone a Files folder is copied into the app first (JUCE drops its access)

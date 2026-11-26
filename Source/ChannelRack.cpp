@@ -836,7 +836,7 @@ public:
         kitBtn.onClick = [this] {
             chooser = std::make_unique<juce::FileChooser> ("Choose a drum kit folder", juce::File::getSpecialLocation (juce::File::userMusicDirectory));
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                                  [this] (const juce::FileChooser& fc) { if (fc.getResult().isDirectory()) importKit (s, fc.getResult()); });
+                                  [this] (const juce::FileChooser& fc) { if (auto d = pickedFolder (fc); d.isDirectory()) importKit (s, d); });
         };
         patternBox.setTooltip ("Pattern being edited (pick 'New pattern' to add one)");
         patternBox.onChange = [this] {

@@ -315,7 +315,7 @@ public:
         addFolder.onClick = [this] {
             chooser = std::make_unique<juce::FileChooser> ("Add a sample folder", downloadsFolder());
             chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories, [this] (const juce::FileChooser& fc) {
-                auto f = fc.getResult();
+                auto f = pickedFolder (fc);
                 if (! f.isDirectory()) return;
                 roots.addIfNotAlreadyThere (f.getFullPathName());
                 save(); refreshFolders(); setRoot (f);

@@ -27,3 +27,33 @@ void hhsUnwatchPhoneRoute (void* token)   // before the engine goes away
     id t = (__bridge_transfer id) token;
     [[NSNotificationCenter defaultCenter] removeObserver: t];
 }
+
+// a folder picked in Files lives outside the app and JUCE drops access to it right after the pick:
+// reopen it from its bookmark and copy it into the app (kits / sample folders then always load, offline too)
+bool hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath)
+{
+    NSURL* url = nil;
+    if (bookmark != nullptr)
+    {
+        BOOL stale = NO;
+        url = [NSURL URLByResolvingBookmarkData: (NSData*) bookmark options: 0 relativeToURL: nil bookmarkDataIsStale: &stale error: nil];
+    }
+    if (url == nil) url = [NSURL URLWithString: [NSString stringWithUTF8String: urlString]];
+    if (url == nil) return false;
+    const BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSURL* dest = [NSURL fileURLWithPath: [NSString stringWithUTF8String: destPath]];
+    [fm removeItemAtURL: dest error: nil];
+    [fm createDirectoryAtURL: [dest URLByDeletingLastPathComponent] withIntermediateDirectories: YES attributes: nil error: nil];
+    __block BOOL ok = NO;
+    NSError* err = nil;
+    NSFileCoordinator* fc = [[NSFileCoordinator alloc] initWithFilePresenter: nil];
+    [fc coordinateReadingItemAtURL: url options: NSFileCoordinatorReadingWithoutChanges error: &err byAccessor: ^(NSURL* u) {
+        ok = [fm copyItemAtURL: u toURL: dest error: nil];
+    }];
+   #if ! __has_feature(objc_arc)
+    [fc release];
+   #endif
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    return ok;
+}
