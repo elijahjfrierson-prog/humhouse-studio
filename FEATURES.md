@@ -127,6 +127,7 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: paste spot: song mode with the playhead past this pattern's clips used to give -1
 - lock: Bluetooth / output-only devices have no inputs (in may be null)
 - lock: every song carries all its audio (clips, takes, imports, one-shots, frozen tracks)
+- lock: KB songs carry each WAV take as a small Ogg copy
 - lock: Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target
 - lock: every track bar at its song height; up / down scroll moves only this one component
 - lock: a cached picture: scrolling slides it, knobs and buttons aren't redrawn
