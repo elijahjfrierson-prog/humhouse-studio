@@ -36,6 +36,28 @@ public:
     }
     void paint (juce::Graphics& g) override
     {
+        // the frame, title and grid don't move: draw them once into an image, not every refresh
+        const float px = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const auto key = juce::String (getWidth()) + "|" + juce::String (getHeight()) + "|" + juce::String (px) + "|" + title
+                         + "|" + col::bg.toString() + col::accent.toString() + col::text.toString() + col::panel.toString() + col::grid.toString()
+                         + (col::neon ? "n" : "") + (col::lightMode ? "l" : "");
+        if (bgImage.isNull() || key != bgKey)
+        {
+            bgImage = juce::Image (juce::Image::ARGB, juce::jmax (1, juce::roundToInt (getWidth() * px)), juce::jmax (1, juce::roundToInt (getHeight() * px)), true);
+            juce::Graphics bg (bgImage);
+            bg.addTransform (juce::AffineTransform::scale (px));
+            paintStatic (bg);
+            bgKey = key;
+        }
+        g.drawImage (bgImage, getLocalBounds().toFloat());
+        auto a = getLocalBounds().reduced (10).withTrimmedTop (34).toFloat().reduced (8);
+        if (mode == 0) drawOsc (g, a); else if (mode == 1) drawHist (g, a); else drawSpec (g, a);
+    }
+    juce::Rectangle<int> graphArea() const { return getLocalBounds().reduced (10).withTrimmedTop (34); }
+
+private:
+    void paintStatic (juce::Graphics& g)
+    {
         g.fillAll (col::bg);
         g.setColour (col::accent); g.fillEllipse (13.0f, 17.0f, 8.0f, 8.0f);
         g.setColour (col::text); g.setFont (juce::FontOptions (14.0f, juce::Font::bold));
@@ -48,11 +70,9 @@ public:
         g.setColour (col::grid.withAlpha (0.55f));
         for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8), a.getY(), a.getBottom());
         for (int i = 1; i < 4; ++i) g.drawHorizontalLine ((int) (a.getY() + a.getHeight() * (float) i / 4), a.getX(), a.getRight());
-        if (mode == 0) drawOsc (g, a); else if (mode == 1) drawHist (g, a); else drawSpec (g, a);
     }
-    juce::Rectangle<int> graphArea() const { return getLocalBounds().reduced (10).withTrimmedTop (34); }
-
-private:
+    juce::Image bgImage;
+    juce::String bgKey;
     static constexpr int fftOrder = 12, fftSize = 1 << fftOrder, histMax = 4096, chunk = 128;
     std::function<ScopeTap*()> source;
     juce::String title;
