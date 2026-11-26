@@ -366,16 +366,19 @@ public:
             tree.addMouseListener (this, true); results.addMouseListener (this, true);
         }
     }
-    // phone: slide a sample sideways onto the Channel Rack or REC (up/down still scrolls the list)
-    bool fingerDrag = false;
-    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    // phone: tap = hear it, hold ~0.35 s then move = drag it onto the Channel Rack or REC, a quick swipe scrolls the list
+    // (a sideways slide still drags too)
+    bool fingerDrag = false, fingerScrolled = false;
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; fingerScrolled = false; }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (! phoneUI || fingerDrag) return;
         const bool inTree = tree.isParentOf (e.eventComponent), inRes = results.isParentOf (e.eventComponent);
         if (! inTree && ! inRes) return;
         const auto d = e.getOffsetFromDragStart();
-        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        const bool held = ! fingerScrolled && e.getLengthOfMousePress() >= 350;
+        if (! held && std::abs (d.x) + std::abs (d.y) > 8) fingerScrolled = true;
+        if (! held && (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f)) return;
         auto* dc = juce::DragAndDropContainer::findParentDragContainerFor (this);
         if (dc == nullptr || dc->isDragAndDropActive()) return;
         juce::File f;
@@ -697,13 +700,15 @@ private:
         if (row < 0 || row >= (int) rows.size() || rows[(size_t) row].header) return {};
         return audio ? "audio:" + rows[(size_t) row].file.getFullPathName() : "pattern:" + juce::String (rows[(size_t) row].index);
     }
-    bool fingerDrag = false;
-    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; }
+    bool fingerDrag = false, fingerScrolled = false;   // phone: tap = hear / open, hold then move = drag, quick swipe = scroll
+    void mouseDown (const juce::MouseEvent&) override { fingerDrag = false; fingerScrolled = false; }
     void mouseDrag (const juce::MouseEvent& e) override
     {
         if (! phoneUI || fingerDrag || ! list.isParentOf (e.eventComponent)) return;
         const auto d = e.getOffsetFromDragStart();
-        if (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f) return;
+        const bool held = ! fingerScrolled && e.getLengthOfMousePress() >= 350;
+        if (! held && std::abs (d.x) + std::abs (d.y) > 8) fingerScrolled = true;
+        if (! held && (std::abs (d.x) < 18 || std::abs (d.x) < std::abs (d.y) * 1.2f)) return;
         const auto at = e.getEventRelativeTo (&list).getMouseDownPosition();
         const int row = list.getRowContainingPosition (at.x, at.y);
         juce::SparseSet<int> sel; sel.addRange ({ row, row + 1 });

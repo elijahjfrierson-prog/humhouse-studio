@@ -832,6 +832,13 @@ struct PhoneMenuList : juce::Component
                 auto a = juce::Rectangle<int> (0, i * rowH, getWidth(), rowH);
                 if (r.header) { g.setColour (col::accent); g.setFont (juce::FontOptions (15.0f, juce::Font::bold)); }
                 else { g.setColour (r.enabled ? col::text : col::dim); g.setFont (juce::FontOptions (18.0f)); }
+                if (o.canDelete && ! r.header && o.canDelete (r.id))   // X: delete this song
+                {
+                    auto x = a.removeFromRight (rowH).reduced (8);
+                    g.setColour (juce::Colour (0xffd04a5a)); g.drawRoundedRectangle (x.toFloat(), 6.0f, 1.5f);
+                    g.setFont (juce::FontOptions (18.0f, juce::Font::bold)); g.drawText ("X", x, juce::Justification::centred);
+                    g.setColour (r.enabled ? col::text : col::dim); g.setFont (juce::FontOptions (18.0f));
+                }
                 g.drawText ((r.ticked ? juce::String (juce::CharPointer_UTF8 ("\xe2\x9c\x93 ")) : juce::String()) + r.text, a.reduced (16, 0), juce::Justification::centredLeft, true);
                 g.setColour (col::gridBar); g.fillRect (a.removeFromBottom (1));
             }
@@ -842,12 +849,21 @@ struct PhoneMenuList : juce::Component
             const int i = e.y / rowH;
             if (i < 0 || i >= (int) o.rows.size()) return;
             const auto& r = o.rows[(size_t) i];
+            if (o.canDelete && o.onDelete && ! r.header && o.canDelete (r.id) && e.x >= getWidth() - rowH)
+            {
+                const int id = r.id;
+                juce::Component::SafePointer<Body> sp (this);
+                o.onDelete (id, [sp, id] { if (sp == nullptr) return; auto& rs = sp->o.rows; rs.erase (std::remove_if (rs.begin(), rs.end(), [id] (const Row& x) { return x.id == id; }), rs.end()); sp->o.resized(); sp->repaint(); });
+                return;
+            }
             if (! r.header && r.enabled && r.id != 0 && o.done) o.done (r.id);
         }
     };
     static constexpr int rowH = 46;
     std::vector<Row> rows;
     std::function<void (int)> done;
+    std::function<bool (int)> canDelete;                                   // rows with an X on the right
+    std::function<void (int, std::function<void()>)> onDelete;            // id, remove-the-row callback
     Body body { *this };
     juce::Viewport view;
     juce::TextButton close { "X  CLOSE" };
@@ -1286,6 +1302,7 @@ public:
     void paintOverChildren (juce::Graphics& g) override   // Neon 3D: every page panel sits in a thin lit frame (strokes only, clipped to what repaints)
     {
         if (! col::neon || col::lightMode) return;
+        if (phoneMenu != nullptr) return;   // phone menu covers the page: no Channel Rack / panel frame drawn over it
         const auto lit = topBar.getBottom();
         {
             juce::ColourGradient line (col::accent.withAlpha (0.0f), (float) topBar.getX(), 0.0f, col::accent.withAlpha (0.0f), (float) topBar.getRight(), 0.0f, false);
@@ -2900,6 +2917,23 @@ private:
                 if (auto f = copyIntoApp (fc.getURLResults()[0]); f.existsAsFile()) safe->load (f);
             });
         });
+        if (phoneMenu != nullptr)   // phone: X on each song deletes it (asks first)
+        {
+            const int n = juce::jmin (300, songs.size());
+            phoneMenu->canDelete = [n] (int id) { return id >= 1 && id <= n; };
+            phoneMenu->onDelete = [safe, songs, backups] (int id, std::function<void()> removeRow)
+            {
+                const auto f = songs[id - 1];
+                juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + f.getFileNameWithoutExtension() + "\"?")
+                                                  .withMessage (backups ? "This backup is deleted from the phone." : "Are you sure? This song is deleted from the phone.").withButton ("Delete").withButton ("Cancel"),
+                                              [safe, f, removeRow] (int b) {
+                                                  if (b != 1 || safe == nullptr) return;
+                                                  if (f.moveToTrash() || f.deleteFile() || ! f.existsAsFile()) { removeRow(); safe->flash ("Deleted: " + f.getFileNameWithoutExtension()); }
+                                                  else safe->flash ("Couldn't delete " + f.getFileNameWithoutExtension());
+                                              });
+            };
+            phoneMenu->repaint();
+        }
     }
    #else
     void openChooser (bool backups)

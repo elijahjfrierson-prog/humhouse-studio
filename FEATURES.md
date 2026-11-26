@@ -188,3 +188,6 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: struct SwipeLock
 - lock: phone: touching the fader to scroll never jumps the volume
 - lock: plug-in windows always stay in front of it
+- lock: phone menu covers the page: no Channel Rack / panel frame drawn over it
+- lock: phone: X on each song deletes it (asks first)
+- lock: phone: tap = hear it, hold ~0.35 s then move = drag it
