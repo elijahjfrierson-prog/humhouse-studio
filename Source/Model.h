@@ -245,6 +245,8 @@ inline float fadeBend (float fadeCurve) { return -0.49f * fadeCurve; }   // clip
 inline double speedFadeSecs (double secs, double lenSecs, double inSecs, double outSecs, bool speedIn, bool speedOut, float fadeCurve)
 {
     const double k1 = std::pow (2.0, (double) fadeCurve) + 1.0;
+    if (speedIn && speedOut && inSecs + outSecs > lenSecs && inSecs + outSecs > 0)   // overlapping speed fades: share the clip so the read never jumps back
+    { const double k = lenSecs / (inSecs + outSecs); inSecs *= k; outSecs *= k; }
     if (speedIn && inSecs > 0 && secs < inSecs) { const double u = juce::jmax (0.0, secs / inSecs); return inSecs - inSecs * (1.0 - std::pow (u, k1)) / k1; }
     const double o0 = lenSecs - outSecs;
     if (speedOut && outSecs > 0 && secs > o0) { const double u = juce::jmin (1.0, (secs - o0) / outSecs); return o0 + outSecs * (1.0 - std::pow (1.0 - u, k1)) / k1; }

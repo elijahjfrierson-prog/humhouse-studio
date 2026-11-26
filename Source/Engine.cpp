@@ -2004,6 +2004,7 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             {
                 // speed fades read the source slower (never faster), so the block's read span always covers them
                 const double sp = speedFade ? frac0 + speedSrc (c0 - clip.start - shB + i / spbC) * cr.fileRate - srcPos : frac0 + i * ratio;
+                if (sp < 0.0) continue;
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
