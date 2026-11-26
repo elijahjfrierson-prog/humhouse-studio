@@ -1453,7 +1453,7 @@ void Engine::startRecordingWriters (bool surprise)
         if (auto* os = t->file.createOutputStream().release())
         {
             if (auto* w = wav.createWriterFor (os, sampleRate, 2, 24, {}, 0))
-                t->writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (w, diskThread, 65536);
+                t->writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (w, diskThread, 1 << 18);   // ~5 s of audio: a disk stall while OBS records never drops take samples
             else delete os;
         }
         if (t->writer) newTakes.push_back (std::move (t));
