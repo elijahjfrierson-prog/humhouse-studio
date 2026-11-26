@@ -14,6 +14,22 @@ inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one 
 #else
 inline constexpr bool phoneUI = false;
 #endif
+// phone: a finger that lands on a fader / knob and swipes mostly sideways is scrolling the page, not moving the value
+struct SwipeLock
+{
+    int mode = 1;   // 0 undecided, 1 value, 2 scroll
+    void down() { mode = phoneUI ? 0 : 1; }
+    bool allows (const juce::MouseEvent& e)
+    {
+        if (mode == 0)
+        {
+            const auto d = e.getOffsetFromDragStart();
+            if (std::abs (d.x) + std::abs (d.y) < 8) return false;
+            mode = std::abs (d.x) > std::abs (d.y) ? 2 : 1;
+        }
+        return mode == 1;
+    }
+};
 #if JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
 inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
 #else
@@ -537,7 +553,9 @@ public:
     Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix = {});
     void mouseDoubleClick (const juce::MouseEvent&) override;   // same menu as right-click (phone: double tap = right-click)
     void mouseDown (const juce::MouseEvent&) override;          // right-click: type value, reset, min / mid / max, automate
+    void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
     void showMenu();
+    SwipeLock swipe;
     std::function<void()> onAutomate;                           // set by views that can make an automation lane for this knob
 private:
     double defValue = 0.0;

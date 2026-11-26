@@ -185,3 +185,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: " stems") + " ...", true, true, -1)
 - lock: Can't open the Exports folder in Files.
 - lock: trackpadZoomTau
+- lock: struct SwipeLock
+- lock: phone: touching the fader to scroll never jumps the volume

@@ -433,6 +433,7 @@ void Knob::mouseDown (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) { showMenu(); return; }
     if (e.mods.isAltDown()) { setValue (defValue, juce::sendNotificationSync); return; }
+    swipe.down();
     juce::Slider::mouseDown (e);
 }
 

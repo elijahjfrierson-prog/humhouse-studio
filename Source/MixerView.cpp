@@ -8,11 +8,19 @@ namespace
 {
 constexpr int stripW = 78, fxPanelW = 280, maxSlots = 10;
 
+struct MixFader : public juce::Slider   // phone: sideways swipes scroll the mixer, the volume stays put
+{
+    SwipeLock swipe;
+    void mouseDown (const juce::MouseEvent& e) override { swipe.down(); juce::Slider::mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
+};
+
 struct Strip : public juce::Component
 {
     Strip (Studio& st, int i) : s (st), index (i)
     {
         fader.setSliderStyle (juce::Slider::LinearVertical);
+        fader.setSliderSnapsToMousePosition (! phoneUI);   // phone: touching the fader to scroll never jumps the volume
         fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         fader.setRange (0.0, 1.25, 0.0);
         fader.setDoubleClickReturnValue (true, 0.8);
@@ -245,7 +253,7 @@ struct Strip : public juce::Component
         scopeLive = live;
     }
     Studio& s; int index; float level = 0, drawnLevel = -1.0f; bool scopeLive = true;
-    juce::Slider fader;
+    MixFader fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
     Knob sep { "M/S", "stereo separation: left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
