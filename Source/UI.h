@@ -216,11 +216,14 @@ namespace col
         if (w <= 0 || h <= 0 || w > 1024 || h > 256 || px <= 0.0f || px > 4.0f) { draw (g, area); return; }
         key = mix (mix (mix (mix (key, (juce::uint64) w), (juce::uint64) h), (juce::uint64) juce::roundToInt (px * 100.0f)),
                    (juce::uint64) (juce::roundToInt (local.getX() * 8.0f) * 64 + juce::roundToInt (local.getY() * 8.0f)));
-        if (cache.size() > 1500 && cache.find (key) == cache.end()) cache.clear();
+        static size_t bytes = 0;   // dragging the color wheel makes new images per accent: old ones go once 16 MB is used
+        const int iw = juce::roundToInt ((float) w * px), ih = juce::roundToInt ((float) h * px);
+        if (bytes > ((size_t) 16 << 20) && cache.find (key) == cache.end()) { cache.clear(); bytes = 0; }
         auto& img = cache[key];
         if (img.isNull())
         {
-            img = juce::Image (juce::Image::ARGB, juce::roundToInt ((float) w * px), juce::roundToInt ((float) h * px), true);
+            img = juce::Image (juce::Image::ARGB, iw, ih, true);
+            bytes += (size_t) iw * (size_t) ih * 4;
             juce::Graphics ig (img);
             ig.addTransform (juce::AffineTransform::scale (px));
             draw (ig, local);
