@@ -23,6 +23,10 @@ public:
         ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
         addAndMakeVisible (*ed);
         ed->onTrackLink = [this] (int tr) { linkMenu (tr); };
+        ed->routedOnHost = [this] (const juce::String& key)
+        {
+            return std::any_of (s.p().clips.begin(), s.p().clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); });
+        };
         setLookAndFeel (&isfx::sharedLookAndFeel());   // same buttons/fonts/colours as the InSequence FX app
         for (auto* b : { &push, &exportAll, &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
         push.setTooltip ("PUSH the whole VIDEO sequence or the selected clips onto the Record timeline as editable clips; the video pops out and follows the playhead");
@@ -187,12 +191,29 @@ private:
             if (r == 3000)
             {
                 const auto key = self.ed->sequence().tracks[(size_t) tr].routeKey;
-                self.ed->setTrackRoute (tr, -1); ++self.linkGen[key]; self.linkSig[key] = "unrouted";   // Undo re-routes it: the poll sees a change and rebuilds the REC clip self.removeLink (key); return;
+                self.ed->setTrackRoute (tr, -1); ++self.linkGen[key]; self.linkSig[key] = "unrouted";   // Undo re-routes it: the poll sees a change and rebuilds the REC clip
+                self.removeLink (key); return;
             }
-            if (r >= 2000) { self.ed->setTrackRoute (tr, lane, r - 2000); self.syncLink (tr); return; }
+            if (r >= 2000)
+            {   // same REC track: just move its clip to the insert (its REC edits stay); otherwise render it there
+                const auto& t0 = self.ed->sequence().tracks[(size_t) tr];
+                const bool same = t0.recLane == lane; const auto key = t0.routeKey;
+                self.ed->setTrackRoute (tr, lane, r - 2000);
+                if (! (same && self.retarget (key, r - 2000))) self.syncLink (tr);
+                return;
+            }
             self.ed->setTrackRoute (tr, r == 1999 ? (int) self.s.p().lanes.size() : r - 1000);
             self.syncLink (tr);
         });
+    }
+    bool retarget (const juce::String& key, int insert)
+    {
+        linkIns[key] = insert;
+        if (std::none_of (s.p().clips.begin(), s.p().clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); })) return false;
+        s.edit ("VIDEO track insert", [&] (Project& p) {
+            for (auto& c : p.clips) if (isLinkClip (c, key)) c.mixerTrack = insert > 0 && insert < (int) p.mixer.size() ? insert : -1;
+        });
+        return true;
     }
     void removeLink (const juce::String& key)
     {
@@ -200,6 +221,7 @@ private:
         s.edit ("Unroute VIDEO track", [&] (Project& p) {
             p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); }), p.clips.end());
         });
+        ed->refreshPlayback();
     }
     void syncLink (int t)
     {
@@ -246,6 +268,7 @@ private:
                 c.start = 0.0; c.length = secondsToBeats (secs, p.bpm);
                 p.clips.push_back (c);
             });
+            self.ed->refreshPlayback();
             const int mt = keepInsert > 0 ? keepInsert : lane < (int) self.s.p().lanes.size() ? self.s.p().lanes[(size_t) lane].mixerTrack : 0;
             self.info.setText ("VIDEO track " + juce::String (t + 1) + " plays on REC Track " + juce::String (lane + 1) + " -> insert " + juce::String (mt)
                                + ": automate and mix it there, EXPORT ALL includes it", juce::dontSendNotification);
@@ -299,9 +322,11 @@ private:
                     auto it = linkSig.find (key);
                     if (it == linkSig.end())
                     {   // first sight (a VIDEO project just opened): its REC clip is already in the song it was routed in; never add it to another
-                        if (! sig[t].fromFirstOccurrenceOf ("|", false, false).upToFirstOccurrenceOf ("|", false, false).containsChar ('-')) linkSig[key] = sig[t];
+                        if (! sig[t].fromFirstOccurrenceOf ("|", false, false).upToFirstOccurrenceOf ("|", false, false).containsChar ('-')) { linkSig[key] = sig[t]; linkIns[key] = tr[(size_t) t].recInsert; }
                     }
                     else if (it->second != sig[t]) syncLink (t);
+                    else if (auto li = linkIns.find (key); li != linkIns.end() && li->second != tr[(size_t) t].recInsert)
+                        retarget (key, tr[(size_t) t].recInsert);   // Undo/Redo of an insert change: move the clip, keep its REC edits
                 }
             }
         }

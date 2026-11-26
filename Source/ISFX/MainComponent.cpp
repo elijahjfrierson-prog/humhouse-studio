@@ -603,7 +603,8 @@ void MainComponent::setTrackRoute (int t, int lane, int insert)
 Sequence MainComponent::playbackSequence() const
 {
     Sequence q = st.project.seq();
-    if (hostPlaying().load()) for (auto& t : q.tracks) if (t.recLane >= 0) t.mute = true;   // VIDEO's own Play still hears them
+    if (hostPlaying().load())   // VIDEO's own Play still hears them; REC only mutes what the open REC song really plays
+        for (auto& t : q.tracks) if (t.recLane >= 0 && routedOnHost != nullptr && routedOnHost (t.routeKey)) t.mute = true;
     return q;
 }
 
@@ -621,7 +622,7 @@ juce::StringArray MainComponent::trackSignatures() const
         juce::String sig = seq.tracks[(size_t) t].mute ? "M|" : "-|", clips;
         if (sv != nullptr) if (auto* cl = (*sv)["clips"].getArray())
             for (auto& c : *cl) if ((int) c["track"] == t) { sig << (st.audio.has (c["media"].toString()) ? "A" : "-"); clips << juce::JSON::toString (c, true); }
-        sig << "|" << seq.duckDb << seq.duckKey << "|" << seq.tracks[(size_t) t].recInsert << "|" << clips;
+        sig << "|" << seq.duckDb << seq.duckKey << "|" << clips;
         out.add (sig);
     }
     return out;
