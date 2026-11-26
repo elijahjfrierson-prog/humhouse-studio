@@ -2495,6 +2495,7 @@ private:
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
+    bool stripPass = false;   // drawing into a zoom strip: clip names are left out and drawn live on top
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
@@ -2738,16 +2739,43 @@ private:
         }
     }
 
+    juce::Colour clipColour (const Clip& c) const
+    {
+        auto& p = s.p();
+        juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
+        if (! c.colour.isTransparent()) colour = c.colour;
+        if (c.muted) colour = col::dim;
+        return colour;
+    }
+    void drawClipLabel (juce::Graphics& g, const Clip& c, juce::Rectangle<float> r, juce::Colour colour)
+    {
+        auto& p = s.p();
+        juce::String label = c.isAuto() ? c.autoTarget.name : c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
+                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
+        if (c.isAudio())
+        {
+            const int ins = p.clipInsert (c);
+            if (ins >= 0 && ins < (int) p.mixer.size()) label << juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xba ")) << p.mixer[(size_t) ins].name;
+            if (c.takeGroup > 0)
+            {
+                int n = 0, k = 0;
+                for (auto& o : p.clips) if (o.takeGroup == c.takeGroup) { ++n; if (o.uid == c.uid) k = n; }
+                if (n > 1) label << "  [take " << k << "/" << n << "]";
+            }
+        }
+        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
+        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
+        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
+    }
     void drawClip (juce::Graphics& g, const Clip& c)
     {
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > contentRight()) return;
         if (! g.getClipBounds().toFloat().expanded (2).intersects (r)) return;   // playhead strip repaints skip clips they don't touch
-        juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
-        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
-        if (! c.colour.isTransparent()) colour = c.colour;
-        if (c.muted) colour = col::dim;
+        const juce::Colour colour = clipColour (c);
         if (col::neon && ! col::lightMode)   // Neon 3D: glossy clip, lit title strip, glowing rim
         {
             g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.42f), 0.0f, r.getY(), colour.withAlpha (0.16f), 0.0f, r.getBottom(), false)); g.fillRoundedRectangle (r, 4);
@@ -2863,23 +2891,7 @@ private:
             }
         }
         if (c.isAuto()) drawAutomation (g, c, r, colour);
-        juce::String label = c.isAuto() ? c.autoTarget.name : c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
-                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
-        if (c.isAudio())
-        {
-            const int ins = p.clipInsert (c);
-            if (ins >= 0 && ins < (int) p.mixer.size()) label << juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xba ")) << p.mixer[(size_t) ins].name;
-            if (c.takeGroup > 0)
-            {
-                int n = 0, k = 0;
-                for (auto& o : p.clips) if (o.takeGroup == c.takeGroup) { ++n; if (o.uid == c.uid) k = n; }
-                if (n > 1) label << "  [take " << k << "/" << n << "]";
-            }
-        }
-        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
-        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
-        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
-        g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
+        if (! stripPass) drawClipLabel (g, c, r, colour);   // names are drawn live, never baked into the zoom strips (a pinch would stretch them)
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
         else if (c.patternIndex >= 0 && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
     }
@@ -3013,7 +3025,7 @@ private:
             ig.setColour (col::bg); ig.fillRect (tr);
             const double keep = scrollX; const int keepY = scrollY; const float keepPpb = pxPerBeat;
             scrollX = k * (stripW / (double) zoomOf); scrollY = tileScrollY; paintRight = (float) tr.getRight(); pxPerBeat = zoomOf;   // the strips' own zoom
-            paintContent (ig, tr);
+            stripPass = true; paintContent (ig, tr); stripPass = false;
             scrollX = keep; scrollY = keepY; paintRight = -1.0f; pxPerBeat = keepPpb;
         }
         (into != nullptr ? *into : strips).push_back (std::move (st));
@@ -3138,6 +3150,17 @@ private:
         if (pending || zooming) drawSet (overStrips, overPpb, false);
         if (! drawSet (strips, tilePpb, ! pending && ! zooming)) return false;
         if (pending) drawSet (nextStrips, nextPpb, false);   // the new set on top as it fills in
+        {   // clip names on top, sharp at their normal width at every zoom
+            juce::Graphics::ScopedSaveState ss (g);
+            g.reduceClipRegion (area);
+            for (auto& c : s.p().clips)
+            {
+                if (c.hidden) continue;
+                const auto r = clipRect (c);
+                if (r.getRight() < headerW || r.getX() > contentRight() || ! g.clipRegionIntersects (r.withHeight (14).getSmallestIntegerContainer())) continue;
+                drawClipLabel (g, c, r, clipColour (c));
+            }
+        }
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)
