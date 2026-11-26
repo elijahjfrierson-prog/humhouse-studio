@@ -640,7 +640,7 @@ struct RenderJob : public juce::ThreadWithProgressWindow
 {
     struct Item { juce::File file; int track; };
     RenderJob (Engine& e, std::vector<Item> it, bool song, bool stemMode)
-        : juce::ThreadWithProgressWindow ("Exporting " + (it.size() == 1 ? it.front().file.getFileName() : juce::String ((int) it.size()) + " stems") + " ...", true, true),
+        : juce::ThreadWithProgressWindow ("Exporting " + (it.size() == 1 ? it.front().file.getFileName() : juce::String ((int) it.size()) + " stems") + " ...", true, true, -1),
           engine (e), items (std::move (it)), songMode (song), stems (stemMode) {}
     void run() override
     {
@@ -3138,8 +3138,10 @@ private:
     {
        #if JUCE_IOS
         {   // iPhone can't pick a folder: exports go to Files > On My iPhone > HumHouse Studio > Exports
-            const auto dir = hhsHome().getChildFile ("Exports");
-            dir.createDirectory();
+            auto dir = hhsHome().getChildFile ("Exports");
+            if (! dir.createDirectory().wasOk() || ! dir.isDirectory()) dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory);
+            if (! dir.isDirectory())
+            { juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "Export", "Can't open the Exports folder in Files."); return; }
             hintBar.setText ("Exporting to Files > On My iPhone > HumHouse Studio > Exports", juce::dontSendNotification);
             exportInto (dir, name, what, track);
             return;

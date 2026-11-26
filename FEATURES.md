@@ -179,3 +179,9 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: void resaveLayout (Studio& s)
 - lock: the Neon look it opened with is saved too
 - lock: copy to playhead marker: one click, same paste path as the keys
+- lock: songEnd + juce::jmax (0, playbackDelay.load())
+- lock: if (quietRun >= quietNeeded) break;
+- lock: if (! ok) file.deleteFile();
+- lock: " stems") + " ...", true, true, -1)
+- lock: Can't open the Exports folder in Files.
+- lock: trackpadZoomTau

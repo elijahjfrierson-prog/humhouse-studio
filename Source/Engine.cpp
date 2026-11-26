@@ -1,3 +1,4 @@
+#include <limits>
 #include "PluginSandbox.h"
 #include "Engine.h"
 #include <thread>
@@ -2852,12 +2853,25 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const bool oldSong = proj.songMode;
     proj.songMode = song;
     const double lenBeats = renderLenBeats > 0 ? renderLenBeats : song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
-    const double tail = 2.0;
-    const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
+    // the song plays to its end (+ delay-compensation latency), then the tail rings out until it is silent (max 10 s) and is trimmed:
+    // no fixed 2 s of dead air / noise floor at the end, and long reverb / delay tails are never cut
+    const double maxTail = 10.0;
+    const juce::int64 songEnd = (juce::int64) (beatsToSeconds (lenBeats, proj.bpm) * sr);
+    const juce::int64 bodyEnd = songEnd + juce::jmax (0, playbackDelay.load());
+    const juce::int64 total = bodyEnd + (juce::int64) (maxTail * sr);
     const double outRate = format != 0 ? compressedRate (rate > 0 ? rate : sr) : rate > 0 ? rate : sr;
     const bool viaMemory = format != 0 || bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
-    juce::AudioBuffer<float> mem;
-    if (viaMemory) mem.setSize (2, (int) total);
+   #if JUCE_IOS
+    const double maxMemMinutes = 20.0;   // phone memory: a longer song in memory would get the app killed
+   #else
+    const double maxMemMinutes = 60.0;
+   #endif
+    if (sr <= 0.0 || total <= 0 || total >= (juce::int64) std::numeric_limits<int>::max() / 2
+        || (viaMemory && (double) total > maxMemMinutes * 60.0 * sr))
+    { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
+    juce::AudioBuffer<float> mem, tailBuf;
+    try { if (viaMemory) mem.setSize (2, (int) total); tailBuf.setSize (2, (int) (total - bodyEnd)); }
+    catch (const std::bad_alloc&) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
 
     file.deleteFile();
     std::unique_ptr<juce::AudioFormatWriter> writer;
@@ -2889,20 +2903,53 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     juce::Random ditherRnd (0x484853);
     bool ok = true;
     lastRenderPeak = 0;
-    for (juce::int64 done = 0; done < total; done += block)
+    auto emit = [&] (juce::AudioBuffer<float>& b, int from, int n, juce::int64 at)
+    {
+        if (n <= 0) return;
+        if (viaMemory) { mem.copyFrom (0, (int) at, b, 0, from, n); mem.copyFrom (1, (int) at, b, 1, from, n); return; }
+        juce::AudioBuffer<float> v (b.getArrayOfWritePointers(), 2, from, n);
+        tpdfDither (v, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (v, 0, n);
+    };
+    const float quietLevel = 1.0e-4f;   // -80 dBFS
+    const int quietNeeded = (int) (0.3 * sr);
+    juce::int64 done = 0;
+    int tailLen = 0, quietRun = 0;
+    for (; done < total; done += block)
     {
         const int n = (int) std::min<juce::int64> (block, total - done);
-        if (done >= (juce::int64) (beatsToSeconds (lenBeats, proj.bpm) * sr)) playing = false;
+        if (done >= songEnd) playing = false;
         float* outs[2] { outBuf.getWritePointer (0), outBuf.getWritePointer (1) };
         // offline reads must not miss disk data
         processBlock (nullptr, 0, outs, 2, n);
-        lastRenderPeak = std::max ({ lastRenderPeak, outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n) });
-        if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
-        else { tpdfDither (outBuf, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (outBuf, 0, n); }
+        const float mag = std::max (outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n));
+        lastRenderPeak = std::max (lastRenderPeak, mag);
+        if (done + n <= bodyEnd) emit (outBuf, 0, n, done);
+        else
+        {
+            const int body = (int) std::max<juce::int64> (0, bodyEnd - done);
+            emit (outBuf, 0, body, done);
+            const int t = juce::jmin (n - body, tailBuf.getNumSamples() - tailLen);
+            for (int ch = 0; ch < 2; ++ch) tailBuf.copyFrom (ch, tailLen, outBuf, ch, body, t);
+            tailLen += t;
+            quietRun = mag < quietLevel ? quietRun + n : 0;
+            if (quietRun >= quietNeeded) break;
+        }
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
+    }
+    if (ok)
+    {
+        int keep = 0;   // trim the silent end of the tail, keep 50 ms after the last audible sample, fade the last 5 ms
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = tailLen; --i >= keep;) if (std::abs (tailBuf.getSample (ch, i)) >= quietLevel) { keep = i + 1; break; }
+        keep = juce::jmin (tailLen, keep + (int) (0.05 * sr));
+        const int fade = juce::jmin (keep, (int) (0.005 * sr));
+        if (fade > 0) tailBuf.applyGainRamp (keep - fade, fade, 1.0f, 0.0f);
+        emit (tailBuf, 0, keep, bodyEnd);
+        if (viaMemory) mem.setSize (2, (int) (bodyEnd + keep), true, false, true);
     }
     writer.reset();
     if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits, format);
+    if (! ok) file.deleteFile();   // cancelled / failed: no half-written file left behind
     offline = false;
     setTimeouts (0);
     renderTrackOnly = -1;

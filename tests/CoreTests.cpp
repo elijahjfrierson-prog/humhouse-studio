@@ -1228,8 +1228,10 @@ int main (int argc, char** argv)
         CHECK (rd != nullptr);
         if (rd)
         {
-            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats() + 2.0;
-            CHECK (std::abs ((double) rd->lengthInSamples - secs * 44100.0) < 1024.0);
+            // the song plus its tail until it is silent (trimmed): never a fixed 2 s of dead air, never shorter than the song
+            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats();
+            std::printf ("export length: %.3f s (song %.3f s)\n", (double) rd->lengthInSamples / 44100.0, secs);
+            CHECK ((double) rd->lengthInSamples >= secs * 44100.0 - 1.0 && (double) rd->lengthInSamples < (secs + 10.0) * 44100.0);
             juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples);
             rd->read (&b, 0, b.getNumSamples(), 0, true, true);
             CHECK (b.getMagnitude (0, 0, 2048) > 0.02f);
@@ -2052,7 +2054,8 @@ int main (int argc, char** argv)
             std::printf ("consolidate: %.2f s, note at the start %.3f, after it %.4f\n", x.getNumSamples() / 44100.0, head, late);
             CHECK (head > 0.05f);       // the note is right at the start of the new clip
             CHECK (late < head * 0.1f); // the clip at beat 16 (not chosen) is not in it
-            CHECK (std::abs (x.getNumSamples() / 44100.0 - (4 * 60.0 / p.bpm + 2.0)) < 0.05);
+            CHECK (x.getNumSamples() / 44100.0 >= 4 * 60.0 / p.bpm - 0.001 && x.getNumSamples() / 44100.0 < 4 * 60.0 / p.bpm + 10.0);
+            CHECK (x.getMagnitude (x.getNumSamples() - juce::jmin (x.getNumSamples(), 256), juce::jmin (x.getNumSamples(), 256)) < 0.01f);   // ends faded, no dead noise
         }
         else CHECK (false);
         f.deleteFile();

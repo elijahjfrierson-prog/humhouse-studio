@@ -2068,8 +2068,9 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         if (e.position.x < headerW) return;
-        // continuous: every pinch event multiplies the target; the view takes it on the next screen refresh, under your fingers
-        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, 0.0);
+        // one smooth motion (FL-style): every pinch event multiplies the target and the view glides to it on every refresh,
+        // so uneven trackpad event timing never shows up as steps
+        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, trackpadZoomTau);
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
@@ -2084,7 +2085,7 @@ public:
         if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
             zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * 8.0)),
-                    e.position.x, w.isSmooth ? 0.0 : 0.07);   // trackpad: direct; mouse wheel notches: a short glide, no steps
+                    e.position.x, w.isSmooth ? trackpadZoomTau : 0.07);   // trackpad: smooth follow; mouse wheel notches: a short glide, no steps
             return;
         }
         else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
@@ -2384,6 +2385,7 @@ private:
     double tgtX = -1, tgtY = -1, scrollYf = 0, scrollTau = 0, lastFrameT = 0; int lastDir = 1;
     // Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom (log scale, fractional, no fixed steps) and the beat that
     // stays under the pointer; the clip strips are stretched on screen while you zoom and redrawn sharp once you stop
+    static constexpr double trackpadZoomTau = 0.045;   // trackpad zoom glide time constant (s): smooth, still under the fingers
     double tgtPpb = -1, zoomTau = 0, zoomAnchorBeat = 0; float zoomAnchorX = 0, tilePpb = 0;
     juce::uint32 lastZoomMs = 0; bool zoomDirty = false;
     void zoomTo (double ppb, float anchorX, double tau, double anchorBeat = -1.0, double lo = 2.0, double hi = 1200.0)
