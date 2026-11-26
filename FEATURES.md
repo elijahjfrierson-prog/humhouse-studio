@@ -206,3 +206,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: stacked / covered windows cost little while streaming
 - lock: a minimized window stays minimized
 - lock: costs one image copy per control
+- lock: a long take never turns into a full Playlist redraw every frame
+- lock: loading waveforms redraw the clips 4x a second, not on every chunk

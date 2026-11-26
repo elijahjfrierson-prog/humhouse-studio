@@ -3807,9 +3807,10 @@ private:
     }
     void changeListenerCallback (juce::ChangeBroadcaster* src) override
     {
-        ++tileGen;   // song edit or a waveform finished loading
-        if (src == &s) refresh(); else repaint();
+        if (src == &s) { ++tileGen; refresh(); return; }   // song edit
+        thumbsDirty = true;   // a waveform loaded more: a take that just finished recording sends this many times while it loads
     }
+    bool thumbsDirty = false; juce::uint32 lastThumbMs = 0; float liveTakeScales = 0.0f;
     std::unique_ptr<juce::VBlankAttachment> vblank;
     // Frame meter: the screen-refresh callbacks run on the message thread, so a late one means a frame was missed
     double hudLastT = 0, hudPeriod = 1000.0 / 60.0; float hudIv[128] {}; int hudN = 0, hudDrops = 0; float hudPaint = 0, hudPaintMax = 0;
@@ -3864,6 +3865,11 @@ private:
         for (auto& h : headers) h->repaintIfChanged();
         if (frameMeterOn().load (std::memory_order_relaxed)) hudTick(); else if (hudN != 0) { hudN = hudDrops = 0; hudLastT = 0; hudPaintMax = 0; repaint(); }
         glideStep();
+        if (thumbsDirty && juce::Time::getMillisecondCounter() - lastThumbMs >= 250)   // loading waveforms redraw the clips 4x a second, not on every chunk
+        {
+            thumbsDirty = false; lastThumbMs = juce::Time::getMillisecondCounter();
+            ++tileGen; repaint();
+        }
         if (zoomDirty && tgtPpb < 0 && juce::Time::getMillisecondCounter() - lastZoomMs >= 160)   // zoom done: redraw the strips sharp
         { zoomDirty = false; repaint (headerW, toolbarH + rulerH, getWidth() - headerW, getHeight() - toolbarH - rulerH); }
         if (tilePending) repaint (headerW, toolbarH + rulerH, getWidth() - headerW, getHeight() - toolbarH - rulerH);   // the next zoom strip
@@ -3892,10 +3898,20 @@ private:
             strip (lastPx); strip (px);
             if (s.engine.isRecording())
             {
-                double b0 = pos;
-                s.engine.forEachLiveTake ([&] (int, double sb, const float*, int, double) { b0 = std::min (b0, sb); });
+                double b0 = pos; float scales = 0.0f;
+                s.engine.forEachLiveTake ([&] (int, double sb, const float* pk, int num, double)
+                {
+                    b0 = std::min (b0, sb);
+                    float mx = 0.02f;
+                    for (int i = 0; i < num; ++i) mx = std::max (mx, pk[i]);
+                    scales += juce::jlimit (1.0f, 10.0f, 0.8f / mx);   // same scale the take is drawn with
+                });
                 const int x0 = juce::jmax (headerW, (int) beatToX (b0) - 2);
-                if (px + 8 > x0) repaint (x0, toolbarH + rulerH, (int) px + 8 - x0, getHeight() - toolbarH - rulerH);
+                // the whole take only when its waveform rescales (a louder note); otherwise only the newly recorded tail,
+                // so a long take never turns into a full Playlist redraw every frame
+                const int from = std::abs (scales - liveTakeScales) > 1.0e-3f ? x0 : juce::jmax (x0, (int) std::min (lastPx, px) - 8);
+                liveTakeScales = scales;
+                if (px + 8 > from) repaint (from, toolbarH + rulerH, (int) px + 8 - from, getHeight() - toolbarH - rulerH);
             }
             lastPx = px;
         }
