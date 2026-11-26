@@ -2102,6 +2102,7 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         if (e.position.x < headerW) return;
+        if (! gestureAxis (3)) return;   // mid-scroll: a stray pinch never zooms
         // one smooth motion (FL-style): every pinch event multiplies the target and the view glides to it on every refresh,
         // so uneven trackpad event timing never shows up as steps
         zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, trackpadZoomTau);
@@ -2118,11 +2119,15 @@ public:
         }
         if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
+            if (w.isSmooth && ! gestureAxis (3)) return;   // Windows touchpads pinch as Ctrl+wheel
             zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * 8.0)),
                     e.position.x, w.isSmooth ? trackpadZoomTau : 0.07);   // trackpad: smooth follow; mouse wheel notches: a short glide, no steps
             return;
         }
-        else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
+        // trackpad: one gesture moves along one axis until the fingers lift (no diagonal drift, no zoom mid-scroll)
+        const int axis = ! w.isSmooth || e.mods.isShiftDown() ? 0 : std::abs (w.deltaX) > std::abs (w.deltaY) ? 1 : 2;
+        if (axis != 0 && ! gestureAxis (axis)) { if (gestureLock != 3) scrollLocked (e, w); return; }
+        if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
         {
             scrollTo (juce::jmax (0.0, (tgtX >= 0 ? tgtX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat), -1.0, w.isSmooth ? 0.0 : 0.06);
             return;   // moves on the next screen refresh: many trackpad events in one frame cost one redraw
@@ -3032,9 +3037,24 @@ private:
     }
     // the click that brings HumHouse to the front never moves the playhead; with the lock on only the ruler does
     juce::uint32 activatedMs = 0;
+    // trackpad gesture lock: the first motion picks the axis (1 sideways, 2 up/down, 3 zoom); it holds until 250 ms without events
+    int gestureLock = 0; juce::uint32 gestureMs = 0;
+    bool gestureAxis (int axis)
+    {
+        const auto now = juce::Time::getMillisecondCounter();
+        if (gestureLock == 0 || now - gestureMs > 250) gestureLock = axis;
+        gestureMs = now;
+        return gestureLock == axis;
+    }
+    void scrollLocked (const juce::MouseEvent&, const juce::MouseWheelDetails& w)   // off-axis trackpad motion: keep only the locked axis
+    {
+        if (gestureLock == 1 && w.deltaX != 0) scrollTo (juce::jmax (0.0, (tgtX >= 0 ? tgtX : scrollX) - w.deltaX * 1400.0 / pxPerBeat), -1.0, 0.0);
+        else if (gestureLock == 2 && w.deltaY != 0) scrollTo (-1.0, (tgtY >= 0 ? tgtY : (double) scrollY) - w.deltaY * 420.0, 0.0);
+    }
     bool clickMaySeek (bool ruler) const
     {
         if (juce::Time::getMillisecondCounter() - activatedMs < 400) return false;
+        if (juce::Time::getMillisecondCounter() - gestureMs < 500) return false;   // a tap during / right after a trackpad gesture never seeks
         return ruler || ! playheadLock().load();
     }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)

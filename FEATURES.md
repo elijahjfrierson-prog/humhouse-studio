@@ -219,3 +219,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Subscription iPhone app: no Sonic Store
 - lock: TAPE STOP (fade out)
 - lock: SPEED UP (fade in)
+- lock: trackpad gesture lock
