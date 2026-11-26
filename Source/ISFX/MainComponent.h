@@ -43,6 +43,7 @@ public:
     const Sequence& sequence() const { return st.project.seq(); }
     void setTrackRoute (int track, int lane, int insert = -1);   // insert -1 keeps the track's insert
     juce::StringArray trackSignatures() const;   // per track: its clips + mute as JSON (what a routed render depends on)
+    void refreshPlayback();                      // REC started/stopped mid-play: re-pick which tracks VIDEO plays itself
     Sequence playbackSequence() const;           // tracks routed to REC are heard from REC, not twice
     std::function<void (int track)> onTrackLink;   // right-click an audio track header   // each audible track with sound -> its own stereo WAV
     struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };

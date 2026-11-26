@@ -586,6 +586,8 @@ std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce:
     return out;
 }
 
+void MainComponent::refreshPlayback() { player.setSequence (playbackSequence()); }
+
 void MainComponent::setTrackRoute (int t, int lane, int insert)
 {
     auto& seq = st.project.seq();
@@ -619,7 +621,7 @@ juce::StringArray MainComponent::trackSignatures() const
         juce::String sig = seq.tracks[(size_t) t].mute ? "M|" : "-|", clips;
         if (sv != nullptr) if (auto* cl = (*sv)["clips"].getArray())
             for (auto& c : *cl) if ((int) c["track"] == t) { sig << (st.audio.has (c["media"].toString()) ? "A" : "-"); clips << juce::JSON::toString (c, true); }
-        sig << "|" << seq.duckDb << seq.duckKey << "|" << clips;
+        sig << "|" << seq.duckDb << seq.duckKey << "|" << seq.tracks[(size_t) t].recInsert << "|" << clips;
         out.add (sig);
     }
     return out;
