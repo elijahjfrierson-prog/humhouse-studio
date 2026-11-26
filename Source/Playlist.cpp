@@ -611,7 +611,7 @@ public:
     void useResult (const juce::File& f, int numSamples) override
     {
         const double beats = numSamples / sr * s.p().bpm / 60.0;
-        s.edit ("HumLab", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; } });
+        s.edit ("HumLab", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; c.videoRoute = {}; } });   // a bake is your own audio now, not live VIDEO
         s.engine.sync();
     }
     void onOriginal() override { work.makeCopyOf (audio); undo.clear(); selA = selB = -1; specDirty = true; repaint(); }
@@ -844,7 +844,7 @@ public:
     {
         if (! edited()) { LiveClipEditor::useResult (f, numSamples); return; }
         const double beats = numSamples / sr * s.p().bpm / 60.0;
-        s.edit ("HumTime", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; } });
+        s.edit ("HumTime", [this, f, beats] (Project& p) { for (auto& c : p.clips) if (c.uid == uid) { c.audioFile = f; c.sourceOffset = 0; c.length = beats; c.videoRoute = {}; } });   // a bake is your own audio now, not live VIDEO
         s.engine.sync();
     }
     void onOriginal() override { slices = { { 0, audio.getNumSamples(), 0 } }; undo.clear(); fitView(); repaint(); }
