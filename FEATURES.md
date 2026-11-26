@@ -201,3 +201,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: a tab never keeps focus
 - lock: until you slide it, the FX box follows the screen
 - lock: a disk stall while OBS records never drops take samples
+- lock: a VST instrument that outputs NaN / inf must never silence the whole Master

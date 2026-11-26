@@ -2145,6 +2145,8 @@ struct EngineJobs
             juce::AudioBuffer<float> view (rt->buf.getArrayOfWritePointers(), rt->buf.getNumChannels(), n);
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
+            for (int ch = 0; ch < view.getNumChannels(); ++ch)   // a VST instrument that outputs NaN / inf must never silence the whole Master
+                for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x)) *x = 0.0f;
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
             if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f || rt->numPreFaded > 0)) applyCutFade (*rt, view, n);
         }

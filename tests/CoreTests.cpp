@@ -2608,7 +2608,7 @@ int main (int argc, char** argv)
             const auto t0 = juce::Time::getHighResolutionTicks();
             e.processBlock (nullptr, 0, o, 2, 256);
             const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
-            if (b >= 100) { total += dt; worst = std::max (worst, dt); if (dt > deadline) ++late; }
+            if (b >= 100) { total += dt; worst = std::max (worst, dt); if (dt > deadline) { ++late; std::printf ("  late block %d: %.0f us\n", b, dt * 1e6); } }
             peak = std::max (peak, out.getMagnitude (0, 256));
             CHECK (std::isfinite (out.getSample (0, 0)));
         }
