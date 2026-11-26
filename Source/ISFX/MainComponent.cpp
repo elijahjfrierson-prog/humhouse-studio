@@ -305,7 +305,7 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
     status.setColour (juce::Label::textColourId, theme::dim); status.setFont (12.0f);
 
     hscroll.addListener (this); hscroll.setAutoHide (false);
-    timeline.onEdited = [this] { refresh (true); if (onProjectEdited) onProjectEdited(); };
+    timeline.onEdited = [this] { refresh (true); };
     timeline.onTrackLink = [this] (int tr) { if (onTrackLink) onTrackLink (tr); };
     fxlib.onApply = [this] (const juce::String& d, int scope, int side) { timeline.applyLibraryItem (d, scope, side); };
     timeline.onSeek = [this] (Ticks t) { seek (t); };
@@ -510,7 +510,7 @@ void MainComponent::resized()
 // ============================================================ state refresh / transport
 void MainComponent::refresh (bool inspectorToo)
 {
-    player.setSequence (st.project.seq());
+    player.setSequence (playbackSequence());
     preview.setProject (st.project);
     preview.projectEdited (st.project);
     preview.requestFrame (st.playhead);
@@ -592,6 +592,33 @@ void MainComponent::setTrackRecLane (int t, int lane)
     if (t < 0 || t >= (int) seq.tracks.size() || seq.tracks[(size_t) t].recLane == lane) return;
     st.edit ("Route track to REC");
     seq.tracks[(size_t) t].recLane = lane;
+    if (seq.tracks[(size_t) t].routeKey.isEmpty()) seq.tracks[(size_t) t].routeKey = juce::Uuid().toString().substring (0, 8);
+    player.setSequence (playbackSequence());
+}
+
+Sequence MainComponent::playbackSequence() const
+{
+    Sequence q = st.project.seq();
+    for (auto& t : q.tracks) if (t.recLane >= 0) t.mute = true;
+    return q;
+}
+
+juce::StringArray MainComponent::trackSignatures() const
+{
+    juce::StringArray out;
+    const auto& seq = st.project.seq();
+    const auto v = toVar (st.project);
+    const juce::var* sv = nullptr;
+    if (auto* seqs = v["sequences"].getArray())
+        for (auto& x : *seqs) if (x["id"].toString() == seq.id) sv = &x;
+    for (int t = 0; t < (int) seq.tracks.size(); ++t)
+    {
+        juce::String sig = seq.tracks[(size_t) t].mute ? "M" : "-";
+        if (sv != nullptr) if (auto* cl = (*sv)["clips"].getArray())
+            for (auto& c : *cl) if ((int) c["track"] == t) sig << juce::JSON::toString (c, true);
+        out.add (sig);
+    }
+    return out;
 }
 
 void MainComponent::renderTrackAsync (int t, const juce::File& f, std::function<void (double)> done)
@@ -599,7 +626,7 @@ void MainComponent::renderTrackAsync (int t, const juce::File& f, std::function<
     if (st.project.sequences.empty()) return;
     Sequence one = st.project.seq();
     if (t < 0 || t >= (int) one.tracks.size()) return;
-    for (int k = 0; k < (int) one.tracks.size(); ++k) { one.tracks[(size_t) k].solo = false; one.tracks[(size_t) k].mute = k != t; }
+    for (int k = 0; k < (int) one.tracks.size(); ++k) { one.tracks[(size_t) k].solo = false; one.tracks[(size_t) k].mute = k != t || one.tracks[(size_t) k].mute; }   // a muted track renders silent
     auto cache = std::make_shared<AudioCache>();   // just this track's decoded audio, shared (not copied), so the thread owns what it reads
     for (auto& c : one.clips) if (c.track == t) if (auto a = st.audio.get (c.mediaId)) cache->put (c.mediaId, a);
     juce::Thread::launch ([one = std::move (one), cache, f, done = std::move (done), safe = juce::Component::SafePointer<MainComponent> (this)]
@@ -676,7 +703,7 @@ void MainComponent::togglePlay()
 {
     if (player.isPlaying()) { player.stop(); playBtn.setButtonText ("Play"); preview.setLive (false); return; }
     preview.setLive (true);
-    player.setSequence (st.project.seq());
+    player.setSequence (playbackSequence());
     player.play (st.playhead);
     playBtn.setButtonText ("Pause");
 }

@@ -42,8 +42,9 @@ public:
     void renderTrackAsync (int track, const juce::File& f, std::function<void (double seconds)> done);
     const Sequence& sequence() const { return st.project.seq(); }
     void setTrackRecLane (int track, int lane);
-    std::function<void (int track)> onTrackLink;   // right-click an audio track header
-    std::function<void()> onProjectEdited;   // each audible track with sound -> its own stereo WAV
+    juce::StringArray trackSignatures() const;   // per track: its clips + mute as JSON (what a routed render depends on)
+    Sequence playbackSequence() const;           // tracks routed to REC are heard from REC, not twice
+    std::function<void (int track)> onTrackLink;   // right-click an audio track header   // each audible track with sound -> its own stereo WAV
     struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };
     std::vector<ClipRender> renderClips (const juce::File& dir, bool selectedOnly);   // PUSH: each clip with sound -> WAV at its timeline spot
     bool hasSelection() const { return ! st.selected.isEmpty(); }
