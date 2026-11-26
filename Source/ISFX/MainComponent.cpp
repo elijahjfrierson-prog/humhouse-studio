@@ -604,7 +604,7 @@ Sequence MainComponent::playbackSequence() const
 {
     Sequence q = st.project.seq();
     if (hostPlaying().load())   // VIDEO's own Play still hears them; REC only mutes what the open REC song really plays
-        for (auto& t : q.tracks) if (t.recLane >= 0 && routedOnHost != nullptr && routedOnHost (t.routeKey)) t.mute = true;
+        for (auto& t : q.tracks) if (t.routeKey.isNotEmpty() && routedOnHost != nullptr && routedOnHost (t.routeKey)) t.mute = true;   // incl. a REC Undo bringing an unrouted clip back
     return q;
 }
 

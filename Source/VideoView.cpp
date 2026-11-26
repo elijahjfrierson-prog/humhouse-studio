@@ -156,7 +156,7 @@ private:
     static juce::File linkDir() { return hhsHome().getChildFile ("Video Tracks").getChildFile ("Routed"); }
     static juce::String linkPrefix (const juce::String& key) { return "V-" + key + " "; }
     static bool isLinkClip (const Clip& c, const juce::String& key)
-    { return key.isNotEmpty() && c.audioFile.getParentDirectory() == linkDir() && c.audioFile.getFileName().startsWith (linkPrefix (key)); }
+    { return key.isNotEmpty() && c.audioFile.getFileName().startsWith (linkPrefix (key)); }   // by name: saving copies it into the song's folder, keeping the name
     int trackOfKey (const juce::String& key) const
     {
         const auto& tr = ed->sequence().tracks;
