@@ -210,6 +210,11 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
     if (col::neon && ! col::lightMode)   // Neon 3D: a lit glass dome on a dark well, the value arc glows
     {
         const auto fill = s.isEnabled() ? s.findColour (juce::Slider::rotarySliderFillColourId) : col::dim;
+        const auto key = col::mix (col::mix (col::mix (0x4b4e4f42ull, fill.getARGB()), (juce::uint64) juce::roundToInt (a0 * 100.0f)),
+                                   (juce::uint64) juce::roundToInt (a1 * 100.0f));
+        col::drawCached (g, c, key, [&] (juce::Graphics& g, juce::Rectangle<float> c)   // the knob without its value: drawn once, blitted
+        {
+        const auto body = c.reduced (size * 0.17f);
         g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillEllipse (body.expanded (2.0f).translated (0.0f, 2.5f));
         juce::ColourGradient dome (juce::Colour (0xff3a3f4e), body.getX() + br * 0.6f, body.getY() + br * 0.45f, juce::Colour (0xff05060b), body.getRight(), body.getBottom(), true);
         g.setGradientFill (dome); g.fillEllipse (body);
@@ -227,9 +232,11 @@ void HHLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, in
         g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.22f), body.getCentreX(), body.getY(), juce::Colours::transparentWhite, body.getCentreX(), body.getCentreY(), false));
         g.fillEllipse (body.reduced (br * 0.12f).withTrimmedBottom (br * 0.7f));   // specular highlight
         g.setColour (fill.withAlpha (0.35f)); g.drawEllipse (body, 1.0f);
-        juce::Path track, arc;
+        juce::Path track;
         track.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, a1, true);
         g.setColour (juce::Colour (0xff1a1f33)); g.strokePath (track, ring);
+        });
+        juce::Path arc;
         arc.addCentredArc (c.getCentreX(), c.getCentreY(), rad, rad, 0, a0, ang, true);
         g.setColour (fill.withAlpha (0.10f)); g.strokePath (arc, juce::PathStrokeType (11.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         g.setColour (fill.withAlpha (0.25f)); g.strokePath (arc, juce::PathStrokeType (6.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
@@ -267,12 +274,16 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     {
         const bool on = b.getToggleState();
         const float rr = juce::jmin (7.0f, r.getHeight() * 0.3f);
-        if (on) base = col::panel2.interpolatedWith (col::accent, 0.28f);   // ON = dark glass lit from inside, not a flat fill
+        const auto key = col::mix (col::mix (0x4b455953ull, col::accent.getARGB()), (juce::uint64) ((on ? 4 : 0) + (down ? 2 : over ? 1 : 0)));
+        col::drawCached (g, b.getLocalBounds().toFloat(), key, [&] (juce::Graphics& g, juce::Rectangle<float> area)   // drawn once per size / state, blitted
+        {
+        const auto r = area.reduced (0.5f);
         g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillRoundedRectangle (r.translated (0.0f, 1.5f), rr);
         col::metal (g, r, rr, down ? 0.0f : over ? 0.15f : 0.05f);   // Neon 3D iron: brushed gunmetal key with a chrome bevel
         if (on) { g.setColour (col::accent.withAlpha (0.26f)); g.fillRoundedRectangle (r, rr); }
         g.setColour (on ? col::accent : col::accent.withAlpha (over ? 0.55f : 0.22f)); g.drawRoundedRectangle (r.reduced (0.5f), rr, on ? 1.5f : 1.0f);
         if (on) { g.setColour (col::accent.withAlpha (0.18f)); g.drawRoundedRectangle (r.reduced (1.5f), rr, 3.0f); }
+        });
         return;
     }
     g.setGradientFill (juce::ColourGradient (base.brighter (0.07f), 0.0f, r.getY(), base.darker (0.07f), 0.0f, r.getBottom(), false));   // studio console look: soft top light

@@ -205,3 +205,4 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: macOS puts its purple capture badge over the native red / yellow / green
 - lock: stacked / covered windows cost little while streaming
 - lock: a minimized window stays minimized
+- lock: costs one image copy per control

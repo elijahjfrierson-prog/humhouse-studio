@@ -202,6 +202,32 @@ namespace col
         }
         return img;
     }
+    inline juce::uint64 mix (juce::uint64 h, juce::uint64 v) { return (h ^ v) * 0x100000001b3ull; }
+    // Static layers (knob bodies, metal keys) are drawn once per size / colour / screen scale into an image and blitted
+    // after that, so a full repaint (scrolling, stacked windows while streaming) costs one image copy per control.
+    inline void drawCached (juce::Graphics& g, juce::Rectangle<float> area, juce::uint64 key,
+                            const std::function<void (juce::Graphics&, juce::Rectangle<float>)>& draw)
+    {
+        static std::unordered_map<juce::uint64, juce::Image> cache;
+        const float px = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const float x0 = std::floor (area.getX()), y0 = std::floor (area.getY());
+        const auto local = area.translated (-x0, -y0);
+        const int w = (int) std::ceil (local.getRight()), h = (int) std::ceil (local.getBottom());
+        if (w <= 0 || h <= 0 || w > 1024 || h > 256 || px <= 0.0f || px > 4.0f) { draw (g, area); return; }
+        key = mix (mix (mix (mix (key, (juce::uint64) w), (juce::uint64) h), (juce::uint64) juce::roundToInt (px * 100.0f)),
+                   (juce::uint64) (juce::roundToInt (local.getX() * 8.0f) * 64 + juce::roundToInt (local.getY() * 8.0f)));
+        if (cache.size() > 1500 && cache.find (key) == cache.end()) cache.clear();
+        auto& img = cache[key];
+        if (img.isNull())
+        {
+            img = juce::Image (juce::Image::ARGB, juce::roundToInt ((float) w * px), juce::roundToInt ((float) h * px), true);
+            juce::Graphics ig (img);
+            ig.addTransform (juce::AffineTransform::scale (px));
+            draw (ig, local);
+        }
+        g.setOpacity (1.0f);
+        g.drawImage (img, juce::Rectangle<float> (x0, y0, (float) w, (float) h));
+    }
     inline void metal (juce::Graphics& g, juce::Rectangle<float> r, float corner, float lift = 0.0f)   // brushed gunmetal lit from above, chrome bevel
     {
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2b2f3c).brighter (lift), 0.0f, r.getY(), juce::Colour (0xff0b0d14), 0.0f, r.getBottom(), false));
