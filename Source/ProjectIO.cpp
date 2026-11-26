@@ -363,7 +363,7 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); t.setProperty ("poff", c.patOffset, nullptr); setFile (t, "file", c.audioFile);
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
         t.setProperty ("rev", c.reversed, nullptr); if (c.videoRoute.isNotEmpty()) t.setProperty ("vroute", c.videoRoute, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
-        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
+        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); if (c.speedIn) t.setProperty ("spi", true, nullptr); if (c.speedOut) t.setProperty ("spo", true, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         if (c.drummer >= 0) t.setProperty ("drummer", c.drummer, nullptr);
         if (c.isAuto())
         {
@@ -546,7 +546,7 @@ Project projectFromTree (const juce::ValueTree& root)
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"]; c.patOffset = t.getProperty ("poff", 0.0);
         c.audioFile = readFile (t, "file"); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
         c.muted = t["mute"]; c.reversed = t["rev"]; c.videoRoute = t["vroute"].toString(); c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
-        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
+        c.fadeCurve = t["fc"]; c.speedIn = t["spi"]; c.speedOut = t["spo"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0));
         if ((int) t.getProperty ("ak", 0) > 0)
         {

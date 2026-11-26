@@ -1006,6 +1006,7 @@ private:
             else if (r == 2) v->duplicateSel();
             else if (r == 3) v->removeSel(); });
     }
+public:
     static const std::vector<juce::String>& glitchNames()
     {
         static const std::vector<juce::String> v { "Steps", "Tape Stop", "Tape Start", "Stutter 1/8", "Stutter 1/16", "Triplet Stutter", "Stutter Roll",
@@ -1013,6 +1014,7 @@ private:
                                                    "Sidechain Pump", "Filter Sweep", "Wobble", "Pan Swirl", "Lo-Fi Crush", "Drop" };
         return v;
     }
+private:
     int tool = 0, viewN = 1, dragMode = 0, dragFrom = 0, anchor = 0, boxFrom = 0, boxTo = 0;
     bool moved = false, boxSel = false;
     std::vector<humlab::Slice> slices; std::vector<std::vector<humlab::Slice>> undo; std::vector<int> origDst;
@@ -1707,6 +1709,36 @@ public:
         }
         if (e.mods.isPopupMenu())
         {
+            if (i >= 0 && p.clips[(size_t) i].isAudio() && (part == Part::Curve || part == Part::FadeIn || part == Part::FadeOut))
+            {   // right-click / hold a fade dot: Logic-style speed fades
+                const auto& c = p.clips[(size_t) i];
+                const bool in = part == Part::FadeIn || (part == Part::Curve && e.position.x < beatToX (c.start + c.length * 0.5));
+                const bool on = in ? c.speedIn : c.speedOut; const int uid = c.uid;
+                juce::PopupMenu m;
+                m.addItem (1, in ? "SPEED UP (fade in)" : "TAPE STOP (fade out)", true, on);
+                m.addItem (2, in ? "Volume fade in" : "Volume fade out", true, ! on);
+                if ((in ? c.fadeIn : c.fadeOut) <= 0.0)
+                    for (int k = 0; k < 4; ++k) m.addItem (10 + k, juce::String (in ? "SPEED UP " : "TAPE STOP ") + (k == 0 ? "1/4 beat" : k == 1 ? "1/2 beat" : k == 2 ? "1 beat" : "1 bar"));
+                juce::PopupMenu gm;   // Glitch Gate over just the fade: baked into its own clip, the rest of the clip is untouched
+                for (int k = 1; k < (int) HumTimeView::glitchNames().size(); ++k) gm.addItem (100 + k, HumTimeView::glitchNames()[(size_t) k]);
+                if (! phoneLite) m.addSubMenu ("Glitch Gate (" + juce::String (in ? "fade in" : "fade out") + ")", gm, (in ? c.fadeIn : c.fadeOut) > 0.0 && ! c.reversed);
+                juce::Component::SafePointer<Playlist> sp (this);
+                m.showMenuAsync (juce::PopupMenu::Options(), [sp, in, uid] (int r) {
+                    if (! sp || r <= 0) return;
+                    if (r >= 100) { sp->glitchFade (uid, r - 100, in); return; }
+                    sp->s.edit (in ? "Speed up" : "Tape stop", [&] (Project& pr) {
+                        for (auto& o : pr.clips)
+                        {
+                            if (! (o.uid == uid || o.selected) || ! o.isAudio()) continue;
+                            const bool v = r != 2;
+                            if (r >= 10) { const double L = r == 10 ? 0.25 : r == 11 ? 0.5 : r == 12 ? 1.0 : 4.0; (in ? o.fadeIn : o.fadeOut) = juce::jmin (L, o.length * 0.5); }
+                            (in ? o.speedIn : o.speedOut) = v;
+                        }
+                    });
+                    sp->repaint();
+                });
+                return;
+            }
             if (i >= 0) { clipMenu (i); return; }
             const int lane = laneAt (e.position.y);   // empty space on a track: the same track menu as its header
             if (lane >= 0 && lane < (int) headers.size() && lane < (int) p.lanes.size())
@@ -2769,6 +2801,11 @@ private:
                 juce::Path line; auto shape = fadeShape (in, len, line);
                 g.setColour (juce::Colours::black.withAlpha (0.45f)); g.fillPath (shape);
                 g.setColour (col::text.withAlpha (0.7f)); g.strokePath (line, juce::PathStrokeType (1.2f));
+                if ((in ? c.speedIn : c.speedOut) && len > 46 && r.getHeight() > 14)
+                {
+                    g.setColour (col::text.withAlpha (0.85f)); g.setFont (juce::FontOptions (9.0f, juce::Font::bold));
+                    g.drawText (in ? "SPEED UP" : "TAPE STOP", juce::Rectangle<float> (in ? r.getX() : r.getRight() - len, r.getY() + 2, len, 10), juce::Justification::centred, true);
+                }
                 if (len > 10) { auto h = fadeHandle (c, r, in); g.setColour (col::accent2); g.fillEllipse (h.x - 4, h.y - 4, 8, 8); g.setColour (col::text); g.drawEllipse (h.x - 4, h.y - 4, 8, 8, 1.0f); }
             }
             g.setColour (col::text);
@@ -2921,7 +2958,7 @@ private:
         {
             add (c.uid); add (c.lane); add (c.start); add (c.length); add (c.patternIndex); add (c.patOffset); add (c.sourceOffset);
             add (c.gain); add (c.muted); add (c.selected); add (c.reversed); add (c.mixerTrack); add (c.fadeIn); add (c.fadeOut);
-            add (c.fadeCurve); add (c.takeGroup); add (c.hidden); add (c.colour.getARGB()); add (c.drummer); add (c.autoTarget.kind);
+            add (c.fadeCurve); add (c.speedIn); add (c.speedOut); add (c.takeGroup); add (c.hidden); add (c.colour.getARGB()); add (c.drummer); add (c.autoTarget.kind);
             str (c.autoTarget.name); str (c.audioFile.getFullPathName());
             for (auto& q : c.autoPts) { add (q.beat); add (q.value); add (q.curve); }
             if (c.isDrummer())
@@ -3100,6 +3137,43 @@ private:
         if (r < 300 || r > 305) return;
         const double div = divs[r - 300], ra = timeSelA, rb = timeSelB;
         s.edit ("Roll clip", [&] (Project& p) { rollAudioClips (p, uids, div, ra, rb); });
+    }
+    // Glitch Gate on a fade: renders only the fade's audio through Glitch Gate (background thread), then splits it off as its own clip
+    void glitchFade (int uid, int fx, bool in)
+    {
+        const Clip* cp = nullptr; for (auto& o : s.p().clips) if (o.uid == uid) cp = &o;
+        if (cp == nullptr || ! cp->isAudio() || cp->reversed || ! cp->audioFile.existsAsFile()) return;
+        const double F = in ? cp->fadeIn : cp->fadeOut, bpm = s.p().bpm;
+        if (F <= 0.0 || F >= cp->length) return;
+        Clip part = *cp;
+        if (! in) { part.sourceOffset += beatsToSeconds (cp->length - F, bpm); part.start += cp->length - F; }
+        part.length = F;
+        const auto f = s.p().recordingsFolder().getChildFile ("Glitch").getNonexistentChildFile (cp->audioFile.getFileNameWithoutExtension() + "_glitch", ".wav");
+        juce::Component::SafePointer<Playlist> safe (this);
+        juce::Thread::launch ([safe, part, fx, in, bpm, f, uid] {
+            juce::AudioBuffer<float> b; double sr = 0;
+            if (! readClipAudio (part, bpm, b, sr)) return;
+            const auto out = humlab::glitchSlice (b, sr, bpm, part.start, fx);
+            if (! writeClipAudio (f, out, sr)) return;
+            const double got = secondsToBeats (out.getNumSamples() / sr, bpm);
+            juce::MessageManager::callAsync ([safe, uid, in, f, got] {
+                auto* pl = safe.getComponent();
+                if (pl == nullptr) return;
+                pl->s.edit ("Glitch fade", [&] (Project& p) {
+                    auto it = std::find_if (p.clips.begin(), p.clips.end(), [&] (const Clip& o) { return o.uid == uid; });
+                    if (it == p.clips.end()) return;
+                    Clip& c = *it;
+                    const double len = juce::jmin (in ? c.fadeIn : c.fadeOut, got);
+                    if (len <= 0.0 || len >= c.length) return;
+                    Clip g = c; g.uid = p.newUid(); g.audioFile = f; g.sourceOffset = 0; g.length = len; g.selected = false;
+                    g.speedIn = g.speedOut = false; g.videoRoute = {}; g.fadeIn = g.fadeOut = 0.0;
+                    if (in) { g.start = c.start; c.start += len; c.sourceOffset += beatsToSeconds (len, p.bpm); c.length -= len; c.fadeIn = 0.0; c.speedIn = false; }
+                    else { g.start = c.start + c.length - len; c.length -= len; c.fadeOut = 0.0; c.speedOut = false; g.fadeOut = juce::jmin (0.02, len * 0.5); }
+                    p.clips.push_back (g);
+                });
+                pl->s.engine.sync();
+            });
+        });
     }
     // audio quantize: cut the clip at each hit and snap every hit to the grid (the part before the first hit stays put)
     void quantizeAudioClip (int uid, double div)

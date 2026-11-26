@@ -240,6 +240,16 @@ inline float bezierBend (float t, float c)
     return 2.0f * (1.0f - u) * u * cy + u * u;
 }
 inline float fadeBend (float fadeCurve) { return -0.49f * fadeCurve; }   // clip fade curve knob (-2..2) as a Bezier bend
+// speed fades: seconds into the source for `secs` into the clip. Speed ramps 0 -> 1 over the fade in (SPEED UP, lands on the
+// normal timeline at the fade's end) and 1 -> 0 over the fade out (TAPE STOP); the curve knob bends the ramp (k = 2^curve)
+inline double speedFadeSecs (double secs, double lenSecs, double inSecs, double outSecs, bool speedIn, bool speedOut, float fadeCurve)
+{
+    const double k1 = std::pow (2.0, (double) fadeCurve) + 1.0;
+    if (speedIn && inSecs > 0 && secs < inSecs) { const double u = juce::jmax (0.0, secs / inSecs); return inSecs - inSecs * (1.0 - std::pow (u, k1)) / k1; }
+    const double o0 = lenSecs - outSecs;
+    if (speedOut && outSecs > 0 && secs > o0) { const double u = juce::jmin (1.0, (secs - o0) / outSecs); return o0 + outSecs * (1.0 - std::pow (1.0 - u, k1)) / k1; }
+    return secs;
+}
 float autoValueAt (const std::vector<AutoPoint>& pts, double beat);
 float autoToValue (int kind, float v);      // 0..1 -> channel / insert value (FX params map on their own range)
 float autoFromValue (int kind, float x);
@@ -260,6 +270,7 @@ struct Clip
     int    mixerTrack = -1;         // audio routing follows the recording (FL style); -1 = lane's insert
     double fadeIn = 0.0, fadeOut = 0.0; // beats
     float  fadeCurve = 0.0f;        // -1..1 (0 = linear)
+    bool   speedIn = false, speedOut = false;   // Logic-style speed fades: fade in = SPEED UP, fade out = TAPE STOP (curve shapes the ramp)
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
     int    group = 0;               // FL-style clip group: grouped clips select / move together

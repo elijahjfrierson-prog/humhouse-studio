@@ -270,6 +270,12 @@ void HHLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, co
     auto base = b.getToggleState() ? b.findColour (juce::TextButton::buttonOnColourId) : b.findColour (juce::TextButton::buttonColourId);
     if (down) base = base.brighter (0.15f);
     else if (over) base = base.brighter (0.06f);
+    if (b.getProperties().contains ("swatch"))   // color pickers: the color itself, in every theme (Neon's metal keys hid it)
+    {
+        g.setColour (base); g.fillRoundedRectangle (r, 3.0f);
+        g.setColour (b.getToggleState() || over ? col::text : juce::Colours::black.withAlpha (0.45f)); g.drawRoundedRectangle (r, 3.0f, b.getToggleState() ? 2.0f : 1.0f);
+        return;
+    }
     if (col::neon && ! col::lightMode)   // Neon 3D: a raised glass key, lit from above; ON glows in the accent
     {
         const bool on = b.getToggleState();

@@ -28,6 +28,10 @@ if one of the locked strings below disappears from `Source/`. Remove a line only
 - lock: Recording offset
 - lock: Retro Record
 - lock: PUSH
+- lock: Cent Transposer
+- lock: Stereo Spreader
+- lock: HumHouse Mod
+- lock: Classic / Modern hold the note as firmly as Hard Tune
 - lock: Glitch Gate
 - lock: Scope
 - lock: Studio EQ
@@ -213,3 +217,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: Route to REC track / Mixer...
 - lock: AUTO SNAP
 - lock: Subscription iPhone app: no Sonic Store
+- lock: TAPE STOP (fade out)
+- lock: SPEED UP (fade in)

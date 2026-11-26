@@ -96,7 +96,7 @@ public:
         const juce::uint32 presets[] { 0xff9b5cff, 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffe6e8eb, 0xff8c929b, 0xff000000 };
         for (auto p : presets)
         {
-            auto* b = swatches.add (new juce::TextButton());
+            auto* b = swatches.add (new juce::TextButton()); b->getProperties().set ("swatch", true);
             b->setColour (juce::TextButton::buttonColourId, juce::Colour (p));
             b->setTooltip (p == 0xffe6e8eb ? "White (light theme: white backgrounds, dark text)" : p == 0xff8c929b ? "Grey" : p == 0xff000000 ? "Black (true-black background, silver highlights)" : "Preset color");
             b->onClick = [this, p] {
@@ -124,7 +124,7 @@ public:
         const juce::uint32 fonts[] { 0x00000000, 0xffffffff, 0xffc9ced6, 0xff8c929b, 0xff15171a, 0xffff8a3d, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffb15cff };
         for (auto fc : fonts)
         {
-            auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : ""));
+            auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : "")); b->getProperties().set ("swatch", true);
             b->setColour (juce::TextButton::buttonColourId, fc == 0 ? col::panel2 : juce::Colour (fc));
             b->setTooltip (fc == 0 ? "Automatic text color for the theme" : "Text color across the whole app");
             b->onClick = [this, fc] { col::fontColour = juce::Colour (fc); if (s.settings) s.settings->setValue ("fontColour", juce::Colour (fc).toString()); setFontGradient ({}); apply(); };
@@ -161,7 +161,7 @@ public:
         addAndMakeVisible (trackBox);
         for (int i = 0; i <= 12; ++i)
         {
-            auto* b = trackSwatches.add (new juce::TextButton (i == 12 ? "x" : ""));
+            auto* b = trackSwatches.add (new juce::TextButton (i == 12 ? "x" : "")); b->getProperties().set ("swatch", true);
             if (i < 12) b->setColour (juce::TextButton::buttonColourId, pickedColour (i));
             b->setTooltip (i == 12 ? "Clear the track color" : "Color this track and its clips");
             b->onClick = [this, i] {

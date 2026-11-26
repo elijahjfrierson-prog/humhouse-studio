@@ -1988,7 +1988,10 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const int len = o1 - o0;
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
-            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, aproj.bpm);
+            const bool speedFade = (clip.speedIn && clip.fadeIn > 0) || (clip.speedOut && clip.fadeOut > 0);
+            const double lenS = beatsToSeconds (clip.length, aproj.bpm), inS = beatsToSeconds (clip.fadeIn, aproj.bpm), outS = beatsToSeconds (clip.fadeOut, aproj.bpm);
+            auto speedSrc = [&] (double beat) { return clip.sourceOffset + speedFadeSecs (beatsToSeconds (beat, aproj.bpm), lenS, inS, outS, clip.speedIn, clip.speedOut, clip.fadeCurve); };
+            const double srcSec = speedFade ? speedSrc (c0 - clip.start - shB) : clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, aproj.bpm);
             // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
             const double srcPos = srcSec * cr.fileRate;
             const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
@@ -1999,14 +2002,17 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const double spbC = spb;
             for (int i = 0; i < len; ++i)
             {
-                const double sp = frac0 + i * ratio;
+                // speed fades read the source slower (never faster), so the block's read span always covers them
+                const double sp = speedFade ? frac0 + speedSrc (c0 - clip.start - shB + i / spbC) * cr.fileRate - srcPos : frac0 + i * ratio;
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
                 float g = clip.gain * laneGain;
-                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
                 const double toEnd = clip.length - beatInClip;
-                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
+                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn)   // speed up: only the first 15 % ramps in (no click from the stopped tape)
+                    g *= clip.speedIn ? (float) juce::jmin (1.0, beatInClip / (0.15 * clip.fadeIn)) : bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
+                if (clip.fadeOut > 0 && toEnd < clip.fadeOut)
+                    g *= clip.speedOut ? (float) juce::jmin (1.0, std::max (0.0, toEnd) / (0.15 * clip.fadeOut)) : bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);

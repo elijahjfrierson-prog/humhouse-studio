@@ -2087,6 +2087,26 @@ int main (int argc, char** argv)
         std::printf ("  noise gate (earbuds): hiss %.1f dB, voice %.1f dB\n", hissDb, voiceDb);
     }
 
+    {   // speed fades (TAPE STOP / SPEED UP): continuous, never faster than normal, tape stops at zero speed
+        for (float curve : { -2.0f, 0.0f, 2.0f })
+        {
+            double prev = speedFadeSecs (0.0, 4.0, 1.0, 1.0, true, true, curve), maxSpeed = 0, endSpeed = 1, startSpeed = 1;
+            CHECK (prev >= 0.0 && prev < 1.0);
+            for (int k = 1; k <= 4000; ++k)
+            {
+                const double t = k * 0.001, v = speedFadeSecs (t, 4.0, 1.0, 1.0, true, true, curve), sp = (v - prev) / 0.001;
+                maxSpeed = std::max (maxSpeed, sp); if (k == 1) startSpeed = sp; if (k == 4000) endSpeed = sp;
+                CHECK (sp >= -1.0e-9);
+                prev = v;
+            }
+            CHECK (maxSpeed < 1.0001);
+            CHECK (startSpeed < 0.2 && endSpeed < 0.2);
+            CHECK (std::abs (speedFadeSecs (1.0, 4.0, 1.0, 1.0, true, true, curve) - 1.0) < 1.0e-9);   // speed up lands on the normal timeline
+            CHECK (std::abs (speedFadeSecs (3.0, 4.0, 1.0, 1.0, true, true, curve) - 3.0) < 1.0e-9);
+            std::printf ("speed fade curve %+.0f: start speed %.3f, end speed %.3f\n", curve, startSpeed, endSpeed);
+        }
+        CHECK (speedFadeSecs (3.5, 4.0, 1.0, 1.0, false, false, 0.0f) == 3.5);
+    }
     {
         const double sr = 48000.0; const int len = (int) sr;
         auto tone = [&] (juce::AudioBuffer<float>& x) {
@@ -2127,6 +2147,72 @@ int main (int argc, char** argv)
             CHECK (std::abs (hz - want) < want * 0.02);
             CHECK (c1 > c0 * 0.8 && c1 < c0 * 1.25);   // resampling would move it with the pitch (x1.5 at +7)
             CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 3.0f);
+        }
+        // Cent Transposer: A4 200-600 Hz retunes the whole signal; Mod + shimmer + freeze stay finite and bounded
+        for (float a4 : { 440.0f, 432.0f, 300.0f, 600.0f })
+        {
+            auto fx = createBuiltinEffect ("centtrans");
+            CHECK (fx != nullptr);
+            if (! fx) break;
+            fx->setParam ("tuning", a4); fx->prepare (sr, 256);
+            juce::AudioBuffer<float> x; tone (x); PlayContext ctx;
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            const float hz = detectPitchYin (x.getReadPointer (0, len - 2400), 2048, sr, 0.15f, 0.0f, 70.0f, 1100.0f);
+            const double want = 200.0 * a4 / 440.0;
+            std::printf ("cent transposer A4 %.0f Hz: %.2f Hz (want %.2f), rms %.3f -> %.3f\n", a4, hz, want, in.getRMSLevel (0, len / 2, len / 2), x.getRMSLevel (0, len / 2, len / 2));
+            CHECK (std::abs (hz - want) < want * 0.004);
+            CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 2.0f);
+        }
+        {
+            auto fx = createBuiltinEffect ("centtrans");
+            fx->setParam ("tuning", 432.0f); fx->setParam ("moddepth", 0.8f); fx->setParam ("verbmix", 0.7f); fx->setParam ("verbsize", 1.0f);
+            fx->setParam ("shimmer", 5.0f); fx->setParam ("shimamt", 1.0f); fx->prepare (sr, 256);
+            PlayContext ctx; float peak = 0; bool finite = true;
+            for (int pass = 0; pass < 6; ++pass)
+            {
+                if (pass == 3) fx->setParam ("freeze", 1.0f);
+                juce::AudioBuffer<float> x; tone (x);
+                for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < len; ++i) { const float v = x.getSample (c, i); finite = finite && std::isfinite (v); peak = std::max (peak, std::abs (v)); }
+            }
+            std::printf ("cent transposer mod + shimmer + freeze: peak %.2f\n", peak);
+            CHECK (finite);
+            CHECK (peak < 4.0f);
+        }
+        {   // Stereo Spreader: neutral at default; spreads mono into stereo while the mono sum stays the source
+            auto fx = createBuiltinEffect ("spreader"); CHECK (fx != nullptr);
+            fx->prepare (sr, 256); PlayContext ctx;
+            juce::AudioBuffer<float> x; tone (x); juce::AudioBuffer<float> ref; ref.makeCopyOf (x);
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            float err = 0; for (int i = 0; i < len; ++i) err = std::max (err, std::abs (x.getSample (0, i) - ref.getSample (0, i)));
+            CHECK (err < 1.0e-5f);
+            fx->setParam ("sepl", 1.0f); fx->setParam ("sepr", 1.0f); fx->setParam ("monobass", 120.0f);
+            tone (x); for (int i = 0; i < len; ++i) x.setSample (1, i, x.getSample (0, i));
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            double lr = 0, ll = 0, rr = 0; float monoErr = 0;
+            for (int i = len / 2; i < len; ++i)
+            {
+                const float a = x.getSample (0, i), c = x.getSample (1, i);
+                lr += a * c; ll += a * a; rr += c * c; monoErr = std::max (monoErr, std::abs (0.5f * (a + c) - ref.getSample (0, i)));
+            }
+            const double corr = lr / std::sqrt (ll * rr + 1e-12);
+            std::printf ("stereo spreader mono in: L/R correlation %.2f, mono-sum error %.6f\n", corr, monoErr);
+            CHECK (corr < 0.9);
+            CHECK (monoErr < 1.0e-4f);
+        }
+        for (int mode = 0; mode < 7; ++mode)   // HumHouse Mod: every mode finite, and the lows stay as played (no mud)
+        {
+            auto fx = createBuiltinEffect ("hummod"); CHECK (fx != nullptr);
+            fx->setParam ("mode", (float) mode); fx->setParam ("feedback", 0.8f); fx->setParam ("mix", 1.0f); fx->setParam ("depth", 1.0f); fx->prepare (sr, 256);
+            PlayContext ctx; juce::AudioBuffer<float> x (2, len);
+            for (int i = 0; i < len; ++i) { const float v = 0.3f * std::sin (juce::MathConstants<float>::twoPi * 50.0f * (float) i / (float) sr); x.setSample (0, i, v); x.setSample (1, i, v); }
+            const float inR = x.getRMSLevel (0, len / 2, len / 2);
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            bool finite = true; for (int c = 0; c < 2; ++c) for (int i = 0; i < len; ++i) finite = finite && std::isfinite (x.getSample (c, i));
+            const float db = juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / inR);
+            std::printf ("hummod mode %d: 50 Hz level %+.2f dB\n", mode, db);
+            CHECK (finite);
+            CHECK (std::abs (db) < 1.0f);
         }
     }
     // Drummer rock fills sit on the straight grid: no triplet pickups, no gallops; the backbeat is dead on
