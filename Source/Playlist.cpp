@@ -2102,10 +2102,10 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         if (e.position.x < headerW) return;
-        if (! gestureAxis (3)) return;   // mid-scroll: a stray pinch never zooms
+        gestureZoom();   // a pinch always wins: it zooms from its first event, even while two-finger scroll events are still arriving
         // one smooth motion (FL-style): every pinch event multiplies the target and the view glides to it on every refresh,
         // so uneven trackpad event timing never shows up as steps
-        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, trackpadZoomTau);
+        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow ((double) juce::jlimit (0.5f, 2.0f, scale), trackpadZoomGain), e.position.x, trackpadZoomTau);
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
@@ -2119,12 +2119,13 @@ public:
         }
         if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
-            if (w.isSmooth && ! gestureAxis (3)) return;   // Windows touchpads pinch as Ctrl+wheel
-            zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * 8.0)),
+            if (w.isSmooth) gestureZoom();   // Windows touchpads pinch as Ctrl+wheel
+            zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * (w.isSmooth ? 8.0 * trackpadZoomGain : 8.0))),
                     e.position.x, w.isSmooth ? trackpadZoomTau : 0.07);   // trackpad: smooth follow; mouse wheel notches: a short glide, no steps
             return;
         }
         // trackpad: one gesture moves along one axis until the fingers lift (no diagonal drift, no zoom mid-scroll)
+        if (w.isInertial && gestureLock == 3 && juce::Time::getMillisecondCounter() - gestureMs < 250) return;   // scroll momentum never fights a pinch
         const int axis = ! w.isSmooth || e.mods.isShiftDown() ? 0 : std::abs (w.deltaX) > std::abs (w.deltaY) ? 1 : 2;
         if (axis != 0 && ! gestureAxis (axis)) { if (gestureLock != 3) scrollLocked (e, w); return; }
         if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
@@ -2422,7 +2423,8 @@ private:
     double tgtX = -1, tgtY = -1, scrollYf = 0, scrollTau = 0, lastFrameT = 0; int lastDir = 1;
     // Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom (log scale, fractional, no fixed steps) and the beat that
     // stays under the pointer; the clip strips are stretched on screen while you zoom and redrawn sharp once you stop
-    static constexpr double trackpadZoomTau = 0.045;   // trackpad zoom glide time constant (s): smooth, still under the fingers
+    static constexpr double trackpadZoomTau = 0.03;
+    static constexpr double trackpadZoomGain = 2.2;   // FL-like pinch sensitivity: each pinch event's scale is raised to this power   // trackpad zoom glide time constant (s): smooth, still under the fingers
     double tgtPpb = -1, zoomTau = 0, zoomAnchorBeat = 0; float zoomAnchorX = 0, tilePpb = 0;
     juce::uint32 lastZoomMs = 0; bool zoomDirty = false;
     void zoomTo (double ppb, float anchorX, double tau, double anchorBeat = -1.0, double lo = 2.0, double hi = 1200.0)
@@ -3058,6 +3060,7 @@ private:
         gestureMs = now;
         return gestureLock == axis;
     }
+    void gestureZoom() { gestureLock = 3; gestureMs = juce::Time::getMillisecondCounter(); }
     void scrollLocked (const juce::MouseEvent&, const juce::MouseWheelDetails& w)   // off-axis trackpad motion: keep only the locked axis
     {
         if (gestureLock == 1 && w.deltaX != 0) scrollTo (juce::jmax (0.0, (tgtX >= 0 ? tgtX : scrollX) - w.deltaX * 1400.0 / pxPerBeat), -1.0, 0.0);
