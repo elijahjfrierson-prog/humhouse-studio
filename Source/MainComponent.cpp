@@ -35,6 +35,7 @@ static void savePerf()
     appDataFile ("performance.txt").replaceWithText (juce::String (perf().threads) + " " + juce::String ((int) perf().mt) + " " + juce::String ((int) perf().smart));
 }
 bool& captureFriendlyDrawing() { static bool on = ! appDataFile ("capture.txt").existsAsFile() || appDataFile ("capture.txt").loadFileAsString().getIntValue() != 0; return on; }
+bool& humhouseTitleBars() { static bool on = ! appDataFile ("titlebars.txt").existsAsFile() || appDataFile ("titlebars.txt").loadFileAsString().getIntValue() != 0; return on; }
 int& fontStyle() { static int st = 3; return st; }   // Pro is the only clean one: Tattoo / Flash / System drew odd characters
 void setFontStyle (int st)
 {
@@ -301,6 +302,60 @@ juce::Font HHLookAndFeel::getTextButtonFont (juce::TextButton& b, int h)
 {
     if (! phoneUI) return LookAndFeel_V4::getTextButtonFont (b, h);
     return juce::Font (juce::FontOptions (juce::jmin (18.0f, (float) h * 0.5f), juce::Font::bold));
+}
+
+namespace
+{
+struct TitleBarButton : juce::Button   // round, lit like the rest of the UI; drawn inside the window so nothing can cover it
+{
+    explicit TitleBarButton (int t)
+        : juce::Button (t == juce::DocumentWindow::closeButton ? "close" : t == juce::DocumentWindow::minimiseButton ? "minimise" : "maximise"), type (t)
+    {
+        setTooltip (t == juce::DocumentWindow::closeButton ? "Close (Esc)" : t == juce::DocumentWindow::minimiseButton ? "Minimize" : "Maximize");
+        setWantsKeyboardFocus (false);
+    }
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto r = getLocalBounds().toFloat();
+        const float d = juce::jmin (r.getWidth(), r.getHeight()) * 0.7f;
+        const auto c = r.withSizeKeepingCentre (d, d);
+        const juce::Colour base = type == juce::DocumentWindow::closeButton ? juce::Colour (0xffe8424f)
+                                : type == juce::DocumentWindow::minimiseButton ? juce::Colour (0xff2f7df6) : juce::Colour (0xff35b865);
+        const auto f = down ? base.darker (0.3f) : over ? base.brighter (0.25f) : base;
+        g.setGradientFill (juce::ColourGradient (f.brighter (0.35f), c.getCentreX(), c.getY(), f.darker (0.3f), c.getCentreX(), c.getBottom(), false));
+        g.fillEllipse (c);
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.drawEllipse (c, 1.0f);
+        const auto k = c.reduced (d * 0.3f);
+        juce::Path p;
+        if (type == juce::DocumentWindow::closeButton)
+        {
+            p.startNewSubPath (k.getTopLeft()); p.lineTo (k.getBottomRight());
+            p.startNewSubPath (k.getTopRight()); p.lineTo (k.getBottomLeft());
+        }
+        else if (type == juce::DocumentWindow::minimiseButton) { p.startNewSubPath (k.getX(), k.getCentreY()); p.lineTo (k.getRight(), k.getCentreY()); }
+        else p.addRectangle (k);
+        g.setColour (juce::Colours::white);
+        g.strokePath (p, juce::PathStrokeType (juce::jmax (1.6f, d * 0.11f), juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    int type;
+};
+}
+
+juce::Button* HHLookAndFeel::createDocumentWindowButton (int buttonType) { return new TitleBarButton (buttonType); }
+
+void HHLookAndFeel::drawDocumentWindowTitleBar (juce::DocumentWindow& w, juce::Graphics& g, int wd, int h, int titleSpaceX, int titleSpaceW,
+                                                const juce::Image*, bool)
+{
+    g.setGradientFill (juce::ColourGradient (col::panel2.brighter (0.08f), 0.0f, 0.0f, col::bg, 0.0f, (float) h, false));
+    g.fillAll();
+    g.setColour (juce::Colours::white.withAlpha (0.08f));
+    g.drawHorizontalLine (0, 0.0f, (float) wd);
+    g.setColour (juce::Colours::black.withAlpha (0.5f));
+    g.drawHorizontalLine (h - 1, 0.0f, (float) wd);
+    g.setColour (juce::Colours::white.withAlpha (w.isActiveWindow() ? 0.92f : 0.55f));
+    g.setFont (juce::Font (juce::FontOptions ((float) h * 0.46f)).boldened());
+    g.drawText (w.getName(), titleSpaceX + 8, 0, juce::jmax (0, titleSpaceW - 16), h, juce::Justification::centred, true);
 }
 
 void HHLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
@@ -1826,6 +1881,7 @@ if (phoneUI)
                #if JUCE_WINDOWS
                 m.addItem (480, "OBS / Discord capture-friendly drawing (untick = faster GPU drawing)", true, captureFriendlyDrawing());
                #endif
+                m.addItem (4726, "HumHouse window title bars: red X + blue minimize (stream-safe; untick = native)", true, humhouseTitleBars());
             }
             add (mClearBlacklist, "Re-enable crashed plugins", {}, engine.knownPlugins.getBlacklistedFiles().size() > 0);
             m.addItem (4711, "Key commands...");
@@ -1869,6 +1925,13 @@ if (phoneUI)
             return;
         }
         if (id >= 250 && id < 254) { setFontStyle (3); return; }
+        if (id == 4726)   // windows opened from now on
+        {
+            humhouseTitleBars() = ! humhouseTitleBars();
+            appDataFile ("titlebars.txt").getParentDirectory().createDirectory();
+            appDataFile ("titlebars.txt").replaceWithText (humhouseTitleBars() ? "1" : "0");
+            return;
+        }
         if (id == 480)
         {
             captureFriendlyDrawing() = ! captureFriendlyDrawing();
@@ -2158,7 +2221,7 @@ private:
             k->setColour (juce::MidiKeyboardComponent::mouseOverKeyOverlayColourId, col::accent.withAlpha (0.25f));
             k->clearKeyMappings(); k->setWantsKeyboardFocus (false);   // computer keys go to the typing keyboard, so E / C / P and the other shortcuts keep working
             setContentOwned (k, false);
-            setUsingNativeTitleBar (true); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
+            setUsingNativeTitleBar (true); useHumHouseTitleBar (*this); setResizable (true, false); setResizeLimits (300, 80, 2000, 300);
             setWantsKeyboardFocus (false);
             centreWithSize (640, 120); addToDesktop (getDesktopWindowStyleFlags()); setVisible (true); markFloating (*this);   // floats over the app only, never glued over other apps
             miniKeyboardOpen() = true;
@@ -2416,6 +2479,7 @@ private:
         }
         auto w = std::make_unique<PopOut> (title);
         w->setUsingNativeTitleBar (! phoneUI);
+        useHumHouseTitleBar (*w, juce::DocumentWindow::allButtons);
         w->setContentNonOwned (c, false);
         c->setVisible (true);
         w->setResizable (true, true);
@@ -3335,7 +3399,7 @@ private:
             ed->setColour (juce::TextEditor::backgroundColourId, col::bg); ed->setColour (juce::TextEditor::textColourId, col::text);
             ed->setColour (juce::TextEditor::outlineColourId, col::panel2);
             setContentOwned (new Pane (ed, main), false);
-            setUsingNativeTitleBar (! phoneUI); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
+            setUsingNativeTitleBar (! phoneUI); useHumHouseTitleBar (*this); setResizable (true, false); centreWithSize (860, 620); setVisible (true);
         }
         void closeButtonPressed() override { if (onClose) onClose(); }
         bool keyPressed (const juce::KeyPress& k) override

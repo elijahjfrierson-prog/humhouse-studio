@@ -980,7 +980,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const bool playing = s.engine.isPlaying();
         if (playing || wasPlaying) repaint (keyW, barH, getWidth() - keyW, getHeight() - barH);   // grid + ruler + velocity only, not the toolbar / keyboard
         wasPlaying = playing;

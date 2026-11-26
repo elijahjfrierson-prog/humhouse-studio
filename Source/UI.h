@@ -376,6 +376,18 @@ inline void makeCaptureFriendly (juce::Component& c)
    #endif
 }
 
+// Options > HumHouse title bars (default on): pop-out windows draw their own title bar with a red X and a blue minimize.
+// While OBS / screen capture records a window, macOS puts its purple capture badge over the native red / yellow / green
+// buttons, so a native title bar can't be closed or minimized while streaming. Must run before the window is on screen.
+bool& humhouseTitleBars();
+inline void useHumHouseTitleBar (juce::DocumentWindow& w, int buttons = juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
+{
+    if (phoneUI || ! humhouseTitleBars()) return;
+    w.setUsingNativeTitleBar (false);
+    w.setTitleBarHeight (30);
+    w.setTitleBarButtonsRequired (buttons, false);
+}
+
 // Pop-out Mixer / plug-in windows float over the app. On macOS a real "always on top" (floating level) window is hidden
 // from OBS / screen-capture window lists, so there they stay normal windows and are raised above the app after each click.
 #if JUCE_MAC
@@ -414,11 +426,15 @@ inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat
 void joinFullScreen (juce::Component&);   // MacWindows.mm: pop-outs / plug-in windows live inside the app's full-screen space
 void keepUiResponsive();                   // MacWindows.mm: no App Nap / timer coalescing, UI thread at user-interactive QoS (OBS)
 void claimFileTypes();                     // MacWindows.mm: double-clicked .hhs / .hhpack / .hhpreset / .hhchain open in THIS app, not an older copy
+bool windowHidden (juce::Component&);     // MacWindows.mm: its window is fully covered / on another space: nothing of it can be seen
 #else
+inline bool windowHidden (juce::Component&) { return false; }
 inline void joinFullScreen (juce::Component&) {}
 inline void claimFileTypes() {}
 inline void keepUiResponsive() {}
 #endif
+// live views redraw only when some of them can be seen: stacked / covered windows cost nothing while streaming
+inline bool drawsOnScreen (juce::Component& c) { return c.isShowing() && ! windowHidden (c); }
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
@@ -453,6 +469,7 @@ inline juce::DocumentWindow* openToolWindow (const juce::String& title, juce::Co
     };
     auto* w = new W (title);
     w->setUsingNativeTitleBar (true);
+    useHumHouseTitleBar (*w);
     w->setContentOwned (content, true);
     w->setResizable (resizable, false);
     w->centreWithSize (w->getWidth(), w->getHeight());
@@ -574,6 +591,9 @@ public:
     void drawTabbedButtonBarBackground (juce::TabbedButtonBar&, juce::Graphics&) override;
     void drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int w, int h) override;   // phone: a bit bigger
     juce::Font getPopupMenuFont() override;
+    juce::Button* createDocumentWindowButton (int buttonType) override;   // HumHouse title bars: red X close, blue minimize
+    void drawDocumentWindowTitleBar (juce::DocumentWindow&, juce::Graphics&, int w, int h, int titleSpaceX, int titleSpaceW,
+                                     const juce::Image* icon, bool drawTitleTextOnLeft) override;
     void drawPopupMenuBackground (juce::Graphics&, int w, int h) override;   // Neon 3D: dark glass menu with a lit rim
     void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;

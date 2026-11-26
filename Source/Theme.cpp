@@ -929,10 +929,11 @@ void showLayoutDialog (Studio& s)
     o.dialogTitle = "Layout";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = ! phoneUI;
+    o.useNativeTitleBar = ! phoneUI && ! humhouseTitleBars();
     o.resizable = false;
     open = o.launchAsync();
     if (phoneUI && open != nullptr) { open->setTitleBarHeight (44); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+    else if (open != nullptr && ! o.useNativeTitleBar) { open->setTitleBarHeight (30); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, false); }
 }
 
 void showThemeDialog (Studio& s)
@@ -944,10 +945,11 @@ void showThemeDialog (Studio& s)
     o.dialogTitle = "Theme color";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = ! phoneUI;   // phone: our title bar with an X to leave
+    o.useNativeTitleBar = ! phoneUI && ! humhouseTitleBars();   // phone / HumHouse title bars: ours, with an X
     o.resizable = false;
     open = o.launchAsync();
     if (phoneUI && open != nullptr) { open->setTitleBarHeight (44); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+    else if (open != nullptr && ! o.useNativeTitleBar) { open->setTitleBarHeight (30); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, false); }
 }
 
 void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)

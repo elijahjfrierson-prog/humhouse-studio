@@ -370,7 +370,7 @@ class ToolWindow : public juce::DocumentWindow, private juce::Timer
 public:
     ToolWindow (const juce::String& t, juce::Component* c) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); setContentOwned (fitToScreen (c), true); setResizable (true, false);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); useHumHouseTitleBar (*this); setContentOwned (fitToScreen (c), true); setResizable (true, false);
         centreWithSize (getWidth(), getHeight());
         if (floatWithTopmost) setOnTopSafely (*this, true);
         setVisible (true);

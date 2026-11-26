@@ -534,7 +534,7 @@ private:
 
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const auto area = getLocalBounds().withTrimmedTop (barH).withTrimmedLeft (headW);
         if (! fxMode()) { if (s.engine.isPlaying()) repaint (getLocalBounds().withTrimmedTop (barH)); return; }
         auto* t = s.engine.trackScope (track());

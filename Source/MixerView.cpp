@@ -839,7 +839,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const auto vis = viewport.getViewArea();
         for (auto& st : strips) if (st->getBounds().intersects (vis)) st->tick();
         fx.updateLoads();
@@ -965,7 +965,7 @@ struct PatchWindow : juce::DocumentWindow, private juce::Timer
 {
     PatchWindow (const juce::String& t, PatchMethodView* v, int id) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton), view (v), chId (id)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); useHumHouseTitleBar (*this);
         setContentOwned (v, true);
         setResizable (true, false);
         centreWithSize (getWidth(), getHeight());

@@ -71,7 +71,7 @@ private:
     juce::VBlankAttachment vblank { this, [this] { timerCallback(); } };
     void timerCallback()
     {
-        if (freezeBtn.getToggleState() || ! isShowing()) return;
+        if (freezeBtn.getToggleState() || ! drawsOnScreen (*this)) return;
         auto* tap = source ? source() : nullptr;
         if (tap == nullptr) { if (idleTicks++ == 0) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); } return; }
         rate = tap->rate.load();

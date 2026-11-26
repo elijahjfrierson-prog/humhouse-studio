@@ -76,6 +76,7 @@ private:
         removeChildComponent (ed.get());
         win = std::make_unique<Win>();
         win->setUsingNativeTitleBar (true);
+        useHumHouseTitleBar (*win, juce::DocumentWindow::allButtons);
         win->setContentNonOwned (ed.get(), false);
         win->setResizable (true, true);
         win->centreWithSize (juce::jmax (1180, getWidth()), juce::jmax (720, getHeight()));

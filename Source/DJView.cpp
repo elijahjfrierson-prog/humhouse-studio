@@ -1249,7 +1249,7 @@ struct DjWindow : public juce::DocumentWindow
 {
     explicit DjWindow (Studio& s) : juce::DocumentWindow ("Hum Verse", col::panel, juce::DocumentWindow::closeButton)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); useHumHouseTitleBar (*this);
         setContentOwned (new DjView (s), true);
         setResizable (true, false);
         centreWithSize (getWidth(), getHeight());

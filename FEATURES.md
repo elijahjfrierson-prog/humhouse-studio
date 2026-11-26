@@ -202,3 +202,5 @@ A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at o
 - lock: until you slide it, the FX box follows the screen
 - lock: a disk stall while OBS records never drops take samples
 - lock: a VST instrument that outputs NaN / inf must never silence the whole Master
+- lock: macOS puts its purple capture badge over the native red / yellow / green
+- lock: stacked / covered windows cost nothing while streaming

@@ -1297,7 +1297,7 @@ struct PatchBayWindow : public juce::DocumentWindow
 {
     explicit PatchBayWindow (Studio& s) : juce::DocumentWindow ("Patch Bay", col::panel, juce::DocumentWindow::closeButton)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); useHumHouseTitleBar (*this);
         auto* vp = new juce::Viewport();
         vp->setViewedComponent (new Canvas (s), true);
         vp->setSize (phoneUI ? 380 : 1280, phoneUI ? 700 : 800);

@@ -71,6 +71,7 @@ public:
     {
         getProperties().set ("noHold", true);   // phone: holding a plug-in control is how it is used, never a right-click
         setUsingNativeTitleBar (! phoneUI);   // iOS has no native title bar: draw ours with a big X on the left
+        useHumHouseTitleBar (*this);          // desktop: red X / blue minimize that screen capture can't cover
         if (phoneUI) { setTitleBarHeight (44); setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
         if (phoneUI && key.startsWith ("fx:") && fxStudio() != nullptr) content = new PhoneFxFrame (content, key);
         if (phoneUI && proc == nullptr) content = fitToScreen (content);   // built-in plug-ins pinch-zoom (hosted AUv3 views size themselves)
@@ -437,7 +438,7 @@ public:
     std::function<int (const juce::String&, float&)> autoValue;   // 0 = not automated, 1 = automated (not playing here), 2 = v is live 0..1
     void timerCallback() override
     {
-        if (! autoValue || ! isShowing()) return;
+        if (! autoValue || ! drawsOnScreen (*this)) return;
         for (size_t i = 0; i < params.size() && i < (size_t) labels.size(); ++i)
         {
             float v = 0.0f;
@@ -1026,7 +1027,7 @@ private:
     }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
@@ -1208,7 +1209,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent& e) override { if (const int k = hit (e.position); k >= 0) { grid.setExternal ("g" + juce::String (k + 1), 0.0f); grid.commitNow(); repaint(); } }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         if (auto* t = tap ? tap() : nullptr)
         {
             rate = t->rate.load();
@@ -1287,7 +1288,7 @@ private:
     int still = 0;
     void timerCallback() override   // the GR meter redraws only while it moves
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const float gr = std::abs (live && live() ? live()->meter (0) : 0.0f);
         if (gr > 0.01f || shown > 0.01f) still = 0;
         if (still++ < 3) repaint();
@@ -1386,7 +1387,7 @@ public:
         }
     }
 private:
-    void timerCallback() override { if (isShowing()) repaint(); }
+    void timerCallback() override { if (drawsOnScreen (*this)) repaint(); }
     ParamGrid& grid;
     juce::String type;
 };
@@ -1458,7 +1459,7 @@ private:
         for (auto* b : pads) b->setToggleState ((int) b->getProperties()["fx"] == cur, juce::dontSendNotification);
         repaint();
     }
-    void timerCallback() override { if (isShowing()) sync(); }
+    void timerCallback() override { if (drawsOnScreen (*this)) sync(); }
     ParamGrid& grid;
     std::vector<const char*> names;
     juce::OwnedArray<juce::TextButton> pads;

@@ -37,6 +37,15 @@ void keepUiResponsive()
     pthread_set_qos_class_self_np (QOS_CLASS_USER_INTERACTIVE, 0);
 }
 
+bool windowHidden (juce::Component& c)
+{
+    if (auto* peer = c.getPeer())
+        if (auto* view = (NSView*) peer->getNativeHandle())
+            if (NSWindow* w = [view window])
+                return ([w occlusionState] & NSWindowOcclusionStateVisible) == 0;
+    return false;
+}
+
 void joinFullScreen (juce::Component& c)
 {
     if (auto* peer = c.getPeer())
