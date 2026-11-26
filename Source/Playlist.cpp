@@ -2102,10 +2102,9 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         if (e.position.x < headerW) return;
-        gestureZoom();   // a pinch always wins: it zooms from its first event, even while two-finger scroll events are still arriving
         // one smooth motion (FL-style): every pinch event multiplies the target and the view glides to it on every refresh,
         // so uneven trackpad event timing never shows up as steps
-        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow ((double) juce::jlimit (0.5f, 2.0f, scale), trackpadZoomGain), e.position.x, trackpadZoomTau);
+        zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * juce::jlimit (0.5f, 2.0f, scale), e.position.x, trackpadZoomTau);
     }
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
@@ -2119,18 +2118,11 @@ public:
         }
         if (e.mods.isCommandDown() || e.mods.isCtrlDown())
         {
-            if (w.isSmooth) gestureZoom();   // Windows touchpads pinch as Ctrl+wheel
-            zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * (w.isSmooth ? 8.0 * trackpadZoomGain : 8.0))),
+            zoomTo ((tgtPpb > 0 ? tgtPpb : (double) pxPerBeat) * std::pow (1.15, juce::jlimit (-4.0, 4.0, (double) w.deltaY * 8.0)),
                     e.position.x, w.isSmooth ? trackpadZoomTau : 0.07);   // trackpad: smooth follow; mouse wheel notches: a short glide, no steps
             return;
         }
-        if (w.isSmooth)   // trackpad scroll moves freely; only a pinch in progress holds it off
-        {
-            const auto now = juce::Time::getMillisecondCounter();
-            if (gestureLock == 3 && now - gestureMs < 250) return;
-            gestureLock = 0; gestureMs = now;
-        }
-        if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
+        else if (e.mods.isShiftDown() || std::abs (w.deltaX) > std::abs (w.deltaY))
         {
             scrollTo (juce::jmax (0.0, (tgtX >= 0 ? tgtX : scrollX) - (w.deltaX != 0 ? w.deltaX : w.deltaY) * 1400.0 / pxPerBeat), -1.0, w.isSmooth ? 0.0 : 0.06);
             return;   // moves on the next screen refresh: many trackpad events in one frame cost one redraw
@@ -2425,8 +2417,7 @@ private:
     double tgtX = -1, tgtY = -1, scrollYf = 0, scrollTau = 0, lastFrameT = 0; int lastDir = 1;
     // Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom (log scale, fractional, no fixed steps) and the beat that
     // stays under the pointer; the clip strips are stretched on screen while you zoom and redrawn sharp once you stop
-    static constexpr double trackpadZoomTau = 0.03;
-    static constexpr double trackpadZoomGain = 2.2;   // FL-like pinch sensitivity: each pinch event's scale is raised to this power   // trackpad zoom glide time constant (s): smooth, still under the fingers
+    static constexpr double trackpadZoomTau = 0.045;   // trackpad zoom glide time constant (s): smooth, still under the fingers
     double tgtPpb = -1, zoomTau = 0, zoomAnchorBeat = 0; float zoomAnchorX = 0, tilePpb = 0;
     juce::uint32 lastZoomMs = 0; bool zoomDirty = false;
     void zoomTo (double ppb, float anchorX, double tau, double anchorBeat = -1.0, double lo = 2.0, double hi = 1200.0)
@@ -2499,7 +2490,6 @@ private:
     int laneH = 60;   // even height: tracks fill the view, never thin lines
     void lookAndFeelChanged() override { ++tileGen; resized(); repaint(); }   // Layout: new track height
     Drag drag = Drag::None; int dragClip = -1; bool changed = false; float gainDb0 = 0.0f;
-    bool stripPass = false;   // drawing into a zoom strip: clip names are left out and drawn live on top
     bool stretchDrag = false; int stretchMode = 0;   // Alt+drag a clip's right edge: 0 Resample, 1 Stretch (keep pitch)
     std::vector<Clip> dragOrig;
     juce::Point<float> dragStart; juce::Point<int> lastMouse;
@@ -2743,43 +2733,16 @@ private:
         }
     }
 
-    juce::Colour clipColour (const Clip& c) const
-    {
-        auto& p = s.p();
-        juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
-        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
-        if (! c.colour.isTransparent()) colour = c.colour;
-        if (c.muted) colour = col::dim;
-        return colour;
-    }
-    void drawClipLabel (juce::Graphics& g, const Clip& c, juce::Rectangle<float> r, juce::Colour colour)
-    {
-        auto& p = s.p();
-        juce::String label = c.isAuto() ? c.autoTarget.name : c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
-                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
-        if (c.isAudio())
-        {
-            const int ins = p.clipInsert (c);
-            if (ins >= 0 && ins < (int) p.mixer.size()) label << juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xba ")) << p.mixer[(size_t) ins].name;
-            if (c.takeGroup > 0)
-            {
-                int n = 0, k = 0;
-                for (auto& o : p.clips) if (o.takeGroup == c.takeGroup) { ++n; if (o.uid == c.uid) k = n; }
-                if (n > 1) label << "  [take " << k << "/" << n << "]";
-            }
-        }
-        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
-        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
-        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
-        g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
-    }
     void drawClip (juce::Graphics& g, const Clip& c)
     {
         auto& p = s.p();
         auto r = clipRect (c);
         if (r.getRight() < headerW || r.getX() > contentRight()) return;
         if (! g.getClipBounds().toFloat().expanded (2).intersects (r)) return;   // playhead strip repaints skip clips they don't touch
-        const juce::Colour colour = clipColour (c);
+        juce::Colour colour = c.isAuto() ? juce::Colour (0xff4fd18b) : c.isDrummer() ? juce::Colour (0xffffc93d) : c.isAudio() ? juce::Colour (0xff3d9bff) : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].colour : col::accent);
+        if (c.lane >= 0 && c.lane < (int) p.lanes.size() && ! p.lanes[(size_t) c.lane].colour.isTransparent()) colour = p.lanes[(size_t) c.lane].colour;
+        if (! c.colour.isTransparent()) colour = c.colour;
+        if (c.muted) colour = col::dim;
         if (col::neon && ! col::lightMode)   // Neon 3D: glossy clip, lit title strip, glowing rim
         {
             g.setGradientFill (juce::ColourGradient (colour.withAlpha (0.42f), 0.0f, r.getY(), colour.withAlpha (0.16f), 0.0f, r.getBottom(), false)); g.fillRoundedRectangle (r, 4);
@@ -2895,7 +2858,23 @@ private:
             }
         }
         if (c.isAuto()) drawAutomation (g, c, r, colour);
-        if (! stripPass) drawClipLabel (g, c, r, colour);   // names are drawn live, never baked into the zoom strips (a pinch would stretch them)
+        juce::String label = c.isAuto() ? c.autoTarget.name : c.isAudio() ? c.audioFile.getFileNameWithoutExtension()
+                                         : c.isDrummer() ? juce::String ("Drummer") : (c.patternIndex >= 0 && c.patternIndex < (int) p.patterns.size() ? p.patterns[(size_t) c.patternIndex].name : juce::String ("?"));
+        if (c.isAudio())
+        {
+            const int ins = p.clipInsert (c);
+            if (ins >= 0 && ins < (int) p.mixer.size()) label << juce::String (juce::CharPointer_UTF8 ("  \xe2\x80\xba ")) << p.mixer[(size_t) ins].name;
+            if (c.takeGroup > 0)
+            {
+                int n = 0, k = 0;
+                for (auto& o : p.clips) if (o.takeGroup == c.takeGroup) { ++n; if (o.uid == c.uid) k = n; }
+                if (n > 1) label << "  [take " << k << "/" << n << "]";
+            }
+        }
+        const Lane* ln = c.lane >= 0 && c.lane < (int) p.lanes.size() ? &p.lanes[(size_t) c.lane] : nullptr;
+        g.setColour (ln != nullptr && ! ln->nameColour.isTransparent() ? ln->nameColour : col::contrastOn (colour));   // never the same color as the clip
+        g.setFont (ln != nullptr && ln->nameFont.isNotEmpty() ? col::laneNameFont (ln->nameFont, 11.0f) : juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+        g.drawText (label, r.withHeight (14).reduced (5, 0), juce::Justification::centredLeft, true);
         if (c.selected) { g.setColour (juce::Colours::white); g.drawRoundedRectangle (r, 4, 1.5f); }
         else if (c.patternIndex >= 0 && c.patternIndex == p.currentPattern) { g.setColour (col::accent2); g.drawRoundedRectangle (r.reduced (0.5f), 4, 1.5f); }   // where the open pattern is used
     }
@@ -3029,7 +3008,7 @@ private:
             ig.setColour (col::bg); ig.fillRect (tr);
             const double keep = scrollX; const int keepY = scrollY; const float keepPpb = pxPerBeat;
             scrollX = k * (stripW / (double) zoomOf); scrollY = tileScrollY; paintRight = (float) tr.getRight(); pxPerBeat = zoomOf;   // the strips' own zoom
-            stripPass = true; paintContent (ig, tr); stripPass = false;
+            paintContent (ig, tr);
             scrollX = keep; scrollY = keepY; paintRight = -1.0f; pxPerBeat = keepPpb;
         }
         (into != nullptr ? *into : strips).push_back (std::move (st));
@@ -3053,13 +3032,9 @@ private:
     }
     // the click that brings HumHouse to the front never moves the playhead; with the lock on only the ruler does
     juce::uint32 activatedMs = 0;
-    // trackpad: a pinch (3) holds off scroll events until 250 ms without pinch events; gestureMs also stops taps mid-gesture from seeking
-    int gestureLock = 0; juce::uint32 gestureMs = 0;
-    void gestureZoom() { gestureLock = 3; gestureMs = juce::Time::getMillisecondCounter(); }
     bool clickMaySeek (bool ruler) const
     {
         if (juce::Time::getMillisecondCounter() - activatedMs < 400) return false;
-        if (juce::Time::getMillisecondCounter() - gestureMs < 500) return false;   // a tap during / right after a trackpad gesture never seeks
         return ruler || ! playheadLock().load();
     }
     bool paintCachedContent (juce::Graphics& g, juce::Rectangle<int> area)
@@ -3143,17 +3118,6 @@ private:
         if (pending || zooming) drawSet (overStrips, overPpb, false);
         if (! drawSet (strips, tilePpb, ! pending && ! zooming)) return false;
         if (pending) drawSet (nextStrips, nextPpb, false);   // the new set on top as it fills in
-        {   // clip names on top, sharp at their normal width at every zoom
-            juce::Graphics::ScopedSaveState ss (g);
-            g.reduceClipRegion (area);
-            for (auto& c : s.p().clips)
-            {
-                if (c.hidden) continue;
-                const auto r = clipRect (c);
-                if (r.getRight() < headerW || r.getX() > contentRight() || ! g.clipRegionIntersects (r.withHeight (14).getSmallestIntegerContainer())) continue;
-                drawClipLabel (g, c, r, clipColour (c));
-            }
-        }
         return true;
     }
     static void addRollItems (juce::PopupMenu& m)

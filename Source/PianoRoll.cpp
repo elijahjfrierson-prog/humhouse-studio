@@ -558,7 +558,7 @@ public:
     void mouseMagnify (const juce::MouseEvent& e, float scale) override   // trackpad pinch (Mac / Windows precision touchpads)
     {
         const double at = xToBeat (e.position.x);
-        pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * juce::jlimit (0.7f, 1.4f, std::pow (scale, 2.2f)));   // FL-like pinch sensitivity, capped per event: no jumpy pinch
+        pxPerBeat = juce::jlimit (12.0f, 800.0f, pxPerBeat * juce::jlimit (0.85f, 1.18f, scale));   // capped per event: no jumpy pinch
         scrollX = juce::jmax (0.0, at - (e.position.x - gridArea().getX()) / pxPerBeat);
         repaint();
     }
