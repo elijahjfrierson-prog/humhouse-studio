@@ -2423,7 +2423,7 @@ private:
         void paint (juce::Graphics& g) override { g.fillAll (col::panel); g.setColour (col::accent.withAlpha (0.5f)); g.fillRect (0, 0, getWidth(), 1); }
         void show()
         {
-            keys.setVisible (tab == 0); padArea.setVisible (tab == 1); mixView.setVisible (tab == 2);
+            keys.setVisible (tab == 0); padView.setVisible (tab == 1); mixView.setVisible (tab == 2);
             if (tab != 0) m.kbState.allNotesOff (1);
             rebuild(); resized();
         }
@@ -2443,7 +2443,7 @@ private:
             builtFor = k;
             pads.clear(); strips.clear();
             if (tab == 1)
-                for (auto& c : m.studio.p().channels) { if (pads.size() >= 32) break; padArea.addAndMakeVisible (pads.add (new Pad (m, c.id))); }
+                for (auto& c : m.studio.p().channels) padArea.addAndMakeVisible (pads.add (new Pad (m, c.id)));
             if (tab == 2)
             {
                 const auto& mx = m.studio.p().mixer;
@@ -2481,12 +2481,14 @@ private:
             keys.setBounds (r);
             // about two octaves across the strip; keys never thinner than a fingertip (~30 pt)
             keys.setKeyWidth (juce::jmax (30.0f, (float) r.getWidth() / 15.0f));
-            padArea.setBounds (r);
+            padView.setBounds (r);
+            padArea.setSize (r.getWidth(), r.getHeight());
             if (! pads.isEmpty())
             {
                 const int cols = juce::jlimit (2, 8, r.getWidth() / juce::jmax (1, juce::jmin (r.getHeight() / 2, 110)));
                 const int rows = juce::jmax (1, (pads.size() + cols - 1) / cols);
-                const int pw = r.getWidth() / cols, ph = juce::jmax (44, r.getHeight() / juce::jmin (rows, 4));
+                const int pw = (r.getWidth() - (rows * juce::jmax (44, r.getHeight() / juce::jmin (rows, 4)) > r.getHeight() ? 8 : 0)) / cols;   // room for the scroll bar
+                const int ph = juce::jmax (44, r.getHeight() / juce::jmin (rows, 4));
                 for (int i = 0; i < pads.size(); ++i) pads[i]->setBounds ((i % cols) * pw, (i / cols) * ph, pw, ph);
                 padArea.setSize (r.getWidth(), juce::jmax (r.getHeight(), rows * ph));
             }
@@ -2499,7 +2501,7 @@ private:
         juce::OwnedArray<juce::TextButton> tabs;
         juce::MidiKeyboardComponent keys;
         juce::Component padArea, mixBody;
-        juce::Viewport mixView;
+        juce::Viewport mixView, padView;
         juce::OwnedArray<Pad> pads;
         juce::OwnedArray<Strip> strips;
         juce::String builtFor { "-" };
