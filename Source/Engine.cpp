@@ -2880,7 +2880,11 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     if (wasPlaying) stop();
     deviceManager.removeAudioCallback (this);
     antForceRealtime();
+   #if JUCE_IOS
+    const double sr = sampleRate; const int block = juce::jmin (512, maxBlock);   // phone: never a bigger block than the buffers were sized for (64-256 sample buffers)
+   #else
     const double sr = sampleRate; const int block = 512;
+   #endif
     const bool oldSong = proj.songMode;
     proj.songMode = song;
     const double lenBeats = renderLenBeats > 0 ? renderLenBeats : song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
