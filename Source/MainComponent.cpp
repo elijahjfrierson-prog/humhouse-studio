@@ -2395,7 +2395,7 @@ private:
             Fader fader;
             juce::Label name;
             Strip() { addAndMakeVisible (fader); addAndMakeVisible (name); fader.setRange (0.0, 1.25, 0.0); name.setJustificationType (juce::Justification::centred); name.setFont (juce::FontOptions (12.0f)); name.setColour (juce::Label::textColourId, col::text); }
-            void resized() override { auto r = getLocalBounds(); name.setBounds (r.removeFromBottom (18)); fader.setBounds (r.reduced (2)); }
+            void resized() override { auto r = getLocalBounds(); name.setBounds (r.removeFromBottom (18)); fader.setBounds (r.reduced (2)); fader.setMouseDragSensitivity (juce::jmax (40, fader.getHeight() - 20)); }   // full travel = the fader's own length
         };
         explicit DuoStrip (MainComponent& o) : m (o), keys (o.kbState, juce::MidiKeyboardComponent::horizontalKeyboard)
         {
