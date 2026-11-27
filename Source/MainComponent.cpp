@@ -7,6 +7,15 @@
 #if JUCE_IOS
 void* hhsWatchPhoneRoute (std::atomic<bool>& speakerOut);   // IosRoute.mm
 void hhsUnwatchPhoneRoute (void* token);
+#if defined (HHS_APPSTORE) && HHS_APPSTORE
+bool hhsStoreStart (std::function<void (bool unlocked, std::string message)> onChange);   // AppStore.mm
+bool hhsStoreUnlocked();
+void hhsStoreBuy();
+void hhsStoreRestore();
+void hhsStoreManage();
+std::string hhsStorePrice();
+#define HHS_STORE 1
+#endif
 #endif
 
 namespace hhs
@@ -1007,6 +1016,18 @@ public:
        #if JUCE_IOS
         routeWatch = hhsWatchPhoneRoute (engine.speakerOut);
        #endif
+       #if HHS_STORE
+        phoneLite = ! hhsStoreStart ([safe = juce::Component::SafePointer<MainComponent> (this)] (bool full, std::string msg) {
+            if (safe == nullptr) return;
+            if (phoneLite == full) { phoneLite = ! full; safe->relayoutAll (*safe); }
+            if (! msg.empty()) juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("HumHouse Full").withMessage (juce::String (msg)).withButton ("OK"), nullptr);
+        });
+        if (phoneLite && ! studio.settings->getBoolValue ("fullOffered", false))   // first launch: show what Full adds, once
+        {
+            studio.settings->setValue ("fullOffered", true);
+            juce::Timer::callAfterDelay (2500, [safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->showUnlock(); });
+        }
+       #endif
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", phoneUI);
         if (! phoneUI) if (const juce::File bgf (studio.settings->getValue ("bgPicture")); bgf.existsAsFile()) bgPicture = juce::ImageFileFormat::loadFrom (bgf);   // phone: songs carry every sample, one-shot and clip inside, so they open exactly on a computer
@@ -1600,6 +1621,63 @@ if (phoneUI)
         juce::StringArray s; for (auto& [id, k] : userKeys) s.add (id + "=" + k.getTextDescription());
         studio.settings->setValue ("keymap", s.joinIntoString (";")); studio.settings->saveIfNeeded();
     }
+   #if HHS_STORE
+    static void relayoutAll (juce::Component& c) { c.resized(); c.repaint(); for (auto* k : c.getChildren()) relayoutAll (*k); }
+    // HumHouse Full: the $7.99/month unlock, with what it adds and the terms Apple requires next to the buy button
+    struct UnlockPanel : public juce::Component
+    {
+        juce::Label title, body;
+        juce::TextButton buy, restore { "Restore purchases" }, later { "Not now" };
+        juce::HyperlinkButton terms { "Terms of Use", juce::URL ("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") },
+                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/main/PRIVACY.md") };
+        UnlockPanel()
+        {
+            const juce::String price (hhsStorePrice());
+            title.setText (phoneLite ? "Unlock HumHouse Full" : "HumHouse Full is active", juce::dontSendNotification);
+            title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
+            body.setText ("Everything in HumHouse, on your phone:\n"
+                          "- Glitch Gate stutters, repeats and tape effects on clip fades\n"
+                          "- Mastering tools, Maximizer, spectrum and scope views\n"
+                          "- Automation and LFOs on any knob\n"
+                          "- Patch Bay, HumWave synth and the extra sound packs\n"
+                          "- Vocal Room, Studio Vocal and Chroma Verb\n"
+                          "- Curved fades and automation\n\n"
+                          "HumHouse Full: " + price + " per month, auto-renewing. Payment is charged to your Apple ID when you confirm. "
+                          "It renews every month unless you cancel at least 24 hours before the end of the current period. "
+                          "Manage or cancel in your Apple ID's Subscriptions settings.", juce::dontSendNotification);
+            body.setJustificationType (juce::Justification::topLeft);
+            body.setColour (juce::Label::textColourId, col::text);
+            buy.setButtonText (phoneLite ? "Subscribe - " + price + " / month" : "Manage subscription");
+            buy.onClick = [this] { if (phoneLite) hhsStoreBuy(); else hhsStoreManage(); close(); };
+            restore.onClick = [this] { hhsStoreRestore(); close(); };
+            later.onClick = [this] { close(); };
+            for (auto* c : std::initializer_list<juce::Component*> { &title, &body, &buy, &restore, &later, &terms, &privacy }) addAndMakeVisible (c);
+            setSize (520, 520);
+        }
+        void close() { if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState (0); }
+        void resized() override
+        {
+            auto r = getLocalBounds().reduced (18);
+            title.setBounds (r.removeFromTop (36)); r.removeFromTop (6);
+            auto links = r.removeFromBottom (28);
+            terms.setBounds (links.removeFromLeft (links.getWidth() / 2)); privacy.setBounds (links);
+            r.removeFromBottom (8);
+            auto row = r.removeFromBottom (44);
+            later.setBounds (row.removeFromRight (110)); row.removeFromRight (8);
+            restore.setBounds (row.removeFromRight (170)); row.removeFromRight (8);
+            buy.setBounds (row);
+            r.removeFromBottom (10);
+            body.setBounds (r);
+        }
+    };
+    void showUnlock()
+    {
+        juce::DialogWindow::LaunchOptions o;
+        o.content.setOwned (fitToScreen (new UnlockPanel()));
+        o.dialogTitle = "HumHouse Full"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
+        o.launchAsync();
+    }
+   #endif
     void showKeyCommands()
     {
         juce::DialogWindow::LaunchOptions o;
@@ -1791,6 +1869,11 @@ if (phoneUI)
         };
         if (index == 0)
         {
+           #if HHS_STORE
+            m.addItem (4790, phoneLite ? "Unlock HumHouse Full (" + juce::String (hhsStorePrice()) + " / month)..." : "HumHouse Full (active)...");
+            m.addItem (4791, "Restore purchases");
+            m.addSeparator();
+           #endif
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
             m.addItem (4715, "Convert stems folder (Logic / Pro Tools)...");
             m.addItem (4716, "Shrink .hhs files to KB (pick a folder)...");
@@ -2144,6 +2227,10 @@ if (phoneUI)
                 break;
             case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
             case 4724: frameMeterOn() = ! frameMeterOn().load(); if (frameMeterOn().load()) engine.resetCallbackMeter(); if (playlist != nullptr) playlist->repaint(); break;
+           #if HHS_STORE
+            case 4790: showUnlock(); break;
+            case 4791: hhsStoreRestore(); break;
+           #endif
             case 4725: zoomAtPlayhead() = ! zoomAtPlayhead().load(); break;
             case 4726: playheadLock() = ! playheadLock().load(); studio.settings->setValue ("playheadLock", playheadLock().load()); break;
             case 4717:
