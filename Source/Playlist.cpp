@@ -1765,11 +1765,12 @@ public:
                     auto& c = p.clips[(size_t) i]; const bool on = ! c.selected; c.selected = on;
                     if (c.group > 0) for (auto& o : p.clips) if (o.group == c.group && ! o.hidden) o.selected = on;
                 });
-            lockTapClear = i < 0;
+            lockTapClear = i < 0; lockClipTap = i >= 0;
             drag = Drag::Marquee; marquee = {}; marqueeBase.clear();
             for (auto& c : p.clips) marqueeBase.push_back (c.selected);
             repaint(); return;
         }
+        if (phoneUI && toolLock && i < 0 && tool != PTool::Paint) return;   // locked DELETE / MUTE / SLICE: empty space does nothing
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
             if (! e.mods.isShiftDown()) { timeSelA = timeSelB = -1; s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; }); }
@@ -1832,6 +1833,7 @@ public:
         }
         const bool phoneSel = phoneUI && tool == PTool::Select;   // phone SELECT: taps add clips, tapping a selected one drops it
         tapOff = phoneSel && p.clips[(size_t) i].selected && e.getNumberOfClicks() == 1;
+        soloOnDrag = phoneSel && ! p.clips[(size_t) i].selected && ! e.mods.isShiftDown();
         s.live ([&] (Project&) {
             if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown() && ! phoneSel) for (auto& c : p.clips) c.selected = false;
             p.clips[(size_t) i].selected = true;
@@ -1850,6 +1852,14 @@ public:
     {
         auto& p = s.p();
         lastMouse = e.getPosition();
+        if (soloOnDrag && e.getDistanceFromDragStart() > 6 && dragClip >= 0 && dragClip < (int) p.clips.size() && dragOrig.size() == p.clips.size())
+        {   // phone SELECT: dragging a clip that wasn't selected moves only it (and its group); a tap still adds it
+            soloOnDrag = false;
+            const int g = dragOrig[(size_t) dragClip].group;
+            for (size_t k = 0; k < dragOrig.size(); ++k)
+                dragOrig[k].selected = (int) k == dragClip || (g > 0 && dragOrig[k].group == g && ! dragOrig[k].hidden);
+            s.live ([&] (Project&) { for (size_t k = 0; k < dragOrig.size(); ++k) if (! dragOrig[k].selected) p.clips[k] = dragOrig[k]; });
+        }
         if (drag == Drag::Gain)
         {
             if (dragClip < 0 || dragClip >= (int) p.clips.size()) return;
@@ -2029,7 +2039,7 @@ public:
         {
             if (! changed && std::exchange (lockTapClear, false)) s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
             lockTapClear = false;
-            if (! changed && clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
+            if (! changed && ! std::exchange (lockClipTap, false) && clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
             else if (changed) s.live ([] (Project&) {});   // the drag's selection, published once
             marquee = {}; drag = Drag::None; repaint(); return;
         }
@@ -2044,7 +2054,7 @@ public:
                 const int g = p.clips[(size_t) dragClip].group; p.clips[(size_t) dragClip].selected = false;
                 if (g > 0) for (auto& c : p.clips) if (c.group == g) c.selected = false;
             });
-        tapOff = false;
+        tapOff = false; soloOnDrag = false; lockClipTap = false;
         if (drag == Drag::Ruler && ! changed) { if (clickMaySeek (true)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
         else if (changed)
         {
@@ -2390,7 +2400,7 @@ private:
     int dragPt = -1;
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
-    bool toolLock = false, lockTapClear = false, tapOff = false; juce::uint32 toolTapMs = 0;
+    bool toolLock = false, lockTapClear = false, tapOff = false, soloOnDrag = false, lockClipTap = false; juce::uint32 toolTapMs = 0;
     void setToolLock (bool on)
     {
         toolLock = on;
