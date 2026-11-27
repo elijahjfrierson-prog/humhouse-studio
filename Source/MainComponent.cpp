@@ -3460,9 +3460,13 @@ private:
             const auto f = ts[id - base];
             juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + f.getFileNameWithoutExtension() + "\"?")
                                               .withMessage ("Are you sure? This template is deleted from the phone. Your songs stay.").withButton ("Delete").withButton ("Cancel"),
-                                          [safe, f, removeRow] (int b) {
+                                          [safe, f, removeRow, base] (int b) {
                                               if (b != 1 || safe == nullptr) return;
-                                              if (f.deleteFile() || ! f.existsAsFile()) { removeRow(); safe->flash ("Template deleted: " + f.getFileNameWithoutExtension()); }
+                                              if (f.deleteFile() || ! f.existsAsFile())
+                                              {   // File menu rows are looked up by position again, so that menu closes instead of shifting
+                                                  if (base == 300 && safe->phoneMenu != nullptr && safe->phoneMenu->done) safe->phoneMenu->done (0); else removeRow();
+                                                  safe->flash ("Template deleted: " + f.getFileNameWithoutExtension());
+                                              }
                                               else safe->flash ("Couldn't delete " + f.getFileNameWithoutExtension());
                                           });
         };
