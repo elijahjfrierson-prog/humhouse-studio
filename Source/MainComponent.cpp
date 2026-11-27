@@ -2409,7 +2409,9 @@ private:
             }
             keys.setAvailableRange (24, 108); keys.setLowestVisibleKey (48); keys.setWantsKeyboardFocus (false); keys.clearKeyMappings();
             keys.setColour (juce::MidiKeyboardComponent::keyDownOverlayColourId, col::accent.withAlpha (0.7f));
-            addChildComponent (keys); addChildComponent (padArea); addChildComponent (mixView);
+            addChildComponent (keys); addChildComponent (padView); addChildComponent (mixView);
+            padArea.getProperties().set ("noHold", true); padArea.getProperties().set ("ownDoubleTap", true);   // pads play: a hold is a held note, never a right-click
+            padView.setViewedComponent (&padArea, false); padView.setScrollBarsShown (true, false);
             mixView.setViewedComponent (&mixBody, false); mixView.setScrollBarsShown (false, true);
             mixView.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::nonHover);
             tab = juce::jlimit (0, 2, m.studio.settings->getIntValue ("duoTab", 0));
