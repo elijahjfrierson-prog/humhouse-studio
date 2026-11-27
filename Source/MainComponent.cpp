@@ -2386,8 +2386,9 @@ private:
         {
             SwipeLock swipe;
             Fader() : juce::Slider (juce::Slider::LinearVertical, juce::Slider::NoTextBox) { setSliderSnapsToMousePosition (false); }
-            void mouseDown (const juce::MouseEvent& e) override { swipe.down(); juce::Slider::mouseDown (e); }
+            void mouseDown (const juce::MouseEvent& e) override { swipe.down(); startV = getValue(); juce::Slider::mouseDown (e); }
             void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
+            double startV = 0.0;
         };
         struct Strip : juce::Component
         {
@@ -2456,7 +2457,7 @@ private:
                     st->fader.setValue (mx[t].volume, juce::dontSendNotification);
                     const int idx = (int) t;
                     st->fader.onValueChange = [this, st, idx] { m.studio.live ([&] (Project& p) { if (idx < (int) p.mixer.size()) p.mixer[(size_t) idx].volume = (float) st->fader.getValue(); }); };
-                    st->fader.onDragEnd = [this] { m.studio.commit ("Volume"); };
+                    st->fader.onDragEnd = [this, st] { if (st->fader.getValue() != st->fader.startV) m.studio.commit ("Volume"); };   // a scroll swipe isn't an edit
                     mixBody.addAndMakeVisible (st);
                 }
             }
