@@ -3376,7 +3376,7 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
         juce::PopupMenu one;
         one.addItem ("Replace this track's FX", [&s, track, f] { loadChainPreset (s, track, f, true); });
         one.addItem ("Add after current FX", [&s, track, f] { loadChainPreset (s, track, f, false); });
-        if (phoneUI) { juce::PopupMenu::Item del ("Delete this FX chain preset"); del.action = [] {}; addItemWithDelete (one, std::move (del), f, "FX chain preset"); }
+        if (phoneUI) one.addItem ("Delete this FX chain preset", [f] { confirmDeleteFile (f, "FX chain preset"); });
         chains.addSubMenu (f.getFileNameWithoutExtension(), one);
     }
     if (chainFiles.isEmpty()) chains.addItem ("(none saved yet)", false, false, [] {});
