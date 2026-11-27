@@ -2484,12 +2484,12 @@ private:
             // about two octaves across the strip; keys never thinner than a fingertip (~30 pt)
             keys.setKeyWidth (juce::jmax (30.0f, (float) r.getWidth() / 15.0f));
             padView.setBounds (r);
-            padArea.setSize (r.getWidth(), r.getHeight());
-            if (! pads.isEmpty())
+            if (pads.isEmpty()) padArea.setSize (r.getWidth(), r.getHeight());
+            else
             {
                 const int cols = juce::jlimit (2, 8, r.getWidth() / juce::jmax (1, juce::jmin (r.getHeight() / 2, 110)));
                 const int rows = juce::jmax (1, (pads.size() + cols - 1) / cols);
-                const int pw = (r.getWidth() - (rows * juce::jmax (44, r.getHeight() / juce::jmin (rows, 4)) > r.getHeight() ? 8 : 0)) / cols;   // room for the scroll bar
+                const int pw = (r.getWidth() - (rows * juce::jmax (44, r.getHeight() / juce::jmin (rows, 4)) > r.getHeight() ? 18 : 0)) / cols;   // room for the scroll bar
                 const int ph = juce::jmax (44, r.getHeight() / juce::jmin (rows, 4));
                 for (int i = 0; i < pads.size(); ++i) pads[i]->setBounds ((i % cols) * pw, (i / cols) * ph, pw, ph);
                 padArea.setSize (r.getWidth(), juce::jmax (r.getHeight(), rows * ph));
