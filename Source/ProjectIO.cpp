@@ -256,7 +256,8 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
     auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
     if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
     if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
-    if (auto g = unglue (s); g != juce::File()) return g;
+    const bool lossy = gluedIn != nullptr && gluedIn->count (s) > 0 && gluedIn->at (s).startsWith (oggTag);   // the small copy only if no original turns up anywhere
+    if (! lossy) if (auto g = unglue (s); g != juce::File()) return g;
     auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
     {   // built-in kit saved from another HumHouse app (Studio vs Master, another drive/PC): use this app's copy
         const auto norm = s.replaceCharacter ('\\', '/');
@@ -295,6 +296,7 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
             if (e.getFile().getFileName().equalsIgnoreCase (name) && (size <= 0 || e.getFile().getSize() == size)) return e.getFile();
         }
     }
+    if (lossy) if (auto g = unglue (s); g != juce::File()) return g;
     return f;   // still missing: keep the original path so it can be located later
 }
 static juce::File readFile (const juce::ValueTree& t, const char* key) { return findAudio (t[key].toString(), t[juce::Identifier (juce::String (key) + "Rel")].toString(), (juce::int64) t.getProperty (juce::Identifier (juce::String (key) + "Size"), (juce::int64) 0)); }
