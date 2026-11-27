@@ -712,6 +712,298 @@ private:
     float lvlCoef = 0.0002f, eDry = 0, eWet = 0, wetGain = 1.0f;
 };
 
+// ------------------------------------------------------------ Cent Transposer (retunes a whole beat: A4 200-600 Hz + fine cents)
+// one resampling read head (pure, no grains) re-spliced only when it drifts a whole window, at the best-matching spot with a
+// long crossfade, so small retunes (440 -> 432) are almost pure resampling; a constant reported latency keeps the beat in time.
+// Mod: two drifting short delays, left / right apart. Weird Verb: an 8-line FDN with a pitch-shifting shimmer loop, freeze + smear.
+class CentTransposer : public BuiltinEffect
+{
+public:
+    CentTransposer() { initDefaults(); }
+    const char* typeId() const override { return "centtrans"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "tuning", "Tuning A4 (Hz)", 200, 600, 440 }, { "cents", "Fine (cents)", -100, 100, 0 }, { "mix", "Mix", 0, 1, 1 },
+            { "grain", "Quality", 0, 2, 2, { "Tight (drums)", "Smooth", "Cream (full beats)" } },
+            { "moddepth", "Mod Depth", 0, 1, 0 }, { "modrate", "Mod Rate (Hz)", 0.05f, 6, 0.4f }, { "moddrift", "Mod Drift", 0, 1, 0.5f },
+            { "verbmix", "Weird Verb", 0, 1, 0 }, { "verbsize", "Verb Size", 0, 1, 0.6f },
+            { "shimmer", "Shimmer", 0, 5, 0, { "Off", "-12", "-5", "+5", "+7", "+12" } }, { "shimamt", "Shimmer Amount", 0, 1, 0.5f },
+            { "freeze", "Freeze", 0, 1, 0, { "Off", "On" } }, { "smear", "Smear", 0, 1, 0.3f }, { "damp", "Verb Damping", 0, 1, 0.4f } };
+        return ps;
+    }
+    int latencySamples() const override { return engaged() ? (int) std::lround (centre) : 0; }   // at 440 Hz / 0 cents: no delay at all
+    double tailSeconds() const override { return 30.0; }   // read once at sync: Weird Verb / Freeze turned up later must not be cut by Smart Disable
+    void prepare (double s, int) override
+    {
+        sr = s; centre = 0.022 * s;
+        int n = 1; while (n < (int) (s * 0.25)) n <<= 1;
+        bufL.assign ((size_t) n, 0.0f); bufR.assign ((size_t) n, 0.0f); mask = n - 1; w = 0; d = centre; d2 = centre; xfLen = xfPos = 0;
+        int m = 1; while (m < (int) (s * 0.05)) m <<= 1;
+        modL.assign ((size_t) m, 0.0f); modR.assign ((size_t) m, 0.0f); modMask = m - 1; mw = 0; modPh = 0; nzL = nzR = 0;
+        static constexpr int lens[8] { 1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617 };
+        int f = 1; while (f < (int) (1700 * 2.2 * s / 44100.0) + 64) f <<= 1;
+        for (int i = 0; i < 8; ++i) { line[i].assign ((size_t) f, 0.0f); len[i] = lens[i] * 2.0 * s / 44100.0; lp[i] = 0; }
+        lineMask = f - 1; lw = 0; fdnPh = 0;
+        static constexpr int al[4] { 142, 107, 379, 277 };
+        for (int i = 0; i < 4; ++i) { ap[i].assign ((size_t) (al[i] * s / 44100.0) + 1, 0.0f); apW[i] = 0; }
+        int sh = 1; while (sh < (int) (s * 0.08)) sh <<= 1;
+        shBuf.assign ((size_t) sh, 0.0f); shMask = sh - 1; shW = 0; shPh = 0; shOut = 0;
+        ratioS = target(); modAmt = 0;
+    }
+    void reset() override { prepare (sr, 0); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const bool st = b.getNumChannels() > 1;
+        auto* L = b.getWritePointer (0); auto* R = st ? b.getWritePointer (1) : L;
+        const int q = juce::jlimit (0, 2, (int) std::round (p (3)));
+        const double P = sr * (q == 0 ? 0.012 : q == 1 ? 0.02 : 0.03), X = sr * (q == 0 ? 0.006 : q == 1 ? 0.01 : 0.015);
+        const double lo = centre - 0.5 * P, hi = centre + 0.5 * P;
+        const float mix = p (2), depth = p (4), drift = p (6), vmix = p (7);
+        const double modInc = juce::MathConstants<double>::twoPi * p (5) / sr;
+        const double tgt = target(); const bool on = engaged();
+        // verb
+        const bool freeze = p (11) > 0.5f;
+        const float t60 = 0.5f + 19.5f * p (8) * p (8), damp = freeze ? 0.0f : p (13), smear = p (12), shimAmt = freeze ? 0.0f : p (10);
+        const int shim = juce::jlimit (0, 5, (int) std::round (p (9)));
+        static constexpr float shimSemis[6] { 0, -12, -5, 5, 7, 12 };
+        const double shRatio = std::pow (2.0, shimSemis[shim] / 12.0), shWin = 0.06 * sr;
+        float g[8];
+        for (int i = 0; i < 8; ++i) g[i] = freeze ? 1.0f : (float) std::pow (10.0, -3.0 * len[i] / (t60 * sr));
+        const float loopScale = shim > 0 ? 1.0f - 0.25f * shimAmt : 1.0f, apc = 0.45f + 0.25f * smear, wob = (float) (sr / 44100.0) * (4.0f + 14.0f * smear);
+        for (int i = 0; i < n; ++i)
+        {
+            const float inL = L[i], inR = st ? R[i] : L[i];
+            bufL[(size_t) w] = inL; bufR[(size_t) w] = inR;
+            ratioS += 0.0005 * (tgt - ratioS);   // a knob move glides
+            if (xfLen == 0 && (d < lo || d > hi))
+            {
+                const double t = d < lo ? d + P : d - P;
+                d2 = bestSplice (t, (int) (P * 0.25), (int) (X * 0.5));
+                xfLen = (int) X; xfPos = 0;
+            }
+            if (! on) { ratioS = 1.0; d = d2 = centre; xfLen = 0; }
+            float yl = on ? read (bufL, d) : inL, yr = on ? read (bufR, d) : inR;
+            if (xfLen > 0)
+            {
+                const float k = 0.5f - 0.5f * std::cos (kPi * (float) xfPos / (float) xfLen);
+                yl += k * (read (bufL, d2) - yl); yr += k * (read (bufR, d2) - yr);
+            }
+            const double step = 1.0 - ratioS;
+            d += step;
+            if (xfLen > 0) { d2 += step; if (++xfPos >= xfLen) { d = d2; xfLen = 0; } }
+            d = juce::jlimit (4.0, (double) (mask / 2), d);
+            const float dl = on ? read (bufL, centre) : inL, dr = on ? read (bufR, centre) : inR;   // dry, lined up with the shifted signal
+            w = (w + 1) & mask;
+            float sl = dl + mix * (yl - dl), sr2 = dr + mix * (yr - dr);
+            // Mod: two short delays drifting apart (sine + smoothed random), blended in as depth rises
+            modAmt += 0.001f * (depth - modAmt);
+            if (modAmt > 0.0005f)
+            {
+                modL[(size_t) mw] = sl; modR[(size_t) mw] = sr2;
+                modPh += modInc; if (modPh > juce::MathConstants<double>::twoPi) modPh -= juce::MathConstants<double>::twoPi;
+                nzL += 0.0002f * (rnd.nextFloat() * 2.0f - 1.0f - nzL); nzR += 0.0002f * (rnd.nextFloat() * 2.0f - 1.0f - nzR);
+                const double ex = 0.004 * sr * modAmt;
+                const double tl = 0.006 * sr + ex * (0.7 * std::sin (modPh) + 3.0 * drift * nzL);
+                const double tr = 0.006 * sr + ex * (0.7 * std::sin (modPh + 1.5708) + 3.0 * drift * nzR);
+                const float ml = readLin (modL, modMask, mw, juce::jlimit (2.0, 0.045 * sr, tl)), mr = readLin (modR, modMask, mw, juce::jlimit (2.0, 0.045 * sr, tr));
+                mw = (mw + 1) & modMask;
+                const float k = 0.5f * juce::jmin (1.0f, 2.0f * modAmt);
+                sl += k * (ml - sl); sr2 += k * (mr - sr2);
+            }
+            if (vmix > 0.0005f || freeze)
+            {
+                float x = freeze ? 0.0f : 0.5f * (sl + sr2);
+                for (int a = 0; a < 4; ++a)   // Smear: diffusers before the tank
+                {
+                    auto& v = ap[a]; const float z = v[(size_t) apW[a]], y = z - apc * x;
+                    v[(size_t) apW[a]] = x + apc * y; apW[a] = (apW[a] + 1) % (int) v.size(); x = y;
+                }
+                fdnPh += 0.7 * juce::MathConstants<double>::twoPi / sr; if (fdnPh > juce::MathConstants<double>::twoPi) fdnPh -= juce::MathConstants<double>::twoPi;
+                float o[8];
+                for (int k = 0; k < 8; ++k)
+                {
+                    const double dd = len[k] + wob * std::sin (fdnPh + 0.785 * k);
+                    o[k] = readLin (line[k], lineMask, lw, dd) * g[k];
+                    lp[k] += (1.0f - 0.85f * damp) * (o[k] - lp[k]); o[k] = lp[k];
+                }
+                // shimmer: the tank's sum pitched by the interval and fed back in
+                float shf = 0;
+                if (shim > 0 && shimAmt > 0.001f)
+                {
+                    shBuf[(size_t) shW] = 0.125f * (o[0] + o[1] + o[2] + o[3] + o[4] + o[5] + o[6] + o[7]);
+                    shPh += (1.0 - shRatio) / shWin; shPh -= std::floor (shPh);
+                    const double pb = shPh + 0.5 - std::floor (shPh + 0.5);
+                    const float ga = (float) std::sin (juce::MathConstants<double>::pi * shPh), gb = (float) std::sin (juce::MathConstants<double>::pi * pb);
+                    shf = ga * ga * readLin (shBuf, shMask, shW, 2.0 + shPh * shWin) + gb * gb * readLin (shBuf, shMask, shW, 2.0 + pb * shWin);
+                    shW = (shW + 1) & shMask;
+                    shOut += 0.2f * (shf - shOut); shf = shOut * shimAmt;
+                }
+                // 8x8 Hadamard (orthogonal: freeze rings forever without growing)
+                float h[8];
+                for (int k = 0; k < 8; ++k) h[k] = o[k];
+                for (int s2 = 1; s2 < 8; s2 <<= 1)
+                    for (int k = 0; k < 8; k += 2 * s2)
+                        for (int j = k; j < k + s2; ++j) { const float a = h[j], c = h[j + s2]; h[j] = a + c; h[j + s2] = a - c; }
+                const float norm = 0.35355339f * loopScale;
+                for (int k = 0; k < 8; ++k) line[k][(size_t) lw] = h[k] * norm + ((k & 1) ? -x : x) * 0.5f + ((k & 2) ? -shf : shf);
+                lw = (lw + 1) & lineMask;
+                const float vl = 0.4f * (o[0] - o[2] + o[4] - o[6]), vr = 0.4f * (o[1] - o[3] + o[5] - o[7]);
+                sl = sl * (1.0f - 0.5f * vmix) + vmix * vl; sr2 = sr2 * (1.0f - 0.5f * vmix) + vmix * vr;
+            }
+            L[i] = sl; if (st) R[i] = sr2;
+        }
+    }
+private:
+    bool engaged() const { return std::abs (target() - 1.0) > 1.0e-7; }
+    double target() const { return (double) juce::jlimit (200.0f, 600.0f, p (0)) / 440.0 * std::pow (2.0, p (1) / 1200.0); }
+    float read (const std::vector<float>& bf, double delay) const
+    {
+        const double pos = (double) w - delay, fl = std::floor (pos);
+        const int i = (int) fl; const float t = (float) (pos - fl);
+        const float y0 = bf[(size_t) ((i - 1) & mask)], y1 = bf[(size_t) (i & mask)], y2 = bf[(size_t) ((i + 1) & mask)], y3 = bf[(size_t) ((i + 2) & mask)];
+        const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * t + c2) * t + c1) * t + y1;
+    }
+    static float readLin (const std::vector<float>& bf, int m, int wr, double delay)
+    {
+        const double pos = (double) wr - delay, fl = std::floor (pos);
+        const int i = (int) fl; const float t = (float) (pos - fl);
+        return bf[(size_t) (i & m)] * (1.0f - t) + bf[(size_t) ((i + 1) & m)] * t;
+    }
+    // the delay near `t` whose recent waveform best matches what the head just played (no click, no flam)
+    double bestSplice (double t, int span, int ln) const
+    {
+        const int cur = (int) std::lround (d);
+        float xx = 1.0e-9f;
+        for (int j = 0; j < ln; j += 2) { const size_t a = (size_t) ((w - cur - j) & mask); const float x = bufL[a] + bufR[a]; xx += x * x; }
+        double best = t; float bestScore = -2.0f;
+        for (int k = -span; k <= span; k += 2)
+        {
+            const int cand = (int) std::lround (t) + k;
+            if (cand < 8 || cand + ln + 8 > mask / 2) continue;
+            float xy = 0, yy = 1.0e-9f;
+            for (int j = 0; j < ln; j += 2)
+            {
+                const size_t a = (size_t) ((w - cur - j) & mask), c = (size_t) ((w - cand - j) & mask);
+                const float x = bufL[a] + bufR[a], y = bufL[c] + bufR[c];
+                xy += x * y; yy += y * y;
+            }
+            const float score = xy / std::sqrt (xx * yy) - 0.0004f * (float) std::abs (k);   // ties go to the nearest spot
+            if (score > bestScore) { bestScore = score; best = cand + (d - cur); }
+        }
+        return best;
+    }
+    std::vector<float> bufL, bufR, modL, modR, shBuf;
+    std::array<std::vector<float>, 8> line; std::array<std::vector<float>, 4> ap;
+    std::array<double, 8> len {}; std::array<float, 8> lp {}; std::array<int, 4> apW {};
+    int mask = 0, w = 0, xfLen = 0, xfPos = 0, modMask = 0, mw = 0, lineMask = 0, lw = 0, shMask = 0, shW = 0;
+    double sr = 44100, centre = 970, d = 970, d2 = 970, ratioS = 1, modPh = 0, fdnPh = 0, shPh = 0;
+    float nzL = 0, nzR = 0, modAmt = 0, shOut = 0;
+    juce::Random rnd;
+};
+
+// ------------------------------------------------------------ HumHouse Mod: lush modulation (chorus, ensemble, flanger, vibrato,
+// tape drift, doubler, room chorus). Roomy, never muddy: the wet signal is low-cut so the lows stay as played, and a short
+// diffused room sits behind the voices. Dry stays at full level (vibrato is wet only).
+class HumMod : public BuiltinEffect
+{
+public:
+    HumMod() { initDefaults(); }
+    const char* typeId() const override { return "hummod"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps {
+            { "mode", "Mode", 0, 6, 0, { "Chorus", "Ensemble", "Flanger", "Vibrato", "Tape Drift", "Doubler", "Room Chorus" } },
+            { "rate", "Rate (Hz)", 0.02f, 8, 0.6f }, { "depth", "Depth", 0, 1, 0.5f }, { "feedback", "Feedback", -0.9f, 0.9f, 0 },
+            { "delay", "Delay", 0, 1, 0.5f }, { "spread", "Stereo Spread", 0, 1, 1 }, { "room", "Room", 0, 1, 0.3f },
+            { "lowcut", "Wet Low Cut (Hz)", 20, 600, 150 }, { "tone", "Wet High Cut (kHz)", 2, 20, 12 }, { "mix", "Mix", 0, 1, 0.5f } };
+        return ps;
+    }
+    double tailSeconds() const override { return 0.2; }
+    void prepare (double s, int) override
+    {
+        sr = s; int n = 1; while (n < (int) (s * 0.1)) n <<= 1;
+        for (auto& v : buf) v.assign ((size_t) n, 0.0f);
+        mask = n - 1; w = 0; ph = ph2 = 0;
+        static constexpr double dl[2][4] { { 4.3, 7.1, 11.3, 17.9 }, { 5.1, 8.3, 12.7, 19.3 } };
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < 4; ++i) { ap[c][i].assign ((size_t) std::max (2, (int) (dl[c][i] * 0.001 * s)), 0.0f); apW[c][i] = 0; }
+        for (int c = 0; c < 2; ++c) { fbS[c] = hp1[c] = hp2[c] = lpS[c] = nz[c] = nzT[c] = 0; }
+        nzCount = 0;
+    }
+    void reset() override { prepare (sr, 0); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const bool st = b.getNumChannels() > 1;
+        float* ch[2] { b.getWritePointer (0), st ? b.getWritePointer (1) : b.getWritePointer (0) };
+        const int mode = juce::jlimit (0, 6, (int) std::round (p (0)));
+        static constexpr float baseMs[7] { 7, 9, 1.0f, 4, 5, 18, 8 }, depMs[7] { 3, 4, 2.5f, 3, 2, 4, 3.5f };
+        static constexpr int voicesOf[7] { 2, 3, 1, 1, 1, 2, 2 };
+        const int V = voicesOf[mode];
+        const double base = baseMs[mode] * (0.25 + 1.5 * p (4)) * 0.001 * sr, dep = depMs[mode] * p (2) * 0.001 * sr;
+        const double inc = juce::MathConstants<double>::twoPi * p (1) / sr, inc2 = inc * 6.3;
+        const float fb = mode == 2 || mode == 0 || mode == 6 ? p (3) : 0.5f * p (3), spread = p (5);
+        const float room = mode == 6 ? juce::jmax (0.6f, p (6)) : p (6), apg = 0.5f + 0.2f * room;
+        const float cHp = 1.0f - std::exp (-2.0f * kPi * p (7) / (float) sr), cLp = 1.0f - std::exp (-2.0f * kPi * juce::jmin (0.45f * (float) sr, 1000.0f * p (8)) / (float) sr);
+        const float mix = p (9), vg = 1.2f / (float) V;
+        const bool random = mode == 4 || mode == 5, vib = mode == 3;
+        for (int i = 0; i < n; ++i)
+        {
+            ph += inc; if (ph > juce::MathConstants<double>::twoPi) ph -= juce::MathConstants<double>::twoPi;
+            ph2 += inc2; if (ph2 > juce::MathConstants<double>::twoPi) ph2 -= juce::MathConstants<double>::twoPi;
+            if (random && ++nzCount >= 256) { nzCount = 0; nzT[0] = rnd.nextFloat() * 2 - 1; nzT[1] = rnd.nextFloat() * 2 - 1; }
+            for (int c = 0; c < 2; ++c)
+            {
+                const float x = ch[c][i];
+                buf[c][(size_t) w] = x + hhs::fastTanh (fbS[c]);
+                if (random) nz[c] += (float) (2.0 * p (1) / sr + 2.0e-5) * (nzT[c] - nz[c]);
+                float wet = 0;
+                for (int v = 0; v < V; ++v)
+                {
+                    const double off = juce::MathConstants<double>::twoPi * v / V + (c == 1 ? spread * 1.5708 : 0.0);
+                    double lfo = std::sin (ph + off);
+                    if (mode == 1) lfo = 0.85 * lfo + 0.15 * std::sin (ph2 + off * 1.7);
+                    if (random) lfo = 0.4 * lfo + 0.9 * (c == 1 && spread > 0.5f ? nz[1] : nz[0]) * (v == 0 ? 1.0 : -1.0);
+                    const double d = juce::jlimit (2.0, (double) mask - 4.0, base * (1.0 + 0.35 * v) + dep * lfo);
+                    wet += read (buf[c], d);
+                }
+                wet *= vg;
+                fbS[c] = fb * wet;
+                // keep it clean: low cut (2 poles) + high cut on the wet only
+                if (! vib) { hp1[c] += cHp * (wet - hp1[c]); wet -= hp1[c]; hp2[c] += cHp * (wet - hp2[c]); wet -= hp2[c]; }   // vibrato is the whole sound: keep its lows
+                lpS[c] += cLp * (wet - lpS[c]); wet = lpS[c];
+                if (room > 0.001f)
+                {
+                    float y = wet;
+                    for (int a = 0; a < 4; ++a)
+                    {
+                        auto& v = ap[c][a]; const float z = v[(size_t) apW[c][a]], o = z - apg * y;
+                        v[(size_t) apW[c][a]] = y + apg * o; if (++apW[c][a] >= (int) v.size()) apW[c][a] = 0; y = o;
+                    }
+                    wet += room * (y - wet);
+                }
+                ch[c][i] = vib ? x + mix * (wet / (vg * (float) V) - x) : x + mix * 0.7f * wet;
+                if (! st) break;
+            }
+            w = (w + 1) & mask;
+        }
+    }
+private:
+    float read (const std::vector<float>& bf, double delay) const
+    {
+        const double pos = (double) w - delay, fl = std::floor (pos);
+        const int i = (int) fl; const float t = (float) (pos - fl);
+        const float y0 = bf[(size_t) ((i - 1) & mask)], y1 = bf[(size_t) (i & mask)], y2 = bf[(size_t) ((i + 1) & mask)], y3 = bf[(size_t) ((i + 2) & mask)];
+        const float c1 = 0.5f * (y2 - y0), c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3, c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+        return ((c3 * t + c2) * t + c1) * t + y1;
+    }
+    double sr = 44100, ph = 0, ph2 = 0;
+    std::array<std::vector<float>, 2> buf; std::array<std::array<std::vector<float>, 4>, 2> ap; int apW[2][4] {};
+    int mask = 0, w = 0, nzCount = 0;
+    float fbS[2] {}, hp1[2] {}, hp2[2] {}, lpS[2] {}, nz[2] {}, nzT[2] {};
+    juce::Random rnd;
+};
+
 class PhaseSwirl : public BuiltinEffect
 {
 public:
@@ -1110,6 +1402,64 @@ public:
     }
 private:
     double sr = 44100; float lp = 0;
+};
+
+// Stereo Spreader: Separation L / R push each side out on its own (a mono source gets a decorrelated side made from it,
+// so the mono sum stays exactly the source), M/S balances mid against side, Mono Bass keeps the lows centred
+class StereoSpreader : public BuiltinEffect
+{
+public:
+    StereoSpreader() { initDefaults(); }
+    const char* typeId() const override { return "spreader"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<ParamDef> ps { { "sepl", "Separation L", 0, 1, 0.5f }, { "sepr", "Separation R", 0, 1, 0.5f },
+                                                { "ms", "M/S (- mid, + side)", -1, 1, 0 }, { "monobass", "Mono Bass (Hz, 0 = off)", 0, 400, 0 },
+                                                { "out", "Output (dB)", -12, 12, 0 } };
+        return ps;
+    }
+    void prepare (double s, int) override
+    {
+        sr = s;
+        static constexpr double ms[4] { 2.1, 3.7, 5.3, 7.9 };
+        for (int i = 0; i < 4; ++i) { ap[i].assign ((size_t) std::max (2, (int) (ms[i] * 0.001 * s)), 0.0f); apW[i] = 0; }
+        hs1 = hs2 = hx1 = hx2 = 0;
+    }
+    void reset() override { prepare (sr, 0); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const bool st = b.getNumChannels() > 1;
+        auto* l = b.getWritePointer (0); auto* r = st ? b.getWritePointer (1) : l;
+        const float sl = p (0), sr2 = p (1), msk = p (2), bassHz = p (3), g = dbToGain (p (4));
+        const float wL = 2.0f * sl, wR = 2.0f * sr2, aL = 0.7f * juce::jmax (0.0f, 2.0f * sl - 1.0f), aR = 0.7f * juce::jmax (0.0f, 2.0f * sr2 - 1.0f);
+        const float mg = juce::jmin (1.0f, 1.0f - msk) * g, sg = juce::jmin (1.0f, 1.0f + msk) * g;
+        const bool hp = bassHz > 1.0f, synth = aL > 0.0f || aR > 0.0f;
+        const float c = hp ? 1.0f - std::exp (-2.0f * kPi * bassHz / (float) sr) : 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float m = 0.5f * (l[i] + r[i]); float s = 0.5f * (l[i] - r[i]), x = 0.0f;
+            if (synth)
+            {
+                x = m;
+                for (int a = 0; a < 4; ++a)
+                {
+                    auto& v = ap[a]; const float z = v[(size_t) apW[a]], y = z - 0.6f * x;
+                    v[(size_t) apW[a]] = x + 0.6f * y; if (++apW[a] >= (int) v.size()) apW[a] = 0; x = y;
+                }
+            }
+            if (hp)   // two one-pole high-passes on the side: the lows stay mono
+            {
+                hs1 += c * (s - hs1); s -= hs1; hs2 += c * (s - hs2); s -= hs2;
+                hx1 += c * (x - hx1); x -= hx1; hx2 += c * (x - hx2); x -= hx2;
+            }
+            const float outL = mg * m + sg * (wL * s + aL * x), outR = mg * m - sg * (wR * s + aR * x);
+            l[i] = outL; if (st) r[i] = outR;
+        }
+    }
+private:
+    double sr = 44100;
+    std::array<std::vector<float>, 4> ap; std::array<int, 4> apW {};
+    float hs1 = 0, hs2 = 0, hx1 = 0, hx2 = 0;
 };
 
 class SoftClip : public BuiltinEffect
@@ -1522,6 +1872,7 @@ public:
     }
     float detected() const { return detectedMidi.load(); }
     float corrected() const { return correctedMidi.load(); }
+    float meter (int i) const override { return i == 100 ? detectedMidi.load() : i == 101 ? correctedMidi.load() : 0.0f; }   // pitch readout for offline analysis
     void process (juce::AudioBuffer<float>& b, int n, const PlayContext& ctx) override
     {
         const int style = (int) p (0);
@@ -1529,6 +1880,7 @@ public:
         const float snap = juce::jlimit (0.0f, 3.0f, -p (12));   // MetaTune-style negative retune: 0 = instant, -3 = hardest step
         const bool hard = style == 3 || snap > 0.0f;
         if (hard) speed = 1.0f;                                // hard tune: instant
+        const bool firm = hard || style != 0;   // Classic / Modern hold the note as firmly as Hard Tune (only the glide differs): off-pitch notes still lock
         const int root = p (3) < 0 ? ctx.keyRoot : (int) p (3) - 0;
         const int scale = p (4) < 0 ? ctx.scaleIndex : (int) p (4);
         const float mix = p (6);
@@ -1599,7 +1951,7 @@ public:
                     const float th = style == 0 ? 0.12f : 0.18f, fbk = style == 0 ? 0.3f : 0.45f;
                     bool rough = false; int wn = 512; float hz = 0, aper = 1;
                     auto detect = [&] (int len) {
-                        const bool low = lastMidi == 0 || lastMidi < 50;   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
+                        const bool low = lastMidi == 0 || lastMidi < 53;   // up to F3: low notes get ~3 full cycles, so they lock as hard as high ones   // low / baritone notes get a window long enough for ~3 cycles and a 42 Hz floor
                         len = juce::jlimit (256, low ? 1536 : 1024, len);
                         std::array<float, 1536> win {};
                         for (int k = 0; k < len; ++k) win[(size_t) k] = analysis[(size_t) ((aw - len + k + (int) analysis.size()) % (int) analysis.size())];
@@ -1624,6 +1976,8 @@ public:
                     // sung vowel too, so the tune cups it from the first hop instead of waiting for the rasp to settle
                     const bool push = lvl > 0.01f && (voiceLvl > 0 ? lvl > 1.3f * voiceLvl : lvl > 0.03f);
                     const bool belt = push || (heldNote > 0 && voiceLvl > 0 && lvl > 0.6f * voiceLvl && lvl > 0.01f);
+                    const bool holding = heldNote > 0 && style != 0;   // inside a sung note, darker / breathier timbres and low inflections keep being read (Antares holds there)
+                    juce::ignoreUnused (holding);
                     if (lvl < (hard ? 0.07f : 0.1f) * voiceLvl || lvl < 2.0e-4f || aper > (belt ? 0.65f : hard ? 0.5f : 0.35f)) midi = 0.0f;   // Hard Tune: quieter note tails still count as the note   // quiet note tails still count as the note
                     // a rough (noisy) reading far from the note being sung is breath/consonant noise, not a new note
                     if (rough && lastMidi > 0 && std::abs (midi - lastMidi) > 1.5f) midi = 0.0f;
@@ -1655,7 +2009,9 @@ public:
                     if (midi > 0 && (lastMidi == 0 || std::abs (midi - lastMidi) > 1.0f))
                     {
                         const bool same = pendingMidi > 0 && std::abs (midi - pendingMidi) < ((rough || pendingRough) && ! belt ? 0.35f : 0.6f);   // a scream wobbles: the 2nd read may be a bit off
-                        if (same) pendingMidi = 0;
+                        // Hard Tune: a clean, clearly pitched word start is tuned from its first reading (Antares catches the
+                        // first cycle; waiting for a 2nd read let low word starts through untuned)
+                        if (same || (hard && lastMidi == 0 && ! rough && aper < 0.15f)) pendingMidi = 0;
                         else { pendingMidi = midi; pendingRough = rough; midi = 0.0f; }   // counts as a miss: noise can't hold a note forever
                     }
                     else if (midi != -1.0f) pendingMidi = 0;
@@ -1697,14 +2053,14 @@ public:
                         // above / below, and holding the note that first reading picked put short words a half step off
                         const bool young = hard && (float) youngHops * hopSec < youngSec;
                         const int prevHeld = heldNote; bool restart = onset;
-                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : 0.12f)));
+                        centre = onset ? now : centre + (steer - centre) * (1.0f - std::exp (-hopSec / (young ? yTau : firm ? 0.05f : 0.12f)));
                         int target = nearestScaleNote (centre, root, scale);
-                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : hard ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
+                        if (heldNote > 0 && target != heldNote && std::abs (centre - (float) heldNote) < (young ? yHys : firm ? 0.65f : 0.8f) && inScale (heldNote, root, scale)) target = heldNote;
                         // a real jump to another note is taken within ~20 ms
                         const int fast = nearestScaleNote (now, root, scale);
                         if (heldNote > 0 && fast != heldNote && std::abs (now - (float) heldNote) > 0.75f)
                         {
-                            if (++jumpHops * hopSec >= (hard ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; restart = true; }   // Hard Tune steps sooner
+                            if (++jumpHops * hopSec >= (firm ? 0.012f - 0.002f * snap : 0.02f)) { target = fast; centre = now; jumpHops = 0; restart = true; }   // Hard Tune steps sooner
                         }
                         else jumpHops = 0;
                         // the note being sung always leads: a held note more than a semitone from the voice (a fast drop or
@@ -1725,7 +2081,7 @@ public:
                         }
                         if (harmony > 0) harmSemis = (float) (harmonyNote (target, harmony, root, scale) - target);
                         targetRatio = std::pow (2.0f, semis / 12.0f);
-                        if (onset && (hard || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
+                        if (onset && (firm || speed >= 0.5f)) currentRatio = targetRatio;   // new word starts already on the note
                         detectedMidi.store (midi); correctedMidi.store ((float) target);
                     }
                     // a rough reading close to the held note still steers the correction (half way per hop), so the voice
@@ -1736,7 +2092,7 @@ public:
                         targetRatio = std::pow (2.0f, (cur + 0.5f * (want - cur)) / 12.0f);
                     }
                     // keep the tune locked through short dropouts (breaths, consonants, mumbles) - only let go after ~0.75 s
-                    else if (midi == 0.0f && ++missHops > (int) ((hard ? 0.75 : 0.5) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
+                    else if (midi == 0.0f && ++missHops > (int) ((firm ? 1.0 : 0.5) * dsr / hop)) { releasing = true; heldNote = 0; lastMidi = 0; octSlip = 0; slope = 0; jumpHops = 0; }
                 }
             }
             currentRatio = targetRatio + (currentRatio - targetRatio) * coef;
@@ -1748,21 +2104,22 @@ public:
             float wl = l[i], wr = r[i], pl = l[i], pr = r[i];
             // Hard Tune keeps its own snap; every gliding style (Retune / Humanize) keeps the voice's tone
             // only the shifter in use runs (half the CPU)
-            if (style == 3) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
-            if (style == 3)
+            const bool useSplice = style == 3;
+            if (useSplice) shifter.process (wl, wr, 1.0f + (ratio - 1.0f) * wetG, period);   // unvoiced: the head stops moving = untouched
+            if (useSplice)
             {
                 // Antares-clean: on a settled held note (and its breathy stretches), blend each tuned cycle with the one
                 // before, so rasp / breath noise cancels and the note rings clean; never on hard consonants or glides
                 constexpr float ca = 0.7f;
                 const double po = juce::jlimit (16.0, 2000.0, (double) period / juce::jmax (0.25, (double) (1.0f + (ratio - 1.0f) * wetG)));
-                poS = poS <= 0.0 ? po : poS + 0.002 * (po - poS);   // the blend delay glides (a jumping delay = clicks)
+                poS = poS <= 0.0 ? po : poS + 0.01 * (po - poS);   // follows a new note within ~2 ms, so the clean blend locks its first cycles too   // the blend delay glides (a jumping delay = clicks)
                 const double rp = (double) cbW - poS; const int i0 = (int) std::floor (rp); const float t = (float) (rp - i0);
                 auto rd = [&] (const std::vector<float>& b) { return b[(size_t) (i0 & 4095)] * (1 - t) + b[(size_t) ((i0 + 1) & 4095)] * t; };
                 const float dl = rd (cbL), dr = rd (cbR);
                 cbL[(size_t) (cbW & 4095)] = wl; cbR[(size_t) (cbW & 4095)] = wr; ++cbW;
                 const bool steady = std::abs (po - poS) < 0.01 * po;
                 const float want = steady && (! consonant || breathy) && heldNote > 0 ? ca * wetG : 0.0f;
-                combG += (want - combG) * (want > combG ? (float) (1.0 / (0.03 * sr)) : 0.02f);
+                combG += (want - combG) * (want > combG ? (float) (1.0 / (0.008 * sr)) : 0.02f);
                 wl += combG * (dl - wl); wr += combG * (dr - wr);
             }
             else
@@ -2012,6 +2369,70 @@ KeyGuess findKey (const float* x, int n, double sr)
     return g;
 }
 
+// ------------------------------------------------------------ Tune Finder (plug-in)
+// listens to its insert and shows the key / scale, tempo and tuning (cents off A440); the audio passes through untouched.
+// The analysis runs on its own thread every 1.5 s, never on the audio thread.
+class TuneFinder : public BuiltinEffect, private juce::Thread
+{
+public:
+    TuneFinder() : juce::Thread ("Tune Finder") { initDefaults(); ring.assign ((size_t) (20 * aRate), 0.0f); startThread (juce::Thread::Priority::low); }
+    ~TuneFinder() override { stopThread (3000); }
+    const char* typeId() const override { return "tunefinder"; }
+    const std::vector<ParamDef>& params() const override
+    {
+        static const std::vector<const char*> keys = [] {
+            static std::vector<juce::String> names;
+            for (int sc = 0; sc < 2; ++sc) for (int r = 0; r < 12; ++r) names.push_back (KeyGuess::keyName (r, sc));
+            std::vector<const char*> v { "Listening..." };
+            for (auto& n : names) v.push_back (n.toRawUTF8());
+            return v; }();
+        static const std::vector<ParamDef> ps { { "key", "Detected key", 0, 24, 0, keys }, { "bpm", "Detected BPM", 0, 300, 0 },
+                                                { "cents", "Tuning (cents off A440)", -50, 50, 0 }, { "listen", "Listen (seconds)", 4, 20, 8 } };
+        return ps;
+    }
+    void prepare (double s, int) override { ds = juce::jmax (1, juce::roundToInt (s / aRate)); }
+    void process (juce::AudioBuffer<float>& b, int n, const PlayContext&) override
+    {
+        const juce::SpinLock::ScopedTryLockType tl (ringLock);
+        if (! tl.isLocked()) return;
+        const auto* l = b.getReadPointer (0); const auto* r = b.getNumChannels() > 1 ? b.getReadPointer (1) : l;
+        int w = wpos.load (std::memory_order_relaxed), f = filled.load (std::memory_order_relaxed);
+        for (int i = 0; i < n; ++i)
+        {
+            acc += 0.5f * (l[i] + r[i]);
+            if (++accN >= ds) { ring[(size_t) w] = acc / (float) accN; w = (w + 1) % (int) ring.size(); acc = 0; accN = 0; f = std::min (f + 1, (int) ring.size()); }
+        }
+        filled.store (f, std::memory_order_relaxed); wpos.store (w, std::memory_order_release);
+    }
+private:
+    static constexpr double aRate = 11025.0;
+    std::vector<float> ring; std::atomic<int> wpos { 0 }, filled { 0 }; int ds = 4, accN = 0; float acc = 0;
+    juce::SpinLock ringLock;   // the analyser copies under it; the audio thread only try-locks (skips a block, never waits)
+    void run() override
+    {
+        std::vector<float> buf;
+        while (! threadShouldExit())
+        {
+            wait (1500);
+            const int len = juce::jlimit (4 * (int) aRate, (int) ring.size(), (int) (p (3) * aRate));
+            const int have = filled.load();
+            if (have < 4 * (int) aRate) continue;
+            const int use = std::min (len, have), N = (int) ring.size();
+            buf.resize ((size_t) use);
+            float e = 0;
+            {
+                const juce::SpinLock::ScopedLockType sl (ringLock);   // ~1 ms copy: the audio thread skips that block's capture instead of racing it
+                const int w = wpos.load (std::memory_order_acquire);
+                for (int k = 0; k < use; ++k) { const float v = ring[(size_t) ((w - use + k + N) % N)]; buf[(size_t) k] = v; e += v * v; }
+            }
+            if (std::sqrt (e / (float) use) < 1.0e-4f) continue;   // silence: keep the last answer
+            const auto g = findKey (buf.data(), use, aRate);
+            setParamQuiet (0, (float) (1 + g.root + 12 * g.scaleIndex));
+            setParamQuiet (1, (float) g.bpm); setParamQuiet (2, g.cents);
+        }
+    }
+};
+
 // ------------------------------------------------------------ registry
 std::unique_ptr<BuiltinEffect> createStudioEffect (const juce::String& id);
 std::unique_ptr<BuiltinEffect> createPurify();
@@ -2025,17 +2446,17 @@ const std::vector<EffectInfo>& builtinEffects()
         { "strip", "Channel Strip", "Studio" }, { "steq7", "Studio EQ (12 band)", "Studio" }, { "stdyn", "Studio Dyn", "Studio" },
         { "fet76", "FET 76", "Studio" }, { "stgate", "Studio Gate/Expander", "Studio" }, { "stlimit", "Studio Limiter", "Studio" }, { "stmax", "Maximizer (multiband)", "Studio" },
         { "hhmaster", "Hum House Master", "Mastering" }, { "hhcurves", "HumHouse Curves Master (0 latency)", "Mastering" }, { "purify", "Purify (one knob)", "Mastering" }, { "satur", "Saturator", "Studio" }, { "stvocal", "Studio Vocal", "Studio" },
-        { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" },
-        { "vroom", "HumHouse Vocal Room", "Vocal" },
+        { "autopitch", "AutoPitch", "Vocal" }, { "pitchshift", "Pitch Shifter", "Vocal" }, { "centtrans", "Cent Transposer (tune a beat to 432 etc.)", "Utility" },
+        { "vroom", "HumHouse Vocal Room", "Vocal" }, { "isoroom", "HumHouse Iso Room (vocal isolation)", "Vocal" },
         { "deess", "De-Esser", "Vocal" },
         { "eq", "Para EQ", "EQ & Filter" }, { "filter", "Sweep Filter", "EQ & Filter" },
         { "comp", "Compressor", "Dynamics" }, { "limiter", "Limiter", "Dynamics" }, { "gate", "Noise Gate", "Dynamics" },
         { "pump", "Pump (Sidechain)", "Dynamics" }, { "clip", "Soft Clipper", "Dynamics" },
-        { "verb", "Room Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
-        { "phaser", "Phase Swirl", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "gain", "Gain / Pan", "Utility" },
+        { "verb", "Room Verb", "Space" }, { "chromaverb", "Drocetti Verb", "Space" }, { "delay", "Echo Tape", "Space" }, { "chorus", "Chorus", "Modulation" }, { "flanger", "Flanger", "Modulation" }, { "flangus", "Flangus", "Modulation" },
+        { "phaser", "Phase Swirl", "Modulation" }, { "hummod", "HumHouse Mod (chorus / ensemble / flanger)", "Modulation" }, { "wide", "Stereo Wide", "Utility" }, { "spreader", "Stereo Spreader (mono to stereo)", "Utility" }, { "gain", "Gain / Pan", "Utility" },
         { "grit", "Grit", "Distortion" }, { "crush", "Bit Crush", "Distortion" },
         { "hhamp", "Amp House (amp rig)", "Guitar" },
-        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" } };
+        { "glitch", "Glitch Gate", "Time FX" }, { "peakctl", "Peak Controller (link to any knob)", "Controller" }, { "scope", "Scope (wave / spectrum)", "Utility" }, { "tunefinder", "Tune Finder (key / BPM / tune)", "Utility" } };
     return fx;
 }
 
@@ -2093,15 +2514,21 @@ std::unique_ptr<BuiltinEffect> createBuiltinEffect (const juce::String& id)
     if (id == "comp") return std::make_unique<Compressor>();
     if (id == "limiter") return std::make_unique<Limiter>();
     if (id == "verb") return std::make_unique<RoomVerb>();
+    if (id == "chromaverb") return createChromaVerb();
     if (id == "delay") return std::make_unique<EchoTape>();
     if (id == "chorus") return std::make_unique<Chorus>();
     if (id == "flanger") return std::make_unique<Flanger>();
     if (id == "flangus") return std::make_unique<Flangus>();
     if (id == "pitchshift") return std::make_unique<PitchShifter>();
+    if (id == "centtrans") return std::make_unique<CentTransposer>();
+    if (id == "spreader") return std::make_unique<StereoSpreader>();
+    if (id == "hummod") return std::make_unique<HumMod>();
     if (id == "phaser") return std::make_unique<PhaseSwirl>();
     if (id == "grit") return std::make_unique<Grit>();
     if (id == "filter") return std::make_unique<SweepFilter>();
     if (id == "glitch") return std::make_unique<GlitchGate>();
+    if (id == "tunefinder") return std::make_unique<TuneFinder>();
+    if (id == "isoroom") return createIsoRoom();
     if (id == "hhmaster") return std::make_unique<HumHouseMaster>();
     if (id == "wide") return std::make_unique<StereoWide>();
     if (id == "clip") return std::make_unique<SoftClip>();

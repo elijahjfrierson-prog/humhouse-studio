@@ -1,0 +1,221 @@
+# HumHouse Studio feature log + lock
+
+Every feature the owner asked for is listed here. `scripts/feature_lock.py` (run in CI) fails the build
+if one of the locked strings below disappears from `Source/`. Remove a line only when the owner says so.
+
+## Removed on purpose (owner's call)
+- Crash protection (out-of-process plug-in sandbox toggle): removed on all platforms (2026-11-18)
+- Phone: Hum Verse, plug-in scanner, EXPORT ALL video button
+- Subscription phone app: master plug-ins, spectrums/Scope, Glitch Gate, automation, Patch Bay, Drummer, stem split
+
+## Locked (must stay in the code)
+<!-- lock: one string per line, as it appears in Source/ -->
+- lock: Set to master
+- lock: HumHouse No Latency Driver
+- lock: Drocetti Verb
+- lock: Amp House
+- lock: VID POP
+- lock: EXPORT ALL
+- lock: Shrink
+- lock: Warp Stabilizer
+- lock: Separate audio
+- lock: Find key
+- lock: Hum Verse
+- lock: Patch Bay
+- lock: HumHouse Drummer
+- lock: Split stems
+- lock: Low Latency Mode
+- lock: Recording offset
+- lock: Retro Record
+- lock: PUSH
+- lock: Cent Transposer
+- lock: Stereo Spreader
+- lock: HumHouse Mod
+- lock: Classic / Modern hold the note as firmly as Hard Tune
+- lock: Glitch Gate
+- lock: Scope
+- lock: Studio EQ
+- lock: AutoPitch
+- lock: Purify
+- lock: Audio to MIDI
+- lock: Freeze
+- lock: Plugin House
+- lock: HUMHOUSE VIEW
+- lock: Stem Splitter
+- lock: InSequence
+- lock: Key Finder
+- lock: Peak Controller
+- lock: Patch Method
+- lock: Templates
+- lock: Auto-backup
+- lock: Typing keyboard
+- lock: Multithreaded mixer
+- lock: Smart disable
+- lock: RAM disk cache
+- lock: Bezier
+- lock: Metronome
+- lock: Color wheel
+- lock: Speed ramp
+- lock: Optical
+- lock: Low Latency
+- lock: Flex-Tune
+- lock: Harmony
+- lock: Coat (vocal compression)
+- lock: PAGE
+- lock: Templates on this phone
+- lock: Tune Finder
+- lock: Recording offset slider
+- lock: Iso Room
+- lock: AUDIO CLIPS
+- lock: BEAT PATTERNS
+- lock: always closable, also while streaming
+- lock: HumHouse Grand/HumHouse Grand.hhkeys
+- lock: class KeysInstrument
+- lock: Show in Finder (the clip's audio file)
+- lock: Set to: HumHouse
+- lock: dawKeyPresets
+- lock: Tune Finder: key / BPM / tune of this clip
+- lock: Tune Finder: key / BPM / tune of the selected clip
+- lock: selection is UI only: no engine copy per mouse move
+- lock: any HumHouse template zip
+- lock: juce::String unreadableReason
+- lock: void claimFileTypes()
+- lock: name, knobs, boxes: the menu opens right away
+- lock: HumHouse Drummer (turn this track into drums)
+- lock: Drummer section the Drummer rows show and edit
+- lock: first edit keeps what the drummer was playing
+- lock: every clip lands at bar 4 + its own offset, never rounded
+- lock: one exact rule for 1 or 500 clips
+- lock: follow: no page jumps
+- lock: moves on the next screen refresh: many trackpad events in one frame cost one redraw
+- lock: else two screens
+- lock: Background picture (behind the UI, from Downloads)
+- lock: phone: compact fixed tracks
+- lock: phone slim list: name + R M S; swipe right for the rest
+- lock: the arrow handle on the track list
+- lock: the pop-out opens inside it (pop Mixer)
+
+## No Hitch Policy (owner's word)
+A **hitch** = any frame where the UI stalls, jumps, pastes in / redraws all at once, or skips instead of moving smoothly (scrolling, follow-playhead, zoom, selection, meters, recording). Every hitch is a bug: big drawing jobs are split into small pieces done ahead of time, never in one frame.
+- lock: No Hitch (Logic / Pro Tools tiled backing store)
+- lock: phone portrait: 2 rows so every tool icon shows
+- lock: phone: start / play / stop / record in the bottom middle
+- lock: R M S L N, knobs, boxes, the gaps: the whole bar opens the track menu
+- lock: BEAT / REC / MIX: one tap each
+- lock: Quick Punch: back to the first bar of the last take
+- lock: phone transport: as tall as a track, easy to hit
+- lock: No Hitch screen clock (FL / Logic)
+- lock: a newer push to the same PR cancels the older, now-outdated build
+- lock: Build cache: files that didn't change since the last run aren't compiled again
+- lock: only the ruler + clips slide
+- lock: CADisableMinimumFrameDurationOnPhone
+- lock: bgPicture pre-scaled to the window (No Hitch)
+- lock: Poly (glide multiple notes)
+- lock: no redraw until it moves a quarter pixel
+- lock: whole frame painted: no stale picture shows around a plug-in view
+- lock: the frame never asks for more than the screen holds
+- lock: FL-style: a plug-in window reopens where you left it, and never sits off screen
+- lock: several plug-ins open: cascade, never stacked exactly
+- lock: paste / copy spot: the blue playhead you see
+- lock: one-shots / kit samples are always glued in
+- lock: Phone: a hold is a drag (it used to delete the dot you were moving)
+- lock: clip bar: STAMP / PAINT only (copy / paste)
+- lock: phone: finger-sized fade / edge zones
+- lock: phone: an automation clip slides along its own track
+- lock: instant: a click / seek / restart more than ~60 ms off jumps straight there
+- lock: a note anywhere inside the step's slot lights it
+- lock: paste spot: song mode with the playhead past this pattern's clips used to give -1
+- lock: Bluetooth / output-only devices have no inputs (in may be null)
+- lock: every song carries all its audio (clips, takes, imports, one-shots, frozen tracks)
+- lock: Scroll Engine: wheel, trackpad, scrollbars and finger pans only set a target
+- lock: every track bar at its song height; up / down scroll moves only this one component
+- lock: a cached picture: scrolling slides it, knobs and buttons aren't redrawn
+- lock: strips as tall as the whole song when the memory budget allows
+- lock: O(1) per frame: the full song hash only runs when the song
+- lock: Frame meter (Options menu)
+- lock: audio deadline meter: device callback time / buffer period, 2.5% buckets
+- lock: just the %, no late count
+- lock: the header is a cached picture: redraw it only when what paint() shows changed
+- lock: the name gets every pixel the right-hand note doesn't use, and wraps / shrinks instead of being cut off
+- lock: OBS / screen capture can't throttle our refreshes or the UI thread
+- lock: frame p50
+- lock: Zoom Engine: pinch / Cmd+wheel / buttons set a target zoom
+- lock: Zoom Engine (no stalls): mid-zoom the strips stretch; past 1.25x either way a new set at the current zoom is drawn
+- lock: one strip a refresh once the zoom stops, never mid-zoom
+- lock: a hidden comp take is never pasted
+- lock: subscription phone: no HumWave
+- lock: subscription phone: no Drocetti Verb, Studio Vocal, HumHouse Vocal Room
+- lock: Zoom around the playhead (else the pointer)
+- lock: audio: no device callbacks
+- lock: Neon 3D look (HumHouse future)
+- lock: Neon 3D: a lit glass dome on a dark well, the value arc glows
+- lock: Neon 3D: a raised glass key, lit from above
+- lock: Neon 3D: every page panel sits in a thin lit frame
+- lock: Neon 3D: the playhead glows
+- lock: Neon 3D: glossy clip, lit title strip, glowing rim
+- lock: Neon 3D: glass dropdown with a lit rim and chevron
+- lock: Neon 3D: lit groove and a glass fader cap
+- lock: Neon 3D: the open tab is a lit glass pill
+- lock: Neon 3D: purple-lit LANES cards
+- lock: Neon 3D: lit meter housing
+- lock: Neon 3D: dark glass menu with a lit rim
+- lock: Neon 3D: every FX window sits in a lit frame
+- lock: Neon 3D sparks: a fixed pool (no allocation)
+- lock: Neon 3D: a boosted / cut band throws sparks while audio runs
+- lock: Neon 3D: glossy lit spectrum
+- lock: Neon 3D: specular shine on the curve
+- lock: Neon 3D materials (iron look): brushed gunmetal, chrome bevels, recessed wells, purple seams
+- lock: Neon 3D iron: brushed gunmetal key with a chrome bevel
+- lock: Neon 3D iron: machined cap, concentric turning rings + anisotropic sheen + chrome rim
+- lock: Neon 3D iron: brushed gunmetal top bar
+- lock: Neon 3D iron: graphs sit in a recessed screen
+- lock: Neon 3D iron: FX faceplate
+- lock: Neon 3D iron: meter in a recessed slot
+- lock: Neon 3D iron: each strip is a brushed gunmetal module
+- lock: Neon 3D iron: dropdown sits in a recessed slot
+- lock: Neon 3D iron: each track header is a brushed gunmetal module
+- lock: Neon 3D iron: browser side panel in brushed gunmetal
+- lock: Neon 3D: purple glossy spectrum, lit edge + specular shine
+- lock: Neon 3D: halo + bright core + specular shine
+- lock: Neon 3D: curve glows in the chosen color / gradient
+- lock: col::gradCustom = t.size() == 3;
+- lock: layouts saved before Neon keep the current Neon setting
+- lock: void resaveLayout (Studio& s)
+- lock: the Neon look it opened with is saved too
+- lock: copy to playhead marker: one click, same paste path as the keys
+- lock: songEnd + juce::jmax (0, playbackDelay.load())
+- lock: if (quietRun >= quietNeeded) break;
+- lock: if (! ok) file.deleteFile();
+- lock: " stems") + " ...", true, true, -1)
+- lock: Can't open the Exports folder in Files.
+- lock: trackpadZoomTau
+- lock: struct SwipeLock
+- lock: phone: touching the fader to scroll never jumps the volume
+- lock: plug-in windows always stay in front of it
+- lock: phone menu covers the page: no Channel Rack / panel frame drawn over it
+- lock: phone: X on each song deletes it (asks first)
+- lock: phone: tap = hear it, hold ~0.35 s then move = drag it
+- lock: phone: slide the FX box closed to see more of the mixer
+- lock: on iPhone a Files folder is copied into the app first (JUCE drops its access)
+- lock: phone: panels always dock into the page (no floating windows to lose behind it)
+- lock: close every open window (OBS: one key, from any window)
+- lock: anti-ring monitor gate
+- lock: the gain only rises on a real voice (> -40 dBFS)
+- lock: a section with your STEPS is yours for every drum
+- lock: a tab never keeps focus
+- lock: until you slide it, the FX box follows the screen
+- lock: a disk stall while OBS records never drops take samples
+- lock: a VST instrument that outputs NaN / inf must never silence the whole Master
+- lock: macOS puts its purple capture badge over the native red / yellow / green
+- lock: stacked / covered windows cost little while streaming
+- lock: a minimized window stays minimized
+- lock: costs one image copy per control
+- lock: a long take never turns into a full Playlist redraw every frame
+- lock: loading waveforms redraw the clips 4x a second, not on every chunk
+- lock: no frame of a zoom draws a clip
+- lock: the click that brings HumHouse to the front never moves the playhead
+- lock: Route to REC track / Mixer...
+- lock: AUTO SNAP
+- lock: Subscription iPhone app: no Sonic Store
+- lock: TAPE STOP (fade out)
+- lock: SPEED UP (fade in)

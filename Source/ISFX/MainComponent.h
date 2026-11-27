@@ -37,7 +37,16 @@ public:
     double positionSeconds() const { return ticksToSec (player.isPlaying() ? player.position() : st.playhead); }
     juce::File songFile() const;
     struct TrackRender { juce::String name; juce::File file; double seconds = 0; };
-    std::vector<TrackRender> renderTracks (const juce::File& dir);   // each audible track with sound -> its own stereo WAV
+    std::vector<TrackRender> renderTracks (const juce::File& dir);
+    // Route to REC: one track's sound -> WAV on a background thread (the UI never waits); done (seconds, 0 = no sound) on the message thread
+    void renderTrackAsync (int track, const juce::File& f, std::function<void (double seconds)> done);
+    const Sequence& sequence() const { return st.project.seq(); }
+    void setTrackRoute (int track, int lane, int insert = -1);   // insert -1 keeps the track's insert
+    juce::StringArray trackSignatures() const;   // per track: its clips + mute as JSON (what a routed render depends on)
+    std::function<bool (const juce::String& routeKey)> routedOnHost;   // the open REC song has this track's clip
+    void refreshPlayback();                      // REC started/stopped mid-play: re-pick which tracks VIDEO plays itself
+    Sequence playbackSequence() const;           // tracks routed to REC are heard from REC, not twice
+    std::function<void (int track)> onTrackLink;   // right-click an audio track header   // each audible track with sound -> its own stereo WAV
     struct ClipRender { juce::String name; juce::File file; double start = 0, seconds = 0; int track = 0; };
     std::vector<ClipRender> renderClips (const juce::File& dir, bool selectedOnly);   // PUSH: each clip with sound -> WAV at its timeline spot
     bool hasSelection() const { return ! st.selected.isEmpty(); }
@@ -118,7 +127,7 @@ private:
     juce::TextButton fileBtn { "File" }, saveBtn { "Save" }, importBtn { "Import" }, presetsBtn { "Presets" },
         pluginsBtn { "Plug-ins" }, playBtn { "Play" }, exportBtn { "EXPORT" },
         toolBtn[4] { juce::TextButton ("E Select"), juce::TextButton ("P Paint"), juce::TextButton ("D Delete"), juce::TextButton ("C Cut") },
-        snapBtn { "S Snap" }, rippleBtn { "R Ripple" }, magnetBtn { "Magnet" }, gridBtn { "B Grid" }, chopBtn { "CHOP" }, genBtn { "GENERATE 3 EDITS" }, randBtn { "RANDOMIZE" }, seqBtn { "SEQ" },
+        snapBtn { "AUTO SNAP" }, rippleBtn { "R Ripple" }, magnetBtn { "Magnet" }, gridBtn { "B Grid" }, chopBtn { "CHOP" }, genBtn { "GENERATE 3 EDITS" }, randBtn { "RANDOMIZE" }, seqBtn { "SEQ" },
         keepBtn { "Keep range" }, delRangeBtn { "Delete range" }, zoomIn { "+" }, zoomOut { "-" };
     juce::ComboBox seqBox, aspectBox, snapBox, chopBox, styleBox;
     juce::Label status;

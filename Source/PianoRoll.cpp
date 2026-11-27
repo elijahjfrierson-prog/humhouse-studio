@@ -86,7 +86,7 @@ public:
         setWantsKeyboardFocus (true);
         scrollY = (127 - 84) * rowH;
         refresh();
-        startTimerHz (30);
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { timerCallback(); });   // no-skip: playhead on every screen refresh, not a 30 Hz timer
     }
     ~PianoRoll() override { s.removeChangeListener (this); }
 
@@ -640,7 +640,7 @@ public:
         }
         if (is ('v', cmd) && ! clipboard().empty())
         {
-            const double ph = markerLocal();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
+            const double ph = pasteSpot();   // the marker you set (no wrap at the pattern end, works in song mode), else the playhead
             double at = juce::jmax (0.0, ph);   // exactly on the marker, never re-snapped back
             double first = 1e9;
             for (auto& n : clipboard()) first = std::min (first, n.start);
@@ -844,6 +844,24 @@ private:
         return local;
     }
     double markerLocal() const { return dropValid() ? dropAt : playheadLocal(); }
+    // paste spot: song mode with the playhead past this pattern's clips used to give -1 -> the paste landed at beat 0;
+    // now it is measured from the last clip of this pattern before the playhead (the pattern grows to reach it).
+    // Exactly where the playhead is, never rounded to the grid.
+    double pasteSpot() const
+    {
+        if (dropValid()) return dropAt;
+        auto& p = s.p();
+        double at = playheadLocal();
+        if (at < 0.0)
+        {
+            const double pos = s.engine.positionBeats();
+            at = pos;
+            double best = -1.0;
+            for (auto& c : p.clips)
+                if (c.patternIndex == p.currentPattern && c.start <= pos && c.start > best) { best = c.start; at = pos - c.start + juce::jmax (0.0, c.patOffset); }
+        }
+        return juce::jmax (0.0, at);
+    }
     bool dropValid() const { return dropAt >= 0.0 && ! s.engine.isPlaying() && std::abs (s.engine.positionBeats() - dropPos) < 1.0e-6; }
     void drawPlayhead (juce::Graphics& g, juce::Rectangle<int> ga)
     {
@@ -962,12 +980,13 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const bool playing = s.engine.isPlaying();
         if (playing || wasPlaying) repaint (keyW, barH, getWidth() - keyW, getHeight() - barH);   // grid + ruler + velocity only, not the toolbar / keyboard
         wasPlaying = playing;
     }
     bool wasPlaying = false;
+    std::unique_ptr<juce::VBlankAttachment> vblank;
 };
 }
 

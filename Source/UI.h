@@ -14,25 +14,135 @@ inline constexpr bool phoneUI = true;    // touch layout: wrapping top bar, one 
 #else
 inline constexpr bool phoneUI = false;
 #endif
-// phone: a panel bigger than the screen goes in a finger-scrolled view instead of being cut off (desktop: unchanged)
+// phone: a finger that lands on a fader / knob and swipes mostly sideways is scrolling the page, not moving the value
+struct SwipeLock
+{
+    int mode = 1;   // 0 undecided, 1 value, 2 scroll
+    void down() { mode = phoneUI ? 0 : 1; }
+    bool allows (const juce::MouseEvent& e)
+    {
+        if (mode == 0)
+        {
+            const auto d = e.getOffsetFromDragStart();
+            if (std::abs (d.x) + std::abs (d.y) < 8) return false;
+            mode = std::abs (d.x) > std::abs (d.y) ? 2 : 1;
+        }
+        return mode == 1;
+    }
+};
+// phone: a tab on a side panel's edge: drag it to slide the panel open / closed, tap toggles (like the Playlist track list)
+struct EdgeSlide : juce::Component
+{
+    std::function<int()> width; std::function<void (int, bool)> set; int full = 280; bool panelOnRight = true;
+    int w0 = 0; bool moved = false;
+    void paint (juce::Graphics& g) override
+    {
+        const bool open = width && width() > 60;
+        g.setColour (juce::Colour (0xff2a2d36)); g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+        g.setColour (juce::Colour (0xffb070ff)); g.setFont (juce::FontOptions (16.0f, juce::Font::bold));
+        g.drawText (panelOnRight == open ? ">" : "<", getLocalBounds(), juce::Justification::centred);
+    }
+    int delta (const juce::MouseEvent& e) const { return e.getDistanceFromDragStartX() * (panelOnRight ? -1 : 1); }
+    void mouseDown (const juce::MouseEvent&) override { w0 = width ? width() : 0; moved = false; }
+    void mouseDrag (const juce::MouseEvent& e) override { if (std::abs (e.getDistanceFromDragStartX()) > 4) moved = true; if (moved && set) set (w0 + delta (e), false); }
+    void mouseUp (const juce::MouseEvent& e) override { if (! set) return; if (moved) set (w0 + delta (e), true); else set (w0 > 60 ? 0 : full, true); }
+};
+#if JUCE_IOS
+bool hhsCopyPickedFolder (void* bookmark, const char* urlString, const char* destPath);   // IosRoute.mm
+#endif
+// the folder a chooser picked, readable: on iPhone a Files folder is copied into the app first (JUCE drops its access)
+inline juce::File pickedFolder (const juce::FileChooser& fc)
+{
+   #if JUCE_IOS
+    auto urls = fc.getURLResults();
+    if (urls.isEmpty()) return {};
+    auto u = urls[0];
+    const auto local = u.getLocalFile();
+    if (local.isAChildOf (juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)) && local.isDirectory()) return local;
+    auto name = juce::File::createLegalFileName (juce::URL::removeEscapeChars (u.getFileName()));
+    if (name.isEmpty()) name = "Kit";
+    const auto dest = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Kits").getNonexistentChildFile (name, {}, false);   // same name twice: a new folder, the first kit stays
+    if (hhsCopyPickedFolder (getURLBookmark (u), u.toString (false).toRawUTF8(), dest.getFullPathName().toRawUTF8()) && dest.isDirectory()) return dest;
+    return {};
+   #else
+    return fc.getResult();
+   #endif
+}
+#if JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
+inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
+#else
+inline constexpr bool phoneLite = false;
+#endif
+// built-in effects offered in the Plugin House menus (old projects still load every effect)
+inline bool fxOffered (const juce::String& id, const juce::String& category)
+{
+    if (phoneUI && id == "hhamp") return false;   // amp rig is desktop only
+    return ! phoneLite || ! (category == "Mastering" || id == "stmax" || id == "glitch" || id == "scope"
+                             || id == "chromaverb" || id == "stvocal" || id == "vroom");   // subscription phone: no Drocetti Verb, Studio Vocal, HumHouse Vocal Room
+}
+// phone: two fingers pinch-zoom whatever is inside (plug-in windows, dialogs); one finger still works the controls,
+// a drag scrolls once it's bigger than the screen. Takes ownership of c.
+class PinchZoomView : public juce::Viewport
+{
+public:
+    PinchZoomView (juce::Component* c, int maxW, int maxH) : content (c)
+    {
+        holder.addAndMakeVisible (c);
+        setViewedComponent (&holder, false);
+        setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+        holder.addMouseListener (&pinch, true);
+        c->addComponentListener (&pinch);
+        apply (1.0f);
+        setSize (juce::jmin (c->getWidth(), maxW), juce::jmin (c->getHeight(), maxH));
+    }
+    ~PinchZoomView() override { content->removeComponentListener (&pinch); holder.removeMouseListener (&pinch); setViewedComponent (nullptr, false); }
+    void apply (float z)
+    {
+        zoom = juce::jlimit (0.5f, 3.0f, z);
+        content->setTransform (juce::AffineTransform::scale (zoom));
+        content->setTopLeftPosition (0, 0);
+        holder.setSize (juce::roundToInt ((float) content->getWidth() * zoom), juce::roundToInt ((float) content->getHeight() * zoom));
+    }
+private:
+    struct Pinch : juce::MouseListener, juce::ComponentListener
+    {
+        explicit Pinch (PinchZoomView& o) : v (o) {}
+        PinchZoomView& v; juce::Point<float> p[2]; bool down[2] {}, busy = false; float d0 = 1.0f, z0 = 1.0f;
+        juce::Point<float> at (const juce::MouseEvent& e) const { return e.getEventRelativeTo (&v).position; }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            const int i = e.source.getIndex(); if (i > 1) return;
+            p[i] = at (e); down[i] = true;
+            if (down[0] && down[1]) { d0 = juce::jmax (20.0f, p[0].getDistanceFrom (p[1])); z0 = v.zoom; }
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            const int i = e.source.getIndex(); if (i > 1) return;
+            p[i] = at (e);
+            if (down[0] && down[1]) v.apply (z0 * juce::jmax (20.0f, p[0].getDistanceFrom (p[1])) / d0);
+        }
+        void mouseUp (const juce::MouseEvent& e) override { const int i = e.source.getIndex(); if (i <= 1) down[i] = false; }
+        void componentMovedOrResized (juce::Component&, bool, bool resized) override { if (resized && ! busy) { busy = true; v.apply (v.zoom); busy = false; } }
+    };
+    std::unique_ptr<juce::Component> content;
+    juce::Component holder;
+    Pinch pinch { *this };
+    float zoom = 1.0f;
+};
+// phone: every panel goes in a pinch-zoom view, finger-scrolled when it's bigger than the screen (desktop: unchanged)
 inline juce::Component* fitToScreen (juce::Component* c)
 {
     if (! phoneUI || c == nullptr) return c;
     const auto* d = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
     if (d == nullptr) return c;
-    const int maxW = d->userArea.getWidth() - 8, maxH = d->userArea.getHeight() - 60;   // room for the title bar
-    if (c->getWidth() <= maxW && c->getHeight() <= maxH) return c;
-    auto* v = new juce::Viewport();
-    v->setViewedComponent (c, true);
-    v->setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
-    v->setSize (juce::jmin (c->getWidth() + v->getScrollBarThickness(), maxW), juce::jmin (c->getHeight(), maxH));
-    return v;
+    return new PinchZoomView (c, d->userArea.getWidth() - 8, d->userArea.getHeight() - 60);   // room for the title bar
 }
 // a finger / mouse is still dragging somewhere (touch can slide off a knob, so isMouseButtonDown() goes false mid-drag)
 void pumpPendingPaints();   // paints held-back windows every screen refresh (PaintPump.cpp)
 inline bool touchHeld() { return juce::Desktop::getInstance().getNumDraggingMouseSources() > 0; }
 // phone clipboard: a tap on the timeline asks MainComponent where to pop the CLIPBOARD drop button (true = armed, tap taken)
 inline std::function<bool (juce::Component*, juce::Point<int>)> phoneTapHook;
+inline std::function<void()> tuneFinderHook;   // Tune Finder on the selected clip (set by the Playlist)
 inline juce::Component* phoneClipTarget = nullptr;   // after COPY: any tap on this editor (even on a note / clip) picks the drop spot
 // phone: a double tap acts like a right-click (track / clip / channel menus)
 inline juce::MouseEvent asRightClick (const juce::MouseEvent& e)
@@ -49,6 +159,7 @@ namespace col
         rec (0xffff3b57), good (0xff3ddc84), scale (0xff1a2721), root (0xff21392d);
     inline int laneMinH = 60;                               // Layout: smallest Playlist track height
     inline bool lightMode = false;                          // White theme: light backgrounds, dark text
+    inline bool neon = true;                                // Neon 3D look (default): deep blue-black, glowing 3D knobs / buttons, glass-prism House
     inline juce::Colour fontColour (0x00000000);            // custom text color (transparent = automatic)
     // meters + scopes gradient (quiet -> loud), set in Theme
     inline juce::Colour gradLo (0xff3ddc84), gradMid (0xffffd23d), gradHi (0xffff3b57);
@@ -65,6 +176,100 @@ namespace col
         juce::ColourGradient gr (gradHi.withMultipliedAlpha (alpha), x, yTop, gradHi.withMultipliedAlpha (alpha), x, yBottom, false);
         gr.addColour (0.22, gradMid.withMultipliedAlpha (alpha)); gr.addColour (0.5, gradLo.withMultipliedAlpha (alpha)); gr.addColour (0.78, gradMid.withMultipliedAlpha (alpha));
         return gr;
+    }
+    // Neon 3D materials (iron look): brushed gunmetal, chrome bevels, recessed wells, purple seams.
+    // The brushed grain is generated once into a small tile and reused, so a panel costs one image fill.
+    inline const juce::Image& brushedTile()
+    {
+        static juce::Image img;
+        if (img.isNull())
+        {
+            img = juce::Image (juce::Image::ARGB, 512, 64, true);
+            juce::Random rng (0x484855);
+            juce::Image::BitmapData d (img, juce::Image::BitmapData::writeOnly);
+            float row = 0.0f;
+            for (int y = 0; y < img.getHeight(); ++y)
+            {
+                row = row * 0.55f + (rng.nextFloat() - 0.5f) * 0.45f;
+                float nx = 0.0f;
+                for (int x = 0; x < img.getWidth(); ++x)
+                {
+                    nx = nx * 0.93f + (rng.nextFloat() - 0.5f) * 0.3f;
+                    const float v = row + nx;
+                    d.setPixelColour (x, y, (v > 0 ? juce::Colours::white : juce::Colours::black).withAlpha (juce::jmin (1.0f, std::abs (v)) * 0.14f));
+                }
+            }
+        }
+        return img;
+    }
+    inline juce::uint64 mix (juce::uint64 h, juce::uint64 v) { return (h ^ v) * 0x100000001b3ull; }
+    // Static layers (knob bodies, metal keys) are drawn once per size / colour / screen scale into an image and blitted
+    // after that, so a full repaint (scrolling, stacked windows while streaming) costs one image copy per control.
+    inline void drawCached (juce::Graphics& g, juce::Rectangle<float> area, juce::uint64 key,
+                            const std::function<void (juce::Graphics&, juce::Rectangle<float>)>& draw)
+    {
+        static std::unordered_map<juce::uint64, juce::Image> cache;
+        const float px = g.getInternalContext().getPhysicalPixelScaleFactor();
+        const float x0 = std::floor (area.getX()), y0 = std::floor (area.getY());
+        const auto local = area.translated (-x0, -y0);
+        const int w = (int) std::ceil (local.getRight()), h = (int) std::ceil (local.getBottom());
+        if (w <= 0 || h <= 0 || w > 1024 || h > 256 || px <= 0.0f || px > 4.0f) { draw (g, area); return; }
+        key = mix (mix (mix (mix (key, (juce::uint64) w), (juce::uint64) h), (juce::uint64) juce::roundToInt (px * 100.0f)),
+                   (juce::uint64) (juce::roundToInt (local.getX() * 8.0f) * 64 + juce::roundToInt (local.getY() * 8.0f)));
+        static size_t bytes = 0;   // dragging the color wheel makes new images per accent: old ones go once 16 MB is used
+        const int iw = juce::roundToInt ((float) w * px), ih = juce::roundToInt ((float) h * px);
+        if (bytes > ((size_t) 16 << 20) && cache.find (key) == cache.end()) { cache.clear(); bytes = 0; }
+        auto& img = cache[key];
+        if (img.isNull())
+        {
+            img = juce::Image (juce::Image::ARGB, iw, ih, true);
+            bytes += (size_t) iw * (size_t) ih * 4;
+            juce::Graphics ig (img);
+            ig.addTransform (juce::AffineTransform::scale (px));
+            draw (ig, local);
+        }
+        g.setOpacity (1.0f);
+        g.drawImage (img, juce::Rectangle<float> (x0, y0, (float) w, (float) h));
+    }
+    inline void metal (juce::Graphics& g, juce::Rectangle<float> r, float corner, float lift = 0.0f)   // brushed gunmetal lit from above, chrome bevel
+    {
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2b2f3c).brighter (lift), 0.0f, r.getY(), juce::Colour (0xff0b0d14), 0.0f, r.getBottom(), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setTiledImageFill (brushedTile(), 0, 0, 1.0f); g.fillRoundedRectangle (r, corner);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::white.withAlpha (0.38f), 0.0f, r.getY(), juce::Colours::black.withAlpha (0.6f), 0.0f, r.getBottom(), false));
+        g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+        g.setColour (juce::Colours::white.withAlpha (0.22f)); g.drawLine (r.getX() + corner + 1.0f, r.getY() + 1.5f, r.getRight() - corner - 1.0f, r.getY() + 1.5f, 1.0f);
+    }
+    inline void well (juce::Graphics& g, juce::Rectangle<float> r, float corner)   // recessed cavity: inner shadow under the lip, lit lower lip
+    {
+        g.setColour (juce::Colour (0xff030409)); g.fillRoundedRectangle (r, corner);
+        g.setGradientFill (juce::ColourGradient (juce::Colours::black.withAlpha (0.85f), 0.0f, r.getY(), juce::Colours::transparentBlack, 0.0f, r.getY() + juce::jmin (10.0f, r.getHeight() * 0.4f), false));
+        g.fillRoundedRectangle (r, corner);
+        g.setColour (juce::Colours::white.withAlpha (0.13f)); g.drawLine (r.getX() + corner, r.getBottom() - 0.5f, r.getRight() - corner, r.getBottom() - 0.5f, 1.0f);
+        g.setColour (juce::Colours::black.withAlpha (0.7f)); g.drawRoundedRectangle (r.reduced (0.5f), corner, 1.0f);
+    }
+    inline bool gradCustom = false;   // a spectrum gradient was picked in Theme: neon lines glow in it instead of the accent
+    inline void neonFill (juce::Graphics& g, float yTop, float yBottom)   // Neon 3D: area under a curve, lit in the chosen color / gradient
+    {
+        if (gradCustom) g.setGradientFill (levelGradient (0.0f, yTop, yBottom, 0.5f));
+        else g.setGradientFill (juce::ColourGradient (accent.withAlpha (0.55f), 0.0f, yTop, accent.withAlpha (0.03f), 0.0f, yBottom, false));
+    }
+    inline void neonLine (juce::Graphics& g, const juce::Path& p, float yTop, float yBottom, float core = 1.6f)   // Neon 3D: halo + bright core + specular shine
+    {
+        auto paint = [&] (float alpha, float brighten)
+        {
+            if (gradCustom) { auto gr = levelGradient (0.0f, yTop, yBottom, alpha); for (int i = 0; i < gr.getNumColours(); ++i) gr.setColour (i, gr.getColour (i).brighter (brighten)); g.setGradientFill (gr); }
+            else g.setColour (accent.brighter (brighten).withAlpha (alpha));
+        };
+        paint (0.10f, 0.0f); g.strokePath (p, juce::PathStrokeType (core * 5.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        paint (0.28f, 0.1f); g.strokePath (p, juce::PathStrokeType (core * 2.4f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        paint (1.0f, 0.35f); g.strokePath (p, juce::PathStrokeType (core, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.setColour (juce::Colours::white.withAlpha (0.45f)); g.strokePath (p, juce::PathStrokeType (core * 0.4f), juce::AffineTransform::translation (0.0f, -0.6f));
+    }
+    inline void seam (juce::Graphics& g, juce::Rectangle<float> r, float corner)   // purple light leaking from a panel seam
+    {
+        g.setColour (accent.withAlpha (0.12f)); g.drawRoundedRectangle (r.expanded (1.5f), corner + 1.5f, 3.0f);
+        g.setColour (accent.withAlpha (0.7f)); g.drawRoundedRectangle (r, corner, 1.0f);
     }
     // font gradient (Theme > Font: Gradient): headline text gets a left-to-right lo -> mid -> hi fill
     inline bool fontGradient = false;
@@ -200,6 +405,18 @@ inline void makeCaptureFriendly (juce::Component& c)
    #endif
 }
 
+// Options > HumHouse title bars (default on): pop-out windows draw their own title bar with a red X and a blue minimize.
+// While OBS / screen capture records a window, macOS puts its purple capture badge over the native red / yellow / green
+// buttons, so a native title bar can't be closed or minimized while streaming. Must run before the window is on screen.
+bool& humhouseTitleBars();
+inline void useHumHouseTitleBar (juce::DocumentWindow& w, int buttons = juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton)
+{
+    if (phoneUI || ! humhouseTitleBars()) return;
+    w.setUsingNativeTitleBar (false);
+    w.setTitleBarHeight (30);
+    w.setTitleBarButtonsRequired (buttons, false);
+}
+
 // Pop-out Mixer / plug-in windows float over the app. On macOS a real "always on top" (floating level) window is hidden
 // from OBS / screen-capture window lists, so there they stay normal windows and are raised above the app after each click.
 #if JUCE_MAC
@@ -207,6 +424,10 @@ inline constexpr bool floatWithTopmost = false;
 #else
 inline constexpr bool floatWithTopmost = true;
 #endif
+// Frame meter (Options menu): frame time, refresh interval and dropped frames on the Playlist, to measure hitches
+inline std::atomic<bool>& frameMeterOn() { static std::atomic<bool> on { false }; return on; }
+inline std::atomic<bool>& playheadLock() { static std::atomic<bool> on { false }; return on; }   // Playlist: only the ruler moves the playhead
+inline std::atomic<bool>& zoomAtPlayhead() { static std::atomic<bool> on { false }; return on; }   // Playlist zoom anchors on the playhead instead of the pointer
 // horizontal scroll bar for the Playlist / Piano Roll (drag it, or use the wheel)
 struct HScroll : juce::ScrollBar, juce::ScrollBar::Listener
 {
@@ -233,16 +454,43 @@ inline void setOnTopSafely (juce::Component& c, bool onTop)
 inline void markFloating (juce::Component& c) { c.getProperties().set ("hhsFloat", true); }
 #if JUCE_MAC
 void joinFullScreen (juce::Component&);   // MacWindows.mm: pop-outs / plug-in windows live inside the app's full-screen space
+void keepUiResponsive();                   // MacWindows.mm: no App Nap / timer coalescing, UI thread at user-interactive QoS (OBS)
+void claimFileTypes();                     // MacWindows.mm: double-clicked .hhs / .hhpack / .hhpreset / .hhchain open in THIS app, not an older copy
+bool windowHidden (juce::Component&);     // MacWindows.mm: its window is fully covered / on another space: nothing of it can be seen
 #else
+inline bool windowHidden (juce::Component&) { return false; }
 inline void joinFullScreen (juce::Component&) {}
+inline void claimFileTypes() {}
+inline void keepUiResponsive() {}
 #endif
+// live views: stacked / covered windows cost little while streaming. Minimized = no drawing; a fully covered macOS window
+// still draws at ~30 fps, because an OBS Window Capture keeps showing it.
+inline bool drawsOnScreen (juce::Component& c)
+{
+    if (! c.isShowing()) return false;
+    if (auto* p = c.getPeer(); p != nullptr && p->isMinimised()) return false;
+    if (! windowHidden (c)) return true;
+    const int now = (int) juce::Time::getMillisecondCounter(), prev = c.getProperties()["hhsDrawMs"];
+    if (now - prev < 30) return false;
+    c.getProperties().set ("hhsDrawMs", now);
+    return true;
+}
 inline bool isFloating (juce::Component* c) { return c != nullptr && (bool) c->getProperties().getWithDefault ("hhsFloat", false); }
 inline void raiseFloatingWindows()
 {
+    // Mixer / tool windows first, plug-in windows after them, the one being worked in last: a plug-in never drops behind the Mixer
     auto& d = juce::Desktop::getInstance();
-    for (int i = 0; i < d.getNumComponents(); ++i)
-        if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent())
-        { joinFullScreen (*c); c->toFront (false); }
+    juce::Component* active = nullptr;
+    if (auto* f = juce::Component::getCurrentlyFocusedComponent()) active = f->getTopLevelComponent();
+    // a focused Mixer / tool window is raised above the other tool windows only: plug-in windows always stay in front of it
+    for (int pass = 0; pass < 4; ++pass)
+        for (int i = 0; i < d.getNumComponents(); ++i)
+            if (auto* c = d.getComponent (i); isFloating (c) && c->isVisible() && ! c->isCurrentlyBlockedByAnotherModalComponent()
+                && ! (c->getPeer() != nullptr && c->getPeer()->isMinimised()))   // a minimized window stays minimized
+            {
+                const bool plug = c->getProperties().contains ("noHold");
+                if (pass == (plug ? 2 : 0) + (c == active ? 1 : 0)) { joinFullScreen (*c); c->toFront (false); }
+            }
 }
 inline void updateFloating (juce::Component& c)
 {
@@ -262,6 +510,7 @@ inline juce::DocumentWindow* openToolWindow (const juce::String& title, juce::Co
     };
     auto* w = new W (title);
     w->setUsingNativeTitleBar (true);
+    useHumHouseTitleBar (*w);
     w->setContentOwned (content, true);
     w->setResizable (resizable, false);
     w->centreWithSize (w->getWidth(), w->getHeight());
@@ -383,6 +632,10 @@ public:
     void drawTabbedButtonBarBackground (juce::TabbedButtonBar&, juce::Graphics&) override;
     void drawTabAreaBehindFrontButton (juce::TabbedButtonBar&, juce::Graphics&, int w, int h) override;   // phone: a bit bigger
     juce::Font getPopupMenuFont() override;
+    juce::Button* createDocumentWindowButton (int buttonType) override;   // HumHouse title bars: red X close, blue minimize
+    void drawDocumentWindowTitleBar (juce::DocumentWindow&, juce::Graphics&, int w, int h, int titleSpaceX, int titleSpaceW,
+                                     const juce::Image* icon, bool drawTitleTextOnLeft) override;
+    void drawPopupMenuBackground (juce::Graphics&, int w, int h) override;   // Neon 3D: dark glass menu with a lit rim
     void drawLabel (juce::Graphics&, juce::Label&) override;
     void drawComboBox (juce::Graphics&, int w, int h, bool down, int bx, int by, int bw, int bh, juce::ComboBox&) override;
     void positionComboBoxText (juce::ComboBox&, juce::Label&) override;
@@ -400,7 +653,9 @@ public:
     Knob (const juce::String& name, const juce::String& help, double mn, double mx, double def, const juce::String& suffix = {});
     void mouseDoubleClick (const juce::MouseEvent&) override;   // same menu as right-click (phone: double tap = right-click)
     void mouseDown (const juce::MouseEvent&) override;          // right-click: type value, reset, min / mid / max, automate
+    void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
     void showMenu();
+    SwipeLock swipe;
     std::function<void()> onAutomate;                           // set by views that can make an automation lane for this knob
 private:
     double defValue = 0.0;
@@ -425,7 +680,8 @@ struct Studio : public juce::ChangeBroadcaster
     std::function<void (int view)> showView;   // 0 beat, 1 record, 2 mix
 
     Project& p() { return engine.project(); }
-    template <typename F> void live (F&& f) { f (p()); engine.publishProject(); }   // the audio has its own copy: no lock
+    std::uint64_t rev = 0;   // bumps on every song edit: UI caches compare this instead of re-hashing the song every frame
+    template <typename F> void live (F&& f) { f (p()); ++rev; engine.publishProject(); }   // the audio has its own copy: no lock
     template <typename F> void edit (const juce::String& what, F&& f) { live (std::forward<F> (f)); commit (what); }
     void commit (const juce::String& what);
     static std::function<void (const juce::String&)>& readout();   // bottom-left value bar while a knob moves
@@ -523,6 +779,7 @@ void applyFontGradient (const juce::String& colours);   // "lo mid hi" ARGB hex,
 void showThemeDialog (Studio&);
 void showLayoutDialog (Studio&);   // Options > Layout: DAW-style looks + your own
 void applySavedLayout (Studio&);
+void resaveLayout (Studio&);
 inline std::function<void (const juce::String&)> applyKeySet;   // "Logic", "Pro Tools", "Reaper"; "" = HumHouse keys
 namespace build   // Options > Layout > BUILD: where things sit on the computer screen (saved inside each layout)
 {

@@ -362,8 +362,8 @@ juce::ValueTree projectToTree (const Project& p)
         t.setProperty ("uid", c.uid, nullptr); t.setProperty ("lane", c.lane, nullptr); t.setProperty ("start", c.start, nullptr);
         t.setProperty ("len", c.length, nullptr); t.setProperty ("pat", c.patternIndex, nullptr); t.setProperty ("poff", c.patOffset, nullptr); setFile (t, "file", c.audioFile);
         t.setProperty ("off", c.sourceOffset, nullptr); t.setProperty ("gain", c.gain, nullptr); t.setProperty ("mute", c.muted, nullptr);
-        t.setProperty ("rev", c.reversed, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
-        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
+        t.setProperty ("rev", c.reversed, nullptr); if (c.videoRoute.isNotEmpty()) t.setProperty ("vroute", c.videoRoute, nullptr); t.setProperty ("mix", c.mixerTrack, nullptr); t.setProperty ("fi", c.fadeIn, nullptr);
+        t.setProperty ("fo", c.fadeOut, nullptr); t.setProperty ("fc", c.fadeCurve, nullptr); if (c.speedIn) t.setProperty ("spi", true, nullptr); if (c.speedOut) t.setProperty ("spo", true, nullptr); t.setProperty ("take", c.takeGroup, nullptr); t.setProperty ("grp", c.group, nullptr);
         if (c.drummer >= 0) t.setProperty ("drummer", c.drummer, nullptr);
         if (c.isAuto())
         {
@@ -545,8 +545,8 @@ Project projectFromTree (const juce::ValueTree& root)
     {
         Clip c; c.uid = t["uid"]; c.lane = t["lane"]; c.start = t["start"]; c.length = t["len"]; c.patternIndex = t["pat"]; c.patOffset = t.getProperty ("poff", 0.0);
         c.audioFile = readFile (t, "file"); c.sourceOffset = t["off"]; c.gain = t.getProperty ("gain", 1.0f);
-        c.muted = t["mute"]; c.reversed = t["rev"]; c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
-        c.fadeCurve = t["fc"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
+        c.muted = t["mute"]; c.reversed = t["rev"]; c.videoRoute = t["vroute"].toString(); c.mixerTrack = t.getProperty ("mix", -1); c.fadeIn = t["fi"]; c.fadeOut = t["fo"];
+        c.fadeCurve = t["fc"]; c.speedIn = t["spi"]; c.speedOut = t["spo"]; c.takeGroup = t["take"]; c.group = t["grp"]; c.hidden = t["hidden"]; c.drummer = t.getProperty ("drummer", -1);
         c.colour = juce::Colour ((juce::uint32) (juce::int64) t.getProperty ("colour", (juce::int64) 0));
         if ((int) t.getProperty ("ak", 0) > 0)
         {
@@ -665,7 +665,8 @@ int shrinkSongs (const juce::File& folder)
         const auto keep = f.getSiblingFile (f.getFileName() + ".shrinking");
         if (! f.copyFileTo (keep)) continue;
         Project back;
-        const bool ok = saveProject (p, f) && loadProject (back, f) && missingAudio (back) <= missingBefore && back.clips.size() == p.clips.size();
+        const bool ok = saveProject (p, f) && loadProject (back, f) && missingAudio (back) <= missingBefore && back.clips.size() == p.clips.size()
+                        && f.getSize() <= before;   // never keep a "shrunk" song that grew (one-shots now ride inside)
         if (! ok) { f.deleteFile(); keep.moveFileTo (f); continue; }   // anything off: the original song comes back untouched
         keep.deleteFile();
         if (f.getSize() < before) ++n;
@@ -681,15 +682,21 @@ bool saveProject (const Project& p, const juce::File& f)
     if (local) { kb = p; gatherAudio (kb, f); }
     auto tree = projectToTree (local ? kb : p);
     // glue the audio into the song so it opens on any computer or phone; backups skip it (they sit next to the song's audio)
-    if (packAudioInSong().load() && f.getParentDirectory().getFileName() != "Backup")
+    // one-shots / kit samples are always glued in (small), so a song moved computer <-> phone never loses its drums,
+    // even when the song otherwise only points at its audio files (KB mode)
+    if (f.getParentDirectory().getFileName() != "Backup")
     {
+        const Project& src = local ? kb : p;   // the paths the song stores
         juce::ValueTree glued ("GLUED");
         std::set<juce::String> seen; juce::int64 total = 0;
         const auto bundled = bundledSoundsRoot();
-        auto glue = [&] (const juce::File& a)
+        auto glue = [&] (const juce::File& a, bool kitSound = false)
         {
             if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
-            if (bundled != juce::File() && a.isAChildOf (bundled)) return;   // built-in sounds ship with every HumHouse app
+            // only audio ever rides inside a song: a received song naming some other local file can't carry it back out
+            if (! a.hasFileExtension ("wav;bwf;aif;aiff;aifc;flac;mp3;ogg;m4a;caf;wv")) return;
+            // built-in sounds ship with every HumHouse app; kit one-shots still ride along (a few hundred KB) so the other device always has them
+            if (! kitSound && bundled != juce::File() && a.isAChildOf (bundled)) return;
             const auto size = a.getSize();
             if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
             juce::MemoryBlock mb;
@@ -700,9 +707,11 @@ bool saveProject (const Project& p, const juce::File& f)
             g.setProperty ("data", packGlued (mb), nullptr);
             glued.appendChild (g, nullptr);
         };
-        for (auto& c : p.channels) { glue (c.sampleFile); glue (c.smpLayerFile); }
-        for (auto& c : p.clips) glue (c.audioFile);
-        for (auto& a : p.audioPool) glue (a);
+        // every song carries all its audio (clips, takes, imports, one-shots, frozen tracks): phone <-> computer opens complete
+        for (auto& c : src.channels) { glue (c.sampleFile, true); glue (c.smpLayerFile, true); }
+        for (auto& c : src.clips) glue (c.audioFile);
+        for (auto& a : src.audioPool) glue (a);
+        for (auto& m : src.mixer) glue (m.frozenFile);
         if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
     }
     auto xml = tree.createXml();
@@ -784,9 +793,34 @@ static juce::File freshTempDir()
         .getChildFile ("hhpack-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
 }
 
+juce::String unreadableReason (const juce::File& f)
+{
+    if (! f.exists()) return "HumHouse can't find that file (moved, renamed or deleted):\n" + f.getFullPathName();
+    if (f.isDirectory()) return {};
+    if (f.getSize() == 0) return "That file is empty on this device. If it's in iCloud Drive, download it first (cloud icon in Finder / Files), then open it again.";
+    juce::FileInputStream in (f);
+    if (! in.openedOk())
+       #if JUCE_IOS
+        return "iPhone isn't letting HumHouse read that file. Open it from Files > On My iPhone > HumHouse Studio, or share it to HumHouse, then open it again.";
+       #else
+        return "Your computer's privacy settings are blocking HumHouse from reading that folder. Allow HumHouse in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or move the song into Music > HumHouse Studio, then open it again.";
+       #endif
+    return {};
+}
+
+// a template's folder name: Windows drops trailing dots / spaces ("Vibes..." -> "Vibes"), and "Backup" / "_default"
+// are names HumHouse treats specially (backups skip packing audio, _default is hidden from the template list)
+static juce::String templateFolderName (const juce::String& name)
+{
+    auto legal = juce::File::createLegalFileName (name.trim()).trimCharactersAtEnd (". ");
+    if (legal.isEmpty()) legal = "Template";
+    if (legal.equalsIgnoreCase ("Backup") || legal.equalsIgnoreCase ("_default")) legal << " Template";
+    return legal;
+}
+
 bool packTemplate (const Project& src, const juce::String& name, const juce::File& out)
 {
-    const auto legal = juce::File::createLegalFileName (name.trim().isEmpty() ? juce::String ("Template") : name.trim());
+    const auto legal = templateFolderName (name);
     auto stage = freshTempDir();
     auto root = stage.getChildFile (legal);
     auto sounds = root.getChildFile ("Sounds");
@@ -805,7 +839,7 @@ bool packTemplate (const Project& src, const juce::String& name, const juce::Fil
         }
         f = it->second;
     };
-    for (auto& c : p.channels) take (c.sampleFile);
+    for (auto& c : p.channels) { take (c.sampleFile); take (c.smpLayerFile); }   // 808 / sampler layers travel too
     for (auto& c : p.clips) take (c.audioFile);
     for (auto& m : p.mixer) take (m.frozenFile);
     for (auto& f : p.audioPool) take (f);
@@ -831,31 +865,45 @@ bool packTemplate (const Project& src, const juce::String& name, const juce::Fil
 
 juce::File unpackTemplate (const juce::File& pack, const juce::File& templatesDir)
 {
+    // any HumHouse template zip: our .hhpack, one re-zipped by Finder (__MACOSX/._ files), names with dots ("Vibes..."),
+    // the song at the top or one folder down
     juce::ZipFile zip (pack);
-    juce::String top;
+    // the song to install: real songs before Finder sidecars, then shallowest, then the one named like its folder (our own packs)
+    juce::String song; int depth = 1 << 20, rank = 1 << 20, junk = 1 << 20;
     for (int i = 0; i < zip.getNumEntries(); ++i)
     {
         const auto n = zip.getEntry (i)->filename.replaceCharacter ('\\', '/');
-        if (n.startsWithChar ('/') || n.contains ("..") || n.containsChar (':')) return {};   // nothing may land outside the template's folder
-        if (top.isEmpty() && n.endsWithIgnoreCase (".hhs") && n.containsChar ('/'))
-            top = n.upToFirstOccurrenceOf ("/", false, false);
+        if (n.startsWithChar ('/') || n.containsChar (':')) return {};   // nothing may land outside the template's folder
+        for (auto& part : juce::StringArray::fromTokens (n, "/", "")) if (part == "..") return {};
+        if (! n.endsWithIgnoreCase (".hhs")) continue;
+        const int d = n.retainCharacters ("/").length();
+        const auto file = n.fromLastOccurrenceOf ("/", false, false);
+        const bool finderJunk = n.startsWith ("__MACOSX/") || file.startsWith ("._");
+        const bool named = d == 1 && file.upToLastOccurrenceOf (".", false, false) == n.upToFirstOccurrenceOf ("/", false, false);
+        const int r = named ? 0 : 1, j = finderJunk && ! named ? 1 : 0;   // real songs first (a root ._X.hhs sidecar never wins), then shallowest, then folder-named
+        if (std::tie (j, d, r) < std::tie (junk, depth, rank)) { junk = j; depth = d; rank = r; song = n; }
     }
-    if (top.isEmpty()) return {};
+    if (song.isEmpty() || depth > 1) return {};
     auto stage = freshTempDir();
     if (! stage.createDirectory() || zip.uncompressTo (stage, true).failed()) { stage.deleteRecursively(); return {}; }
-    auto from = stage.getChildFile (top);
-    auto inner = from.getChildFile (top + ".hhs");
+    if (! song.startsWith ("__MACOSX/")) stage.getChildFile ("__MACOSX").deleteRecursively();
+    const auto inner = stage.getChildFile (song);
+    const auto top = depth == 1 ? song.upToFirstOccurrenceOf ("/", false, false) : inner.getFileNameWithoutExtension();
+    const auto from = depth == 1 ? stage.getChildFile (top) : stage;
     Project check;
     if (! inner.existsAsFile() || ! loadProject (check, inner)) { stage.deleteRecursively(); return {}; }
     templatesDir.createDirectory();
-    auto dest = templatesDir.getNonexistentChildFile (juce::File::createLegalFileName (top), {}, false);
+    auto dest = templatesDir.getNonexistentChildFile (templateFolderName (top), {}, false);
     const bool ok = from.copyDirectoryTo (dest);
     stage.deleteRecursively();
     if (! ok) return {};
-    auto hhs = dest.getChildFile (top + ".hhs");
-    if (dest.getFileName() != top)
+    auto hhs = dest.getChildFile (inner.getFileName());
+    if (hhs.getFileNameWithoutExtension() != dest.getFileName())   // the template list finds <folder>/<folder>.hhs
     {
         auto renamed = dest.getChildFile (dest.getFileName() + ".hhs");
+        const bool sameFile = renamed.getFullPathName().equalsIgnoreCase (hhs.getFullPathName()) && renamed.getFileIdentifier() == hhs.getFileIdentifier();
+        if (renamed.existsAsFile() && ! sameFile)   // another song already has that name (case-sensitive disks too): keep it beside
+            renamed.moveFileTo (renamed.getNonexistentSibling (true));   // (Demo/demo.hhs on a case-insensitive disk is the same file)
         if (hhs.moveFileTo (renamed)) hhs = renamed;
     }
     return hhs.existsAsFile() ? hhs : juce::File();

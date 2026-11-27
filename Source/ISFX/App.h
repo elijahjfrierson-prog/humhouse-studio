@@ -17,6 +17,7 @@ namespace isfx
 {
 // the host is recording: background video renders wait so audio + UI get the machine
 inline std::atomic<bool>& hostBusy() { static std::atomic<bool> b { false }; return b; }
+inline std::atomic<bool>& hostPlaying() { static std::atomic<bool> b { false }; return b; }   // HumHouse REC is playing (routed tracks sound from there)
 // ---- theme
 namespace theme
 {
@@ -178,6 +179,7 @@ public:
     std::function<void (const juce::StringArray& clipIds, float smoothSec)> onStabilize;
     std::function<void (const juce::StringArray& clipIds)> onSliceCuts;
     std::function<void (const juce::String&)> onStatus;
+    std::function<void (int track)> onTrackLink;                          // right-click an audio track header: Route to REC track / Mixer
     std::function<void (int track)> onTrackPlugins;                       // right-click an audio track header   // right-click Sync clip(s) to audio
     bool isInterestedInFileDrag (const juce::StringArray&) override { return true; }
     void filesDropped (const juce::StringArray&, int x, int y) override;

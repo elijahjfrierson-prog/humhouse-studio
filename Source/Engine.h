@@ -63,7 +63,14 @@ public:
     void publishProject();
     std::atomic<bool> pluginSandbox { false };   // opt-in: a process round trip per plug-in per block is too slow for big chains
     std::atomic<float> renderLoad { 0.0f };
+    std::array<std::atomic<uint32_t>, 64> cbHist {};   // audio deadline meter: device callback time / buffer period, 2.5% buckets
+    std::atomic<int> lateCallbacks { 0 }, cbBlock { 0 };
+    float callbackPercentile (float q) const;           // 0..1.6 of the buffer period
+    void resetCallbackMeter();
     std::atomic<int> dropouts { 0 };            // late blocks since launch (shown next to CPU)     // third-party plug-ins run crash-protected in a helper process
+    std::atomic<bool> noLatencyDriver { true };   // HumHouse No Latency Driver (Windows): never run on DirectSound / plain WASAPI when no ASIO card is in use
+    bool applyNoLatencyDriver();                  // switch to WASAPI low-latency shared mode (fallback: exclusive), true if it changed
+    std::atomic<bool> speakerOut { false };   // phone playing on its own speaker: armed input records but isn't played back (no feedback), like Voice Memos
     std::atomic<bool> lowLatency { false };      // Low Latency Mode: armed tracks go straight to the master (no delay-compensation wait), FX stay on
     std::atomic<bool> ramCache { true };         // Pro Tools-style disk cache: clips play from RAM (up to the budget) instead of streaming
     float trackLoad (int track) const;           // share of the audio block this insert used (0..1)
@@ -89,6 +96,7 @@ public:
     // used to pull it (and Paste / drops at the playhead) up to 250 ms before where the marker was put
     double positionBeats() const { return std::max (0.0, playing.load() ? position.load() - antAheadBeats.load() : position.load()); }
     void setPositionBeats (double b);
+    double markerBeats() const;   // the blue marker: where play started / the playhead was put
     std::atomic<bool> metronomeOn { false }, countInOn { true };
     std::atomic<bool> dualOut { false };
     std::atomic<float> blockLoadFrac { 0.3f };   // recent peak share of the block deadline the audio callback used
@@ -285,6 +293,7 @@ private:
     };
     std::vector<std::unique_ptr<Take>> takes;
     double lastTakeStart = -1.0;
+    bool tookThisRun = false;   // Quick Punch: this play/record run made a take
     juce::SpinLock takeLock;
 
     juce::AudioBuffer<float> scratch, inputScratch;
@@ -292,7 +301,7 @@ private:
     std::atomic<int> retroWrite { 0 }, retroLane { 0 };
     std::atomic<juce::int64> retroTotal { 0 }, retroRunFrom { 0 };   // runFrom: retroTotal when the current straight playback run began
     std::atomic<double> retroEndBeat { -1.0 };   // beat where the newest retro sample was heard (-1: stopped)
-    struct NormState { float rms = 0.0f, gain = 1.0f; };
+    struct NormState { float rms = 0.0f, gain = 1.0f, gateEnv = 0.0f, gateGain = 1.0f; int gateHold = 0; };   // gate*: monitor anti-ring gate
     std::array<NormState, 256> normState {};
     juce::AudioBuffer<float> normScratch { 2, 8192 };
     int idleThresholdBlocks = 0;

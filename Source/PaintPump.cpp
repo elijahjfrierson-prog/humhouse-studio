@@ -13,7 +13,7 @@ void pumpPendingPaints()
 {
    #if JUCE_WINDOWS
     for (int i = 0; i < juce::ComponentPeer::getNumPeers(); ++i)
-        if (auto* peer = juce::ComponentPeer::getPeer (i); peer != nullptr && peer->getComponent().isShowing())
+        if (auto* peer = juce::ComponentPeer::getPeer (i); peer != nullptr && drawsOnScreen (peer->getComponent()))
         {
             peer->performAnyPendingRepaintsNow();
             if (i < juce::ComponentPeer::getNumPeers() && juce::ComponentPeer::getPeer (i) == peer)
@@ -22,7 +22,7 @@ void pumpPendingPaints()
         }
    #elif JUCE_MAC
     for (int i = 0; i < juce::ComponentPeer::getNumPeers(); ++i)
-        if (auto* peer = juce::ComponentPeer::getPeer (i); peer != nullptr && peer->getComponent().isShowing())
+        if (auto* peer = juce::ComponentPeer::getPeer (i); peer != nullptr && drawsOnScreen (peer->getComponent()))
             peer->performAnyPendingRepaintsNow();
    #endif
 }

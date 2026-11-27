@@ -43,7 +43,7 @@ public:
         auto area = getLocalBounds().reduced (10).withTrimmedTop (34).toFloat();
         g.setGradientFill (juce::ColourGradient (col::panel.brighter (0.05f), 0.0f, area.getY(), col::panel.darker (0.15f), 0.0f, area.getBottom(), false));
         g.fillRoundedRectangle (area, 8);
-        g.setColour (juce::Colours::black.withAlpha (0.4f)); g.drawRoundedRectangle (area.reduced (0.5f), 8, 1.0f);
+        g.setColour (col::neon && ! col::lightMode ? col::accent.withAlpha (0.6f) : juce::Colours::black.withAlpha (0.4f)); g.drawRoundedRectangle (area.reduced (0.5f), 8, 1.0f);   // Neon 3D: lit frame
         auto a = area.reduced (8);
         g.setColour (col::grid.withAlpha (0.55f));
         for (int i = 1; i < 8; ++i) g.drawVerticalLine ((int) (a.getX() + a.getWidth() * (float) i / 8), a.getY(), a.getBottom());
@@ -71,7 +71,7 @@ private:
     juce::VBlankAttachment vblank { this, [this] { timerCallback(); } };
     void timerCallback()
     {
-        if (freezeBtn.getToggleState() || ! isShowing()) return;
+        if (freezeBtn.getToggleState() || ! drawsOnScreen (*this)) return;
         auto* tap = source ? source() : nullptr;
         if (tap == nullptr) { if (idleTicks++ == 0) { std::fill (snap.begin(), snap.end(), 0.0f); repaint (graphArea()); } return; }
         rate = tap->rate.load();
@@ -168,6 +168,12 @@ private:
             p.lineTo (a.getX() + (float) x, yFor (spec[(size_t) bin]));
         }
         p.lineTo (a.getRight(), a.getBottom()); p.closeSubPath();
+        if (col::neon && ! col::lightMode)   // Neon 3D: purple glossy spectrum, lit edge + specular shine (real FFT data, nothing faked)
+        {
+            col::neonFill (g, a.getY(), a.getBottom()); g.fillPath (p);
+            col::neonLine (g, p, a.getY(), a.getBottom(), 1.4f);
+            return;
+        }
         g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom(), 0.45f));
         g.fillPath (p);
         g.setGradientFill (col::levelGradient (0, a.getY(), a.getBottom())); g.strokePath (p, juce::PathStrokeType (1.4f));

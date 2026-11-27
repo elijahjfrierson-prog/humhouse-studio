@@ -240,6 +240,18 @@ inline float bezierBend (float t, float c)
     return 2.0f * (1.0f - u) * u * cy + u * u;
 }
 inline float fadeBend (float fadeCurve) { return -0.49f * fadeCurve; }   // clip fade curve knob (-2..2) as a Bezier bend
+// speed fades: seconds into the source for `secs` into the clip. Speed ramps 0 -> 1 over the fade in (SPEED UP, lands on the
+// normal timeline at the fade's end) and 1 -> 0 over the fade out (TAPE STOP); the curve knob bends the ramp (k = 2^curve)
+inline double speedFadeSecs (double secs, double lenSecs, double inSecs, double outSecs, bool speedIn, bool speedOut, float fadeCurve)
+{
+    const double k1 = std::pow (2.0, (double) fadeCurve) + 1.0;
+    if (speedIn && speedOut && inSecs + outSecs > lenSecs && inSecs + outSecs > 0)   // overlapping speed fades: share the clip so the read never jumps back
+    { const double k = lenSecs / (inSecs + outSecs); inSecs *= k; outSecs *= k; }
+    if (speedIn && inSecs > 0 && secs < inSecs) { const double u = juce::jmax (0.0, secs / inSecs); return inSecs - inSecs * (1.0 - std::pow (u, k1)) / k1; }
+    const double o0 = lenSecs - outSecs;
+    if (speedOut && outSecs > 0 && secs > o0) { const double u = juce::jmin (1.0, (secs - o0) / outSecs); return o0 + outSecs * (1.0 - std::pow (1.0 - u, k1)) / k1; }
+    return secs;
+}
 float autoValueAt (const std::vector<AutoPoint>& pts, double beat);
 float autoToValue (int kind, float v);      // 0..1 -> channel / insert value (FX params map on their own range)
 float autoFromValue (int kind, float x);
@@ -260,11 +272,13 @@ struct Clip
     int    mixerTrack = -1;         // audio routing follows the recording (FL style); -1 = lane's insert
     double fadeIn = 0.0, fadeOut = 0.0; // beats
     float  fadeCurve = 0.0f;        // -1..1 (0 = linear)
+    bool   speedIn = false, speedOut = false;   // Logic-style speed fades: fade in = SPEED UP, fade out = TAPE STOP (curve shapes the ramp)
     int    takeGroup = 0;           // loop / punch takes share a group; only the visible take plays
     bool   hidden = false;
     int    group = 0;               // FL-style clip group: grouped clips select / move together
     juce::Colour colour {};         // own clip colour (transparent = track colour)
     int    drummer = -1;            // Drummer region: the drummer channel id it plays
+    juce::String videoRoute;        // rendered from this VIDEO track (its routeKey); survives renames, copies and Reverse
     AutoTarget autoTarget;          // automation clip if autoTarget.kind > 0 (patOffset = beats into the envelope)
     std::vector<AutoPoint> autoPts;
     bool isAuto() const { return autoTarget.kind > AutoNone; }
@@ -395,4 +409,7 @@ double secondsToBeats (double secs, double bpm);
 // hi-hat style roll on audio clips: inside [rangeA, rangeB) (whole clip if no range) the hit at the
 // range start repeats every `div` beats; audio outside the range is kept. Returns clips rolled.
 int rollAudioClips (Project& p, const std::vector<int>& uids, double div, double rangeA = -1, double rangeB = -1);
+// clipboard paste, one exact rule for 1 or 500 clips: start = at + (clip start - origin). Never snapped or rounded;
+// tracks, lengths, offsets, gain and fades kept; only the pasted clips end up selected. Returns how many were pasted.
+int pasteClips (Project& p, const std::vector<Clip>& clipboard, double origin, double at);
 }

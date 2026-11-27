@@ -1,3 +1,4 @@
+#include <limits>
 #include "PluginSandbox.h"
 #include "Engine.h"
 #include <thread>
@@ -659,11 +660,54 @@ void Engine::initialiseAudio (const juce::XmlElement* saved)
        #if JUCE_IOS
         if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // iPhone: about 5 ms, sing through the FX
        #else
-        if (setup.bufferSize < 512) { setup.bufferSize = 512; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (setup.bufferSize != 256) { setup.bufferSize = 256; deviceManager.setAudioDeviceSetup (setup, true); }   // about 5 ms: record through FX on time; raise it in Audio settings if a big session crackles
        #endif
     }
+    applyNoLatencyDriver();   // every launch, also on existing installs
     if (dualOut.load()) setDualOutput (true);
     deviceManager.addAudioCallback (this);
+}
+
+// Why old laptops lag: without an ASIO card, Windows apps land on DirectSound (~60-100 ms) or plain shared WASAPI
+// (10 ms engine period + a big buffer). Our built-in driver is WASAPI low-latency shared mode (the IAudioClient3 smallest
+// period, OBS and other apps still play), falling back to exclusive mode, and back to the old driver if neither opens.
+bool Engine::applyNoLatencyDriver()
+{
+   #if JUCE_WINDOWS
+    if (! noLatencyDriver.load()) return false;
+    const auto cur = deviceManager.getCurrentAudioDeviceType();
+    if (cur == "ASIO" || cur == "Windows Audio (Low Latency Mode)") return false;
+    const auto before = deviceManager.getAudioDeviceSetup();
+    for (const char* want : { "Windows Audio (Low Latency Mode)", "Windows Audio (Exclusive Mode)" })
+    {
+        bool has = false;
+        for (auto* t : deviceManager.getAvailableDeviceTypes()) has = has || t->getTypeName() == want;
+        if (! has) continue;
+        deviceManager.setCurrentAudioDeviceType (want, true);
+        auto setup = deviceManager.getAudioDeviceSetup();
+        const auto fallback = setup;
+        // keep the user's interface + channels when the new driver lists them
+        setup.outputDeviceName = before.outputDeviceName; setup.inputDeviceName = before.inputDeviceName;
+        setup.inputChannels = before.inputChannels; setup.outputChannels = before.outputChannels;
+        setup.useDefaultInputChannels = before.useDefaultInputChannels; setup.useDefaultOutputChannels = before.useDefaultOutputChannels;
+        if (deviceManager.setAudioDeviceSetup (setup, true).isNotEmpty()) { setup = fallback; deviceManager.setAudioDeviceSetup (setup, true); }
+        if (auto* d = deviceManager.getCurrentAudioDevice(); d != nullptr && d->isOpen())
+        {
+            int best = 0;   // the largest size at or under 256, else the smallest the driver offers
+            for (int b : d->getAvailableBufferSizes()) if (b <= 256 ? (best == 0 || best > 256 || b > best) : (best == 0 || (best > 256 && b < best))) best = b;
+            if (best > 0 && best != setup.bufferSize)
+            {
+                const auto working = deviceManager.getAudioDeviceSetup();
+                auto s2 = working; s2.bufferSize = best;
+                if (deviceManager.setAudioDeviceSetup (s2, true).isNotEmpty()) deviceManager.setAudioDeviceSetup (working, true);   // driver refused: keep the open stream
+            }
+            if (auto* d2 = deviceManager.getCurrentAudioDevice(); d2 != nullptr && d2->isOpen()) return true;
+        }
+    }
+    deviceManager.setCurrentAudioDeviceType (cur, true);   // neither opened on this card: keep what worked
+    deviceManager.setAudioDeviceSetup (before, true);
+   #endif
+    return false;
 }
 
 void Engine::setDualOutput (bool on)
@@ -763,7 +807,7 @@ void Engine::sync()
         else
         {
             SharedSample s;
-            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile())
+            if (ch.type == ChannelType::Sampler && ch.sampleFile.existsAsFile() && ! ch.sampleFile.hasFileExtension ("hhkeys"))
             {
                 auto key = ch.sampleFile.getFullPathName();
                 auto c = sampleCache.find (key);
@@ -1158,6 +1202,22 @@ void Engine::audioDeviceAboutToStart (juce::AudioIODevice* d)
 }
 void Engine::audioDeviceStopped() { antForceRealtime(); }
 
+float Engine::callbackPercentile (float q) const
+{
+    uint64_t total = 0;
+    for (auto& b : cbHist) total += b.load (std::memory_order_relaxed);
+    if (total == 0) return 0.0f;
+    const uint64_t want = (uint64_t) std::ceil ((double) total * q);
+    uint64_t acc = 0;
+    for (size_t i = 0; i < cbHist.size(); ++i)
+        if ((acc += cbHist[i].load (std::memory_order_relaxed)) >= want) return (float) (i + 1) / 40.0f;
+    return 1.6f;
+}
+void Engine::resetCallbackMeter()
+{
+    for (auto& b : cbHist) b.store (0, std::memory_order_relaxed);
+    lateCallbacks.store (0, std::memory_order_relaxed);
+}
 double Engine::cpuLoad() const { return std::max ((double) deviceManager.getCpuUsage(), (double) renderLoad.load()); }   // render-ahead does the work off the device callback
 
 void Engine::setPerformance (int threads, bool multithreaded, bool smartDisable)
@@ -1273,6 +1333,7 @@ double Engine::loopLengthOf (const Project& proj)
 }
 
 static double startBeat = 0.0;
+double Engine::markerBeats() const { return startBeat; }
 
 // Audio clips stream from disk with no wait on the audio thread; load the audio at the play position
 // (and each later clip's start) before playback, so the first beat isn't silent.
@@ -1297,6 +1358,7 @@ void Engine::primeClipReaders (double beat)
 void Engine::play()
 {
     if (playing.load()) return;
+    tookThisRun = false;
     publishProject();   // start from the song as it is right now (armed lanes, punch, loop)
     const bool rec = recording.load(), punch = rec && proj.songMode && proj.hasPunch();
     const double here = position.load();
@@ -1343,9 +1405,13 @@ void Engine::stop()
         playing = false; countingIn = false;
         panicPending = true;   // the audio thread silences every voice at its next block
     }
-    lastTakeStart = -1.0;
     finishRecordingWriters();
-    if (proj.quickPunch && lastTakeStart >= 0.0) position = startBeat = lastTakeStart;
+    if (proj.quickPunch && tookThisRun && lastTakeStart >= 0.0)
+    {
+        // Quick Punch: back to the first bar of the last take (took bars 9-13 -> bar 9), ready to go again
+        const double bar = juce::jmax (1.0, (double) proj.beatsPerBar);
+        position = startBeat = std::floor (lastTakeStart / bar + 1.0e-6) * bar;
+    }
     else if (proj.returnToStart) position = startBeat;
 }
 
@@ -1387,7 +1453,7 @@ void Engine::startRecordingWriters (bool surprise)
         if (auto* os = t->file.createOutputStream().release())
         {
             if (auto* w = wav.createWriterFor (os, sampleRate, 2, 24, {}, 0))
-                t->writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (w, diskThread, 65536);
+                t->writer = std::make_unique<juce::AudioFormatWriter::ThreadedWriter> (w, diskThread, 1 << 18);   // ~5 s of audio: a disk stall while OBS records never drops take samples
             else delete os;
         }
         if (t->writer) newTakes.push_back (std::move (t));
@@ -1466,6 +1532,7 @@ void Engine::finishRecordingWriters()
         std::swap (done, takes);
     }
     if (done.empty()) return;
+    bool batchTake = false;
     bool added = false;
     for (auto& t : done)
     {
@@ -1487,9 +1554,12 @@ void Engine::finishRecordingWriters()
         for (size_t i = 0; i + 1 < passes.size(); ++i)
         {
             // latency compensation: what you sang at beat b reaches the file `lat` samples later
-            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, written / 2, (juce::int64) t->latency);   // < 0: a negative Recording offset reads from earlier in the file
+            // < 0: a negative Recording offset reads from earlier in the file; past the file's start (or end) the clip itself
+            // moves by the rest, so the full -5000..+5000 ms offset always lands
+            const juce::int64 want = (juce::int64) t->latency;
+            const juce::int64 lat = juce::jlimit<juce::int64> (-passes[i].first, std::max<juce::int64> (0, written - 1), want);
             const juce::int64 s0 = passes[i].first + lat, s1 = i + 2 == passes.size() ? written : passes[i + 1].first + lat;
-            double b0 = passes[i].second, b1 = b0 + (double) (s1 - s0) / spb;
+            double b0 = passes[i].second + (double) (lat - want) / spb, b1 = b0 + (double) (s1 - s0) / spb;
             double srcOff = (double) s0 / sampleRate;
             if (proj.songMode && proj.hasPunch())
             {
@@ -1503,6 +1573,7 @@ void Engine::finishRecordingWriters()
             c.sourceOffset = srcOff; c.mixerTrack = insert; c.takeGroup = group;
             c.fadeIn = c.fadeOut = 0.02;
             newClips.push_back (c);
+            if (std::find (proj.audioPool.begin(), proj.audioPool.end(), t->file) == proj.audioPool.end()) proj.audioPool.push_back (t->file);   // a take stays in Audio Clips even after its clip is deleted
         }
         if (newClips.empty()) continue;
         if (t->surprise)
@@ -1515,7 +1586,8 @@ void Engine::finishRecordingWriters()
             added = true;
             continue;
         }
-        if (! newClips.empty()) lastTakeStart = lastTakeStart < 0.0 ? newClips.front().start : std::min (lastTakeStart, newClips.front().start);
+        if (! batchTake || newClips.front().start < lastTakeStart) lastTakeStart = newClips.front().start;   // the latest punch counts, also after a punch-out with the rec button
+        batchTake = tookThisRun = true;
         if (! proj.hasPunch())
         {
             // a new take never records over an earlier one: if the track is busy there it drops to the next free track
@@ -1613,6 +1685,18 @@ void Engine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn
                                                const juce::AudioIODeviceCallbackContext&)
 {
     callbackMs = juce::Time::getMillisecondCounterHiRes();
+    struct CbMeter   // audio deadline meter: wait-free, fixed buckets, no allocation
+    {
+        Engine& e; int n; double t0;
+        ~CbMeter()
+        {
+            if (n <= 0 || e.sampleRate <= 0) return;
+            const double raw = (juce::Time::getMillisecondCounterHiRes() - t0) / (1000.0 * n / e.sampleRate);
+            e.cbHist[(size_t) juce::jlimit (0, 63, (int) (raw * 40.0))].fetch_add (1, std::memory_order_relaxed);
+            if (raw >= 1.0) e.lateCallbacks.fetch_add (1, std::memory_order_relaxed);
+            e.cbBlock.store (n, std::memory_order_relaxed);
+        }
+    } cbMeter { *this, n, callbackMs.load() };
     int st = antState.load();
     if (st == 3) { antPrimed = false; antState.store (1); st = 1; antWake.signal(); }
     if (st == 1 || st == 2)
@@ -1824,8 +1908,10 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
                     double ss = 0, sl = 32.0;
                     const int g = drumGroupOf (h.lane), sec = drumSectionAt (*src, clip.start + h.beat, &ss, &sl);
                     if ((mask >> g & 1) == 0 || silent (sec, g)) continue;
-                    if (auto ms = src->steps.find (sec); ms != src->steps.end() && ms->second[(size_t) g] != 0
-                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;   // your STEPS own that drum; the groove plays around it and fills bar 8
+                    // a section with your STEPS is yours for every drum (an empty row is silent, no stray toms / cymbals from
+                    // the groove); the groove only plays the bar-8 fill
+                    if (auto ms = src->steps.find (sec); ms != src->steps.end()
+                        && ! (src->fills > 0.02f && clip.start + h.beat - ss >= sl - 4.0)) continue;
                     Note nt; nt.key = kDrummerLaneKey + h.lane + 32 * (h.variant & 3); nt.start = h.beat; nt.length = 0.125; nt.velocity = juce::jlimit (0.02f, 1.0f, h.vel * drummerDynamics (*src, clip.start + h.beat));
                     emit (ci, nt, s);
                 }
@@ -1902,7 +1988,10 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const int len = o1 - o0;
             if (len <= 0) continue;
             const double ratio = cr.fileRate / sampleRate;
-            const double srcSec = clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, aproj.bpm);
+            const bool speedFade = (clip.speedIn && clip.fadeIn > 0) || (clip.speedOut && clip.fadeOut > 0);
+            const double lenS = beatsToSeconds (clip.length, aproj.bpm), inS = beatsToSeconds (clip.fadeIn, aproj.bpm), outS = beatsToSeconds (clip.fadeOut, aproj.bpm);
+            auto speedSrc = [&] (double beat) { return clip.sourceOffset + speedFadeSecs (beatsToSeconds (beat, aproj.bpm), lenS, inS, outS, clip.speedIn, clip.speedOut, clip.fadeCurve); };
+            const double srcSec = speedFade ? speedSrc (c0 - clip.start - shB) : clip.sourceOffset + beatsToSeconds (c0 - clip.start - shB, aproj.bpm);
             // exact source position: the fractional part carries into the interpolation, so block edges never drop or repeat a sample
             const double srcPos = srcSec * cr.fileRate;
             const juce::int64 srcStart = (juce::int64) std::floor (srcPos + 1.0e-6);
@@ -1913,14 +2002,18 @@ void Engine::renderSegment (double b0, double b1, int off, int n)
             const double spbC = spb;
             for (int i = 0; i < len; ++i)
             {
-                const double sp = frac0 + i * ratio;
+                // speed fades read the source slower (never faster), so the block's read span always covers them
+                const double sp = speedFade ? frac0 + speedSrc (c0 - clip.start - shB + i / spbC) * cr.fileRate - srcPos : frac0 + i * ratio;
+                if (sp < 0.0) continue;
                 const int i0 = (int) sp; const float fr = (float) (sp - i0);
                 if (i0 + 1 >= need) break;
                 const double beatInClip = (c0 - clip.start) + i / spbC;
                 float g = clip.gain * laneGain;
-                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn) g *= bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
                 const double toEnd = clip.length - beatInClip;
-                if (clip.fadeOut > 0 && toEnd < clip.fadeOut) g *= bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
+                if (clip.fadeIn > 0 && beatInClip < clip.fadeIn)   // speed up: only the first 15 % ramps in (no click from the stopped tape)
+                    g *= clip.speedIn ? (float) juce::jmin (1.0, beatInClip / (0.15 * clip.fadeIn)) : bezierBend ((float) (beatInClip / clip.fadeIn), fadeBend (clip.fadeCurve));
+                if (clip.fadeOut > 0 && toEnd < clip.fadeOut)
+                    g *= clip.speedOut ? (float) juce::jmin (1.0, std::max (0.0, toEnd) / (0.15 * clip.fadeOut)) : bezierBend ((float) std::max (0.0, toEnd / clip.fadeOut), fadeBend (clip.fadeCurve));
                 for (int ch = 0; ch < 2; ++ch)
                 {
                     auto* s = cr.tmp.getReadPointer (ch);
@@ -2059,6 +2152,8 @@ struct EngineJobs
             juce::AudioBuffer<float> view (rt->buf.getArrayOfWritePointers(), rt->buf.getNumChannels(), n);
             pl.processBlock (view, rt->midi);
             if (pl.getTotalNumOutputChannels() == 1) view.copyFrom (1, 0, view, 0, 0, n);
+            for (int ch = 0; ch < view.getNumChannels(); ++ch)   // a VST instrument that outputs NaN / inf must never silence the whole Master
+                for (auto* x = view.getWritePointer (ch), * e = x + n; x < e; ++x) if (! std::isfinite (*x)) *x = 0.0f;
             if (view.getMagnitude (0, n) > 1.0e-5f) rt->silentBlocks = 0;
             if (rt->cutTails && (rt->numGainEv > 0 || rt->cutGain < 1.0f || rt->cutTarget < 1.0f || rt->numPreFaded > 0)) applyCutFade (*rt, view, n);
         }
@@ -2454,8 +2549,9 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
             auto& lane = aproj.lanes[l];
             if (! lane.armed) continue;
             const int c0 = lane.stereoIn ? lane.inputPair * 2 : lane.inputCh, c1 = lane.stereoIn ? c0 + 1 : c0;
-            const float* il = c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
-            const float* ir = c1 < numIn ? in[c1] : il;
+            // Bluetooth / output-only devices have no inputs (in may be null): never index past them with an armed track
+            const float* il = in != nullptr && c0 >= 0 && c0 < numIn ? in[c0] : nullptr;
+            const float* ir = in != nullptr && c1 >= 0 && c1 < numIn ? in[c1] : il;
             if (il == nullptr) continue;
             if (ir == nullptr) ir = il;
             if (lane.autoNorm && l < normState.size() && n <= normScratch.getNumSamples())
@@ -2469,19 +2565,39 @@ void Engine::processBlock (const float* const* in, int numIn, float* const* out,
                     const float x = 0.5f * (il[i] + ir[i]);
                     ns.rms = ns.rms * 0.9995f + 0.0005f * x * x;
                     const float level = std::sqrt (ns.rms);
-                    if (level > 0.001f)
+                    // the gain only rises on a real voice (> -40 dBFS). In the pauses it settles back to unity,
+                    // so earbud / room leakage is never pushed up 16x into a feedback ring (monitor and take)
+                    if (level > 0.01f)
                     {
                         const float tg = juce::jlimit (0.5f, 16.0f, 0.25f / level);
                         ns.gain += (tg - ns.gain) * (tg < ns.gain ? 0.002f : 0.0002f);
                     }
+                    else if (level < 0.004f) ns.gain += (1.0f - ns.gain) * 0.0005f;
                     nl[i] = ceil (il[i] * ns.gain); nr[i] = ceil (ir[i] * ns.gain);
                 }
                 il = nl; ir = nr;
             }
-            if (lane.monitor && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
+            if (lane.monitor && ! speakerOut.load() && lane.mixerTrack >= 0 && lane.mixerTrack < (int) trackRt.size())
             {
                 auto& dest = trackRt[(size_t) lane.mixerTrack]->in;
-                dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n);
+                if (l < normState.size() && dest.getNumSamples() >= n && dest.getNumChannels() >= 2)
+                {
+                    // anti-ring monitor gate: when the voice stops (< -45 dBFS for 120 ms) the monitor fades to -30 dB, so the
+                    // mic -> earbuds -> mic loop is broken before it can ring; it opens again in ~2 ms on the next word
+                    auto& gs = normState[l];
+                    auto* dl = dest.getWritePointer (0); auto* dr = dest.getWritePointer (1);
+                    const int hold = (int) (0.12 * sampleRate);
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const float a = std::max (std::abs (il[i]), std::abs (ir[i]));
+                        gs.gateEnv = a > gs.gateEnv ? a : gs.gateEnv * 0.9995f;
+                        if (gs.gateEnv > 0.0056f) gs.gateHold = hold; else if (gs.gateHold > 0) --gs.gateHold;
+                        const float tg = gs.gateHold > 0 ? 1.0f : 0.03f;
+                        gs.gateGain += (tg - gs.gateGain) * (tg > gs.gateGain ? 0.01f : 0.0006f);
+                        dl[i] += il[i] * gs.gateGain; dr[i] += ir[i] * gs.gateGain;
+                    }
+                }
+                else { dest.addFrom (0, 0, il, n); dest.addFrom (1, 0, ir, n); }
             }
             if (rolling && tl.isLocked())
                 for (auto& tk : takes)
@@ -2768,12 +2884,25 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     const bool oldSong = proj.songMode;
     proj.songMode = song;
     const double lenBeats = renderLenBeats > 0 ? renderLenBeats : song ? std::max (proj.songLengthBeats(), 1.0) : loopLength();
-    const double tail = 2.0;
-    const juce::int64 total = (juce::int64) ((beatsToSeconds (lenBeats, proj.bpm) + tail) * sr);
+    // the song plays to its end (+ delay-compensation latency), then the tail rings out until it is silent (max 10 s) and is trimmed:
+    // no fixed 2 s of dead air / noise floor at the end, and long reverb / delay tails are never cut
+    const double maxTail = 10.0;
+    const juce::int64 songEnd = (juce::int64) (beatsToSeconds (lenBeats, proj.bpm) * sr);
+    const juce::int64 bodyEnd = songEnd + juce::jmax (0, playbackDelay.load());
+    const juce::int64 total = bodyEnd + (juce::int64) (maxTail * sr);
     const double outRate = format != 0 ? compressedRate (rate > 0 ? rate : sr) : rate > 0 ? rate : sr;
     const bool viaMemory = format != 0 || bits == 64 || std::abs (outRate - sr) > 0.5;   // 64-bit float / other rates: render, then sinc-convert + write
-    juce::AudioBuffer<float> mem;
-    if (viaMemory) mem.setSize (2, (int) total);
+   #if JUCE_IOS
+    const double maxMemMinutes = 20.0;   // phone memory: a longer song in memory would get the app killed
+   #else
+    const double maxMemMinutes = 60.0;
+   #endif
+    if (sr <= 0.0 || total <= 0 || total >= (juce::int64) std::numeric_limits<int>::max() / 2
+        || (viaMemory && (double) total > maxMemMinutes * 60.0 * sr))
+    { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
+    juce::AudioBuffer<float> mem, tailBuf;
+    try { if (viaMemory) mem.setSize (2, (int) total); tailBuf.setSize (2, (int) (total - bodyEnd)); }
+    catch (const std::bad_alloc&) { proj.songMode = oldSong; deviceManager.addAudioCallback (this); return false; }
 
     file.deleteFile();
     std::unique_ptr<juce::AudioFormatWriter> writer;
@@ -2805,20 +2934,53 @@ bool Engine::renderToWav (const juce::File& file, bool song, std::function<bool 
     juce::Random ditherRnd (0x484853);
     bool ok = true;
     lastRenderPeak = 0;
-    for (juce::int64 done = 0; done < total; done += block)
+    auto emit = [&] (juce::AudioBuffer<float>& b, int from, int n, juce::int64 at)
+    {
+        if (n <= 0) return;
+        if (viaMemory) { mem.copyFrom (0, (int) at, b, 0, from, n); mem.copyFrom (1, (int) at, b, 1, from, n); return; }
+        juce::AudioBuffer<float> v (b.getArrayOfWritePointers(), 2, from, n);
+        tpdfDither (v, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (v, 0, n);
+    };
+    const float quietLevel = 1.0e-4f;   // -80 dBFS
+    const int quietNeeded = (int) (2.0 * sr);   // 2 s of quiet: a long echo repeat (e.g. a 1/4 note at 60 BPM) still lands; the silent end is trimmed below
+    juce::int64 done = 0;
+    int tailLen = 0, quietRun = 0;
+    for (; done < total; done += block)
     {
         const int n = (int) std::min<juce::int64> (block, total - done);
-        if (done >= (juce::int64) (beatsToSeconds (lenBeats, proj.bpm) * sr)) playing = false;
+        if (done >= songEnd) playing = false;
         float* outs[2] { outBuf.getWritePointer (0), outBuf.getWritePointer (1) };
         // offline reads must not miss disk data
         processBlock (nullptr, 0, outs, 2, n);
-        lastRenderPeak = std::max ({ lastRenderPeak, outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n) });
-        if (viaMemory) { mem.copyFrom (0, (int) done, outBuf, 0, 0, n); mem.copyFrom (1, (int) done, outBuf, 1, 0, n); }
-        else { tpdfDither (outBuf, n, bits, ditherRnd); writer->writeFromAudioSampleBuffer (outBuf, 0, n); }
+        const float mag = std::max (outBuf.getMagnitude (0, 0, n), outBuf.getMagnitude (1, 0, n));
+        lastRenderPeak = std::max (lastRenderPeak, mag);
+        if (done + n <= bodyEnd) emit (outBuf, 0, n, done);
+        else
+        {
+            const int body = (int) std::max<juce::int64> (0, bodyEnd - done);
+            emit (outBuf, 0, body, done);
+            const int t = juce::jmin (n - body, tailBuf.getNumSamples() - tailLen);
+            for (int ch = 0; ch < 2; ++ch) tailBuf.copyFrom (ch, tailLen, outBuf, ch, body, t);
+            tailLen += t;
+            quietRun = mag < quietLevel ? quietRun + n : 0;
+            if (quietRun >= quietNeeded) break;
+        }
         if (progress && ! progress ((float) done / (float) total)) { ok = false; break; }
+    }
+    if (ok)
+    {
+        int keep = 0;   // trim the silent end of the tail, keep 50 ms after the last audible sample, fade the last 5 ms
+        for (int ch = 0; ch < 2; ++ch)
+            for (int i = tailLen; --i >= keep;) if (std::abs (tailBuf.getSample (ch, i)) >= quietLevel) { keep = i + 1; break; }
+        keep = juce::jmin (tailLen, keep + (int) (0.05 * sr));
+        const int fade = juce::jmin (keep, (int) (0.005 * sr));
+        if (fade > 0) tailBuf.applyGainRamp (keep - fade, fade, 1.0f, 0.0f);
+        emit (tailBuf, 0, keep, bodyEnd);
+        if (viaMemory) mem.setSize (2, (int) (bodyEnd + keep), true, false, true);
     }
     writer.reset();
     if (ok && viaMemory) ok = writeExportWav (file, mem, sr, outRate, bits, format);
+    if (! ok) file.deleteFile();   // cancelled / failed: no half-written file left behind
     offline = false;
     setTimeouts (0);
     renderTrackOnly = -1;

@@ -294,7 +294,7 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
     genBtn.setTooltip ("Builds three separate editable sequences from your synced takes: Cinematic / Atmospheric, Underground / Experimental and High-Energy / Performance. Rules-based and repeatable, every cut stays editable.");
     chopBtn.setTooltip ("Switches camera angles on the chosen grid or detected drum hits inside the selected range (or the whole song). All angles stay in sync.");
     styleBox.setTooltip ("Style mode used by GENERATE 3 EDITS for the base treatment.");
-    snapBox.setTooltip ("Snap grid for moving, trimming, cutting and painting."); snapBtn.setTooltip ("S: snapping on/off");
+    snapBox.setTooltip ("Snap grid for moving, trimming, cutting and painting."); snapBtn.setTooltip ("AUTO SNAP (S): moving, trimming and dropping clips snaps to the playhead, other clip edges and the grid");
     rippleBtn.setTooltip ("R: ripple delete closes the gap"); gridBtn.setTooltip ("B: show the beat grid");
     aspectBox.setTooltip ("Output aspect ratio. Clips reframe with Fill, Fit or Blur Fill (clip inspector).");
     seqBox.setTooltip ("Sequences in this project (generated edits appear here)");
@@ -306,6 +306,7 @@ MainComponent::MainComponent (juce::AudioDeviceManager* external)
 
     hscroll.addListener (this); hscroll.setAutoHide (false);
     timeline.onEdited = [this] { refresh (true); };
+    timeline.onTrackLink = [this] (int tr) { if (onTrackLink) onTrackLink (tr); };
     fxlib.onApply = [this] (const juce::String& d, int scope, int side) { timeline.applyLibraryItem (d, scope, side); };
     timeline.onSeek = [this] (Ticks t) { seek (t); };
     timeline.onAskText = [this] (const juce::String& t, const juce::String& d, std::function<void (juce::String)> cb) { askText (t, d, cb); };
@@ -480,7 +481,7 @@ void MainComponent::resized()
     auto bar = bottom.removeFromTop (36).reduced (6, 5);
     for (int i = 0; i < 4; ++i) place (bar, toolBtn[i], 76);
     bar.removeFromLeft (8);
-    place (bar, snapBox, 80); place (bar, snapBtn, 64); place (bar, rippleBtn, 76); place (bar, magnetBtn, 70); place (bar, gridBtn, 64);
+    place (bar, snapBox, 80); place (bar, snapBtn, 84); place (bar, rippleBtn, 76); place (bar, magnetBtn, 70); place (bar, gridBtn, 64);
     bar.removeFromLeft (8);
     place (bar, chopBox, 104); place (bar, chopBtn, 64);
     bar.removeFromLeft (8);
@@ -509,7 +510,7 @@ void MainComponent::resized()
 // ============================================================ state refresh / transport
 void MainComponent::refresh (bool inspectorToo)
 {
-    player.setSequence (st.project.seq());
+    player.setSequence (playbackSequence());
     preview.setProject (st.project);
     preview.projectEdited (st.project);
     preview.requestFrame (st.playhead);
@@ -585,6 +586,85 @@ std::vector<MainComponent::TrackRender> MainComponent::renderTracks (const juce:
     return out;
 }
 
+void MainComponent::refreshPlayback() { player.setSequence (playbackSequence()); }
+
+void MainComponent::setTrackRoute (int t, int lane, int insert)
+{
+    auto& seq = st.project.seq();
+    if (t < 0 || t >= (int) seq.tracks.size()) return;
+    const int ins = lane < 0 ? 0 : insert >= 0 ? insert : seq.tracks[(size_t) t].recInsert;
+    if (seq.tracks[(size_t) t].recLane == lane && seq.tracks[(size_t) t].recInsert == ins) return;
+    st.edit ("Route track to REC");
+    seq.tracks[(size_t) t].recLane = lane; seq.tracks[(size_t) t].recInsert = ins;
+    if (seq.tracks[(size_t) t].routeKey.isEmpty()) seq.tracks[(size_t) t].routeKey = juce::Uuid().toString().substring (0, 8);
+    player.setSequence (playbackSequence());
+}
+
+Sequence MainComponent::playbackSequence() const
+{
+    Sequence q = st.project.seq();
+    if (hostPlaying().load())   // VIDEO's own Play still hears them; REC only mutes what the open REC song really plays
+        for (auto& t : q.tracks) if (t.routeKey.isNotEmpty() && routedOnHost != nullptr && routedOnHost (t.routeKey)) t.mute = true;   // incl. a REC Undo bringing an unrouted clip back
+    return q;
+}
+
+juce::StringArray MainComponent::trackSignatures() const
+{
+    juce::StringArray out;
+    const auto& seq = st.project.seq();
+    const auto v = toVar (st.project);
+    const juce::var* sv = nullptr;
+    if (auto* seqs = v["sequences"].getArray())
+        for (auto& x : *seqs) if (x["id"].toString() == seq.id) sv = &x;
+    for (int t = 0; t < (int) seq.tracks.size(); ++t)
+    {
+        // mute | media decoded per clip | auto-duck | the clips: everything the render reads
+        juce::String sig = seq.tracks[(size_t) t].mute ? "M|" : "-|", clips;
+        if (sv != nullptr) if (auto* cl = (*sv)["clips"].getArray())
+            for (auto& c : *cl) if ((int) c["track"] == t) { sig << (st.audio.has (c["media"].toString()) ? "A" : "-"); clips << juce::JSON::toString (c, true); }
+        sig << "|" << seq.duckDb << seq.duckKey << "|" << clips;
+        out.add (sig);
+    }
+    return out;
+}
+
+void MainComponent::renderTrackAsync (int t, const juce::File& f, std::function<void (double)> done)
+{
+    if (st.project.sequences.empty()) return;
+    Sequence one = st.project.seq();
+    if (t < 0 || t >= (int) one.tracks.size()) return;
+    for (int k = 0; k < (int) one.tracks.size(); ++k) { one.tracks[(size_t) k].solo = false; one.tracks[(size_t) k].mute = k != t || one.tracks[(size_t) k].mute; }   // a muted track renders silent
+    auto cache = std::make_shared<AudioCache>();   // just this track's decoded audio, shared (not copied), so the thread owns what it reads
+    for (auto& c : one.clips) if (c.track == t) if (auto a = st.audio.get (c.mediaId)) cache->put (c.mediaId, a);
+    juce::Thread::launch ([one = std::move (one), cache, f, done = std::move (done), safe = juce::Component::SafePointer<MainComponent> (this)]
+    {
+        const juce::int64 total = (juce::int64) std::llround ((double) one.duration() * kMixRate / (double) kFlicks);
+        double secs = 0.0;
+        bool any = false;
+        for (auto& c : one.clips) any = any || (c.track >= 0 && ! one.tracks[(size_t) c.track].mute && c.enabled && cache->has (c.mediaId));
+        if (any && total > 0) secs = -1.0;   // a failure unless the WAV below gets written
+        if (any && total > 0 && f.getParentDirectory().createDirectory())
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (f), kMixRate, 2, 24, {}, 0));
+            if (w != nullptr)
+            {
+                constexpr int blk = 8192;
+                std::vector<float> L (blk), R (blk);
+                for (juce::int64 pos = 0; pos < total; pos += blk)
+                {
+                    const int n = (int) std::min<juce::int64> (blk, total - pos);
+                    mixSequence (one, *cache, pos, n, L.data(), R.data(), nullptr);
+                    const float* ch[2] { L.data(), R.data() };
+                    w->writeFromFloatArrays (ch, 2, n);
+                }
+                secs = (double) total / kMixRate;
+            }
+        }
+        juce::MessageManager::callAsync ([safe, done, secs] { if (safe != nullptr) done (secs); });
+    });
+}
+
 std::vector<MainComponent::ClipRender> MainComponent::renderClips (const juce::File& dir, bool selectedOnly)
 {
     std::vector<ClipRender> out;
@@ -631,7 +711,7 @@ void MainComponent::togglePlay()
 {
     if (player.isPlaying()) { player.stop(); playBtn.setButtonText ("Play"); preview.setLive (false); return; }
     preview.setLive (true);
-    player.setSequence (st.project.seq());
+    player.setSequence (playbackSequence());
     player.play (st.playhead);
     playBtn.setButtonText ("Pause");
 }

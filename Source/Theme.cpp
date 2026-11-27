@@ -96,7 +96,7 @@ public:
         const juce::uint32 presets[] { 0xff9b5cff, 0xffff8a3d, 0xffff3b57, 0xffb15cff, 0xff4d7cff, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffe6e8eb, 0xff8c929b, 0xff000000 };
         for (auto p : presets)
         {
-            auto* b = swatches.add (new juce::TextButton());
+            auto* b = swatches.add (new juce::TextButton()); b->getProperties().set ("swatch", true);
             b->setColour (juce::TextButton::buttonColourId, juce::Colour (p));
             b->setTooltip (p == 0xffe6e8eb ? "White (light theme: white backgrounds, dark text)" : p == 0xff8c929b ? "Grey" : p == 0xff000000 ? "Black (true-black background, silver highlights)" : "Preset color");
             b->onClick = [this, p] {
@@ -124,7 +124,7 @@ public:
         const juce::uint32 fonts[] { 0x00000000, 0xffffffff, 0xffc9ced6, 0xff8c929b, 0xff15171a, 0xffff8a3d, 0xff38d1ff, 0xff3ddc84, 0xffff5db1, 0xffffc93d, 0xffb15cff };
         for (auto fc : fonts)
         {
-            auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : ""));
+            auto* b = fontSw.add (new juce::TextButton (fc == 0 ? "Auto" : "")); b->getProperties().set ("swatch", true);
             b->setColour (juce::TextButton::buttonColourId, fc == 0 ? col::panel2 : juce::Colour (fc));
             b->setTooltip (fc == 0 ? "Automatic text color for the theme" : "Text color across the whole app");
             b->onClick = [this, fc] { col::fontColour = juce::Colour (fc); if (s.settings) s.settings->setValue ("fontColour", juce::Colour (fc).toString()); setFontGradient ({}); apply(); };
@@ -161,7 +161,7 @@ public:
         addAndMakeVisible (trackBox);
         for (int i = 0; i <= 12; ++i)
         {
-            auto* b = trackSwatches.add (new juce::TextButton (i == 12 ? "x" : ""));
+            auto* b = trackSwatches.add (new juce::TextButton (i == 12 ? "x" : "")); b->getProperties().set ("swatch", true);
             if (i < 12) b->setColour (juce::TextButton::buttonColourId, pickedColour (i));
             b->setTooltip (i == 12 ? "Clear the track color" : "Color this track and its clips");
             b->onClick = [this, i] {
@@ -306,6 +306,15 @@ void applyTheme (juce::Colour accent, float tint, bool black)
         refreshAll();
         return;
     }
+    if (col::neon)   // Neon 3D: deep blue-black studio glass, the chosen color glows (purple by default), cyan second accent
+    {
+        col::accent = accent; col::accent2 = juce::Colour (0xff38d1ff);
+        col::bg = juce::Colour (0xff06080f); col::panel = juce::Colour (0xff0b0e19); col::panel2 = juce::Colour (0xff111526);
+        col::grid = juce::Colour (0xff141a2b); col::gridBeat = juce::Colour (0xff1a2137); col::gridBar = juce::Colour (0xff27314d);
+        col::scale = col::bg.interpolatedWith (accent, 0.10f); col::root = col::bg.interpolatedWith (accent, 0.2f);
+        refreshAll();
+        return;
+    }
     const float h = accent.getHue(), sat = juce::jlimit (0.0f, 0.4f, accent.getSaturation() * 0.4f * juce::jlimit (0.0f, 1.0f, tint));
     auto shade = [h, sat] (float b) { return juce::Colour::fromHSV (h, sat, b, 1.0f); };
     col::accent = accent;
@@ -319,6 +328,7 @@ void applyTheme (juce::Colour accent, float tint, bool black)
 void applyGradient (const juce::String& colours)
 {
     auto t = juce::StringArray::fromTokens (colours, " ", "");
+    col::gradCustom = t.size() == 3;
     if (t.size() == 3) { col::gradLo = juce::Colour::fromString (t[0]); col::gradMid = juce::Colour::fromString (t[1]); col::gradHi = juce::Colour::fromString (t[2]); }
     else { col::gradLo = juce::Colour (0xff3ddc84); col::gradMid = juce::Colour (0xffffd23d); col::gradHi = juce::Colour (0xffff3b57); }
     refreshAll();
@@ -414,7 +424,7 @@ void relayout() { if (relayoutMain) relayoutMain(); }
 juce::String currentLayout()
 {
     return joinLayout ({ { "bg", col::bg.toString() }, { "panel", col::panel.toString() }, { "panel2", col::panel2.toString() }, { "gridBar", col::gridBar.toString() },
-                         { "text", col::text.toString() }, { "accent", col::accent.toString() }, { "light", col::lightMode ? "1" : "0" }, { "laneH", juce::String (col::laneMinH) } });
+                         { "text", col::text.toString() }, { "accent", col::accent.toString() }, { "light", col::lightMode ? "1" : "0" }, { "neon", col::neon ? "1" : "0" }, { "laneH", juce::String (col::laneMinH) } });
 }
 juce::String currentLayoutWithBuild() { auto v = parseLayout (currentLayout()); putBuild (v); return joinLayout (v); }
 void applyLayoutDesc (const juce::String& d)
@@ -422,6 +432,7 @@ void applyLayoutDesc (const juce::String& d)
     auto v = parseLayout (d);
     auto c = [&v] (const char* k, juce::Colour def) { auto it = v.find (k); const auto x = it != v.end() ? juce::Colour::fromString (it->second) : def; return x.getAlpha() == 0 ? def : x.withAlpha (1.0f); };
     col::lightMode = v["light"] == "1";
+    if (v.find ("neon") != v.end()) col::neon = v["neon"] == "1";   // layouts saved before Neon keep the current Neon setting
     applyTextColours();
     col::bg = c ("bg", col::bg); col::panel = c ("panel", col::panel); col::panel2 = c ("panel2", col::panel2);
     col::gridBar = c ("gridBar", col::gridBar); col::accent = c ("accent", col::accent); col::text = c ("text", col::text);
@@ -508,12 +519,14 @@ struct LayoutPanel : juce::Component
             col::laneMinH = 60;
             if (s.settings) { s.settings->removeValue ("layout"); s.settings->setValue ("layoutName", label); }
             col::lightMode = false; if (build::font.isNotEmpty()) juce::Typeface::clearTypefaceCache();
+            col::neon = s.settings == nullptr || s.settings->getBoolValue ("themeNeon", true);
             build::reset(); applyTheme (juce::Colour (0xff9b5cff), 0.15f, false); relayout();
         }
         else
         {
             applyLayoutDesc (desc);
-            if (s.settings) { s.settings->setValue ("layout", desc); s.settings->setValue ("layoutName", label); }
+            auto saved = parseLayout (desc); saved["neon"] = col::neon ? "1" : "0";   // the Neon look it opened with is saved too, so a restart opens the same look
+            if (s.settings) { s.settings->setValue ("layout", joinLayout (saved)); s.settings->setValue ("layoutName", label); }
         }
         if (withKeys.getToggleState() && applyKeySet) applyKeySet (keySet);
         if (s.settings) s.settings->saveIfNeeded();
@@ -902,6 +915,11 @@ void applySavedLayout (Studio& s)
     if (s.settings != nullptr && s.settings->containsKey ("layout")) applyLayoutDesc (s.settings->getValue ("layout"));
 }
 
+void resaveLayout (Studio& s)   // Neon toggled: the saved layout keeps its sizes and picks up the new look
+{
+    if (s.settings != nullptr && s.settings->containsKey ("layout")) { s.settings->setValue ("layout", currentLayoutWithBuild()); s.settings->saveIfNeeded(); }
+}
+
 void showLayoutDialog (Studio& s)
 {
     static juce::Component::SafePointer<juce::DialogWindow> open;
@@ -911,10 +929,11 @@ void showLayoutDialog (Studio& s)
     o.dialogTitle = "Layout";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = ! phoneUI;
+    o.useNativeTitleBar = ! phoneUI && ! humhouseTitleBars();
     o.resizable = false;
     open = o.launchAsync();
     if (phoneUI && open != nullptr) { open->setTitleBarHeight (44); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+    else if (open != nullptr && ! o.useNativeTitleBar) { open->setTitleBarHeight (30); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, false); }
 }
 
 void showThemeDialog (Studio& s)
@@ -926,10 +945,11 @@ void showThemeDialog (Studio& s)
     o.dialogTitle = "Theme color";
     o.dialogBackgroundColour = col::panel;
     o.escapeKeyTriggersCloseButton = true;
-    o.useNativeTitleBar = ! phoneUI;   // phone: our title bar with an X to leave
+    o.useNativeTitleBar = ! phoneUI && ! humhouseTitleBars();   // phone / HumHouse title bars: ours, with an X
     o.resizable = false;
     open = o.launchAsync();
     if (phoneUI && open != nullptr) { open->setTitleBarHeight (44); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, true); }
+    else if (open != nullptr && ! o.useNativeTitleBar) { open->setTitleBarHeight (30); open->setTitleBarButtonsRequired (juce::DocumentWindow::closeButton, false); }
 }
 
 void drawLogo (juce::Graphics& g, juce::Rectangle<float> area, bool withText)

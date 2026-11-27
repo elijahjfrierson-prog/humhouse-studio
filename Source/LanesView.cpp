@@ -36,7 +36,7 @@ public:
         fxBtn.onClick = autoBtn.onClick = [this] { scroll = 0; laneKey = {}; refill(); repaint(); };
         setupButton (addBtn, "+ LANE", "Automate this track: volume, pan, a send or any effect knob");
         addBtn.onClick = [this] { addMenu(); };
-        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) addAndMakeVisible (b);
+        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) if (! phoneLite || b == &fxBtn) addAndMakeVisible (b);   // stripped phone app: no automation
         laneBox.setTooltip ("LANE: one automation / effect, or all of them");
         trackBox.setTooltip ("TRACK: only what sits on this Playlist track");
         mixBox.setTooltip ("MIXER: only this mixer insert's effects and automation");
@@ -230,8 +230,7 @@ private:
         if (row.t.kind == AutoFxParam) m.addItem (1, "Open effect");
         m.addItem (2, anyOn ? "Mute automation" : "Unmute automation");
         m.addItem (3, "Delete automation (" + juce::String ((int) uids.size()) + (uids.size() == 1 ? " clip)" : " clips)"));
-        m.addSeparator();
-        m.addItem (4, "Add automation lane...");
+        if (! phoneLite) { m.addSeparator(); m.addItem (4, "Add automation lane..."); }
         m.showMenuAsync (juce::PopupMenu::Options().withMousePosition(),
                          [safe = juce::Component::SafePointer<LanesView> (this), row, uids, anyOn] (int r)
                          {
@@ -436,7 +435,7 @@ private:
         bool muted = true; for (int ci : row.clips) muted = muted && p.clips[(size_t) ci].muted;
         auto card = b.reduced (4).toFloat();
         g.setColour (col::panel); g.fillRoundedRectangle (card, 6.0f);
-        g.setColour (v >= 0.0f ? autoRed : col::accent2.withAlpha (0.8f)); g.drawRoundedRectangle (card, 6.0f, v >= 0.0f ? 2.0f : 1.2f);
+        g.setColour (v >= 0.0f ? autoRed : (col::neon && ! col::lightMode ? col::accent : col::accent2).withAlpha (0.8f)); g.drawRoundedRectangle (card, 6.0f, v >= 0.0f ? 2.0f : 1.2f);   // Neon 3D: purple-lit LANES cards
         auto in = card.reduced (8.0f, 5.0f);
         g.setColour (muted ? col::dim : col::text); g.setFont (juce::FontOptions (12.0f, juce::Font::bold));
         fitText (g, f != nullptr ? slotLabel (s, *f) : row.t.name.isNotEmpty() ? row.t.name : juce::String ("Automation"), in.removeFromTop (15.0f), juce::Justification::centredLeft, false);
@@ -488,6 +487,7 @@ private:
 
     void addMenu (bool atMouse = false)
     {
+        if (phoneLite) return;   // stripped phone app: no automation
         auto& p = s.p(); const int tr = track();
         if (tr >= (int) p.mixer.size()) return;
         const auto& mt = p.mixer[(size_t) tr];
@@ -534,7 +534,7 @@ private:
 
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const auto area = getLocalBounds().withTrimmedTop (barH).withTrimmedLeft (headW);
         if (! fxMode()) { if (s.engine.isPlaying()) repaint (getLocalBounds().withTrimmedTop (barH)); return; }
         auto* t = s.engine.trackScope (track());

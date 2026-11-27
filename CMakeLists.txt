@@ -28,6 +28,9 @@ set(HHS_CORE_SOURCES
     Source/Effects.cpp
     Source/StudioEffects.cpp
     Source/AmpSim.cpp
+    Source/ChromaVerb.cpp
+    Source/IsoRoomFx.cpp
+    Source/IsoRoom/IsoRoomEngine.cpp
     Source/Engine.cpp
     Source/PluginSandbox.cpp
     Source/ProjectIO.cpp
@@ -181,6 +184,8 @@ function(hhs_add_app target product bundle licensed)
         DOCUMENT_BROWSER_ENABLED TRUE
         TARGETED_DEVICE_FAMILY "1,2"
         NEEDS_CURL TRUE
+        # iPhone Pro: ProMotion 120 Hz (iOS caps apps at 60 fps without this)
+        PLIST_TO_MERGE "<plist><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/></dict></plist>"
     )
     if(IOS)   # bundled kits / sounds go inside the .app (bundledSoundsRoot = next to the executable)
         add_custom_command(TARGET ${target} POST_BUILD
@@ -193,6 +198,7 @@ function(hhs_add_app target product bundle licensed)
         Source/MainComponent.cpp
         Source/PaintPump.cpp
         $<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:Source/MacWindows.mm>
+        $<$<BOOL:${IOS}>:Source/IosRoute.mm>
         Source/ChannelRack.cpp
         Source/PianoRoll.cpp
         Source/Playlist.cpp
@@ -212,7 +218,7 @@ function(hhs_add_app target product bundle licensed)
     if(APPLE AND NOT IOS AND HHS_WITH_ISFX)   # FFmpeg dylibs ship in Contents/Frameworks
         target_link_options(${target} PRIVATE "-Wl,-rpath,@executable_path/../Frameworks")
     endif()
-    target_link_libraries(${target} PRIVATE ${HHS_LIBS} HHSFonts
+    target_link_libraries(${target} PRIVATE ${HHS_LIBS} HHSFonts "$<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:-framework CoreServices>"
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 endfunction()
 hhs_add_app(HumHouseStudio "HumHouse Studio" "com.humhouse.studio" 1)
@@ -224,7 +230,7 @@ if(NOT IOS)
 enable_testing()
 juce_add_console_app(HHSTests PRODUCT_NAME "HHSTests" NEEDS_CURL TRUE)
 target_sources(HHSTests PRIVATE ${HHS_CORE_SOURCES} tests/CoreTests.cpp)
-target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="HumHouse Studio")
+target_compile_definitions(HHSTests PRIVATE ${HHS_DEFS} JUCE_APPLICATION_NAME_STRING="HumHouse Studio" HHS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(HHSTests PRIVATE ${HHS_LIBS}
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 add_test(NAME HHSTests COMMAND HHSTests)

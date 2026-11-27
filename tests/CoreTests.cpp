@@ -310,6 +310,68 @@ static HeldProbe probeHeld (int style, double midiIn, double jitter = 0.002)
 
 int main (int argc, char** argv)
 {
+    {   // the owner's real songs (one zlib, one plain XML) always open: a build that can't open them never ships
+        int opened = 0;
+        for (auto& f : juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs").findChildFiles (juce::File::findFiles, false, "*.hhs"))
+        {
+            hhs::Project q; const bool ok = hhs::loadProject (q, f);
+            CHECK (ok && ! q.channels.empty());
+            if (ok) ++opened;
+            CHECK (hhs::unreadableReason (f).isEmpty());
+        }
+        CHECK (opened >= 2);
+        CHECK (hhs::unreadableReason (juce::File (HHS_SOURCE_DIR).getChildFile ("tests/songs/missing.hhs")).isNotEmpty());
+    }
+    {   // HumHouse Grand: the recorded piano plays every key, and a released note dies away
+        auto map = juce::File::getCurrentWorkingDirectory().getChildFile ("Sounds/HumHouse Grand/HumHouse Grand.hhkeys");
+        if (map.existsAsFile())
+        {
+            hhs::Channel c; c.type = hhs::ChannelType::Sampler; c.sampleFile = map;
+            auto inst = hhs::createInstrument (c, nullptr, 44100.0);
+            CHECK (inst != nullptr);
+            juce::AudioBuffer<float> o (2, 4410);
+            for (int k : { 21, 40, 60, 84, 108 })
+            {
+                o.clear(); inst->noteOn (k, 0.8f, false); inst->render (o, 0, 4410);
+                CHECK (o.getMagnitude (0, 4410) > 0.01f && std::isfinite (o.getSample (0, 100)));
+                inst->noteOff (k);
+            }
+            for (int b = 0; b < 40 && inst->isActive(); ++b) { o.clear(); inst->render (o, 0, 4410); }
+            CHECK (! inst->isActive());
+        }
+    }
+    if (auto* lp = std::getenv ("HHS_LOAD"))   // HHS_LOAD=song.hhs HHSTests: does this song open?
+    {
+        hhs::Project q; const bool ok = hhs::loadProject (q, juce::File (lp));
+        std::printf ("load %s: %s  channels=%d clips=%d\n", lp, ok ? "OK" : "FAILED", (int) q.channels.size(), (int) q.clips.size());
+        return ok ? 0 : 1;
+    }
+    // offline AutoPitch render for A/B against references: HHS_AP_IN=in.wav HHS_AP_OUT=out.wav HHSTests
+    if (auto* inPath = std::getenv ("HHS_AP_IN"))
+    {
+        juce::AudioFormatManager fm; fm.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> rd (fm.createReaderFor (juce::File (juce::String (inPath))));
+        if (rd == nullptr) return 2;
+        const int N = (int) rd->lengthInSamples; juce::AudioBuffer<float> all (2, N); rd->read (&all, 0, N, 0, true, true);
+        auto ap = hhs::createBuiltinEffect ("autopitch"); ap->prepare (rd->sampleRate, 512);
+        if (auto* st = std::getenv ("HHS_AP_STYLE")) ap->setParam ("style", (float) std::atoi (st));
+        ap->setParam ("retune", 0.0f); ap->setParam ("key", (float) (std::getenv ("HHS_AP_KEY") ? std::atoi (std::getenv ("HHS_AP_KEY")) : 0) + 1.0f);
+        ap->setParam ("scale", std::getenv ("HHS_AP_SCALE") ? (float) std::atoi (std::getenv ("HHS_AP_SCALE")) : 16.0f);
+        hhs::PlayContext ctx; juce::AudioBuffer<float> b (2, 512);
+        for (int at = 0; at < N; at += 512)
+        {
+            const int n = std::min (512, N - at);
+            for (int c = 0; c < 2; ++c) b.copyFrom (c, 0, all, c, at, n);
+            ap->process (b, n, ctx);
+            if (auto* lg = std::getenv ("HHS_AP_LOG")) { static FILE* f = std::fopen (lg, "w"); if (f) std::fprintf (f, "%d %.3f %.3f\n", at, ap->meter (100), ap->meter (101)); }
+            for (int c = 0; c < 2; ++c) all.copyFrom (c, at, b, 0 + c, 0, n);
+        }
+        juce::File out (juce::String (std::getenv ("HHS_AP_OUT") ? std::getenv ("HHS_AP_OUT") : "/tmp/ap_out.wav")); out.deleteFile();
+        juce::WavAudioFormat wav; std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::FileOutputStream (out), rd->sampleRate, 2, 24, {}, 0));
+        if (w) w->writeFromAudioSampleBuffer (all, 0, N);
+        std::printf ("autopitch render: %d samples -> %s\n", N, out.getFullPathName().toRawUTF8());
+        return 0;
+    }
     // CI crash triage: print where a crash happened instead of a bare SEGFAULT
     juce::SystemStats::setApplicationCrashHandler ([] (void*)
     {
@@ -696,6 +758,82 @@ int main (int argc, char** argv)
         std::printf ("channel routing: ch1 -> %d, ch12 -> %d, track 1 -> %d\n", pr.channels[0].mixerTrack, pr.channels[11].mixerTrack, pr.lanes[0].mixerTrack);
         CHECK (inOrder);
         CHECK (laneIns.size() == pr.lanes.size());
+    }
+
+    // clipboard paste: destination = playhead + each clip's own offset, exact for 1 / 10 / 100 / 500 clips across tracks
+    for (int count : { 1, 10, 100, 500 })
+    {
+        Project p; p.bpm = 87.0 + count; p.beatsPerBar = count % 2 ? 4 : 3;
+        for (int l = 0; l < 6; ++l) { Lane ln; ln.name = "T" + juce::String (l); p.lanes.push_back (ln); }
+        std::vector<Clip> cb; double lo = 1e9; juce::Random r (count);
+        for (int i = 0; i < count; ++i)
+        {
+            Clip c; c.uid = p.newUid(); c.lane = i % 6; c.start = 3.37 + i * 1.913 + r.nextDouble() * 0.71;   // between bars, irregular
+            c.length = 0.25 + r.nextDouble() * 3.0; c.sourceOffset = r.nextDouble(); c.gain = 0.7f; c.fadeIn = 0.1; c.selected = true;
+            p.clips.push_back (c); cb.push_back (c); lo = std::min (lo, c.start);
+        }
+        for (double at : { 16.0, 17.3333, 0.0 })   // on a bar, between bars, at zero
+        {
+            const auto before = p.clips.size();
+            CHECK (pasteClips (p, cb, lo, at) == count);
+            CHECK (p.clips.size() == before + (size_t) count);
+            for (int i = 0; i < count; ++i)
+            {
+                const auto& o = cb[(size_t) i]; const auto& n = p.clips[before + (size_t) i];
+                CHECK (std::abs (n.start - (at + (o.start - lo))) < 1.0e-9);
+                CHECK (n.lane == o.lane && n.length == o.length && n.sourceOffset == o.sourceOffset && n.gain == o.gain && n.fadeIn == o.fadeIn);
+                CHECK (n.selected && n.uid != o.uid);
+            }
+            CHECK (std::abs (p.clips[before].start - at) < 1.0e-9 || count > 1);
+            int sel = 0; for (auto& c : p.clips) sel += c.selected ? 1 : 0;
+            CHECK (sel == count);   // only the new paste is selected
+        }
+        for (size_t i = 0; i < cb.size(); ++i) CHECK (p.clips[i].start == cb[i].start);   // the originals never move
+    }
+
+    for (int blk : { 256, 512 })
+    {   // audio deadline meter: every device callback lands in the histogram, the block size is shown, reset clears it
+        Engine e; e.prepare (48000, blk);
+        e.newProject (Project::createDemo()); e.sync(); e.resetCallbackMeter();
+        juce::AudioBuffer<float> out (2, blk);
+        juce::AudioIODeviceCallbackContext cc {};
+        for (int b = 0; b < 300; ++b)
+        {
+            float* o[2] { out.getWritePointer (0), out.getWritePointer (1) };
+            e.audioDeviceIOCallbackWithContext (nullptr, 0, o, 2, blk, cc);
+        }
+        uint64_t total = 0; for (auto& h : e.cbHist) total += h.load();
+        CHECK (total == 300 && e.cbBlock.load() == blk);
+        CHECK (e.callbackPercentile (0.5f) > 0.0f && e.callbackPercentile (0.5f) < 1.0f);
+        e.resetCallbackMeter();
+        total = 0; for (auto& h : e.cbHist) total += h.load();
+        CHECK (total == 0 && e.lateCallbacks.load() == 0 && e.callbackPercentile (0.99f) == 0.0f);
+    }
+    {   // paste at the playhead: bars 5/10/15/20 -> 100/105/110/115; a hidden comp take never owns the anchor or gets pasted
+        Project p; p.bpm = 140.0; p.beatsPerBar = 4;
+        for (int l = 0; l < 10; ++l) { Lane ln; ln.name = "T" + juce::String (l); p.lanes.push_back (ln); }
+        auto bar = [] (double b) { return (b - 1.0) * 4.0; };
+        std::vector<Clip> cb;
+        for (int i = 0; i < 4; ++i) { Clip c; c.uid = p.newUid(); c.lane = i; c.start = bar (5.0 + 5.0 * i); c.length = 4.0; c.takeGroup = 7; p.clips.push_back (c); cb.push_back (c); }
+        Clip hid; hid.uid = p.newUid(); hid.lane = 1; hid.start = bar (1.0); hid.length = 8.0; hid.hidden = true; hid.takeGroup = 7;
+        p.clips.push_back (hid);
+        std::vector<Clip> copied; double lo = 1e9;
+        for (auto c : cb) { copied.push_back (c); lo = std::min (lo, c.start); }
+        copied.push_back (hid);   // even if a hidden take slipped in, it is skipped
+        const auto before = p.clips.size();
+        CHECK (pasteClips (p, copied, lo, bar (100.0)) == 4);
+        CHECK (p.clips.size() == before + 4);
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto& n = p.clips[before + (size_t) i];
+            CHECK (std::abs (n.start - bar (100.0 + 5.0 * i)) < 1.0e-9 && n.lane == i && ! n.hidden && n.takeGroup == 0);
+        }
+        for (double at : { bar (50.0), bar (10.5), 1.2345, bar (45.0), bar (60.0) })   // five pastes, each on its own playhead
+        {
+            const auto b0 = p.clips.size();
+            pasteClips (p, copied, lo, at);
+            CHECK (std::abs (p.clips[b0].start - at) < 1.0e-12);
+        }
     }
 
     // scales
@@ -1090,8 +1228,10 @@ int main (int argc, char** argv)
         CHECK (rd != nullptr);
         if (rd)
         {
-            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats() + 2.0;
-            CHECK (std::abs ((double) rd->lengthInSamples - secs * 44100.0) < 1024.0);
+            // the song plus its tail until it is silent (trimmed): never a fixed 2 s of dead air, never shorter than the song
+            const double secs = 60.0 / p.bpm * p.patterns[(size_t) p.currentPattern].lengthBeats();
+            std::printf ("export length: %.3f s (song %.3f s)\n", (double) rd->lengthInSamples / 44100.0, secs);
+            CHECK ((double) rd->lengthInSamples >= secs * 44100.0 - 1.0 && (double) rd->lengthInSamples < (secs + 10.0) * 44100.0);
             juce::AudioBuffer<float> b (2, (int) rd->lengthInSamples);
             rd->read (&b, 0, b.getNumSamples(), 0, true, true);
             CHECK (b.getMagnitude (0, 0, 2048) > 0.02f);
@@ -1914,7 +2054,8 @@ int main (int argc, char** argv)
             std::printf ("consolidate: %.2f s, note at the start %.3f, after it %.4f\n", x.getNumSamples() / 44100.0, head, late);
             CHECK (head > 0.05f);       // the note is right at the start of the new clip
             CHECK (late < head * 0.1f); // the clip at beat 16 (not chosen) is not in it
-            CHECK (std::abs (x.getNumSamples() / 44100.0 - (4 * 60.0 / p.bpm + 2.0)) < 0.05);
+            CHECK (x.getNumSamples() / 44100.0 >= 4 * 60.0 / p.bpm - 0.001 && x.getNumSamples() / 44100.0 < 4 * 60.0 / p.bpm + 10.0);
+            CHECK (x.getMagnitude (x.getNumSamples() - juce::jmin (x.getNumSamples(), 256), juce::jmin (x.getNumSamples(), 256)) < 0.01f);   // ends faded, no dead noise
         }
         else CHECK (false);
         f.deleteFile();
@@ -1946,6 +2087,26 @@ int main (int argc, char** argv)
         std::printf ("  noise gate (earbuds): hiss %.1f dB, voice %.1f dB\n", hissDb, voiceDb);
     }
 
+    {   // speed fades (TAPE STOP / SPEED UP): continuous, never faster than normal, tape stops at zero speed
+        for (float curve : { -2.0f, 0.0f, 2.0f })
+        {
+            double prev = speedFadeSecs (0.0, 4.0, 1.0, 1.0, true, true, curve), maxSpeed = 0, endSpeed = 1, startSpeed = 1;
+            CHECK (prev >= 0.0 && prev < 1.0);
+            for (int k = 1; k <= 4000; ++k)
+            {
+                const double t = k * 0.001, v = speedFadeSecs (t, 4.0, 1.0, 1.0, true, true, curve), sp = (v - prev) / 0.001;
+                maxSpeed = std::max (maxSpeed, sp); if (k == 1) startSpeed = sp; if (k == 4000) endSpeed = sp;
+                CHECK (sp >= -1.0e-9);
+                prev = v;
+            }
+            CHECK (maxSpeed < 1.0001);
+            CHECK (startSpeed < 0.2 && endSpeed < 0.2);
+            CHECK (std::abs (speedFadeSecs (1.0, 4.0, 1.0, 1.0, true, true, curve) - 1.0) < 1.0e-9);   // speed up lands on the normal timeline
+            CHECK (std::abs (speedFadeSecs (3.0, 4.0, 1.0, 1.0, true, true, curve) - 3.0) < 1.0e-9);
+            std::printf ("speed fade curve %+.0f: start speed %.3f, end speed %.3f\n", curve, startSpeed, endSpeed);
+        }
+        CHECK (speedFadeSecs (3.5, 4.0, 1.0, 1.0, false, false, 0.0f) == 3.5);
+    }
     {
         const double sr = 48000.0; const int len = (int) sr;
         auto tone = [&] (juce::AudioBuffer<float>& x) {
@@ -1986,6 +2147,72 @@ int main (int argc, char** argv)
             CHECK (std::abs (hz - want) < want * 0.02);
             CHECK (c1 > c0 * 0.8 && c1 < c0 * 1.25);   // resampling would move it with the pitch (x1.5 at +7)
             CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 3.0f);
+        }
+        // Cent Transposer: A4 200-600 Hz retunes the whole signal; Mod + shimmer + freeze stay finite and bounded
+        for (float a4 : { 440.0f, 432.0f, 300.0f, 600.0f })
+        {
+            auto fx = createBuiltinEffect ("centtrans");
+            CHECK (fx != nullptr);
+            if (! fx) break;
+            fx->setParam ("tuning", a4); fx->prepare (sr, 256);
+            juce::AudioBuffer<float> x; tone (x); PlayContext ctx;
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            const float hz = detectPitchYin (x.getReadPointer (0, len - 2400), 2048, sr, 0.15f, 0.0f, 70.0f, 1100.0f);
+            const double want = 200.0 * a4 / 440.0;
+            std::printf ("cent transposer A4 %.0f Hz: %.2f Hz (want %.2f), rms %.3f -> %.3f\n", a4, hz, want, in.getRMSLevel (0, len / 2, len / 2), x.getRMSLevel (0, len / 2, len / 2));
+            CHECK (std::abs (hz - want) < want * 0.004);
+            CHECK (std::abs (juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / in.getRMSLevel (0, len / 2, len / 2))) < 2.0f);
+        }
+        {
+            auto fx = createBuiltinEffect ("centtrans");
+            fx->setParam ("tuning", 432.0f); fx->setParam ("moddepth", 0.8f); fx->setParam ("verbmix", 0.7f); fx->setParam ("verbsize", 1.0f);
+            fx->setParam ("shimmer", 5.0f); fx->setParam ("shimamt", 1.0f); fx->prepare (sr, 256);
+            PlayContext ctx; float peak = 0; bool finite = true;
+            for (int pass = 0; pass < 6; ++pass)
+            {
+                if (pass == 3) fx->setParam ("freeze", 1.0f);
+                juce::AudioBuffer<float> x; tone (x);
+                for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+                for (int c = 0; c < 2; ++c) for (int i = 0; i < len; ++i) { const float v = x.getSample (c, i); finite = finite && std::isfinite (v); peak = std::max (peak, std::abs (v)); }
+            }
+            std::printf ("cent transposer mod + shimmer + freeze: peak %.2f\n", peak);
+            CHECK (finite);
+            CHECK (peak < 4.0f);
+        }
+        {   // Stereo Spreader: neutral at default; spreads mono into stereo while the mono sum stays the source
+            auto fx = createBuiltinEffect ("spreader"); CHECK (fx != nullptr);
+            fx->prepare (sr, 256); PlayContext ctx;
+            juce::AudioBuffer<float> x; tone (x); juce::AudioBuffer<float> ref; ref.makeCopyOf (x);
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            float err = 0; for (int i = 0; i < len; ++i) err = std::max (err, std::abs (x.getSample (0, i) - ref.getSample (0, i)));
+            CHECK (err < 1.0e-5f);
+            fx->setParam ("sepl", 1.0f); fx->setParam ("sepr", 1.0f); fx->setParam ("monobass", 120.0f);
+            tone (x); for (int i = 0; i < len; ++i) x.setSample (1, i, x.getSample (0, i));
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            double lr = 0, ll = 0, rr = 0; float monoErr = 0;
+            for (int i = len / 2; i < len; ++i)
+            {
+                const float a = x.getSample (0, i), c = x.getSample (1, i);
+                lr += a * c; ll += a * a; rr += c * c; monoErr = std::max (monoErr, std::abs (0.5f * (a + c) - ref.getSample (0, i)));
+            }
+            const double corr = lr / std::sqrt (ll * rr + 1e-12);
+            std::printf ("stereo spreader mono in: L/R correlation %.2f, mono-sum error %.6f\n", corr, monoErr);
+            CHECK (corr < 0.9);
+            CHECK (monoErr < 1.0e-4f);
+        }
+        for (int mode = 0; mode < 7; ++mode)   // HumHouse Mod: every mode finite, and the lows stay as played (no mud)
+        {
+            auto fx = createBuiltinEffect ("hummod"); CHECK (fx != nullptr);
+            fx->setParam ("mode", (float) mode); fx->setParam ("feedback", 0.8f); fx->setParam ("mix", 1.0f); fx->setParam ("depth", 1.0f); fx->prepare (sr, 256);
+            PlayContext ctx; juce::AudioBuffer<float> x (2, len);
+            for (int i = 0; i < len; ++i) { const float v = 0.3f * std::sin (juce::MathConstants<float>::twoPi * 50.0f * (float) i / (float) sr); x.setSample (0, i, v); x.setSample (1, i, v); }
+            const float inR = x.getRMSLevel (0, len / 2, len / 2);
+            for (int at = 0; at < len; at += 256) { juce::AudioBuffer<float> b (x.getArrayOfWritePointers(), 2, at, std::min (256, len - at)); fx->process (b, b.getNumSamples(), ctx); }
+            bool finite = true; for (int c = 0; c < 2; ++c) for (int i = 0; i < len; ++i) finite = finite && std::isfinite (x.getSample (c, i));
+            const float db = juce::Decibels::gainToDecibels (x.getRMSLevel (0, len / 2, len / 2) / inR);
+            std::printf ("hummod mode %d: 50 Hz level %+.2f dB\n", mode, db);
+            CHECK (finite);
+            CHECK (std::abs (db) < 1.0f);
         }
     }
     // Drummer rock fills sit on the straight grid: no triplet pickups, no gallops; the backbeat is dead on
@@ -2467,7 +2694,7 @@ int main (int argc, char** argv)
             const auto t0 = juce::Time::getHighResolutionTicks();
             e.processBlock (nullptr, 0, o, 2, 256);
             const double dt = juce::Time::highResolutionTicksToSeconds (juce::Time::getHighResolutionTicks() - t0);
-            if (b >= 100) { total += dt; worst = std::max (worst, dt); if (dt > deadline) ++late; }
+            if (b >= 100) { total += dt; worst = std::max (worst, dt); if (dt > deadline) { ++late; std::printf ("  late block %d: %.0f us\n", b, dt * 1e6); } }
             peak = std::max (peak, out.getMagnitude (0, 256));
             CHECK (std::isfinite (out.getSample (0, 0)));
         }
@@ -3051,6 +3278,18 @@ int main (int argc, char** argv)
         auto t2 = hhs::unpackTemplate (pack, inbox);   // received twice: kept side by side, nothing overwritten
         CHECK (t2.existsAsFile() && t2 != t);
         CHECK (hhs::unpackTemplate (wav.getSiblingFile ("nope.hhpack"), inbox) == juce::File());
+        {   // a template named with dots, and one re-zipped by Finder (song at the top + __MACOSX junk), both open
+            auto dots = tmp.getChildFile ("Vibes....hhpack");
+            CHECK (hhs::packTemplate (p, "Vibes...", dots));
+            CHECK (hhs::unpackTemplate (dots, inbox).existsAsFile());
+            juce::ZipFile::Builder z; auto songFile = tmp.getChildFile ("Loose.hhs");
+            CHECK (hhs::saveProject (q, songFile));
+            z.addFile (songFile, 9, "Loose.hhs"); z.addFile (songFile, 9, "__MACOSX/._Loose.hhs");
+            auto loose = tmp.getChildFile ("Loose.hhpack");
+            { juce::FileOutputStream os (loose); CHECK (os.openedOk() && z.writeToStream (os, nullptr)); }
+            auto lt = hhs::unpackTemplate (loose, inbox);
+            CHECK (lt.existsAsFile() && lt.getFileNameWithoutExtension() == lt.getParentDirectory().getFileName());
+        }
         std::printf ("shared template: %s -> %s\n", pack.getFileName().toRawUTF8(), q.channels.empty() ? "?" : q.channels.back().sampleFile.getFileName().toRawUTF8());
         tmp.deleteRecursively();
     }

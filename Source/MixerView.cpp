@@ -8,11 +8,19 @@ namespace
 {
 constexpr int stripW = 78, fxPanelW = 280, maxSlots = 10;
 
+struct MixFader : public juce::Slider   // phone: sideways swipes scroll the mixer, the volume stays put
+{
+    SwipeLock swipe;
+    void mouseDown (const juce::MouseEvent& e) override { swipe.down(); juce::Slider::mouseDown (e); }
+    void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
+};
+
 struct Strip : public juce::Component
 {
     Strip (Studio& st, int i) : s (st), index (i)
     {
         fader.setSliderStyle (juce::Slider::LinearVertical);
+        fader.setSliderSnapsToMousePosition (! phoneUI);   // phone: touching the fader to scroll never jumps the volume
         fader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
         fader.setRange (0.0, 1.25, 0.0);
         fader.setDoubleClickReturnValue (true, 0.8);
@@ -86,9 +94,17 @@ struct Strip : public juce::Component
     {
         auto& p = s.p();
         const bool sel = s.selectedTrack == index;
-        g.setColour (sel ? col::panel2.brighter (0.1f) : col::panel);
-        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
-        if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
+        if (col::neon && ! col::lightMode)   // Neon 3D iron: each strip is a brushed gunmetal module, the selected one lit at the seam
+        {
+            col::metal (g, getLocalBounds().toFloat().reduced (2), 4, sel ? 0.12f : 0.0f);
+            if (sel) col::seam (g, getLocalBounds().toFloat().reduced (2.5f), 4);
+        }
+        else
+        {
+            g.setColour (sel ? col::panel2.brighter (0.1f) : col::panel);
+            g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4);
+            if (sel) { g.setColour (col::accent); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (2), 4, 1.5f); }
+        }
         g.setColour (col::dim); g.setFont (juce::FontOptions (11.0f));
         fitText (g, index == 0 ? juce::String ("M") : juce::String (index), 0, 4, getWidth(), 14, juce::Justification::centred);
         if (index < (int) p.mixer.size() && p.mixer[(size_t) index].colour != juce::Colour (0xff2a2f36))
@@ -108,11 +124,12 @@ struct Strip : public juce::Component
         paintScope (g);
         // meter
         auto m = meterArea();
-        g.setColour (col::bg); g.fillRect (m);
+        if (col::neon && ! col::lightMode) col::well (g, m.toFloat().expanded (1.0f), 2.0f); else { g.setColour (col::bg); g.fillRect (m); }   // Neon 3D iron: meter in a recessed slot
         const float db = juce::Decibels::gainToDecibels (level, -60.0f);
         const float h = (float) m.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 66.0f);
         g.setGradientFill (col::levelGradient ((float) m.getX(), (float) m.getY(), (float) m.getBottom()));
         g.fillRect ((float) m.getX(), (float) m.getBottom() - h, (float) m.getWidth(), h);
+        if (col::neon && ! col::lightMode) { g.setColour (col::accent.withAlpha (0.35f)); g.drawRect (m.toFloat().expanded (1.0f), 1.0f); }   // Neon 3D: lit meter housing
         const int nfx = index < (int) p.mixer.size() ? (int) std::count_if (p.mixer[(size_t) index].fx.begin(), p.mixer[(size_t) index].fx.end(), [] (const FxSlot& f) { return f.type.isNotEmpty(); }) : 0;
         if (nfx > 0)
         {
@@ -217,7 +234,7 @@ struct Strip : public juce::Component
                 else if (r == 5) s.edit ("Set to master", [this] (Project& p) {
                     auto& mt = p.mixer[(size_t) index];
                     mt.direct = ! mt.direct;
-                    if (mt.direct) { mt.sends.clear(); mt.routesToMaster = true; }   // only the master, so no bus can add delay
+                    if (mt.direct) mt.routesToMaster = true;   // master path is unaligned (no latency); bus sends and routes stay
                 });
                 else if (r == 4) s.edit ("Clear FX", [this] (Project& p) { p.mixer[(size_t) index].fx.clear(); });
                 else if (r == 3) juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "Stem export", "Use File > Export and pick \"Selected track only\" or \"All tracks as stems\".");
@@ -236,7 +253,7 @@ struct Strip : public juce::Component
         scopeLive = live;
     }
     Studio& s; int index; float level = 0, drawnLevel = -1.0f; bool scopeLive = true;
-    juce::Slider fader;
+    MixFader fader;
     Knob pan { "Pan", "left / right", -1.0, 1.0, 0.0 };
     Knob sep { "M/S", "stereo separation: left = merge to mono, right = separate / wider. Double-click = 0", -1.0, 1.0, 0.0 };
     Knob duck { "Duck", "sidechain: dips this insert under the SC source (e.g. beat under vocals). 0 = off", 0.0, 1.0, 0.0 };
@@ -678,7 +695,7 @@ private:
         m.addItem (1, "Open editor"); m.addItem (2, fx[(size_t) i].bypass ? "Turn on" : "Bypass");
         m.addItem (3, "Replace (Plugin House)..."); m.addItem (4, "Move up", i > 0); m.addItem (5, "Move down", i + 1 < (int) fx.size());
         std::vector<AutoTarget> targets;
-        m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
+        if (! phoneLite) m.addSubMenu ("Automate (new track below)", automateMenu (s, targets, 100, t, uid, -1));
         m.addSeparator(); m.addItem (6, "Remove");
         m.showMenuAsync ({}, [this, t, i, uid, targets] (int r) {
             if (r >= 100)
@@ -757,6 +774,13 @@ public:
         viewport.setScrollBarsShown (false, true);
         addAndMakeVisible (viewport);
         addAndMakeVisible (fx);
+        if (phoneUI)   // phone: slide the FX box closed to see more of the mixer
+        {
+            fxSlide.full = fxPanelW; fxSlide.panelOnRight = true;
+            fxSlide.width = [this] { return fxW; };
+            fxSlide.set = [this] (int w, bool done) { w = juce::jlimit (0, fxPanelW, w); if (done && w < 60) w = 0; fxW = w; fxUserSet = true; resized(); fxSlide.repaint(); };
+            addAndMakeVisible (fxSlide);
+        }
         setupButton (addBtn, "+ Insert", "Add a mixer insert (bus / group / FX return)");
         addBtn.onClick = [this] { s.edit ("Add insert", [this] (Project& p) { s.selectedTrack = p.addMixerTrack ("Track " + juce::String (p.mixer.size())); }); };
         addAndMakeVisible (addBtn);
@@ -771,8 +795,12 @@ public:
     void resized() override
     {
         auto r = getLocalBounds();
-        fx.setBounds (r.removeFromRight (fxPanelW));
+        // phone: until you slide it, the FX box follows the screen: open on a wide screen (unfolded / landscape), closed on a narrow one
+        if (phoneUI && ! fxUserSet) fxW = getWidth() >= 700 ? fxPanelW : 0;
+        fx.setBounds (r.removeFromRight (phoneUI ? fxW : fxPanelW));
+        fx.setVisible (fx.getWidth() > 0);
         auto top = r.removeFromTop (30);
+        if (phoneUI) { fxSlide.setBounds (top.removeFromRight (34).reduced (3)); fxSlide.toFront (false); }
         addBtn.setBounds (top.removeFromLeft (100).reduced (4));
         wiresBtn.setBounds (top.removeFromLeft (80).reduced (4));
         viewport.setBounds (r);
@@ -789,6 +817,7 @@ private:
     juce::Component holder;
     std::vector<std::unique_ptr<Strip>> strips;
     FxPanel fx;
+    EdgeSlide fxSlide; int fxW = fxPanelW; bool fxUserSet = false;
     juce::TextButton addBtn, wiresBtn;
     WireOverlay wires { s, stripW };
 
@@ -810,7 +839,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
     void timerCallback() override
     {
-        if (! isShowing()) return;
+        if (! drawsOnScreen (*this)) return;
         const auto vis = viewport.getViewArea();
         for (auto& st : strips) if (st->getBounds().intersects (vis)) st->tick();
         fx.updateLoads();
@@ -917,6 +946,7 @@ private:
                 for (auto* id : ch.fx)
                 {
                     if (p.mixer[(size_t) t].fx.size() >= (size_t) maxSlots) break;
+                    if (! std::all_of (builtinEffects().begin(), builtinEffects().end(), [id] (const EffectInfo& e) { return juce::String (e.id) != id || fxOffered (e.id, e.category); })) continue;
                     auto& f = p.addFx (t, id);
                     if (juce::String (id) == "peakctl") ctl = f.uid;
                     if (juce::String (id) == "filter") flt = f.uid;
@@ -935,7 +965,7 @@ struct PatchWindow : juce::DocumentWindow, private juce::Timer
 {
     PatchWindow (const juce::String& t, PatchMethodView* v, int id) : juce::DocumentWindow (t, col::panel, juce::DocumentWindow::closeButton), view (v), chId (id)
     {
-        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44);
+        setUsingNativeTitleBar (! phoneUI); if (phoneUI) setTitleBarHeight (44); useHumHouseTitleBar (*this);
         setContentOwned (v, true);
         setResizable (true, false);
         centreWithSize (getWidth(), getHeight());

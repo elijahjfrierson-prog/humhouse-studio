@@ -22,6 +22,11 @@ public:
     {
         ed = std::make_unique<isfx::MainComponent> (&s.engine.deviceManager);
         addAndMakeVisible (*ed);
+        ed->onTrackLink = [this] (int tr) { linkMenu (tr); };
+        ed->routedOnHost = [this] (const juce::String& key)
+        {
+            return std::any_of (s.p().clips.begin(), s.p().clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); });
+        };
         setLookAndFeel (&isfx::sharedLookAndFeel());   // same buttons/fonts/colours as the InSequence FX app
         for (auto* b : { &push, &exportAll, &pop, &follow, &toRecord, &toMixer }) addAndMakeVisible (b);
         push.setTooltip ("PUSH the whole VIDEO sequence or the selected clips onto the Record timeline as editable clips; the video pops out and follows the playhead");
@@ -76,6 +81,7 @@ private:
         removeChildComponent (ed.get());
         win = std::make_unique<Win>();
         win->setUsingNativeTitleBar (true);
+        useHumHouseTitleBar (*win, juce::DocumentWindow::allButtons);
         win->setContentNonOwned (ed.get(), false);
         win->setResizable (true, true);
         win->centreWithSize (juce::jmax (1180, getWidth()), juce::jmax (720, getHeight()));
@@ -143,6 +149,130 @@ private:
         if (! popped()) popOut();
         info.setText (juce::String ((int) cl.size()) + " clip(s) pushed to REC - edit them there, the popped-out video follows the playhead", juce::dontSendNotification);
     }
+    juce::uint32 linkPollMs = 0;
+    std::map<juce::String, juce::String> linkSig;   // routeKey -> the track signature its REC clip was rendered from
+    std::map<juce::String, int> linkIns;            // routeKey -> VIDEO's insert at the last render (REC-side changes win until VIDEO's changes)
+    std::map<juce::String, int> linkGen;            // routeKey -> newest render; older renders finishing late are dropped
+    static juce::File linkDir() { return hhsHome().getChildFile ("Video Tracks").getChildFile ("Routed"); }
+    static juce::String linkPrefix (const juce::String& key) { return "V-" + key + " "; }
+    static bool isLinkClip (const Clip& c, const juce::String& key) { return key.isNotEmpty() && c.videoRoute == key; }
+    int trackOfKey (const juce::String& key) const
+    {
+        const auto& tr = ed->sequence().tracks;
+        for (int t = 0; t < (int) tr.size(); ++t) if (tr[(size_t) t].routeKey == key) return t;
+        return -1;
+    }
+    // right-click a VIDEO audio track: route it to any REC track (default: the same number going down) and that track's insert
+    void linkMenu (int tr)
+    {
+        const auto& tracks = ed->sequence().tracks;
+        if (tr < 0 || tr >= (int) tracks.size()) return;
+        int def = 0;
+        for (int k = 0; k < tr; ++k) def += tracks[(size_t) k].kind == isfx::TrackKind::Audio ? 1 : 0;
+        const int cur = tracks[(size_t) tr].recLane;
+        const auto& lanes = s.p().lanes; const auto& mx = s.p().mixer;
+        auto laneName = [&] (int i) { return "Track " + juce::String (i + 1) + (i < (int) lanes.size() && lanes[(size_t) i].name.isNotEmpty() ? "  " + lanes[(size_t) i].name : juce::String()); };
+        juce::PopupMenu m, rec, ins;
+        for (int i = 0; i < juce::jmax ((int) lanes.size(), def + 1); ++i) rec.addItem (1000 + i, laneName (i), true, cur == i);
+        rec.addSeparator(); rec.addItem (1999, "New REC track");
+        const int lane = cur >= 0 ? cur : def;
+        for (int i = 1; i < (int) mx.size(); ++i)
+            ins.addItem (2000 + i, "Insert " + juce::String (i) + "  " + mx[(size_t) i].name, true, tracks[(size_t) tr].recInsert == i);
+        m.addSectionHeader ("Plays live on REC: automate it, mix it, EXPORT ALL has it");
+        m.addItem (1000 + def, "Route to " + laneName (def) + " (same number)", true, cur == def);
+        m.addSubMenu ("Route to REC track", rec);
+        m.addSubMenu ("Route to Mixer insert", ins, mx.size() > 1);
+        m.addItem (3000, "Unroute", cur >= 0);
+        m.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<EditorView> (this), tr, lane] (int r)
+        {
+            if (safe == nullptr || r <= 0) return;
+            auto& self = *safe;
+            if (r == 3000)
+            {
+                const auto key = self.ed->sequence().tracks[(size_t) tr].routeKey;
+                self.ed->setTrackRoute (tr, -1); ++self.linkGen[key]; self.linkSig[key] = "unrouted";   // Undo re-routes it: the poll sees a change and rebuilds the REC clip
+                self.removeLink (key); return;
+            }
+            if (r >= 2000)
+            {   // same REC track: just move its clip to the insert (its REC edits stay); otherwise render it there
+                const auto& t0 = self.ed->sequence().tracks[(size_t) tr];
+                const bool same = t0.recLane == lane; const auto key = t0.routeKey;
+                self.ed->setTrackRoute (tr, lane, r - 2000);
+                if (! (same && self.retarget (key, r - 2000))) self.syncLink (tr);
+                return;
+            }
+            self.ed->setTrackRoute (tr, r == 1999 ? (int) self.s.p().lanes.size() : r - 1000);
+            self.syncLink (tr);
+        });
+    }
+    bool retarget (const juce::String& key, int insert)
+    {
+        linkIns[key] = insert;
+        if (std::none_of (s.p().clips.begin(), s.p().clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); })) return false;
+        s.edit ("VIDEO track insert", [&] (Project& p) {
+            for (auto& c : p.clips) if (isLinkClip (c, key)) c.mixerTrack = insert > 0 && insert < (int) p.mixer.size() ? insert : -1;
+        });
+        return true;
+    }
+    void removeLink (const juce::String& key)
+    {
+        if (std::none_of (s.p().clips.begin(), s.p().clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); })) return;
+        s.edit ("Unroute VIDEO track", [&] (Project& p) {
+            p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); }), p.clips.end());
+        });
+        ed->refreshPlayback();
+    }
+    void syncLink (int t)
+    {
+        const auto key = ed->sequence().tracks[(size_t) t].routeKey;
+        if (key.isEmpty()) return;
+        const auto sig = ed->trackSignatures();
+        linkSig[key] = t < sig.size() ? sig[t] : juce::String();
+        const int gen = ++linkGen[key];
+        const auto f = linkDir().getChildFile (linkPrefix (key) + juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S") + ".wav").getNonexistentSibling();
+        info.setText ("Routing VIDEO track " + juce::String (t + 1) + " to REC...", juce::dontSendNotification);
+        ed->renderTrackAsync (t, f, [safe = juce::Component::SafePointer<EditorView> (this), key, gen, f] (double secs)
+        {
+            if (safe == nullptr) return;
+            auto& self = *safe;
+            const int t = self.trackOfKey (key);   // the track may have moved while it rendered
+            const auto& tracks = self.ed->sequence().tracks;
+            const int lane = t >= 0 ? tracks[(size_t) t].recLane : -1;
+            if (lane < 0 || self.linkGen[key] != gen) { f.deleteFile(); return; }   // unrouted, or a newer render is on its way
+            if (secs < 0)
+            {   // the WAV couldn't be written: keep what REC has and try again next second
+                self.linkSig[key] = {};
+                self.info.setText ("Couldn't write VIDEO track " + juce::String (t + 1) + "'s audio - retrying", juce::dontSendNotification); return;
+            }
+            if (secs <= 0)
+            {   // nothing audible left (clips deleted or the track muted): its REC clip goes too
+                f.deleteFile(); self.removeLink (key);
+                self.info.setText ("VIDEO track " + juce::String (t + 1) + " has no sound - nothing on REC", juce::dontSendNotification); return;
+            }
+            const int vidIns = tracks[(size_t) t].recInsert;
+            int keepInsert = vidIns;
+            if (auto li = self.linkIns.find (key); li != self.linkIns.end() && li->second == vidIns)
+                for (auto& c : self.s.p().clips) if (isLinkClip (c, key)) { keepInsert = c.mixerTrack; break; }   // the insert picked on REC stays
+            self.linkIns[key] = vidIns;
+            self.s.edit ("VIDEO track to REC", [&] (Project& p) {
+                p.clips.erase (std::remove_if (p.clips.begin(), p.clips.end(), [&] (const Clip& c) { return isLinkClip (c, key); }), p.clips.end());
+                while ((int) p.lanes.size() <= lane)
+                {
+                    Lane l; l.name = "Track " + juce::String ((int) p.lanes.size() + 1);
+                    l.mixerTrack = p.addMixerTrack (l.name);
+                    p.lanes.push_back (l);
+                }
+                Clip c; c.uid = p.newUid(); c.lane = lane; c.audioFile = f; c.patternIndex = -1; c.videoRoute = key;
+                if (keepInsert > 0 && keepInsert < (int) p.mixer.size()) c.mixerTrack = keepInsert;   // only this clip: the lane's other audio keeps its insert
+                c.start = 0.0; c.length = secondsToBeats (secs, p.bpm);
+                p.clips.push_back (c);
+            });
+            self.ed->refreshPlayback();
+            const int mt = keepInsert > 0 ? keepInsert : lane < (int) self.s.p().lanes.size() ? self.s.p().lanes[(size_t) lane].mixerTrack : 0;
+            self.info.setText ("VIDEO track " + juce::String (t + 1) + " plays on REC Track " + juce::String (lane + 1) + " -> insert " + juce::String (mt)
+                               + ": automate and mix it there, EXPORT ALL includes it", juce::dontSendNotification);
+        });
+    }
     void tracksMenu()
     {
         juce::PopupMenu m, to;
@@ -173,6 +303,32 @@ private:
     }
     void timerCallback() override
     {
+        const bool hostOn = s.engine.isPlaying();
+        if (isfx::hostPlaying().exchange (hostOn) != hostOn) ed->refreshPlayback();   // routed tracks never sound from both
+        if (juce::Time::getMillisecondCounter() - linkPollMs > 1000 && ! s.engine.isRecording())
+        {   // once a second: a routed track whose clips or mute changed re-renders in the background and replaces its REC clip
+            linkPollMs = juce::Time::getMillisecondCounter();
+            const auto& tr = ed->sequence().tracks;
+            bool anyRouted = false;
+            for (auto& t : tr) anyRouted = anyRouted || t.recLane >= 0;
+            if (anyRouted)
+            {
+                const auto sig = ed->trackSignatures();
+                for (int t = 0; t < (int) tr.size() && t < sig.size(); ++t)
+                {
+                    if (tr[(size_t) t].recLane < 0) continue;
+                    const auto key = tr[(size_t) t].routeKey;
+                    auto it = linkSig.find (key);
+                    if (it == linkSig.end())
+                    {   // first sight (a VIDEO project just opened): its REC clip is already in the song it was routed in; never add it to another
+                        if (! sig[t].fromFirstOccurrenceOf ("|", false, false).upToFirstOccurrenceOf ("|", false, false).containsChar ('-')) { linkSig[key] = sig[t]; linkIns[key] = tr[(size_t) t].recInsert; }
+                    }
+                    else if (it->second != sig[t]) syncLink (t);
+                    else if (auto li = linkIns.find (key); li != linkIns.end() && li->second != tr[(size_t) t].recInsert)
+                        retarget (key, tr[(size_t) t].recInsert);   // Undo/Redo of an insert change: move the clip, keep its REC edits
+                }
+            }
+        }
         isfx::hostBusy() = s.engine.isRecording();
         ed->setActive (isShowing() || popped());
         if (! follow.getToggleState() || (! isShowing() && ! popped())) { hostWasPlaying = s.engine.isPlaying(); return; }
