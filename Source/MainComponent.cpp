@@ -1022,12 +1022,23 @@ public:
             if (phoneLite == full) { phoneLite = ! full; safe->relayoutAll (*safe); }
             if (! msg.empty()) juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("HumHouse Pro").withMessage (juce::String (msg)).withButton ("OK"), nullptr);
         });
+        if (phoneUI && ! studio.settings->getBoolValue ("welcomeOff", false)) studio.settings->setValue ("proOffered", true);   // the Welcome page shows Pro
         if (phoneLite && ! studio.settings->getBoolValue ("proOffered", false))   // first launch: show what Full adds, once
         {
             studio.settings->setValue ("proOffered", true);
             juce::Timer::callAfterDelay (2500, [safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->showUnlock(); });
         }
        #endif
+        if (phoneUI && ! studio.settings->getBoolValue ("welcomeOff", false))
+        {
+            welcome = std::make_unique<PhoneWelcome>();
+            welcome->onDone = [this] (bool off) {
+                if (off) studio.settings->setValue ("welcomeOff", true);
+                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->welcome = nullptr; });
+            };
+            addAndMakeVisible (*welcome);
+            welcome->setBounds (getLocalBounds());
+        }
         engine.lowLatency = studio.settings->getBoolValue ("lowLatency", true);   // No Latency Policy: on by default, no right-click steps to record on time
         packAudioInSong() = studio.settings->getBoolValue ("packAudioInSong", phoneUI);
         if (! phoneUI) if (const juce::File bgf (studio.settings->getValue ("bgPicture")); bgf.existsAsFile()) bgPicture = juce::ImageFileFormat::loadFrom (bgf);   // phone: songs carry every sample, one-shot and clip inside, so they open exactly on a computer
@@ -1454,6 +1465,7 @@ public:
     {
         auto r = getLocalBounds();
         if (phoneMenu != nullptr) phoneMenu->setBounds (phoneSafe (r));   // phone turned while the menu is open
+        if (welcome != nullptr) { welcome->setBounds (r); welcome->toFront (false); }
 if (phoneUI)
         {
             if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds()))
@@ -1644,6 +1656,12 @@ if (phoneUI)
     }
    #if HHS_STORE
     static void relayoutAll (juce::Component& c) { c.resized(); c.repaint(); for (auto* k : c.getChildren()) relayoutAll (*k); }
+    static juce::String proTerms (const juce::String& price)
+    {
+        return "HumHouse Pro: " + price + " per month, auto-renewing. Payment is charged to your Apple ID when you confirm. "
+               "It renews every month unless you cancel at least 24 hours before the end of the current period. "
+               "Manage or cancel in your Apple ID's Subscriptions settings.";
+    }
     // HumHouse Pro: the $7.99/month unlock, with what it adds and the terms Apple requires next to the buy button
     struct UnlockPanel : public juce::Component
     {
@@ -1656,16 +1674,7 @@ if (phoneUI)
             const juce::String price (hhsStorePrice());
             title.setText (phoneLite ? "Unlock HumHouse Pro" : "HumHouse Pro is active", juce::dontSendNotification);
             title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
-            body.setText ("Everything in HumHouse, on your phone:\n"
-                          "- Glitch Gate stutters, repeats and tape effects on clip fades\n"
-                          "- Mastering tools, Maximizer, spectrum and scope views\n"
-                          "- Automation and LFOs on any knob\n"
-                          "- Patch Bay, HumWave synth and the extra sound packs\n"
-                          "- Vocal Room, Studio Vocal and Chroma Verb\n"
-                          "- Curved fades and automation\n\n"
-                          "HumHouse Pro: " + price + " per month, auto-renewing. Payment is charged to your Apple ID when you confirm. "
-                          "It renews every month unless you cancel at least 24 hours before the end of the current period. "
-                          "Manage or cancel in your Apple ID's Subscriptions settings.", juce::dontSendNotification);
+            body.setText ("Everything in HumHouse, on your phone:\n" + proList() + "\n" + proTerms (price), juce::dontSendNotification);
             body.setJustificationType (juce::Justification::topLeft);
             body.setColour (juce::Label::textColourId, col::text);
             buy.setButtonText (phoneLite ? "Subscribe - " + price + " / month" : "Manage subscription");
@@ -2510,6 +2519,94 @@ private:
         juce::String builtFor { "-" };
         int tab = 0;
     };
+    static juce::String proList()   // what the free phone app leaves out (phoneLite)
+    {
+        return "- Glitch Gate stutters, repeats and tape effects on clip fades\n"
+               "- Mastering tools, Maximizer, spectrum and scope views\n"
+               "- Automation and LFOs on any knob\n"
+               "- Patch Bay, HumWave synth and the extra sound packs\n"
+               "- Vocal Room, Studio Vocal and Chroma Verb\n"
+               "- Curved fades and automation\n";
+    }
+    // phone: the Welcome page the desktop apps open with (what's in it; App Store app: what HumHouse Pro adds + subscribe)
+    struct PhoneWelcome : public juce::Component
+    {
+        juce::Label title, sub, body;
+        juce::Viewport view;
+        juce::ToggleButton dontShow { "Don't show this again" };
+        juce::TextButton start { "Start making music" }, buy, restore { "Restore purchases" };
+        juce::HyperlinkButton terms { "Terms of Use", juce::URL ("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") },
+                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/main/PRIVACY.md") };
+        bool store = false;
+        std::function<void (bool off)> onDone;
+        PhoneWelcome()
+        {
+           #if HHS_STORE
+            store = phoneLite;
+           #endif
+            title.setText ("Welcome to HumHouse Studio", juce::dontSendNotification);
+            title.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
+            sub.setText ("Beats and vocals in one place - full studio workflow, phone-fast.", juce::dontSendNotification);
+            sub.setColour (juce::Label::textColourId, col::dim);
+            juce::String t ("FREE IN HUMHOUSE\n"
+                            "- Channel Rack: step sequencer, built-in kits, sampler and synth\n"
+                            "- Piano Roll: scale highlight, chord stamp, hi-hat rolls, 808 slides\n"
+                            "- Playlist: patterns and audio clips, select, paint, slice, mute\n"
+                            "- DUO strip: mini keyboard, drum pads or mini mixer under any page\n"
+                            "- Record vocals: punch-in, loop takes, AutoPitch\n"
+                            "- Mixer: EQ, compression, reverb, delay, sends\n"
+                            "- Export WAV / MP3 / M4A; songs open on HumHouse for Mac and Windows\n");
+            if (phoneLite) t << "\n" << (store ? "HUMHOUSE PRO ADDS\n" : "NOT IN THIS VERSION\n") << proList();
+           #if HHS_STORE
+            if (store) t << "\n" << proTerms (hhsStorePrice());
+            buy.setButtonText ("Subscribe - " + juce::String (hhsStorePrice()) + " / month");
+            buy.onClick = [this] { hhsStoreBuy(); finish(); };
+            restore.onClick = [this] { hhsStoreRestore(); finish(); };
+           #endif
+            body.setText (t, juce::dontSendNotification);
+            body.setJustificationType (juce::Justification::topLeft);
+            body.setColour (juce::Label::textColourId, col::text);
+            view.setViewedComponent (&body, false);
+            view.setScrollBarsShown (true, false);
+            view.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+            start.onClick = [this] { finish(); };
+            for (auto* c : std::initializer_list<juce::Component*> { &title, &sub, &view, &dontShow, &start }) addAndMakeVisible (c);
+            if (store) for (auto* c : std::initializer_list<juce::Component*> { &buy, &restore, &terms, &privacy }) addAndMakeVisible (c);
+        }
+        void finish() { if (onDone) onDone (dontShow.getToggleState()); }
+        void paint (juce::Graphics& g) override { g.fillAll (col::bg); }
+        void resized() override
+        {
+            auto r = getLocalBounds();
+            if (auto* d = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds())) r = d->safeAreaInsets.subtractedFrom (r);   // below the notch
+            r = r.reduced (16, 10);
+            title.setBounds (r.removeFromTop (32)); sub.setBounds (r.removeFromTop (22)); r.removeFromTop (6);
+            const bool wide = r.getWidth() >= 560;
+            if (store)
+            {
+                auto links = r.removeFromBottom (26);
+                terms.setBounds (links.removeFromLeft (links.getWidth() / 2)); privacy.setBounds (links);
+            }
+            auto row = r.removeFromBottom (44);
+            if (store && ! wide)
+            {
+                start.setBounds (row); r.removeFromBottom (6);
+                auto row2 = r.removeFromBottom (44);
+                restore.setBounds (row2.removeFromRight (row2.getWidth() / 3)); row2.removeFromRight (6); buy.setBounds (row2);
+            }
+            else
+            {
+                start.setBounds (row.removeFromRight (190));
+                if (store) { row.removeFromRight (6); restore.setBounds (row.removeFromRight (160)); row.removeFromRight (6); buy.setBounds (row); }
+            }
+            dontShow.setBounds (r.removeFromBottom (32)); r.removeFromBottom (4);
+            view.setBounds (r);
+            juce::AttributedString a; a.append (body.getText(), body.getFont(), col::text); a.setWordWrap (juce::AttributedString::byWord);
+            juce::TextLayout tl; tl.createLayout (a, (float) juce::jmax (10, r.getWidth() - 24));
+            body.setSize (r.getWidth() - 12, juce::jmax (r.getHeight(), (int) std::ceil (tl.getHeight()) + 24));
+        }
+    };
+    std::unique_ptr<PhoneWelcome> welcome;
     std::unique_ptr<DuoStrip> duo;
     struct MiniKb : juce::DocumentWindow   // Options > Mini keyboard: a small floating keyboard; click it, then play with the mouse or your computer keys
     {

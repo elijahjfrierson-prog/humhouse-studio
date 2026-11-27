@@ -617,6 +617,7 @@ struct IconTextButton : public juce::TextButton
         const float sz = (float) juce::jmin (getWidth(), getHeight()) - 6.0f;
         g.setOpacity (isEnabled() ? 1.0f : 0.4f);
         g.drawImage (img, juce::Rectangle<float> (sz, sz).withCentre (getLocalBounds().toFloat().getCentre()), juce::RectanglePlacement::centred);
+        if (getProperties()["locked"]) { g.setOpacity (1.0f); g.setColour (col::accent2); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 4.0f, 2.5f); }   // double-tapped: locked tool
     }
 };
 

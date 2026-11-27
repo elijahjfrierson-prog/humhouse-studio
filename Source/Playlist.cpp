@@ -1407,7 +1407,11 @@ public:
                 (void) labels;
                 b->icon = (int) std::array<CursorIcon, 5> { CursorIcon::Select, CursorIcon::Brush, CursorIcon::Bin, CursorIcon::Mute, CursorIcon::Scissors }[(size_t) i];
                 b->setRadioGroupId (4301);
-                b->onClick = [this, i] { tool = (PTool) i; };
+                b->onClick = [this, i] {   // phone: double tap a tool = lock it (one finger only does that tool, never scrolls)
+                    const auto now = juce::Time::getMillisecondCounter();
+                    const bool lock = phoneUI && tool == (PTool) i && ! toolLock && now - toolTapMs < 450;
+                    tool = (PTool) i; toolTapMs = now; setToolLock (lock);
+                };
                 addAndMakeVisible (b);
             }
             toolBtns[0]->setToggleState (true, juce::dontSendNotification);
@@ -1750,9 +1754,21 @@ public:
             }
             return;
         }
-        if (phoneUI && ! tapReplay && (phoneClipTarget == this || i < 0 || ! p.clips[(size_t) i].selected))
+        if (phoneUI && ! tapReplay && (phoneClipTarget == this || (! toolLock && (i < 0 || (! p.clips[(size_t) i].selected && tool != PTool::Select)))))
         {   // phone: drag empty space to scroll (BandLab), a quick tap still paints / moves the playhead
             drag = Drag::Pan; panTap = true; panSrc = e.source.getIndex(); panFrom = e.position; panX0 = scrollX; panY0 = scrollY; return;
+        }
+        if (phoneUI && toolLock && tool == PTool::Select)
+        {   // locked SELECT: a tap toggles a clip, a drag boxes more in; nothing moves or scrolls
+            if (i >= 0)
+                s.live ([&] (Project&) {
+                    auto& c = p.clips[(size_t) i]; const bool on = ! c.selected; c.selected = on;
+                    if (c.group > 0) for (auto& o : p.clips) if (o.group == c.group && ! o.hidden) o.selected = on;
+                });
+            lockTapClear = i < 0;
+            drag = Drag::Marquee; marquee = {}; marqueeBase.clear();
+            for (auto& c : p.clips) marqueeBase.push_back (c.selected);
+            repaint(); return;
         }
         if ((i < 0 && tool != PTool::Paint) || e.mods.isCommandDown())   // FL: drag empty space (or Ctrl/Cmd+drag) to box-select
         {
@@ -1814,8 +1830,10 @@ public:
             repaint();
             return;
         }
+        const bool phoneSel = phoneUI && tool == PTool::Select;   // phone SELECT: taps add clips, tapping a selected one drops it
+        tapOff = phoneSel && p.clips[(size_t) i].selected && e.getNumberOfClicks() == 1;
         s.live ([&] (Project&) {
-            if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown()) for (auto& c : p.clips) c.selected = false;
+            if (! p.clips[(size_t) i].selected && ! e.mods.isShiftDown() && ! phoneSel) for (auto& c : p.clips) c.selected = false;
             p.clips[(size_t) i].selected = true;
             if (const int g = p.clips[(size_t) i].group; g > 0) for (auto& c : p.clips) if (c.group == g && ! c.hidden) c.selected = true;
         });
@@ -2009,6 +2027,8 @@ public:
         }
         if (drag == Drag::Marquee)
         {
+            if (! changed && std::exchange (lockTapClear, false)) s.live ([] (Project& pr) { for (auto& c : pr.clips) c.selected = false; });
+            lockTapClear = false;
             if (! changed && clickMaySeek (false)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x))));
             else if (changed) s.live ([] (Project&) {});   // the drag's selection, published once
             marquee = {}; drag = Drag::None; repaint(); return;
@@ -2019,6 +2039,12 @@ public:
             else if (timeSelB > timeSelA) s.edit ("Loop range", [a = timeSelA, b = timeSelB] (Project& pr) { pr.punchIn = a; pr.punchOut = b; });   // FL: playback loops the selection
             drag = Drag::None; repaint(); return;
         }
+        if (drag == Drag::Move && ! changed && std::exchange (tapOff, false) && dragClip >= 0 && dragClip < (int) p.clips.size())
+            s.live ([&] (Project&) {
+                const int g = p.clips[(size_t) dragClip].group; p.clips[(size_t) dragClip].selected = false;
+                if (g > 0) for (auto& c : p.clips) if (c.group == g) c.selected = false;
+            });
+        tapOff = false;
         if (drag == Drag::Ruler && ! changed) { if (clickMaySeek (true)) s.engine.setPositionBeats (juce::jmax (0.0, placeSnap (xToBeat (e.position.x)))); }
         else if (changed)
         {
@@ -2199,7 +2225,7 @@ public:
             const std::pair<int, PTool> keys[] { { 'e', PTool::Select }, { 'p', PTool::Paint }, { 'b', PTool::Paint }, { 'd', PTool::Delete }, { 't', PTool::Mute }, { 'c', PTool::Slice } };
             for (auto& [key, tl] : keys)
                 if (k.getKeyCode() == key || k.getKeyCode() == juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) key))
-                { tool = tl; toolBtns[(int) tl]->setToggleState (true, juce::dontSendNotification); return true; }
+                { tool = tl; setToolLock (false); toolBtns[(int) tl]->setToggleState (true, juce::dontSendNotification); return true; }
         }
         const auto lower = juce::CharacterFunctions::toLowerCase ((juce::juce_wchar) k.getKeyCode());
         if (k.getModifiers() == juce::ModifierKeys (cmd) && (lower == 'c' || lower == 'x'))
@@ -2364,6 +2390,12 @@ private:
     int dragPt = -1;
     enum class PTool { Select, Paint, Delete, Mute, Slice };
     PTool tool = PTool::Select;
+    bool toolLock = false, lockTapClear = false, tapOff = false; juce::uint32 toolTapMs = 0;
+    void setToolLock (bool on)
+    {
+        toolLock = on;
+        for (int k = 0; k < toolBtns.size(); ++k) { toolBtns[k]->getProperties().set ("locked", on && k == (int) tool); toolBtns[k]->repaint(); }
+    }
     juce::OwnedArray<juce::TextButton> toolBtns;
     juce::TextButton groupBtn, toPlayheadBtn;
     int lastClipUid = 0;
