@@ -2412,6 +2412,7 @@ private:
             addChildComponent (keys); addChildComponent (padView); addChildComponent (mixView);
             padArea.getProperties().set ("noHold", true); padArea.getProperties().set ("ownDoubleTap", true);   // pads play: a hold is a held note, never a right-click
             padView.setViewedComponent (&padArea, false); padView.setScrollBarsShown (true, false);
+            padView.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::never); padView.setScrollBarThickness (18);   // a finger on a pad plays it at once; the bar scrolls
             mixView.setViewedComponent (&mixBody, false); mixView.setScrollBarsShown (false, true);
             mixView.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::nonHover);
             tab = juce::jlimit (0, 2, m.studio.settings->getIntValue ("duoTab", 0));
