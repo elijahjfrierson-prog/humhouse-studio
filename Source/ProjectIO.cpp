@@ -177,12 +177,13 @@ static bool unpackSmall (const juce::String& s, juce::MemoryOutputStream& out)
     juce::MemoryOutputStream binS;
     if (! juce::Base64::convertFromBase64 (binS, s.substring ((int) std::strlen (oggTag)))) return false;
     juce::MemoryInputStream in (binS.getData(), binS.getDataSize(), false);
-    const int bits = in.readInt(); const auto frames = in.readInt64();
-    if ((bits != 16 && bits != 24 && bits != 32) || frames <= 0) return false;
+    const int bits = in.readInt(); auto frames = in.readInt64();
+    if ((bits != 8 && bits != 16 && bits != 24 && bits != 32) || frames <= 0) return false;
     const auto at = (size_t) in.getPosition();
     juce::OggVorbisAudioFormat fmt;
     std::unique_ptr<juce::AudioFormatReader> r (fmt.createReaderFor (new juce::MemoryInputStream (static_cast<const char*> (binS.getData()) + at, binS.getDataSize() - at, true), true));
     if (! r) return false;
+    frames = juce::jmin (frames, r->lengthInSamples + (juce::int64) r->sampleRate);   // a damaged / hostile header can't ask for hours of silence
     juce::MemoryBlock pcm;
     {
         juce::WavAudioFormat wav;
