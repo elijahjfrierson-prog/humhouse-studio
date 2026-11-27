@@ -69,8 +69,8 @@ if(APPLE AND NOT IOS)
     list(APPEND HHS_DEFS JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1)
 endif()
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
-# App Store iPhone app (-DHHS_APPSTORE=ON): free stripped set, HumHouse Full ($7.99/month in-app subscription) unlocks the rest
-option(HHS_APPSTORE "iOS: App Store build with the HumHouse Full subscription" OFF)
+# App Store iPhone app (-DHHS_APPSTORE=ON): free stripped set, HumHouse Pro ($7.99/month in-app subscription) unlocks the rest
+option(HHS_APPSTORE "iOS: App Store build with the HumHouse Pro subscription" OFF)
 set(HHS_BUILD_NUMBER "${PROJECT_VERSION}" CACHE STRING "CFBundleVersion (App Store uploads need a new one each time)")
 set(HHS_IOS_FAMILY "1,2")
 set(HHS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon.png")

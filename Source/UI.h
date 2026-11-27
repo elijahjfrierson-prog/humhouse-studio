@@ -69,7 +69,7 @@ inline juce::File pickedFolder (const juce::FileChooser& fc)
    #endif
 }
 #if JUCE_IOS && defined (HHS_APPSTORE) && HHS_APPSTORE
-inline bool phoneLite = true;              // App Store app: the stripped set until HumHouse Full ($7.99/month) is bought (AppStore.mm)
+inline bool phoneLite = true;              // App Store app: the stripped set until HumHouse Pro ($7.99/month) is bought (AppStore.mm)
 #elif JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
 inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
 #else

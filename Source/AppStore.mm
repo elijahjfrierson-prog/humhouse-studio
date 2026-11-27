@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-// App Store app: free = the stripped phone set; "HumHouse Full" ($7.99/month auto-renewing) unlocks everything.
+// App Store app: free = the stripped phone set; "HumHouse Pro" ($7.99/month auto-renewing) unlocks everything.
 // Every purchase / renewal / restore extends "full until" to that transaction's date + 33 days, so a cancelled
 // subscription locks again after its last paid month. Renewals arrive through the observer on launch.
 static NSString* const hhsFullProduct = @"com.humhouse.studio.full.monthly";
@@ -68,7 +68,7 @@ static void hhsTell (std::string msg) { const bool full = hhsFullNow(); dispatch
                     if (until > [d doubleForKey: hhsUntilKey]) [d setDouble: until forKey: hhsUntilKey];
                 }
                 [queue finishTransaction: t];
-                if (ours && t.transactionState == SKPaymentTransactionStatePurchased) hhsTell (hhsFullNow() ? "HumHouse Full is unlocked. Thank you!" : std::string());
+                if (ours && t.transactionState == SKPaymentTransactionStatePurchased) hhsTell (hhsFullNow() ? "HumHouse Pro is unlocked. Thank you!" : std::string());
                 break;
             }
             case SKPaymentTransactionStateFailed:
@@ -80,7 +80,7 @@ static void hhsTell (std::string msg) { const bool full = hhsFullNow(); dispatch
                 break;
             }
             case SKPaymentTransactionStateDeferred:
-                if (ours) hhsTell ("Waiting for approval (Ask to Buy). HumHouse Full unlocks as soon as it's approved.");
+                if (ours) hhsTell ("Waiting for approval (Ask to Buy). HumHouse Pro unlocks as soon as it's approved.");
                 break;
             default: break;
         }
@@ -88,7 +88,7 @@ static void hhsTell (std::string msg) { const bool full = hhsFullNow(); dispatch
 }
 - (void) paymentQueueRestoreCompletedTransactionsFinished: (SKPaymentQueue*) queue
 {
-    hhsTell (hhsFullNow() ? "HumHouse Full is restored." : "No active HumHouse Full subscription on this Apple ID.");
+    hhsTell (hhsFullNow() ? "HumHouse Pro is restored." : "No active HumHouse Pro subscription on this Apple ID.");
 }
 - (void) paymentQueue: (SKPaymentQueue*) queue restoreCompletedTransactionsFailedWithError: (NSError*) error
 {

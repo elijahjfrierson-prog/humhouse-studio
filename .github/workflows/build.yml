@@ -204,7 +204,7 @@ jobs:
           rm -rf Payload && mkdir Payload && cp -R "$LITE" Payload/
           zip -qry artifacts/HumHouse-Studio-iPhone-Subscription.ipa Payload
           ls -la artifacts
-      - name: Build App Store app (free + HumHouse Full subscription; signed and uploaded outside CI)
+      - name: Build App Store app (free + HumHouse Pro subscription; signed and uploaded outside CI)
         run: |
           cmake -S . -B build-appstore -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \

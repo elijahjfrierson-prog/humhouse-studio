@@ -1020,11 +1020,11 @@ public:
         phoneLite = ! hhsStoreStart ([safe = juce::Component::SafePointer<MainComponent> (this)] (bool full, std::string msg) {
             if (safe == nullptr) return;
             if (phoneLite == full) { phoneLite = ! full; safe->relayoutAll (*safe); }
-            if (! msg.empty()) juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("HumHouse Full").withMessage (juce::String (msg)).withButton ("OK"), nullptr);
+            if (! msg.empty()) juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("HumHouse Pro").withMessage (juce::String (msg)).withButton ("OK"), nullptr);
         });
-        if (phoneLite && ! studio.settings->getBoolValue ("fullOffered", false))   // first launch: show what Full adds, once
+        if (phoneLite && ! studio.settings->getBoolValue ("proOffered", false))   // first launch: show what Full adds, once
         {
-            studio.settings->setValue ("fullOffered", true);
+            studio.settings->setValue ("proOffered", true);
             juce::Timer::callAfterDelay (2500, [safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->showUnlock(); });
         }
        #endif
@@ -1623,7 +1623,7 @@ if (phoneUI)
     }
    #if HHS_STORE
     static void relayoutAll (juce::Component& c) { c.resized(); c.repaint(); for (auto* k : c.getChildren()) relayoutAll (*k); }
-    // HumHouse Full: the $7.99/month unlock, with what it adds and the terms Apple requires next to the buy button
+    // HumHouse Pro: the $7.99/month unlock, with what it adds and the terms Apple requires next to the buy button
     struct UnlockPanel : public juce::Component
     {
         juce::Label title, body;
@@ -1633,7 +1633,7 @@ if (phoneUI)
         UnlockPanel()
         {
             const juce::String price (hhsStorePrice());
-            title.setText (phoneLite ? "Unlock HumHouse Full" : "HumHouse Full is active", juce::dontSendNotification);
+            title.setText (phoneLite ? "Unlock HumHouse Pro" : "HumHouse Pro is active", juce::dontSendNotification);
             title.setFont (juce::Font (juce::FontOptions (24.0f, juce::Font::bold)));
             body.setText ("Everything in HumHouse, on your phone:\n"
                           "- Glitch Gate stutters, repeats and tape effects on clip fades\n"
@@ -1642,7 +1642,7 @@ if (phoneUI)
                           "- Patch Bay, HumWave synth and the extra sound packs\n"
                           "- Vocal Room, Studio Vocal and Chroma Verb\n"
                           "- Curved fades and automation\n\n"
-                          "HumHouse Full: " + price + " per month, auto-renewing. Payment is charged to your Apple ID when you confirm. "
+                          "HumHouse Pro: " + price + " per month, auto-renewing. Payment is charged to your Apple ID when you confirm. "
                           "It renews every month unless you cancel at least 24 hours before the end of the current period. "
                           "Manage or cancel in your Apple ID's Subscriptions settings.", juce::dontSendNotification);
             body.setJustificationType (juce::Justification::topLeft);
@@ -1674,7 +1674,7 @@ if (phoneUI)
     {
         juce::DialogWindow::LaunchOptions o;
         o.content.setOwned (fitToScreen (new UnlockPanel()));
-        o.dialogTitle = "HumHouse Full"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
+        o.dialogTitle = "HumHouse Pro"; o.dialogBackgroundColour = col::panel; o.useNativeTitleBar = true; o.resizable = false;
         o.launchAsync();
     }
    #endif
@@ -1870,7 +1870,7 @@ if (phoneUI)
         if (index == 0)
         {
            #if HHS_STORE
-            m.addItem (4790, phoneLite ? "Unlock HumHouse Full (" + juce::String (hhsStorePrice()) + " / month)..." : "HumHouse Full (active)...");
+            m.addItem (4790, phoneLite ? "Unlock HumHouse Pro (" + juce::String (hhsStorePrice()) + " / month)..." : "HumHouse Pro (active)...");
             m.addItem (4791, "Restore purchases");
             m.addSeparator();
            #endif
