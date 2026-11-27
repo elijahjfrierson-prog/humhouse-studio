@@ -608,7 +608,7 @@ inline juce::MouseCursor toolCursor (CursorIcon k)
 struct XMenuRow : public juce::PopupMenu::CustomComponent
 {
     juce::String text; std::function<void()> onX;
-    XMenuRow (juce::String t, std::function<void()> x) : juce::PopupMenu::CustomComponent (false), text (std::move (t)), onX (std::move (x)) {}
+    XMenuRow (juce::String t, std::function<void()> x) : juce::PopupMenu::CustomComponent (false), text (std::move (t)), onX (std::move (x)) { setTitle (text); }
     void getIdealSize (int& w, int& h) override { w = juce::jmax (220, juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (17.0f)), text) + 90); h = 44; }
     void paint (juce::Graphics& g) override
     {
@@ -624,20 +624,33 @@ struct XMenuRow : public juce::PopupMenu::CustomComponent
     {
         if (e.mouseWasDraggedSinceMouseDown()) return;
         if (e.x < getWidth() - getHeight()) { triggerMenuItem(); return; }
+        tapX();
+    }
+    void tapX()
+    {
         auto x = onX;
         juce::PopupMenu::dismissAllActiveMenus();
         if (x) juce::MessageManager::callAsync (x);
     }
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override   // VoiceOver: activate = the item, "more actions" = the X
+    {
+        return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::menuItem,
+            juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] { triggerMenuItem(); })
+                                        .addAction (juce::AccessibilityActionType::showMenu, [this] { tapX(); }),
+            juce::AccessibilityHandler::Interfaces {});
+    }
 };
+inline void confirmDeleteFile (const juce::File& file, const juce::String& what)
+{
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + file.getFileNameWithoutExtension() + "\"?")
+                                      .withMessage ("Are you sure? This " + what + " is deleted from the phone.").withButton ("Delete").withButton ("Cancel"),
+                                  [file] (int b) { if (b == 1) file.deleteFile(); });
+}
 // phone: the item gets an X that deletes `file` (asks first); desktop: a plain item
 inline void addItemWithDelete (juce::PopupMenu& m, juce::PopupMenu::Item item, const juce::File& file, const juce::String& what)
 {
     if (phoneUI)
-        item.customComponent = new XMenuRow (item.text, [file, what] {
-            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + file.getFileNameWithoutExtension() + "\"?")
-                                              .withMessage ("Are you sure? This " + what + " is deleted from the phone.").withButton ("Delete").withButton ("Cancel"),
-                                          [file] (int b) { if (b == 1) file.deleteFile(); });
-        });
+        item.customComponent = new XMenuRow (item.text, [file, what] { confirmDeleteFile (file, what); });
     m.addItem (std::move (item));
 }
 struct IconTextButton : public juce::TextButton
