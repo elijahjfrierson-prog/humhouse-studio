@@ -1569,7 +1569,10 @@ if (phoneUI)
             const bool on = phoneUI && duoBtn.getToggleState();
             duo->setVisible (on);
             // DUO strip: a third of the screen, never cramped on a small phone or a waste on a big / unfolded one
-            if (on) duo->setBounds (r.removeFromBottom (juce::jlimit (150, 420, r.getHeight() * 32 / 100)));
+            // and the page keeps at least 200 pt (landscape on a small phone: the strip shrinks, then steps aside)
+            const int h = juce::jmin (juce::jlimit (150, 420, r.getHeight() * 32 / 100), r.getHeight() - 200);
+            duo->setVisible (on && h >= 100);
+            if (on && h >= 100) duo->setBounds (r.removeFromBottom (h));
         }
         if (kbInset != nullptr)
         {
