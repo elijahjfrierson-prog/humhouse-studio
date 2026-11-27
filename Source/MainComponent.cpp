@@ -2379,9 +2379,16 @@ private:
             void mouseUp (const juce::MouseEvent&) override { if (down && key >= 0) m.engine.previewNote (id, key, 0.0f, false); down = false; key = -1; repaint(); }
             MainComponent& m; int id; int key = -1; bool down = false;
         };
+        struct Fader : juce::Slider   // a sideways swipe scrolls the strip, the volume stays put
+        {
+            SwipeLock swipe;
+            Fader() : juce::Slider (juce::Slider::LinearVertical, juce::Slider::NoTextBox) { setSliderSnapsToMousePosition (false); }
+            void mouseDown (const juce::MouseEvent& e) override { swipe.down(); juce::Slider::mouseDown (e); }
+            void mouseDrag (const juce::MouseEvent& e) override { if (swipe.allows (e)) juce::Slider::mouseDrag (e); }
+        };
         struct Strip : juce::Component
         {
-            juce::Slider fader { juce::Slider::LinearVertical, juce::Slider::NoTextBox };
+            Fader fader;
             juce::Label name;
             Strip() { addAndMakeVisible (fader); addAndMakeVisible (name); fader.setRange (0.0, 1.25, 0.0); name.setJustificationType (juce::Justification::centred); name.setFont (juce::FontOptions (12.0f)); name.setColour (juce::Label::textColourId, col::text); }
             void resized() override { auto r = getLocalBounds(); name.setBounds (r.removeFromBottom (18)); fader.setBounds (r.reduced (2)); }
