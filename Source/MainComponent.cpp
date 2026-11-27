@@ -1033,9 +1033,9 @@ public:
         if (phoneUI && ! studio.settings->getBoolValue ("welcomeOff", false))
         {
             welcome = std::make_unique<PhoneWelcome>();
-            welcome->onDone = [this] (bool off) {
+            welcome->onDone = [this, safe = juce::Component::SafePointer<MainComponent> (this)] (bool off) {
                 if (off) studio.settings->setValue ("welcomeOff", true);
-                juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] { if (safe != nullptr) safe->welcome = nullptr; });
+                juce::MessageManager::callAsync ([safe] { if (safe != nullptr) safe->welcome = nullptr; });
             };
             addAndMakeVisible (*welcome);
             welcome->setBounds (getLocalBounds());
