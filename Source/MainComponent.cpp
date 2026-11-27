@@ -1870,8 +1870,8 @@ if (phoneUI)
         if (index == 0)
         {
            #if HHS_STORE
-            m.addItem (4790, phoneLite ? "Unlock HumHouse Pro (" + juce::String (hhsStorePrice()) + " / month)..." : "HumHouse Pro (active)...");
-            m.addItem (4791, "Restore purchases");
+            m.addItem (4896, phoneLite ? "Unlock HumHouse Pro (" + juce::String (hhsStorePrice()) + " / month)..." : "HumHouse Pro (active)...");
+            m.addItem (4897, "Restore purchases");
             m.addSeparator();
            #endif
             add (mNew, "New project", "Ctrl+N"); add (mOpen, "Open...", "Ctrl+O"); add (mOpenBackup, "Open backup...");
@@ -2228,8 +2228,8 @@ if (phoneUI)
             case 4723: bgPicture = bgScaled = bgScaledFrom = {}; studio.settings->removeValue ("bgPicture"); repaint(); break;
             case 4724: frameMeterOn() = ! frameMeterOn().load(); if (frameMeterOn().load()) engine.resetCallbackMeter(); if (playlist != nullptr) playlist->repaint(); break;
            #if HHS_STORE
-            case 4790: showUnlock(); break;
-            case 4791: hhsStoreRestore(); break;
+            case 4896: showUnlock(); break;
+            case 4897: hhsStoreRestore(); break;
            #endif
             case 4725: zoomAtPlayhead() = ! zoomAtPlayhead().load(); break;
             case 4726: playheadLock() = ! playheadLock().load(); studio.settings->setValue ("playheadLock", playheadLock().load()); break;
