@@ -206,6 +206,8 @@ jobs:
           ls -la artifacts
       - name: Build App Store app (free + HumHouse Pro subscription; signed and uploaded outside CI)
         run: |
+          X=$(ls -d /Applications/Xcode_26*.app | grep -v -i beta | sort -V | tail -1); echo "App Store Xcode: $X"; test -n "$X"
+          sudo xcode-select -s "$X/Contents/Developer"   # Apple only accepts uploads built with the iOS 26 SDK
           cmake -S . -B build-appstore -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
             -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
