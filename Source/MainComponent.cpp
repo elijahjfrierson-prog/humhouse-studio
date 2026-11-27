@@ -1020,6 +1020,7 @@ public:
         phoneLite = ! hhsStoreStart ([safe = juce::Component::SafePointer<MainComponent> (this)] (bool full, std::string msg) {
             if (safe == nullptr) return;
             if (phoneLite == full) { phoneLite = ! full; safe->relayoutAll (*safe); }
+            if (safe->welcome != nullptr) safe->welcome->fill();   // the price in the buyer's currency
             if (! msg.empty()) juce::AlertWindow::showAsync (juce::MessageBoxOptions().withTitle ("HumHouse Pro").withMessage (juce::String (msg)).withButton ("OK"), nullptr);
         });
         if (phoneUI && ! studio.settings->getBoolValue ("welcomeOff", false)) studio.settings->setValue ("proOffered", true);   // the Welcome page shows Pro
@@ -2548,6 +2549,22 @@ private:
             title.setFont (juce::Font (juce::FontOptions (22.0f, juce::Font::bold)));
             sub.setText ("Beats and vocals in one place - full studio workflow, phone-fast.", juce::dontSendNotification);
             sub.setColour (juce::Label::textColourId, col::dim);
+            fill();
+           #if HHS_STORE
+            buy.onClick = [this] { hhsStoreBuy(); finish(); };
+            restore.onClick = [this] { hhsStoreRestore(); finish(); };
+           #endif
+            body.setJustificationType (juce::Justification::topLeft);
+            body.setColour (juce::Label::textColourId, col::text);
+            view.setViewedComponent (&body, false);
+            view.setScrollBarsShown (true, false);
+            view.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
+            start.onClick = [this] { finish(); };
+            for (auto* c : std::initializer_list<juce::Component*> { &title, &sub, &view, &dontShow, &start }) addAndMakeVisible (c);
+            if (store) for (auto* c : std::initializer_list<juce::Component*> { &buy, &restore, &terms, &privacy }) addAndMakeVisible (c);
+        }
+        void fill()   // again once the App Store answers with the buyer's local price
+        {
             juce::String t ("FREE IN HUMHOUSE\n"
                             "- Channel Rack: step sequencer, built-in kits, sampler and synth\n"
                             "- Piano Roll: scale highlight, chord stamp, hi-hat rolls, 808 slides\n"
@@ -2560,18 +2577,10 @@ private:
            #if HHS_STORE
             if (store) t << "\n" << proTerms (hhsStorePrice());
             buy.setButtonText ("Subscribe - " + juce::String (hhsStorePrice()) + " / month");
-            buy.onClick = [this] { hhsStoreBuy(); finish(); };
-            restore.onClick = [this] { hhsStoreRestore(); finish(); };
            #endif
+            if (t == body.getText()) return;
             body.setText (t, juce::dontSendNotification);
-            body.setJustificationType (juce::Justification::topLeft);
-            body.setColour (juce::Label::textColourId, col::text);
-            view.setViewedComponent (&body, false);
-            view.setScrollBarsShown (true, false);
-            view.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
-            start.onClick = [this] { finish(); };
-            for (auto* c : std::initializer_list<juce::Component*> { &title, &sub, &view, &dontShow, &start }) addAndMakeVisible (c);
-            if (store) for (auto* c : std::initializer_list<juce::Component*> { &buy, &restore, &terms, &privacy }) addAndMakeVisible (c);
+            if (! getBounds().isEmpty()) resized();
         }
         void finish() { if (onDone) onDone (dontShow.getToggleState()); }
         void paint (juce::Graphics& g) override { g.fillAll (col::bg); }
@@ -2751,6 +2760,7 @@ private:
         juce::Component::SafePointer<MainComponent> safe (this);
         showMenuOrList (m, juce::PopupMenu::Options().withTargetComponent (&menuBtn).withStandardItemHeight (36),
                          [safe] (int r) { if (safe != nullptr && r != 0) safe->menuItemSelected (r, 0); });
+        templateX (300, templateFiles());   // File > New from template: X deletes
     }
     void importFiles()
     {
@@ -3420,15 +3430,10 @@ private:
         m.addSectionHeader ("TEMPLATES ON THIS PHONE");
         auto ts = templateFiles();
         ts.removeIf ([] (const juce::File& f) { return ! f.isAChildOf (templatesDir()); });   // only the app's own Templates folder: a song folder added as a source is never deleted here
-        for (int i = 0; i < ts.size() && i < 90; ++i)
-        {
-            juce::PopupMenu sub;
-            sub.addItem (1000 + i, "Open (new song from it)"); sub.addItem (2000 + i, "Delete");
-            m.addSubMenu (ts[i].getFileNameWithoutExtension(), sub);
-        }
+        for (int i = 0; i < ts.size() && i < 90; ++i) m.addItem (1000 + i, ts[i].getFileNameWithoutExtension());   // tap = new song from it, X = delete
         if (ts.isEmpty()) m.addItem (-1, "(no templates yet)", false);
         m.addSeparator(); m.addItem (3000, "Delete all templates", ! ts.isEmpty());
-        m.showMenuAsync ({}, [this, ts] (int r) {
+        showMenuOrList (m, {}, [this, ts] (int r) {
             if (r >= 1000 && r < 1000 + ts.size()) newProject (ts[r - 1000]);
             else if (r >= 2000 && r < 2000 + ts.size())
             {
@@ -3442,6 +3447,25 @@ private:
                                                   .withMessage (juce::String (ts.size()) + " templates on this phone will be deleted. Your songs stay.").withButton ("Delete").withButton ("Cancel"),
                                               [this, ts] (int b) { if (b != 1) return; for (auto& f : ts) f.deleteFile(); flash ("Templates cleared"); });
         });
+        templateX (1000, ts);
+    }
+    // phone: an X next to each template row deletes it (asks first); base = the rows' first menu id
+    void templateX (int base, const juce::Array<juce::File>& ts)
+    {
+        if (phoneMenu == nullptr) return;
+        phoneMenu->canDelete = [base, ts] (int id) { return id >= base && id < base + juce::jmin (90, ts.size()) && ts[id - base].isAChildOf (templatesDir()); };
+        juce::Component::SafePointer<MainComponent> safe (this);
+        phoneMenu->onDelete = [safe, base, ts] (int id, std::function<void()> removeRow)
+        {
+            const auto f = ts[id - base];
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + f.getFileNameWithoutExtension() + "\"?")
+                                              .withMessage ("Are you sure? This template is deleted from the phone. Your songs stay.").withButton ("Delete").withButton ("Cancel"),
+                                          [safe, f, removeRow] (int b) {
+                                              if (b != 1 || safe == nullptr) return;
+                                              if (f.deleteFile() || ! f.existsAsFile()) { removeRow(); safe->flash ("Template deleted: " + f.getFileNameWithoutExtension()); }
+                                              else safe->flash ("Couldn't delete " + f.getFileNameWithoutExtension());
+                                          });
+        };
     }
     static juce::File defaultTemplate() { return templatesDir().getChildFile ("_default.hhs"); }
     static bool inBackupFolder (const juce::File& f) { for (auto d = f.getParentDirectory(); d != d.getParentDirectory(); d = d.getParentDirectory()) if (d.getFileName() == "Backup") return true; return false; }

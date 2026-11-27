@@ -604,6 +604,42 @@ inline juce::MouseCursor toolCursor (CursorIcon k)
 }
 
 // a toolbar button that shows an icon instead of text (tooltip says what it does)
+// phone: a menu row with an X on the right (tap the name = the item, tap X = onX, e.g. delete a saved preset)
+struct XMenuRow : public juce::PopupMenu::CustomComponent
+{
+    juce::String text; std::function<void()> onX;
+    XMenuRow (juce::String t, std::function<void()> x) : juce::PopupMenu::CustomComponent (false), text (std::move (t)), onX (std::move (x)) {}
+    void getIdealSize (int& w, int& h) override { w = juce::jmax (220, juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (17.0f)), text) + 90); h = 44; }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds();
+        if (isItemHighlighted()) { g.setColour (findColour (juce::PopupMenu::highlightedBackgroundColourId)); g.fillRect (r); }
+        auto x = r.removeFromRight (getHeight()).reduced (7);
+        g.setColour (juce::Colour (0xffd04a5a)); g.drawRoundedRectangle (x.toFloat(), 6.0f, 1.5f);
+        g.setFont (juce::FontOptions (17.0f, juce::Font::bold)); g.drawText ("X", x, juce::Justification::centred);
+        g.setColour (findColour (isItemHighlighted() ? juce::PopupMenu::highlightedTextColourId : juce::PopupMenu::textColourId));
+        g.setFont (juce::FontOptions (17.0f)); g.drawText (text, r.reduced (12, 0), juce::Justification::centredLeft, true);
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        if (e.x < getWidth() - getHeight()) { triggerMenuItem(); return; }
+        auto x = onX;
+        juce::PopupMenu::dismissAllActiveMenus();
+        if (x) juce::MessageManager::callAsync (x);
+    }
+};
+// phone: the item gets an X that deletes `file` (asks first); desktop: a plain item
+inline void addItemWithDelete (juce::PopupMenu& m, juce::PopupMenu::Item item, const juce::File& file, const juce::String& what)
+{
+    if (phoneUI)
+        item.customComponent = new XMenuRow (item.text, [file, what] {
+            juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + file.getFileNameWithoutExtension() + "\"?")
+                                              .withMessage ("Are you sure? This " + what + " is deleted from the phone.").withButton ("Delete").withButton ("Cancel"),
+                                          [file] (int b) { if (b == 1) file.deleteFile(); });
+        });
+    m.addItem (std::move (item));
+}
 struct IconTextButton : public juce::TextButton
 {
     int icon = 0;
