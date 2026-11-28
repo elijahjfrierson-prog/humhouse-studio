@@ -4,6 +4,7 @@
 #include "ProjectImport.h"
 #include <thread>
 #include "BinaryData.h"
+#include "WelcomeData.h"
 #if JUCE_IOS
 void* hhsWatchPhoneRoute (std::atomic<bool>& speakerOut);   // IosRoute.mm
 void hhsUnwatchPhoneRoute (void* token);
@@ -1456,6 +1457,7 @@ public:
             line.addColour (0.5, col::accent.withAlpha (0.8f));
             g.setGradientFill (line); g.fillRect (topBar.getX(), lit - 1, topBar.getWidth(), 1);
         }
+        if (! phoneUI)   // phone: no purple frames around the panels
         for (auto* c : { browser.get(), playlist.get(), mixer.get(), rack.get(), piano.get(), lanes.get(), patchView.get(), videoView.get() })
         {
             if (c == nullptr || ! c->isVisible() || c->getParentComponent() != this || c->getWidth() < 40 || c->getHeight() < 40) continue;
@@ -2547,6 +2549,8 @@ private:
         juce::HyperlinkButton terms { "Terms of Use", juce::URL ("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") },
                               privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/c0df6dd2e635ede5747ba5d42ae44c8df453c556/PRIVACY.md") };
         bool store = false;
+        juce::Component page;
+        juce::ImageComponent pics;
         std::function<void (bool off)> onDone;
         PhoneWelcome()
         {
@@ -2564,7 +2568,10 @@ private:
            #endif
             body.setJustificationType (juce::Justification::topLeft);
             body.setColour (juce::Label::textColourId, col::text);
-            view.setViewedComponent (&body, false);
+            pics.setImage (juce::ImageCache::getFromMemory (WelcomeData::collage_jpg, WelcomeData::collage_jpgSize), juce::RectanglePlacement::centred);
+            pics.setInterceptsMouseClicks (false, false);
+            page.addAndMakeVisible (pics); page.addAndMakeVisible (body);
+            view.setViewedComponent (&page, false);
             view.setScrollBarsShown (true, false);
             view.setScrollOnDragMode (juce::Viewport::ScrollOnDragMode::all);
             start.onClick = [this] { finish(); };
@@ -2620,7 +2627,10 @@ private:
             view.setBounds (r);
             juce::AttributedString a; a.append (body.getText(), body.getFont(), col::text); a.setWordWrap (juce::AttributedString::byWord);
             juce::TextLayout tl; tl.createLayout (a, (float) juce::jmax (10, r.getWidth() - 24));
-            body.setSize (r.getWidth() - 12, juce::jmax (r.getHeight(), (int) std::ceil (tl.getHeight()) + 24));
+            const int pw = r.getWidth() - 12, ph = pw * 1128 / 1056;   // the collage, full width, above the text
+            pics.setBounds (0, 0, pw, ph);
+            body.setBounds (0, ph + 8, pw, (int) std::ceil (tl.getHeight()) + 24);
+            page.setSize (pw, juce::jmax (r.getHeight(), body.getBottom()));
         }
     };
     std::unique_ptr<PhoneWelcome> welcome;
