@@ -806,12 +806,12 @@ static const std::vector<DawKeys>& dawKeyPresets()
     static const std::vector<DawKeys> d {
         { "Pro Tools", { { "home", K (K::returnKey) }, { "rec", K (K::F12Key) }, { "mixer", K ('=', cmd, 0) }, { "export", K ('b', cmd | alt, 0) }, { "metro", K ('7') } } },
         { "Logic Pro", { { "home", K (K::returnKey) }, { "rec", K ('r') }, { "mixer", K ('x') }, { "piano", K ('p') }, { "browser", K ('f') }, { "metro", K ('k') } } },   // Logic's Cmd+B bounce is our Cmd+B duplicate: export stays Cmd+R
-        { "FL Studio", { { "rec", K ('r') }, { "song", K ('l') }, { "playlist", K (K::F5Key) }, { "piano", K (K::F7Key) }, { "mixer", K (K::F9Key) }, { "metro", K ('m', cmd, 0) }, { "export", K ('r', cmd, 0) } } },
+        { "Beat Keys", { { "rec", K ('r') }, { "song", K ('l') }, { "playlist", K (K::F5Key) }, { "piano", K (K::F7Key) }, { "mixer", K (K::F9Key) }, { "metro", K ('m', cmd, 0) }, { "export", K ('r', cmd, 0) } } },
         { "Ableton Live", { { "rec", K (K::F9Key) }, { "song", K (K::tabKey) }, { "mixer", K ('m', cmd | alt, 0) }, { "browser", K ('b', cmd | alt, 0) }, { "export", K ('r', cmd | shift, 0) } } },
         { "Studio One", { { "mixer", K (K::F3Key) }, { "metro", K ('c') }, { "export", K ('e', cmd, 0) } } },
         { "Cubase", { { "mixer", K (K::F3Key) }, { "metro", K ('c') }, { "export", K ('e', cmd, 0) } } },
         { "Reaper", { { "rec", K ('r', cmd, 0) }, { "mixer", K ('m', cmd, 0) }, { "export", K ('r', cmd | alt, 0) }, { "browser", K ('x', cmd | alt, 0) } } },
-        { "BandLab", { { "rec", K ('r') }, { "metro", K ('m') } } } };
+        { "Quick Keys", { { "rec", K ('r') }, { "metro", K ('m') } } } };
     return d;
 }
 
@@ -1355,6 +1355,11 @@ public:
             for (auto* b : { &closeAllBtn, &menuBtn, &importBtn, &copyBtn, &pasteBtn, &undoBtn, &redoBtn, &altABtn, &altSBtn, &dupBtn, &delBtn, &octUpBtn, &octDnBtn, &noteUpBtn, &noteDnBtn }) addAndMakeVisible (b);
             // folders: one tap opens a row of their buttons under the top bar, another tap tucks it away
             browserBtn.setButtonText ("SOUNDS");
+           #if HHS_STORE
+            setupButton (proBtn, "PRO", "HumHouse Pro: what it adds, $7.99 / month, subscribe or restore", false);
+            proBtn.onClick = [this] { showUnlock(); };
+            addAndMakeVisible (proBtn);
+           #endif
             toolsOpen = studio.settings->getBoolValue ("phoneTools", true);
             keysOpen = studio.settings->getBoolValue ("phoneKeys", false);
             moreOpen = studio.settings->getBoolValue ("phoneMore", false);
@@ -1479,6 +1484,9 @@ if (phoneUI)
             std::vector<std::pair<juce::Component*, int>> items {
                 { &menuBtn, 70 }, { &beatPg, 58 }, { &recPg, 52 }, { &mixPg, 52 }, { &pagesBtn, 64 }, { &songBtn, 56 }, { &saveBtn, 80 }, { &browserBtn, 96 }, { nullptr, brk },
                 { &toolsBtn, 92 }, { &keysBtn, 100 }, { &moreBtn, 86 } };   // 2 rows: everything else sits in the folders, transport at the bottom
+           #if HHS_STORE
+            items.insert (std::find_if (items.begin(), items.end(), [this] (const auto& it) { return it.first == &browserBtn; }) + 1, std::pair<juce::Component*, int> { &proBtn, 60 });   // HumHouse Pro, next to SOUNDS
+           #endif
             if (toolsOpen) items.insert (items.end(), { { &retroBtn, 80 }, { &copyBtn, 92 }, { &pasteBtn, 76 }, { &undoBtn, 76 }, { &redoBtn, 76 }, { &delBtn, 86 }, { &dupBtn, 80 }, { &altABtn, 74 }, { &altSBtn, 74 } });
             if (keysOpen) items.insert (items.end(), { { &duoBtn, 64 }, { &pianoBtn, 80 }, { &octDnBtn, 70 }, { &octUpBtn, 70 }, { &noteDnBtn, 52 }, { &noteUpBtn, 52 } });
             if (moreOpen) items.insert (items.end(), { { &closeAllBtn, 46 }, { &rackPopBtn, 66 }, { &importBtn, 96 }, { &bpm, 110 }, { &posLabel, 110 }, { &metroBtn, 72 }, { &countBtn, 92 }, { &mixPopBtn, 50 }, { &scopeBtn, 76 }, { &themeBtn, 80 }, { &cpuLabel, 92 } });
@@ -2276,7 +2284,7 @@ if (phoneUI)
             case mShortcuts: showShortcuts(); break;
             case mAbout:
                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::InfoIcon, "HumHouse Studio",
-                    "Beat-making and vocal-recording studio.\nFL-style editing, BandLab-style flow.");
+                    "Beat-making and vocal-recording studio.\nMake it now.");
                 break;
             default: break;
         }
@@ -2651,6 +2659,7 @@ private:
         MainComponent& m;
     } kbListen { *this };
     juce::TextButton songBtn, metroBtn, countBtn, browserBtn, themeBtn, scopeBtn, vidPopBtn, saveBtn;
+    juce::TextButton proBtn;
     int savedFlash = 0;
     void* routeWatch = nullptr;   // iOS headphone route observer
     struct FloatRaiser : public juce::MouseListener   // macOS: clicking the main window keeps pop-outs / plug-ins above it
@@ -3416,7 +3425,7 @@ private:
     void openChooser (bool backups)
     {
         auto dir = backups ? backupDir() : docsDir();
-        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project (or Reaper .rpp, Ableton .als, FL .flp)", dir, backups ? "*.hhs" : "*.hhs;*.rpp;*.als;*.flp");
+        chooser = std::make_unique<juce::FileChooser> (backups ? "Open backup" : "Open project (.hhs, .rpp, .als, .flp)", dir, backups ? "*.hhs" : "*.hhs;*.rpp;*.als;*.flp");
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                               [this] (const juce::FileChooser& fc) { if (fc.getResult().existsAsFile()) load (fc.getResult()); });
     }
