@@ -1677,7 +1677,7 @@ if (phoneUI)
         juce::Label title, body;
         juce::TextButton buy, restore { "Restore purchases" }, later { "Not now" };
         juce::HyperlinkButton terms { "Terms of Use", juce::URL ("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") },
-                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/main/PRIVACY.md") };
+                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/c0df6dd2e635ede5747ba5d42ae44c8df453c556/PRIVACY.md") };
         UnlockPanel()
         {
             const juce::String price (hhsStorePrice());
@@ -2545,7 +2545,7 @@ private:
         juce::ToggleButton dontShow { "Don't show this again" };
         juce::TextButton start { "Start making music" }, buy, restore { "Restore purchases" };
         juce::HyperlinkButton terms { "Terms of Use", juce::URL ("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/") },
-                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/main/PRIVACY.md") };
+                              privacy { "Privacy Policy", juce::URL ("https://github.com/elijahjfrierson-prog/humhouse-studio/blob/c0df6dd2e635ede5747ba5d42ae44c8df453c556/PRIVACY.md") };
         bool store = false;
         std::function<void (bool off)> onDone;
         PhoneWelcome()
