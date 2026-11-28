@@ -119,6 +119,7 @@ public:
     ~PluginList() override { s.engine.knownPlugins.removeChangeListener (this); }
     void resized() override
     {
+        if (builtLite != phoneLite) rebuild();   // App Store app: HumHouse Pro bought / lapsed
         auto r = getLocalBounds().reduced (4);
         search.setBounds (r.removeFromTop (26)); r.removeFromTop (4);
         if (! phoneUI) { scan.setBounds (r.removeFromBottom (28)); r.removeFromBottom (4); }
@@ -132,10 +133,12 @@ private:
     juce::TextButton scan;
     std::vector<Entry> entries;
     int previewRow = -1;
+    bool builtLite = phoneLite;
     juce::Array<juce::PluginDescription> types;
 
     void rebuild()
     {
+        builtLite = phoneLite;
         entries.clear();
         const auto q = search.getText().trim();
         auto match = [&q] (const juce::String& a, const juce::String& b) { return q.isEmpty() || a.containsIgnoreCase (q) || b.containsIgnoreCase (q); };

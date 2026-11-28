@@ -36,7 +36,7 @@ public:
         fxBtn.onClick = autoBtn.onClick = [this] { scroll = 0; laneKey = {}; refill(); repaint(); };
         setupButton (addBtn, "+ LANE", "Automate this track: volume, pan, a send or any effect knob");
         addBtn.onClick = [this] { addMenu(); };
-        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) if (! phoneLite || b == &fxBtn) addAndMakeVisible (b);   // stripped phone app: no automation
+        for (auto* b : { &fxBtn, &autoBtn, &addBtn }) addAndMakeVisible (b);
         laneBox.setTooltip ("LANE: one automation / effect, or all of them");
         trackBox.setTooltip ("TRACK: only what sits on this Playlist track");
         mixBox.setTooltip ("MIXER: only this mixer insert's effects and automation");
@@ -56,6 +56,7 @@ public:
     void resized() override
     {
         auto top = getLocalBounds().removeFromTop (barH).reduced (4, 3);
+        autoBtn.setVisible (! phoneLite); addBtn.setVisible (! phoneLite);   // stripped phone app: no automation
         addBtn.setBounds (top.removeFromRight (phoneUI ? 84 : 70)); top.removeFromRight (8);
         autoBtn.setBounds (top.removeFromRight (phoneUI ? 116 : 100)); top.removeFromRight (4);
         fxBtn.setBounds (top.removeFromRight (phoneUI ? 104 : 90)); top.removeFromRight (8);

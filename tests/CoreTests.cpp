@@ -3408,7 +3408,27 @@ int main (int argc, char** argv)
         }
         std::printf ("glued audio: %s\n", q.channels.empty() ? "-" : q.channels.back().sampleFile.getFullPathName().toRawUTF8());
         packAudioInSong() = false;   // default: the song only points at its audio, so it stays KB
-        CHECK (saveProject (q, song) && song.getSize() < 16 * 1024);
+        {   // a long recorded take stays in the song folder, not inside the KB song
+            auto take = dir.getChildFile ("take.wav");
+            juce::AudioBuffer<float> b (2, 441000);
+            for (int i = 0; i < 441000; ++i) { b.setSample (0, i, 0.3f * std::sin ((float) i * 0.013f)); b.setSample (1, i, (float) ((i * 7919) % 1000) / 2000.0f); }
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::FileOutputStream (take), 44100, 2, 24, {}, 0));
+            CHECK (w != nullptr); if (w) w->writeFromAudioSampleBuffer (b, 0, 441000);
+            w.reset();
+            Clip cl; cl.audioFile = take; cl.length = 8; q.clips.push_back (cl);
+        }
+        CHECK (saveProject (q, song) && song.getSize() < dir.getChildFile ("take.wav").getSize() / 8);   // the 2.6 MB take rides as a small copy
+        std::printf ("KB song with a 2.6 MB take: %lld bytes\n", (long long) song.getSize());
+        {   // on a device without the take: the copy unpacks to a WAV of the same rate, channels, bits and length
+            const auto takeFile = song.getSiblingFile ("glue Files");
+            takeFile.deleteRecursively(); dir.getChildFile ("take.wav").deleteFile();
+            Project r; CHECK (loadProject (r, song) && ! r.clips.empty() && r.clips.back().audioFile.existsAsFile());
+            juce::WavAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatReader> rd (r.clips.empty() ? nullptr : fmt.createReaderFor (new juce::FileInputStream (r.clips.back().audioFile), true));
+            CHECK (rd != nullptr && rd->lengthInSamples == 441000 && rd->numChannels == 2 && rd->bitsPerSample == 24 && (int) rd->sampleRate == 44100);
+            if (rd) { juce::AudioBuffer<float> b (2, 441000); rd->read (&b, 0, 441000, 0, true, true); CHECK (b.getMagnitude (0, 0, 441000) > 0.2f); }
+        }
         std::printf ("KB song: %lld bytes\n", (long long) song.getSize());
         dir.deleteRecursively();
     }

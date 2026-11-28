@@ -600,7 +600,11 @@ private:
         auto files = presetDir().findChildFiles (juce::File::findFiles, false, "*.hhpreset");
         files.sort();
         if (! files.isEmpty()) menu.addSectionHeader ("Your presets");
-        for (int i = 0; i < files.size() && i < 200; ++i) menu.addItem (100 + i, files[i].getFileNameWithoutExtension());
+        for (int i = 0; i < files.size() && i < 200; ++i)
+        {
+            juce::PopupMenu::Item it (files[i].getFileNameWithoutExtension()); it.itemID = 100 + i;
+            addItemWithDelete (menu, std::move (it), files[i], "preset");   // phone: X deletes it
+        }
         menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&presetBtn), [this, files] (int r) {
             if (r == 1) savePreset();
             else if (r == 2) writePreset (lastPreset);
@@ -3372,6 +3376,7 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
         juce::PopupMenu one;
         one.addItem ("Replace this track's FX", [&s, track, f] { loadChainPreset (s, track, f, true); });
         one.addItem ("Add after current FX", [&s, track, f] { loadChainPreset (s, track, f, false); });
+        if (phoneUI) one.addItem ("Delete this FX chain preset", [f] { confirmDeleteFile (f, "FX chain preset"); });
         chains.addSubMenu (f.getFileNameWithoutExtension(), one);
     }
     if (chainFiles.isEmpty()) chains.addItem ("(none saved yet)", false, false, [] {});
@@ -3391,7 +3396,9 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
         juce::PopupMenu sub;
         const juce::String type = inf.id;
         for (auto& f : files)
-            sub.addItem (f.getFileNameWithoutExtension(), [&s, track, type, f] {
+        {
+            juce::PopupMenu::Item it (f.getFileNameWithoutExtension());
+            it.action = [&s, track, type, f] {
                 auto x = juce::XmlDocument::parse (f);
                 if (x == nullptr) return;
                 int uid = 0;
@@ -3402,7 +3409,9 @@ juce::PopupMenu trackPresetMenu (Studio& s, int track)
                     for (auto* e : x->getChildWithTagNameIterator ("P")) slot.params[e->getStringAttribute ("id")] = (float) e->getDoubleAttribute ("v");
                 });
                 if (uid != 0) openEffectEditor (s, track, uid);
-            });
+            };
+            addItemWithDelete (sub, std::move (it), f, "preset");   // phone: X deletes it
+        }
         m.addSubMenu (inf.name, sub);
     }
     if (! any) m.addItem ("(save presets from any effect's PRESETS button)", false, false, [] {});

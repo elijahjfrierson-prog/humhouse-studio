@@ -420,7 +420,7 @@ bool importFlp (const juce::File& f, Project& p, juce::StringArray& report, cons
             ++clips;
         }
     }
-    report.add ("FL Studio: channels, samples, patterns and playlist read. Mixer FX chains and plugin settings live in FL's own format and aren't copied.");
+    report.add (".flp project: channels, samples, patterns and playlist read. Mixer FX chains and plugin settings use their own format and aren't copied.");
     finish (p, report, missing, fxOk, fxMissing, clips);
     return true;
 }

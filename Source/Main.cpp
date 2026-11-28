@@ -271,7 +271,7 @@ public:
         openFromCommandLine (commandLine);
         for (auto& f : pendingOpen) openFromCommandLine (f);
         pendingOpen.clear();
-       #if HHS_LICENSED
+       #if HHS_LICENSED && ! JUCE_IOS   // phone: its own full-screen Welcome page, never this desktop window on top of it
         if (! WelcomePanel::offFile().existsAsFile())
         {
             auto* p = new WelcomePanel();

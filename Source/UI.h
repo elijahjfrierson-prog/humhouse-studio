@@ -68,7 +68,9 @@ inline juce::File pickedFolder (const juce::FileChooser& fc)
     return fc.getResult();
    #endif
 }
-#if JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
+#if JUCE_IOS && defined (HHS_APPSTORE) && HHS_APPSTORE
+inline bool phoneLite = true;              // App Store app: the stripped set until HumHouse Pro ($7.99/month) is bought (AppStore.mm)
+#elif JUCE_IOS && defined (HHS_LICENSED) && HHS_LICENSED
 inline constexpr bool phoneLite = true;    // subscription phone app (stripped): no master plug-ins, spectrums, graphic EQs, glitch gate, automation
 #else
 inline constexpr bool phoneLite = false;
@@ -602,6 +604,55 @@ inline juce::MouseCursor toolCursor (CursorIcon k)
 }
 
 // a toolbar button that shows an icon instead of text (tooltip says what it does)
+// phone: a menu row with an X on the right (tap the name = the item, tap X = onX, e.g. delete a saved preset)
+struct XMenuRow : public juce::PopupMenu::CustomComponent
+{
+    juce::String text; std::function<void()> onX;
+    XMenuRow (juce::String t, std::function<void()> x) : juce::PopupMenu::CustomComponent (false), text (std::move (t)), onX (std::move (x)) { setTitle (text); }
+    void getIdealSize (int& w, int& h) override { w = juce::jmax (220, juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (17.0f)), text) + 90); h = 44; }
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds();
+        if (isItemHighlighted()) { g.setColour (findColour (juce::PopupMenu::highlightedBackgroundColourId)); g.fillRect (r); }
+        auto x = r.removeFromRight (getHeight()).reduced (7);
+        g.setColour (juce::Colour (0xffd04a5a)); g.drawRoundedRectangle (x.toFloat(), 6.0f, 1.5f);
+        g.setFont (juce::FontOptions (17.0f, juce::Font::bold)); g.drawText ("X", x, juce::Justification::centred);
+        g.setColour (findColour (isItemHighlighted() ? juce::PopupMenu::highlightedTextColourId : juce::PopupMenu::textColourId));
+        g.setFont (juce::FontOptions (17.0f)); g.drawText (text, r.reduced (12, 0), juce::Justification::centredLeft, true);
+    }
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (e.mouseWasDraggedSinceMouseDown()) return;
+        if (e.x < getWidth() - getHeight()) { triggerMenuItem(); return; }
+        tapX();
+    }
+    void tapX()
+    {
+        auto x = onX;
+        juce::PopupMenu::dismissAllActiveMenus();
+        if (x) juce::MessageManager::callAsync (x);
+    }
+    std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override   // VoiceOver: activate = the item, "more actions" = the X
+    {
+        return std::make_unique<juce::AccessibilityHandler> (*this, juce::AccessibilityRole::menuItem,
+            juce::AccessibilityActions().addAction (juce::AccessibilityActionType::press, [this] { triggerMenuItem(); })
+                                        .addAction (juce::AccessibilityActionType::showMenu, [this] { tapX(); }),
+            juce::AccessibilityHandler::Interfaces {});
+    }
+};
+inline void confirmDeleteFile (const juce::File& file, const juce::String& what)
+{
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions().withIconType (juce::MessageBoxIconType::WarningIcon).withTitle ("Delete \"" + file.getFileNameWithoutExtension() + "\"?")
+                                      .withMessage ("Are you sure? This " + what + " is deleted from the phone.").withButton ("Delete").withButton ("Cancel"),
+                                  [file] (int b) { if (b == 1) file.deleteFile(); });
+}
+// phone: the item gets an X that deletes `file` (asks first); desktop: a plain item
+inline void addItemWithDelete (juce::PopupMenu& m, juce::PopupMenu::Item item, const juce::File& file, const juce::String& what)
+{
+    if (phoneUI)
+        item.customComponent = new XMenuRow (item.text, [file, what] { confirmDeleteFile (file, what); });
+    m.addItem (std::move (item));
+}
 struct IconTextButton : public juce::TextButton
 {
     int icon = 0;
@@ -615,6 +666,7 @@ struct IconTextButton : public juce::TextButton
         const float sz = (float) juce::jmin (getWidth(), getHeight()) - 6.0f;
         g.setOpacity (isEnabled() ? 1.0f : 0.4f);
         g.drawImage (img, juce::Rectangle<float> (sz, sz).withCentre (getLocalBounds().toFloat().getCentre()), juce::RectanglePlacement::centred);
+        if (getProperties()["locked"]) { g.setOpacity (1.0f); g.setColour (col::accent2); g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (1.5f), 4.0f, 2.5f); }   // double-tapped: locked tool
     }
 };
 

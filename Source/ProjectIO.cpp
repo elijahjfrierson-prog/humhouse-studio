@@ -1,4 +1,5 @@
 #include "ProjectIO.h"
+#include <mutex>
 #include <map>
 #include <set>
 #include <cstring>
@@ -119,8 +120,81 @@ static juce::String packGlued (const juce::MemoryBlock& mb)
     }
     return juce::Base64::toBase64 (mb.getData(), mb.getSize());
 }
+// KB songs carry each WAV take as a small Ogg copy (~64 kbps: 30 MB -> ~1.4 MB). The original WAV stays in the song folder
+// and always wins; the copy is unpacked (same rate, channels, bits, length) only where the original is missing.
+// Encoded once per take: cached on disk by content, so saving never re-encodes and an unpacked copy is never re-encoded.
+static constexpr const char* oggTag = "OGG1:";
+static juce::File smallCache (const juce::File& a)
+{
+    static std::mutex m; static std::map<juce::String, juce::String> known;   // path|size|time -> content hash
+    const auto key = a.getFullPathName() + "|" + juce::String (a.getSize()) + "|" + juce::String (a.getLastModificationTime().toMilliseconds());
+    juce::String hash;
+    { std::lock_guard<std::mutex> l (m); if (auto it = known.find (key); it != known.end()) hash = it->second; }
+    if (hash.isEmpty())
+    {
+        juce::FileInputStream in (a);
+        if (! in.openedOk()) return {};
+        juce::uint64 h = 1469598103934665603ull;
+        juce::HeapBlock<juce::uint8> buf (1 << 20);
+        for (int got; (got = in.read (buf.get(), 1 << 20)) > 0;)
+            for (int i = 0; i < got; ++i) h = (h ^ buf[i]) * 1099511628211ull;
+        hash = juce::String::toHexString ((juce::int64) h) + "-" + juce::String (a.getSize());
+        std::lock_guard<std::mutex> l (m); known[key] = hash;
+    }
+    return hhsHome().getChildFile ("Glue Cache").getChildFile (hash + ".ogg1");
+}
+static juce::String packSmall (const juce::File& a)
+{
+    if (! a.hasFileExtension ("wav;bwf")) return {};
+    const auto cache = smallCache (a);
+    if (cache == juce::File()) return {};
+    juce::MemoryBlock bin;
+    if (! cache.loadFileAsData (bin) || bin.getSize() < 16)
+    {
+        bin.reset();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatReader> r (wav.createReaderFor (new juce::FileInputStream (a), true));
+        if (! r || r->numChannels < 1 || r->numChannels > 2 || r->lengthInSamples <= 0 || r->sampleRate < 8000 || r->sampleRate > 192000) return {};
+        juce::MemoryBlock ogg;
+        {
+            juce::OggVorbisAudioFormat fmt;
+            std::unique_ptr<juce::AudioFormatWriter> w (fmt.createWriterFor (new juce::MemoryOutputStream (ogg, false), r->sampleRate, r->numChannels, 16, {}, 0));
+            if (! w || ! w->writeFromAudioReader (*r, 0, r->lengthInSamples)) return {};
+        }
+        if (ogg.getSize() == 0 || (juce::int64) ogg.getSize() >= a.getSize() / 2) return {};
+        {
+            juce::MemoryOutputStream mo (bin, false);
+            mo.writeInt ((int) r->bitsPerSample); mo.writeInt64 (r->lengthInSamples);
+            mo.write (ogg.getData(), ogg.getSize());
+        }
+        cache.getParentDirectory().createDirectory();
+        cache.replaceWithData (bin.getData(), bin.getSize());
+    }
+    return oggTag + juce::Base64::toBase64 (bin.getData(), bin.getSize());
+}
+static bool unpackSmall (const juce::String& s, juce::MemoryOutputStream& out)
+{
+    juce::MemoryOutputStream binS;
+    if (! juce::Base64::convertFromBase64 (binS, s.substring ((int) std::strlen (oggTag)))) return false;
+    juce::MemoryInputStream in (binS.getData(), binS.getDataSize(), false);
+    const int bits = in.readInt(); auto frames = in.readInt64();
+    if ((bits != 8 && bits != 16 && bits != 24 && bits != 32) || frames <= 0) return false;
+    const auto at = (size_t) in.getPosition();
+    juce::OggVorbisAudioFormat fmt;
+    std::unique_ptr<juce::AudioFormatReader> r (fmt.createReaderFor (new juce::MemoryInputStream (static_cast<const char*> (binS.getData()) + at, binS.getDataSize() - at, true), true));
+    if (! r) return false;
+    frames = juce::jmin (frames, r->lengthInSamples + (juce::int64) r->sampleRate);   // a damaged / hostile header can't ask for hours of silence
+    juce::MemoryBlock pcm;
+    {
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (new juce::MemoryOutputStream (pcm, false), r->sampleRate, r->numChannels, bits, {}, 0));
+        if (! w || ! w->writeFromAudioReader (*r, 0, frames)) return false;   // reads past the Ogg's end come back silent: length is exact
+    }
+    return out.write (pcm.getData(), pcm.getSize());
+}
 static bool unpackGlued (const juce::String& s, juce::MemoryOutputStream& out)
 {
+    if (s.startsWith (oggTag)) return unpackSmall (s, out);
     if (! s.startsWith (flacTag)) return juce::Base64::convertFromBase64 (out, s);
     juce::MemoryOutputStream binS;
     if (! juce::Base64::convertFromBase64 (binS, s.substring ((int) std::strlen (flacTag)))) return false;
@@ -148,7 +222,15 @@ static juce::File unglue (const juce::String& s)
     juce::MemoryOutputStream mo;
     if (! unpackGlued (it->second, mo)) return {};
     dst.getParentDirectory().createDirectory();
-    return dst.replaceWithData (mo.getData(), mo.getDataSize()) ? dst : juce::File();
+    if (! dst.replaceWithData (mo.getData(), mo.getDataSize())) return {};
+    if (it->second.startsWith (oggTag))   // saving this unpacked copy again reuses its Ogg: no second-generation loss
+        if (const auto c = smallCache (dst); c != juce::File() && ! c.existsAsFile())
+        {
+            juce::MemoryOutputStream bin;
+            if (juce::Base64::convertFromBase64 (bin, it->second.substring ((int) std::strlen (oggTag))) && c.getParentDirectory().createDirectory().wasOk())
+                c.replaceWithData (bin.getData(), bin.getDataSize());
+        }
+    return dst;
 }
 
 static juce::String fileStr (const juce::File& f) { return f == juce::File() ? juce::String() : f.getFullPathName(); }
@@ -174,7 +256,8 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
     auto alt0 = [] (const juce::File& c) { return c.existsAsFile() ? c : (c.hasFileExtension ("wav") && c.withFileExtension ("flac").existsAsFile()) ? c.withFileExtension ("flac") : juce::File(); };
     if (auto c = alt0 (f); c != juce::File()) return c;   // built-in kits are FLAC now
     if (rel.isNotEmpty() && ioBase != juce::File()) if (auto c = alt0 (ioBase.getChildFile (rel)); c != juce::File()) return c;
-    if (auto g = unglue (s); g != juce::File()) return g;
+    const bool lossy = gluedIn != nullptr && gluedIn->count (s) > 0 && gluedIn->at (s).startsWith (oggTag);   // the small copy only if no original turns up anywhere
+    if (! lossy) if (auto g = unglue (s); g != juce::File()) return g;
     auto alt = [&] (const juce::File& c) { auto a = alt0 (c); return a != juce::File() && (size <= 0 || a.hasFileExtension ("flac") || a.getSize() == size) ? a : juce::File(); };
     {   // built-in kit saved from another HumHouse app (Studio vs Master, another drive/PC): use this app's copy
         const auto norm = s.replaceCharacter ('\\', '/');
@@ -213,6 +296,7 @@ static juce::File findAudio (const juce::String& s, const juce::String& rel, juc
             if (e.getFile().getFileName().equalsIgnoreCase (name) && (size <= 0 || e.getFile().getSize() == size)) return e.getFile();
         }
     }
+    if (lossy) if (auto g = unglue (s); g != juce::File()) return g;
     return f;   // still missing: keep the original path so it can be located later
 }
 static juce::File readFile (const juce::ValueTree& t, const char* key) { return findAudio (t[key].toString(), t[juce::Identifier (juce::String (key) + "Rel")].toString(), (juce::int64) t.getProperty (juce::Identifier (juce::String (key) + "Size"), (juce::int64) 0)); }
@@ -690,7 +774,7 @@ bool saveProject (const Project& p, const juce::File& f)
         juce::ValueTree glued ("GLUED");
         std::set<juce::String> seen; juce::int64 total = 0;
         const auto bundled = bundledSoundsRoot();
-        auto glue = [&] (const juce::File& a, bool kitSound = false)
+        auto glue = [&] (const juce::File& a, bool kitSound = false, bool small = false)
         {
             if (a == juce::File() || ! a.existsAsFile() || ! seen.insert (a.getFullPathName()).second) return;
             // only audio ever rides inside a song: a received song naming some other local file can't carry it back out
@@ -698,20 +782,26 @@ bool saveProject (const Project& p, const juce::File& f)
             // built-in sounds ship with every HumHouse app; kit one-shots still ride along (a few hundred KB) so the other device always has them
             if (! kitSound && bundled != juce::File() && a.isAChildOf (bundled)) return;
             const auto size = a.getSize();
-            if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
-            juce::MemoryBlock mb;
-            if (! a.loadFileAsData (mb)) return;
-            total += size;
+            auto data = small ? packSmall (a) : juce::String();
+            if (data.isEmpty())
+            {
+                if (size > 64 * 1024 * 1024 || total + size > 512 * 1024 * 1024) return;
+                juce::MemoryBlock mb;
+                if (! a.loadFileAsData (mb)) return;
+                total += size;
+                data = packGlued (mb);
+            }
             juce::ValueTree g ("F");
             g.setProperty ("path", a.getFullPathName(), nullptr);
-            g.setProperty ("data", packGlued (mb), nullptr);
+            g.setProperty ("data", data, nullptr);
             glued.appendChild (g, nullptr);
         };
-        // every song carries all its audio (clips, takes, imports, one-shots, frozen tracks): phone <-> computer opens complete
+        // every song carries all its audio (clips, takes, imports, one-shots, frozen tracks): phone <-> computer opens complete.
+        // KB songs: takes ride as small Ogg copies; the lossless originals sit in the song folder (gatherAudio)
         for (auto& c : src.channels) { glue (c.sampleFile, true); glue (c.smpLayerFile, true); }
-        for (auto& c : src.clips) glue (c.audioFile);
-        for (auto& a : src.audioPool) glue (a);
-        for (auto& m : src.mixer) glue (m.frozenFile);
+        for (auto& c : src.clips) glue (c.audioFile, false, local);
+        for (auto& a : src.audioPool) glue (a, false, local);
+        for (auto& m : src.mixer) glue (m.frozenFile, false, local);
         if (glued.getNumChildren() > 0) tree.appendChild (glued, nullptr);
     }
     auto xml = tree.createXml();

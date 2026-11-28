@@ -69,6 +69,18 @@ if(APPLE AND NOT IOS)
     list(APPEND HHS_DEFS JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=1)
 endif()
 # iPhone / iPad: AUv3 plug-ins only (no VST3 on iOS)
+# App Store iPhone app (-DHHS_APPSTORE=ON): free stripped set, HumHouse Pro ($7.99/month in-app subscription) unlocks the rest
+option(HHS_APPSTORE "iOS: App Store build with the HumHouse Pro subscription" OFF)
+set(HHS_BUILD_NUMBER "${PROJECT_VERSION}" CACHE STRING "CFBundleVersion (App Store uploads need a new one each time)")
+set(HHS_IOS_FAMILY "1,2")
+set(HHS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon.png")
+if(IOS)
+    set(HHS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon-ios.png")   # full square, no border: iOS rounds the corners itself
+endif()
+if(IOS AND HHS_APPSTORE)
+    list(APPEND HHS_DEFS HHS_APPSTORE=1)
+    set(HHS_IOS_FAMILY "1")   # iPhone only on the App Store
+endif()
 if(IOS)
     list(APPEND HHS_DEFS JUCE_PLUGINHOST_VST3=0)
 else()
@@ -111,11 +123,16 @@ juce_add_binary_data(HHSKeyprints HEADER_NAME KeyprintData.h NAMESPACE KeyprintD
 list(APPEND HHS_LIBS HHSKeyprints)
 juce_add_binary_data(HHSAmpData HEADER_NAME AmpData.h NAMESPACE AmpData SOURCES Resources/Amp/amp_studio.jpg Resources/Amp/amp_cab.jpg Resources/Amp/amp_heads.jpg Resources/Amp/amp_mics.png Resources/Amp/amp_stand.png Resources/Amp/amp_boom.png)
 list(APPEND HHS_LIBS HHSAmpData)
+juce_add_binary_data(HHSWelcomeData HEADER_NAME WelcomeData.h NAMESPACE WelcomeData SOURCES Resources/Welcome/collage.jpg)   # phone Welcome page: screenshot collage
+list(APPEND HHS_LIBS HHSWelcomeData)
 if(APPLE OR WIN32)
     list(APPEND HHS_LIBS juce::juce_video)   # VIDEO tab player (AVFoundation / Media Foundation)
 endif()
 if(APPLE)
     list(APPEND HHS_LIBS "-framework AudioToolbox" "-framework CoreFoundation")
+    if(IOS AND HHS_APPSTORE)
+        list(APPEND HHS_LIBS "-framework StoreKit")
+    endif()
 endif()
 
 option(HHS_TESTS_ONLY "Build only the headless test target" OFF)
@@ -166,10 +183,11 @@ juce_add_binary_data(HHSFonts SOURCES Resources/Fonts/PirataOne-Regular.ttf Reso
 function(hhs_add_app target product bundle licensed)
     juce_add_gui_app(${target}
         PRODUCT_NAME "${product}"
-        ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/humhouse-icon.png"
+        ICON_BIG "${HHS_ICON}"
         COMPANY_NAME "HumHouse"
         BUNDLE_ID "${bundle}"
         VERSION ${PROJECT_VERSION}
+        BUILD_VERSION ${HHS_BUILD_NUMBER}
         MICROPHONE_PERMISSION_ENABLED TRUE
         MICROPHONE_PERMISSION_TEXT "${product} records vocals and instruments from your audio input."
         HARDENED_RUNTIME_ENABLED FALSE
@@ -182,10 +200,10 @@ function(hhs_add_app target product bundle licensed)
         BACKGROUND_AUDIO_ENABLED TRUE
         FILE_SHARING_ENABLED TRUE
         DOCUMENT_BROWSER_ENABLED TRUE
-        TARGETED_DEVICE_FAMILY "1,2"
+        TARGETED_DEVICE_FAMILY "${HHS_IOS_FAMILY}"
         NEEDS_CURL TRUE
         # iPhone Pro: ProMotion 120 Hz (iOS caps apps at 60 fps without this)
-        PLIST_TO_MERGE "<plist><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/></dict></plist>"
+        PLIST_TO_MERGE "<plist><dict><key>CADisableMinimumFrameDurationOnPhone</key><true/><key>ITSAppUsesNonExemptEncryption</key><false/></dict></plist>"
     )
     if(IOS)   # bundled kits / sounds go inside the .app (bundledSoundsRoot = next to the executable)
         add_custom_command(TARGET ${target} POST_BUILD
@@ -199,6 +217,7 @@ function(hhs_add_app target product bundle licensed)
         Source/PaintPump.cpp
         $<$<AND:$<PLATFORM_ID:Darwin>,$<NOT:$<BOOL:${IOS}>>>:Source/MacWindows.mm>
         $<$<BOOL:${IOS}>:Source/IosRoute.mm>
+        $<$<AND:$<BOOL:${IOS}>,$<BOOL:${HHS_APPSTORE}>>:Source/AppStore.mm>
         Source/ChannelRack.cpp
         Source/PianoRoll.cpp
         Source/Playlist.cpp
